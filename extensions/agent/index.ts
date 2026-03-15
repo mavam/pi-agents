@@ -1,98 +1,109 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { type Message, StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@mariozechner/pi-ai";
 import type {
   AgentToolResult,
   ExtensionAPI,
+  ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
   type Agent,
-  type Scope,
-  type Source,
-  buildSkillsPrompt,
   discoverAgents,
   formatAgentList,
-  type Thinking,
+  type Scope,
 } from "./agents.js";
-
-interface UsageStats {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-  contextTokens: number;
-  turns: number;
-}
+import {
+  createSubprocessSpawnEngine,
+  formatFailureReason,
+  isChildProcessRunning,
+  type SpawnProcess,
+} from "./engine/subprocess.js";
+import { CompositionExecutionError, CompositionExecutor } from "./executor.js";
+import { validateComposeParams } from "./flow-spec.js";
+import { AgentManager } from "./manager.js";
+import {
+  COMPOSITION_EVENT_CUSTOM_TYPE,
+  rebuildCompositionState,
+} from "./persistence.js";
+import {
+  countStatuses,
+  createCompositionRuntimeState,
+  getCompositionNodes,
+  getOrderedCompositions,
+  iconForStatus,
+  markRunningCompositionsAborted,
+} from "./state.js";
+import type {
+  AgentRunDetails,
+  ComposeParams,
+  CompositionResultDetails,
+} from "./types.js";
 
 interface AgentToolExecutionResult<T> extends AgentToolResult<T> {
   isError?: boolean;
 }
 
-interface AgentRunDetails {
-  agent: string;
-  agentSource: Source | "unknown";
-  model?: string;
-  thinking?: Thinking;
-  skills: string[];
-  missingSkills: string[];
-  exitCode: number;
-  stopReason?: string;
-  errorMessage?: string;
-  stderr: string;
-  usage: UsageStats;
-  discoveryDiagnostics: string[];
-  scope: Scope;
-}
+const ScopeSchema = StringEnum(["user", "project", "both"] as const, {
+  description:
+    'Which agents to load. "user" reads ~/.pi/agents. "project" reads nearest .pi/agents. "both" merges both (project wins).',
+  default: "both",
+});
 
-class DelegatedAgentRunError extends Error {
-  readonly details: AgentRunDetails;
+const AgentParamsSchema = Type.Object({
+  name: Type.String({
+    description: "Name of the agent definition from markdown frontmatter",
+  }),
+  task: Type.String({ description: "Task to delegate" }),
+  scope: Type.Optional(ScopeSchema),
+  cwd: Type.Optional(
+    Type.String({
+      description: "Working directory for the delegated agent process",
+    }),
+  ),
+});
 
-  constructor(message: string, details: AgentRunDetails) {
-    super(message);
-    this.name = "DelegatedAgentRunError";
-    this.details = details;
-  }
-}
+const ComposeParamsSchema = Type.Object({
+  label: Type.Optional(
+    Type.String({ description: "Optional label shown in composition UI" }),
+  ),
+  flow: Type.Any({
+    description:
+      "Serializable FlowSpec: spawn | sequence | fork | join | loop.",
+  }),
+  budgets: Type.Optional(
+    Type.Object({
+      maxDepth: Type.Optional(Type.Number()),
+      maxChildren: Type.Optional(Type.Number()),
+      maxParallelism: Type.Optional(Type.Number()),
+      maxIterations: Type.Optional(Type.Number()),
+    }),
+  ),
+  scope: Type.Optional(ScopeSchema),
+  cwd: Type.Optional(
+    Type.String({
+      description: "Working directory for relative agent discovery and tasks",
+    }),
+  ),
+});
 
-export type SpawnProcess = typeof spawn;
-
-function getFinalOutput(messages: Message[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "assistant") continue;
-    const chunks: string[] = [];
-    for (const part of msg.content) {
-      if (part.type === "text") chunks.push(part.text);
-    }
-    if (chunks.length > 0) return chunks.join("\n").trim();
-  }
-  return "";
-}
-
-function writePromptToTempFile(
-  agentName: string,
-  prompt: string,
-): { dir: string; filePath: string } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-run-"));
-  const safeName = agentName.replace(/[^\w.-]+/g, "_") || "agent";
-  const filePath = path.join(dir, `append-system-${safeName}.md`);
-  fs.writeFileSync(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
-  return { dir, filePath };
-}
-
-function initialUsage(): UsageStats {
+function initialAgentDetails(scope: Scope, agent: string): AgentRunDetails {
   return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    cost: 0,
-    contextTokens: 0,
-    turns: 0,
+    agent,
+    agentSource: "unknown",
+    skills: [],
+    missingSkills: [],
+    exitCode: 1,
+    stderr: "",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      contextTokens: 0,
+      turns: 0,
+    },
+    discoveryDiagnostics: [],
+    scope,
   };
 }
 
@@ -159,86 +170,148 @@ function formatAgentDetails(
   return lines.join("\n");
 }
 
-function parseMessageEndEvent(line: string): Message | null {
-  try {
-    const parsed: unknown = JSON.parse(line);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const event = parsed as { type?: unknown; message?: unknown };
-    if (event.type !== "message_end") return null;
-    if (typeof event.message !== "object" || event.message === null)
-      return null;
-    return event.message as Message;
-  } catch {
-    return null;
-  }
-}
-
-export function isChildProcessRunning(
-  proc: Pick<ChildProcessWithoutNullStreams, "exitCode" | "signalCode">,
-): boolean {
-  return proc.exitCode === null && proc.signalCode === null;
-}
-
-function stripStackTrace(text: string): string {
-  const lines = text.split(/\r?\n/).map((line) => line.trimEnd());
-  const cleaned: string[] = [];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      if (cleaned.length > 0 && cleaned[cleaned.length - 1] !== "")
-        cleaned.push("");
-      continue;
-    }
-    if (trimmed.startsWith("at ")) continue;
-    if (trimmed.startsWith("file://")) continue;
-    if (/^Node\.js v\d+/i.test(trimmed)) continue;
-    cleaned.push(trimmed);
-  }
-
-  return cleaned.join("\n").trim();
-}
-
-export function formatFailureReason(
-  rawReason: string,
-  modelHint?: string,
+function formatCompositionOverviewText(
+  runtimeState: ReturnType<typeof createCompositionRuntimeState>,
 ): string {
-  const compact = stripStackTrace(rawReason);
-  const source = compact || rawReason;
-  const missingKeyMatch = source.match(/No API key found for ([^.\n]+)/i);
-  if (missingKeyMatch) {
-    const provider = missingKeyMatch[1]?.trim() || "the selected provider";
-    const model = modelHint ? ` Model: ${modelHint}.` : "";
-    return `No credentials configured for provider "${provider}".${model} Run /login or configure the provider API key, then retry.`;
+  const runs = getOrderedCompositions(runtimeState);
+  if (runs.length === 0) {
+    return "No compositions recorded in this session.";
   }
 
-  return compact || "(no output)";
+  const lines = ["Compositions:"];
+  for (const run of runs.slice(0, 10)) {
+    const nodes = getCompositionNodes(runtimeState, run.id);
+    lines.push(
+      `- ${iconForStatus(run.status)} ${run.label} (${run.id.slice(0, 8)}) · ${run.status} · ${nodes.length} nodes`,
+    );
+  }
+  return lines.join("\n");
 }
 
-const ScopeSchema = StringEnum(["user", "project", "both"] as const, {
-  description:
-    'Which agents to load. "user" reads ~/.pi/agents. "project" reads nearest .pi/agents. "both" merges both (project wins).',
-  default: "both",
-});
+function formatCompositionDetailsText(
+  runtimeState: ReturnType<typeof createCompositionRuntimeState>,
+  compositionId: string,
+): string {
+  const run = runtimeState.runs.get(compositionId);
+  if (!run) {
+    const known = getOrderedCompositions(runtimeState)
+      .map((item) => item.id.slice(0, 8))
+      .join(", ");
+    return `Unknown composition "${compositionId}". Known: ${known || "none"}`;
+  }
 
-const ParamsSchema = Type.Object({
-  name: Type.String({
-    description: "Name of the agent definition from markdown frontmatter",
-  }),
-  task: Type.String({ description: "Task to delegate" }),
-  scope: Type.Optional(ScopeSchema),
-  cwd: Type.Optional(
-    Type.String({
-      description: "Working directory for the delegated agent process",
-    }),
-  ),
-});
+  const nodes = getCompositionNodes(runtimeState, run.id);
+  const lines = [
+    `Composition: ${run.label}`,
+    `ID: ${run.id}`,
+    `Status: ${run.status}`,
+    `Scope: ${run.scope}`,
+    `CWD: ${run.cwd}`,
+    `Started: ${new Date(run.startedAt).toISOString()}`,
+  ];
+  if (run.completedAt) {
+    lines.push(`Completed: ${new Date(run.completedAt).toISOString()}`);
+  }
+  if (run.error) {
+    lines.push(`Error: ${run.error}`);
+  }
+  lines.push("", "Nodes:");
+  for (const node of nodes) {
+    const suffix: string[] = [];
+    if (node.branchKey) suffix.push(`branch=${node.branchKey}`);
+    if (node.iteration !== undefined)
+      suffix.push(`iteration=${node.iteration}`);
+    if (node.specId) suffix.push(`spec=${node.specId}`);
+    lines.push(
+      `- ${iconForStatus(node.status)} ${node.kind} ${node.id}${suffix.length > 0 ? ` (${suffix.join(", ")})` : ""}`,
+    );
+    if (node.error) lines.push(`  error: ${node.error}`);
+  }
+  if (run.result) {
+    lines.push("", "Result:", formatOutput(run.result.output));
+  }
+  return lines.join("\n");
+}
+
+function formatOutput(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function updateCompositionUI(
+  ctx: ExtensionContext | undefined,
+  runtimeState: ReturnType<typeof createCompositionRuntimeState>,
+): void {
+  if (!ctx?.hasUI) return;
+  const runs = getOrderedCompositions(runtimeState);
+  const active = runs.filter((run) => run.status === "running");
+
+  if (active.length === 0) {
+    ctx.ui.setWidget("pi-agents-compositions", undefined);
+    ctx.ui.setStatus("pi-agents-compositions", undefined);
+    return;
+  }
+
+  const lines = ["● compositions"];
+  for (const run of active.slice(0, 5)) {
+    const nodes = getCompositionNodes(runtimeState, run.id);
+    const lastNodes = nodes.slice(-4);
+    lines.push(
+      `├─ ${iconForStatus(run.status)} ${run.label} ${run.id.slice(0, 8)} ${run.status}`,
+    );
+    for (const node of lastNodes) {
+      const label = node.label ?? node.specId ?? node.kind;
+      lines.push(`│  ├─ ${iconForStatus(node.status)} ${label}`);
+    }
+  }
+
+  const counts = countStatuses(runtimeState);
+  ctx.ui.setWidget("pi-agents-compositions", lines);
+  ctx.ui.setStatus(
+    "pi-agents-compositions",
+    `${counts.compositions} compositions · ${counts.running} agents running · ${counts.waiting} joins waiting`,
+  );
+}
 
 export function createAgentExtension(options?: {
   spawnProcess?: SpawnProcess;
 }) {
-  const spawnProcess = options?.spawnProcess ?? spawn;
+  const engine = createSubprocessSpawnEngine({
+    spawnProcess: options?.spawnProcess,
+  });
+
   return function agentExtension(pi: ExtensionAPI) {
+    const runtimeState = createCompositionRuntimeState();
+    const manager = new AgentManager(engine);
+    const executor = new CompositionExecutor({
+      pi,
+      manager,
+      runtimeState,
+      onStateChanged: (ctx) => updateCompositionUI(ctx, runtimeState),
+    });
+
+    if (typeof (pi as { on?: unknown }).on === "function") {
+      pi.on("session_start", async (_event, ctx) => {
+        const rebuilt = rebuildCompositionState(
+          ctx.sessionManager.getEntries(),
+        );
+        runtimeState.runs.clear();
+        runtimeState.nodes.clear();
+        runtimeState.order.length = 0;
+        for (const [id, run] of rebuilt.runs.entries())
+          runtimeState.runs.set(id, run);
+        for (const [id, node] of rebuilt.nodes.entries())
+          runtimeState.nodes.set(id, node);
+        runtimeState.order.push(...rebuilt.order);
+        markRunningCompositionsAborted(runtimeState);
+        updateCompositionUI(ctx, runtimeState);
+      });
+    }
+
     pi.registerCommand("agents", {
       description:
         "List available agents, or show details for a specific agent",
@@ -286,12 +359,40 @@ export function createAgentExtension(options?: {
       },
     });
 
+    pi.registerCommand("compositions", {
+      description: "List compositions, or show details for a specific run",
+      getArgumentCompletions: (prefix) => {
+        const items = getOrderedCompositions(runtimeState)
+          .map((run) => ({
+            value: run.id,
+            label: run.label,
+            description: `${run.status} · ${run.id.slice(0, 8)}`,
+          }))
+          .filter(
+            (item) =>
+              item.value.startsWith(prefix) || item.label.startsWith(prefix),
+          );
+        return items.length > 0 ? items : null;
+      },
+      handler: async (args) => {
+        const query = args.trim();
+        const content = query
+          ? formatCompositionDetailsText(runtimeState, query)
+          : formatCompositionOverviewText(runtimeState);
+        pi.sendMessage({
+          customType: COMPOSITION_EVENT_CUSTOM_TYPE,
+          content,
+          display: true,
+        });
+      },
+    });
+
     pi.registerTool({
       name: "agent",
       label: "Agent",
       description:
         "Run an isolated pi agent from an agent markdown definition (name, description, model, thinking, skills).",
-      parameters: ParamsSchema,
+      parameters: AgentParamsSchema,
       async execute(
         _toolCallId,
         params,
@@ -310,253 +411,97 @@ export function createAgentExtension(options?: {
           return {
             content: [{ type: "text", text: message }],
             details: {
-              agent: params.name,
-              agentSource: "unknown",
-              skills: [],
-              missingSkills: [],
-              exitCode: 1,
-              stderr: "",
-              usage: initialUsage(),
+              ...initialAgentDetails(scope, params.name),
               discoveryDiagnostics: diagnostics,
-              scope,
             },
             isError: true,
           };
         }
 
-        return runSingleAgent({
-          agent,
-          task: params.task,
-          cwd: params.cwd ?? ctx.cwd,
-          signal,
-          onUpdate,
-          scope,
-          discoveryDiagnostics: diagnostics,
-          spawnProcess,
-        });
+        const handle = manager.spawn(
+          {
+            agent,
+            task: params.task,
+            cwd: params.cwd ?? ctx.cwd,
+            scope,
+            discoveryDiagnostics: diagnostics,
+          },
+          ctx,
+        );
+
+        const onAbort = () => {
+          void handle.abort();
+        };
+        if (signal) {
+          if (signal.aborted) onAbort();
+          else signal.addEventListener("abort", onAbort, { once: true });
+        }
+
+        const updateTask = (async () => {
+          if (!onUpdate) return;
+          for await (const update of handle.updates) {
+            onUpdate({
+              content: [{ type: "text", text: update.text }],
+              details: update.details,
+            });
+          }
+        })();
+
+        try {
+          const result = await handle.wait();
+          await updateTask;
+          return {
+            content: [{ type: "text", text: result.text || "(no output)" }],
+            details: result.details,
+          };
+        } finally {
+          if (signal) signal.removeEventListener("abort", onAbort);
+        }
+      },
+    });
+
+    pi.registerTool({
+      name: "compose",
+      label: "Compose",
+      description:
+        "Execute an explicit, serializable workflow graph over isolated agent runs.",
+      parameters: ComposeParamsSchema,
+      async execute(
+        _toolCallId,
+        params,
+        signal,
+        onUpdate,
+        ctx,
+      ): Promise<AgentToolExecutionResult<CompositionResultDetails>> {
+        validateComposeParams(params);
+        const composeParams = params as ComposeParams;
+
+        try {
+          const details = await executor.execute(
+            composeParams,
+            ctx,
+            signal,
+            onUpdate,
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: details.result
+                  ? formatOutput(details.result.output)
+                  : `Composition ${details.composition.id} completed.`,
+              },
+            ],
+            details,
+          };
+        } catch (error) {
+          if (error instanceof CompositionExecutionError) throw error;
+          throw error;
+        }
       },
     });
   };
 }
 
 export default createAgentExtension();
-
-async function runSingleAgent(options: {
-  agent: Agent;
-  task: string;
-  cwd: string;
-  signal: AbortSignal | undefined;
-  onUpdate: ((result: AgentToolResult<AgentRunDetails>) => void) | undefined;
-  scope: Scope;
-  discoveryDiagnostics: string[];
-  spawnProcess: SpawnProcess;
-}): Promise<AgentToolExecutionResult<AgentRunDetails>> {
-  const {
-    agent,
-    task,
-    cwd,
-    signal,
-    onUpdate,
-    scope,
-    discoveryDiagnostics,
-    spawnProcess,
-  } = options;
-
-  const args: string[] = ["--mode", "json", "-p", "--no-session"];
-  if (agent.model) {
-    args.push("--model", agent.model);
-  }
-  if (agent.thinking) {
-    args.push("--thinking", agent.thinking);
-  }
-
-  const { prompt: skillsPrompt, missingSkills } = buildSkillsPrompt(
-    agent.skills,
-    cwd,
-  );
-  const appendParts = [agent.systemPrompt.trim(), skillsPrompt.trim()].filter(
-    Boolean,
-  );
-
-  let tempDir: string | undefined;
-  let tempPromptPath: string | undefined;
-  if (appendParts.length > 0) {
-    const tmp = writePromptToTempFile(agent.name, appendParts.join("\n\n"));
-    tempDir = tmp.dir;
-    tempPromptPath = tmp.filePath;
-    args.push("--append-system-prompt", tempPromptPath);
-  }
-
-  // Pipe the delegated task via stdin to avoid CLI argv parsing ambiguities.
-
-  const messages: Message[] = [];
-  const usage = initialUsage();
-  let stopReason: string | undefined;
-  let errorMessage: string | undefined;
-  let resolvedModel = agent.model;
-  let stderr = "";
-  let wasAborted = false;
-
-  const details = (exitCode: number): AgentRunDetails => ({
-    agent: agent.name,
-    agentSource: agent.source,
-    model: resolvedModel,
-    thinking: agent.thinking,
-    skills: [...agent.skills],
-    missingSkills,
-    exitCode,
-    stopReason,
-    errorMessage,
-    stderr,
-    usage: { ...usage },
-    discoveryDiagnostics,
-    scope,
-  });
-
-  const emitUpdate = () => {
-    if (!onUpdate) return;
-    onUpdate({
-      content: [
-        { type: "text", text: getFinalOutput(messages) || "(running...)" },
-      ],
-      details: details(-1),
-    });
-  };
-
-  try {
-    const exitCode = await new Promise<number>((resolve) => {
-      const proc = spawnProcess("pi", args, {
-        cwd,
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let buffered = "";
-      let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-      let settled = false;
-
-      const finish = (code: number) => {
-        if (settled) return;
-        settled = true;
-        if (forceKillTimer) {
-          clearTimeout(forceKillTimer);
-          forceKillTimer = undefined;
-        }
-        resolve(code);
-      };
-
-      const parseLine = (line: string) => {
-        if (!line.trim()) return;
-        const msg = parseMessageEndEvent(line);
-        if (!msg) return;
-
-        messages.push(msg);
-        if (msg.role === "assistant") {
-          usage.turns += 1;
-          if (msg.usage) {
-            usage.input += msg.usage.input || 0;
-            usage.output += msg.usage.output || 0;
-            usage.cacheRead += msg.usage.cacheRead || 0;
-            usage.cacheWrite += msg.usage.cacheWrite || 0;
-            usage.cost += msg.usage.cost?.total || 0;
-            usage.contextTokens = msg.usage.totalTokens || usage.contextTokens;
-          }
-          if (msg.model) {
-            resolvedModel = msg.model;
-          }
-          if (msg.stopReason) {
-            stopReason = msg.stopReason;
-          }
-          if (msg.errorMessage) {
-            errorMessage = msg.errorMessage;
-          }
-        }
-        emitUpdate();
-      };
-
-      proc.stdout.on("data", (chunk) => {
-        buffered += chunk.toString();
-        const lines = buffered.split("\n");
-        buffered = lines.pop() || "";
-        for (const line of lines) parseLine(line);
-      });
-
-      proc.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-
-      proc.on("close", (code, signalCode) => {
-        if (buffered.trim()) {
-          parseLine(buffered);
-        }
-        if (signalCode) {
-          const signalFailure = `Delegated "pi" process terminated by signal ${signalCode}.`;
-          stderr = stderr ? `${stderr}\n${signalFailure}` : signalFailure;
-          if (!errorMessage) errorMessage = signalFailure;
-          finish(1);
-          return;
-        }
-        finish(code ?? 0);
-      });
-
-      proc.on("error", (error) => {
-        const errorText =
-          error instanceof Error ? error.message : String(error);
-        const spawnFailure = `Failed to spawn "pi": ${errorText}`;
-        stderr = stderr ? `${stderr}\n${spawnFailure}` : spawnFailure;
-        if (!errorMessage) errorMessage = spawnFailure;
-        finish(1);
-      });
-
-      if (signal) {
-        const kill = () => {
-          if (wasAborted) return;
-          wasAborted = true;
-          proc.kill("SIGTERM");
-          forceKillTimer = setTimeout(() => {
-            if (isChildProcessRunning(proc)) proc.kill("SIGKILL");
-          }, 5000);
-        };
-        if (signal.aborted) kill();
-        else signal.addEventListener("abort", kill, { once: true });
-      }
-
-      proc.stdin.end(task);
-    });
-
-    if (wasAborted) {
-      throw new DelegatedAgentRunError(`Agent ${agent.name} aborted.`, details(1));
-    }
-
-    const finalText = getFinalOutput(messages);
-    const isError =
-      exitCode !== 0 || stopReason === "error" || stopReason === "aborted";
-    if (isError) {
-      const rawReason = errorMessage || stderr || finalText || "(no output)";
-      const reason = formatFailureReason(rawReason, resolvedModel);
-      throw new DelegatedAgentRunError(
-        `Agent ${agent.name} failed: ${reason}`,
-        details(exitCode),
-      );
-    }
-
-    return {
-      content: [{ type: "text", text: finalText || "(no output)" }],
-      details: details(exitCode),
-    };
-  } finally {
-    if (tempPromptPath) {
-      try {
-        fs.unlinkSync(tempPromptPath);
-      } catch {
-        // ignore cleanup errors
-      }
-    }
-    if (tempDir) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        // ignore cleanup errors
-      }
-    }
-  }
-}
+export { formatFailureReason, isChildProcessRunning, type SpawnProcess };

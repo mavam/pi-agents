@@ -10,11 +10,18 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from "@mariozechner/pi-coding-agent";
 import agentExtension, {
   createAgentExtension,
   type SpawnProcess,
 } from "../extensions/agent/index.ts";
+import type { AgentRunDetails } from "../extensions/agent/types.ts";
+
+type ErrorWithDetails = Error & { details?: AgentRunDetails };
 
 let sandboxDir = "";
 let workspaceDir = "";
@@ -48,17 +55,19 @@ function writeAgent(filePath: string, name: string, description: string): void {
 function setupTool(register = agentExtension) {
   let tool: ToolDefinition | undefined;
 
-  register({
+  const api = {
     registerCommand() {
       // not needed for tool tests
     },
-    registerTool(registered) {
+    registerTool(registered: ToolDefinition) {
       if (registered.name === "agent") tool = registered;
     },
     sendMessage() {
       // not needed for tool tests
     },
-  } as any);
+  } as unknown as ExtensionAPI;
+
+  register(api);
 
   if (!tool) throw new Error("agent tool was not registered");
   return tool;
@@ -131,7 +140,7 @@ describe("agent tool delegated process execution", () => {
       { name: "explorer", task: "--help" },
       undefined,
       undefined,
-      { cwd: workspaceDir } as any,
+      { cwd: workspaceDir } as unknown as ExtensionContext,
     );
 
     expect(result.isError).toBeFalsy();
@@ -178,16 +187,16 @@ describe("agent tool delegated process execution", () => {
         { name: "explorer", task: "do work" },
         undefined,
         undefined,
-        { cwd: workspaceDir } as any,
+        { cwd: workspaceDir } as unknown as ExtensionContext,
       )
       .then(() => null)
-      .catch((caught) => caught as Error & { details?: any })) as
-      | (Error & { details?: any })
-      | null;
+      .catch(
+        (caught) => caught as ErrorWithDetails,
+      )) as ErrorWithDetails | null;
 
     expect(error).not.toBeNull();
     expect(error?.message ?? "").toContain('Failed to spawn "pi"');
-    const details = error?.details as any;
+    const details = error?.details;
     expect(details?.errorMessage ?? "").toContain('Failed to spawn "pi"');
     expect(details?.stderr ?? "").toContain('Failed to spawn "pi"');
   });
@@ -230,16 +239,16 @@ describe("agent tool delegated process execution", () => {
         { name: "explorer", task: "do work" },
         undefined,
         undefined,
-        { cwd: workspaceDir } as any,
+        { cwd: workspaceDir } as unknown as ExtensionContext,
       )
       .then(() => null)
-      .catch((caught) => caught as Error & { details?: any })) as
-      | (Error & { details?: any })
-      | null;
+      .catch(
+        (caught) => caught as ErrorWithDetails,
+      )) as ErrorWithDetails | null;
 
     expect(error).not.toBeNull();
     expect(error?.message ?? "").toContain("terminated by signal SIGKILL");
-    const details = error?.details as any;
+    const details = error?.details;
     expect(details?.exitCode).toBe(1);
     expect(details?.stderr ?? "").toContain("terminated by signal SIGKILL");
   });

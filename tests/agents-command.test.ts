@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import agentExtension from "../extensions/agent/index.ts";
 
 interface CapturedMessage {
@@ -64,7 +65,7 @@ function setupExtension(): {
     sendMessage(message) {
       messages.push(message as CapturedMessage);
     },
-  } as any);
+  } as unknown as ExtensionAPI);
 
   const command = commands.get("agents");
   if (!command) throw new Error("/agents command was not registered");

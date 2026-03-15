@@ -39,14 +39,14 @@ describe("formatFailureReason", () => {
 
 describe("isChildProcessRunning", () => {
   it("returns true only when neither exitCode nor signalCode is set", () => {
+    expect(isChildProcessRunning({ exitCode: null, signalCode: null })).toBe(
+      true,
+    );
+    expect(isChildProcessRunning({ exitCode: 0, signalCode: null })).toBe(
+      false,
+    );
     expect(
-      isChildProcessRunning({ exitCode: null, signalCode: null } as any),
-    ).toBe(true);
-    expect(
-      isChildProcessRunning({ exitCode: 0, signalCode: null } as any),
-    ).toBe(false);
-    expect(
-      isChildProcessRunning({ exitCode: null, signalCode: "SIGTERM" } as any),
+      isChildProcessRunning({ exitCode: null, signalCode: "SIGTERM" }),
     ).toBe(false);
   });
 });

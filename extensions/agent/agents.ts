@@ -116,8 +116,7 @@ function parseAgentFile(filePath: string, source: Source): Agent | string {
     return `Invalid 'thinking' (must be one of ${THINKING_LEVELS.join("|")})`;
   if (
     fm.skills !== undefined &&
-    (!Array.isArray(fm.skills) ||
-      fm.skills.some((s) => typeof s !== "string"))
+    (!Array.isArray(fm.skills) || fm.skills.some((s) => typeof s !== "string"))
   )
     return "Invalid 'skills' (must be a YAML array of strings)";
 
@@ -220,10 +219,7 @@ const EMPTY_LOAD_RESULT = {
   diagnostics: [] as Diagnostic[],
 };
 
-export function discoverAgents(
-  cwd: string,
-  scope: Scope,
-): DiscoveryResult {
+export function discoverAgents(cwd: string, scope: Scope): DiscoveryResult {
   const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
   const user =

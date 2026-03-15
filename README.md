@@ -6,7 +6,7 @@ A generic framework for agent orchestration in
 ## 📦 Install
 
 ```bash
-pi install npm:@tenzir/pi-agents
+pi install npm:pi-agents
 ```
 
 Where agents are loaded from:

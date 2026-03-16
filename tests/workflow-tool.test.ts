@@ -298,6 +298,75 @@ describe("workflow tool", () => {
     expect(details.result?.output).toBe("combined summary");
   });
 
+  it("rejects duplicate workflow node ids", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const workflowTool = setupWorkflowTool(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    const error = (await workflowTool
+      .execute(
+        "call-duplicate-id",
+        {
+          flow: {
+            kind: "sequence",
+            steps: [
+              { kind: "spawn", id: "dup", agent: "worker", task: "first" },
+              { kind: "spawn", id: "dup", agent: "worker", task: "second" },
+            ],
+          },
+        },
+        undefined,
+        undefined,
+        { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+      )
+      .then(() => null)
+      .catch((caught) => caught as Error)) as Error | null;
+
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toContain('duplicates "dup"');
+    expect(inputs).toEqual([]);
+  });
+
+  it("rejects joins that do not reference a fork", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const workflowTool = setupWorkflowTool(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    const error = (await workflowTool
+      .execute(
+        "call-invalid-join",
+        {
+          flow: {
+            kind: "sequence",
+            steps: [
+              {
+                kind: "spawn",
+                id: "not-a-fork",
+                agent: "worker",
+                task: "first",
+              },
+              { kind: "join", from: "not-a-fork", mode: "all" },
+            ],
+          },
+        },
+        undefined,
+        undefined,
+        { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+      )
+      .then(() => null)
+      .catch((caught) => caught as Error)) as Error | null;
+
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toContain("must reference a fork node");
+    expect(inputs).toEqual([]);
+  });
+
   it("does not start later sequence steps after cancellation", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "reviewer.md"),

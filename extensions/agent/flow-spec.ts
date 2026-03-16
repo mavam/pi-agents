@@ -181,6 +181,58 @@ function validateLoopSpec(
   }
 }
 
+function validateFlowReferences(flow: FlowSpec): void {
+  const ids = new Map<string, FlowSpec["kind"]>();
+  const joins: Array<{ from: string; label: string }> = [];
+
+  const visit = (spec: FlowSpec, label: string) => {
+    if (spec.id) {
+      const previous = ids.get(spec.id);
+      if (previous) {
+        throw new Error(
+          `${label}.id duplicates "${spec.id}", which is already used by a ${previous} node.`,
+        );
+      }
+      ids.set(spec.id, spec.kind);
+    }
+
+    switch (spec.kind) {
+      case "spawn":
+        return;
+      case "sequence":
+        for (const [index, step] of spec.steps.entries()) {
+          visit(step, `${label}.steps[${index}]`);
+        }
+        return;
+      case "fork":
+        for (const [branchKey, branchSpec] of Object.entries(spec.branches)) {
+          visit(branchSpec, `${label}.branches.${branchKey}`);
+        }
+        return;
+      case "join":
+        joins.push({ from: spec.from, label: `${label}.from` });
+        return;
+      case "loop":
+        visit(spec.body, `${label}.body`);
+        return;
+    }
+  };
+
+  visit(flow, "flow");
+
+  for (const join of joins) {
+    const targetKind = ids.get(join.from);
+    if (!targetKind) {
+      throw new Error(`${join.label} references unknown fork "${join.from}".`);
+    }
+    if (targetKind !== "fork") {
+      throw new Error(
+        `${join.label} must reference a fork node, but "${join.from}" is a ${targetKind}.`,
+      );
+    }
+  }
+}
+
 export function validateFlowSpec(
   spec: unknown,
   label = "flow",
@@ -217,6 +269,7 @@ export function validateWorkflowParams(
   }
   assertOptionalString(params.label, "label");
   validateFlowSpec(params.flow, "flow");
+  validateFlowReferences(params.flow);
   assertOptionalString(params.cwd, "cwd");
   if (
     params.scope !== undefined &&

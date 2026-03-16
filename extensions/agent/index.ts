@@ -13,6 +13,7 @@ import {
 } from "./agents.js";
 import {
   createSubprocessSpawnEngine,
+  DelegatedAgentRunError,
   formatFailureReason,
   isChildProcessRunning,
   type SpawnProcess,
@@ -32,6 +33,7 @@ import {
 import type {
   AgentRunDetails,
   RunResultDetails,
+  SpawnNodeResult,
   WorkflowParams,
 } from "./types.js";
 
@@ -276,6 +278,12 @@ function formatOutput(value: unknown): string {
   }
 }
 
+function getRootSpawnResult(
+  details: RunResultDetails,
+): SpawnNodeResult | undefined {
+  return details.result?.kind === "spawn" ? details.result : undefined;
+}
+
 function updateRunUI(
   ctx: ExtensionContext | undefined,
   runtimeState: ReturnType<typeof createRunRuntimeState>,
@@ -485,44 +493,60 @@ export function createAgentExtension(options?: {
           };
         }
 
-        const handle = manager.spawn(
-          {
-            agent,
+        const workflow: WorkflowParams = {
+          label: agent.name,
+          cwd: params.cwd ?? ctx.cwd,
+          scope,
+          flow: {
+            kind: "spawn",
+            id: params.name,
+            label: agent.name,
+            agent: params.name,
             task: params.task,
-            cwd: params.cwd ?? ctx.cwd,
-            scope,
-            discoveryDiagnostics: diagnostics,
           },
-          ctx,
-        );
-
-        const onAbort = () => {
-          void handle.abort();
         };
-        if (signal) {
-          if (signal.aborted) onAbort();
-          else signal.addEventListener("abort", onAbort, { once: true });
-        }
-
-        const updateTask = (async () => {
-          if (!onUpdate) return;
-          for await (const update of handle.updates) {
-            onUpdate({
-              content: [{ type: "text", text: update.text }],
-              details: update.details,
-            });
-          }
-        })();
 
         try {
-          const result = await handle.wait();
-          await updateTask;
+          const details = await executor.execute(
+            workflow,
+            ctx,
+            signal,
+            onUpdate
+              ? (update) => {
+                  const spawnResult = getRootSpawnResult(update.details);
+                  if (!spawnResult) return;
+                  onUpdate({
+                    content: [
+                      {
+                        type: "text",
+                        text: spawnResult.text || "(no output)",
+                      },
+                    ],
+                    details: spawnResult.run,
+                  });
+                }
+              : undefined,
+          );
+          const spawnResult = getRootSpawnResult(details);
+          if (!spawnResult) {
+            throw new Error(
+              "Expected single-agent workflow to return a spawn result.",
+            );
+          }
           return {
-            content: [{ type: "text", text: result.text || "(no output)" }],
-            details: result.details,
+            content: [
+              { type: "text", text: spawnResult.text || "(no output)" },
+            ],
+            details: spawnResult.run,
           };
-        } finally {
-          if (signal) signal.removeEventListener("abort", onAbort);
+        } catch (error) {
+          if (
+            error instanceof RunExecutionError &&
+            error.cause instanceof DelegatedAgentRunError
+          ) {
+            throw error.cause;
+          }
+          throw error;
         }
       },
     });

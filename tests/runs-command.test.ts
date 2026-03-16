@@ -108,11 +108,13 @@ function createSpawnProcess(
 function setupExtension(spawnProcess: SpawnProcess): {
   runsCommand: RegisteredCommand;
   runCommand: RegisteredCommand;
+  agentTool: ToolDefinition;
   workflowTool: ToolDefinition;
   messages: CapturedMessage[];
 } {
   const commands = new Map<string, RegisteredCommand>();
   const messages: CapturedMessage[] = [];
+  let agentTool: ToolDefinition | undefined;
   let workflowTool: ToolDefinition | undefined;
 
   createAgentExtension({ spawnProcess })({
@@ -120,6 +122,7 @@ function setupExtension(spawnProcess: SpawnProcess): {
       commands.set(name, options as RegisteredCommand);
     },
     registerTool(tool) {
+      if (tool.name === "agent") agentTool = tool;
       if (tool.name === "workflow") workflowTool = tool;
     },
     sendMessage(message) {
@@ -144,8 +147,9 @@ function setupExtension(spawnProcess: SpawnProcess): {
   const runCommand = commands.get("run");
   if (!runCommand) throw new Error("/run command was not registered");
 
+  if (!agentTool) throw new Error("agent tool was not registered");
   if (!workflowTool) throw new Error("workflow tool was not registered");
-  return { runsCommand, runCommand, workflowTool, messages };
+  return { runsCommand, runCommand, agentTool, workflowTool, messages };
 }
 
 beforeEach(() => {
@@ -219,5 +223,33 @@ describe("/run command", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain(`ID: ${runId}`);
     expect(messages[0]?.content).not.toContain("Unknown run");
+  });
+
+  it("lists direct agent tool executions as runs", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "explorer.md"),
+      "explorer",
+      "Project explorer",
+    );
+
+    const inputs: string[] = [];
+    const { agentTool, runsCommand, messages } = setupExtension(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    await agentTool.execute(
+      "call-agent-1",
+      { name: "explorer", task: "inspect" },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    messages.length = 0;
+    await runsCommand.handler("", { cwd: workspaceDir });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toContain("explorer");
+    expect(messages[0]?.content).toContain("completed");
   });
 });

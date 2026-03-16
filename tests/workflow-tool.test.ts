@@ -395,4 +395,167 @@ describe("workflow tool", () => {
     expect(details.result.iterations).toHaveLength(2);
     expect(details.result.output.done).toBe(true);
   });
+
+  it("aborts running siblings and stops scheduling new branches on failFast", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+    let branchBKillCount = 0;
+    let branchCStarts = 0;
+
+    const spawnProcess: SpawnProcess = (_command, _args, _options) => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      let capturedInput = "";
+      const stdin = new Writable({
+        write(chunk, _encoding, callback) {
+          capturedInput += chunk.toString();
+          callback();
+        },
+        final(callback) {
+          queueMicrotask(() => {
+            if (capturedInput.includes("branch A")) {
+              stderr.write("branch A failed");
+              proc.emit("close", 1, null);
+              return;
+            }
+            if (capturedInput.includes("branch B")) {
+              return;
+            }
+            if (capturedInput.includes("branch C")) {
+              branchCStarts += 1;
+              const event = {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "result-c" }],
+                },
+              };
+              stdout.write(`${JSON.stringify(event)}\n`);
+              proc.emit("close", 0, null);
+            }
+          });
+          callback();
+        },
+      });
+      const proc =
+        new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+      Object.assign(proc, {
+        stdout,
+        stderr,
+        stdin,
+        exitCode: null,
+        signalCode: null,
+        kill(signal?: NodeJS.Signals) {
+          if (capturedInput.includes("branch B")) {
+            branchBKillCount += 1;
+          }
+          queueMicrotask(() => {
+            proc.emit("close", null, signal ?? "SIGTERM");
+          });
+          return true;
+        },
+      });
+      return proc;
+    };
+
+    const tool = setupWorkflowTool(spawnProcess);
+    const error = await tool
+      .execute(
+        "call-fail-fast",
+        {
+          flow: {
+            kind: "sequence",
+            steps: [
+              {
+                kind: "fork",
+                id: "fanout",
+                concurrency: 2,
+                branches: {
+                  a: { kind: "spawn", agent: "worker", task: "branch A" },
+                  b: { kind: "spawn", agent: "worker", task: "branch B" },
+                  c: { kind: "spawn", agent: "worker", task: "branch C" },
+                },
+              },
+              {
+                kind: "join",
+                from: "fanout",
+                mode: "all",
+              },
+            ],
+          },
+        },
+        undefined,
+        undefined,
+        { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+      )
+      .then(() => null)
+      .catch((caught) => caught as Error);
+
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toContain("branch A failed");
+    expect(branchBKillCount).toBeGreaterThan(0);
+    expect(branchCStarts).toBe(0);
+  });
+
+  it("does not spawn child agents when the workflow is aborted before budget awaits resolve", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+    let spawnCount = 0;
+    const spawnProcess: SpawnProcess = (...args) => {
+      spawnCount += 1;
+      return createSpawnProcess(() => "ok", [])(...args);
+    };
+
+    const tool = setupWorkflowTool(spawnProcess);
+    const controller = new AbortController();
+    queueMicrotask(() => controller.abort());
+
+    const error = await tool
+      .execute(
+        "call-pre-abort",
+        {
+          flow: {
+            kind: "spawn",
+            id: "only",
+            agent: "worker",
+            task: "do work",
+          },
+        },
+        controller.signal,
+        undefined,
+        { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+      )
+      .then(() => null)
+      .catch((caught) => caught as Error);
+
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toContain("Workflow aborted");
+    expect(spawnCount).toBe(0);
+  });
+
+  it("emits immutable run snapshots to workflow observers", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+    const inputs: string[] = [];
+    const tool = setupWorkflowTool(createSpawnProcess(() => "done", inputs));
+    const snapshots: RunResultDetails[] = [];
+
+    await tool.execute(
+      "call-snapshots",
+      {
+        flow: {
+          kind: "spawn",
+          id: "only",
+          agent: "worker",
+          task: "do work",
+        },
+      },
+      undefined,
+      (update) => {
+        snapshots.push(update.details as RunResultDetails);
+      },
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots[0]?.run.status).toBe("running");
+    expect(snapshots[0]?.result).toBeUndefined();
+  });
 });

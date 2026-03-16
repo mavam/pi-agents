@@ -65,6 +65,17 @@ function setupTool(register = agentExtension) {
     sendMessage() {
       // not needed for tool tests
     },
+    appendEntry() {
+      // not needed for tool tests
+    },
+    on() {
+      // not needed for tool tests
+    },
+    events: {
+      emit() {
+        // not needed for tool tests
+      },
+    },
   } as unknown as ExtensionAPI;
 
   register(api);

@@ -8,7 +8,7 @@ import { BudgetActor } from "./budgets.js";
 import type { SpawnHandle } from "./engine/interface.js";
 import { DelegatedAgentRunError } from "./engine/subprocess.js";
 import { parseJsonText } from "./flow-spec.js";
-import { type AgentManager, mapWithConcurrencyLimit } from "./manager.js";
+import type { AgentManager } from "./manager.js";
 import { appendRunEvent } from "./persistence.js";
 import type { RunRuntimeState } from "./state.js";
 import { applyRunEvent, getRunNodes } from "./state.js";
@@ -39,6 +39,8 @@ interface FlowMemory {
   readonly history: FlowNodeResult[];
 }
 
+type ForkFailurePolicy = "failFast" | "collectErrors";
+
 interface EvaluationState {
   runId: string;
   cwd: string;
@@ -49,6 +51,8 @@ interface EvaluationState {
   memory: FlowMemory;
   signal?: AbortSignal;
   createNodeId: (spec: FlowSpec) => string;
+  joinFailurePolicies: ReadonlyMap<string, ForkFailurePolicy>;
+  handleRegistry: HandleRegistryActor;
 }
 
 interface ExecutorOptions {
@@ -60,12 +64,198 @@ interface ExecutorOptions {
 
 export class RunExecutionError extends Error {
   readonly details: RunResultDetails;
+  readonly cause: unknown;
 
-  constructor(message: string, details: RunResultDetails) {
+  constructor(message: string, details: RunResultDetails, cause?: unknown) {
     super(message);
     this.name = "RunExecutionError";
     this.details = details;
+    this.cause = cause;
   }
+}
+
+interface HandleRegistryState {
+  aborted: boolean;
+  handles: Map<string, SpawnHandle>;
+}
+
+class HandleRegistryActor {
+  private readonly state: HandleRegistryState = {
+    aborted: false,
+    handles: new Map(),
+  };
+  private mailbox: Promise<void> = Promise.resolve();
+
+  private send<T>(fn: (state: HandleRegistryState) => T): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.mailbox = this.mailbox.then(() => {
+        try {
+          resolve(fn(this.state));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  }
+
+  spawn(factory: () => SpawnHandle): Promise<SpawnHandle> {
+    return this.send((state) => {
+      if (state.aborted) {
+        throw new Error("Workflow aborted.");
+      }
+      const handle = factory();
+      state.handles.set(handle.id, handle);
+      return handle;
+    });
+  }
+
+  release(handleId: string): Promise<void> {
+    return this.send((state) => {
+      state.handles.delete(handleId);
+    });
+  }
+
+  async abortAll(): Promise<void> {
+    const handles = await this.send((state) => {
+      state.aborted = true;
+      return [...state.handles.values()];
+    });
+    await Promise.all(handles.map((handle) => handle.abort()));
+  }
+}
+
+interface ForkCoordinatorState {
+  cursor: number;
+  stopped: boolean;
+  controllers: Map<string, AbortController>;
+  primaryFailure?: string;
+}
+
+class ForkCoordinatorActor {
+  private readonly state: ForkCoordinatorState = {
+    cursor: 0,
+    stopped: false,
+    controllers: new Map(),
+  };
+  private mailbox: Promise<void> = Promise.resolve();
+
+  constructor(
+    private readonly entries: ReadonlyArray<readonly [string, FlowSpec]>,
+  ) {}
+
+  private send<T>(fn: (state: ForkCoordinatorState) => T): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.mailbox = this.mailbox.then(() => {
+        try {
+          resolve(fn(this.state));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  }
+
+  next(): Promise<readonly [string, FlowSpec] | undefined> {
+    return this.send((state) => {
+      if (state.stopped) return undefined;
+      const entry = this.entries[state.cursor];
+      if (!entry) return undefined;
+      state.cursor += 1;
+      return entry;
+    });
+  }
+
+  register(key: string, controller: AbortController): Promise<boolean> {
+    return this.send((state) => {
+      if (state.stopped) return false;
+      state.controllers.set(key, controller);
+      return true;
+    });
+  }
+
+  complete(key: string): Promise<void> {
+    return this.send((state) => {
+      state.controllers.delete(key);
+    });
+  }
+
+  recordFailure(
+    key: string,
+    message: string,
+  ): Promise<{ primary: boolean; controllers: AbortController[] }> {
+    return this.send((state) => {
+      state.controllers.delete(key);
+      if (state.primaryFailure !== undefined) {
+        return { primary: false, controllers: [] };
+      }
+      state.primaryFailure = message;
+      state.stopped = true;
+      return {
+        primary: true,
+        controllers: [...state.controllers.values()],
+      };
+    });
+  }
+
+  primaryFailure(): Promise<string | undefined> {
+    return this.send((state) => state.primaryFailure);
+  }
+}
+
+function collectJoinFailurePolicies(
+  flow: FlowSpec,
+): ReadonlyMap<string, ForkFailurePolicy> {
+  const policies = new Map<string, ForkFailurePolicy>();
+
+  const visit = (spec: FlowSpec) => {
+    switch (spec.kind) {
+      case "spawn":
+        return;
+      case "sequence":
+        for (const step of spec.steps) visit(step);
+        return;
+      case "fork":
+        for (const branch of Object.values(spec.branches)) visit(branch);
+        return;
+      case "join": {
+        const policy = spec.onFailure ?? "failFast";
+        if (policy === "failFast" || !policies.has(spec.from)) {
+          policies.set(spec.from, policy);
+        }
+        return;
+      }
+      case "loop":
+        visit(spec.body);
+        return;
+    }
+  };
+
+  visit(flow);
+  return policies;
+}
+
+function createLinkedAbortController(parentSignal?: AbortSignal): {
+  controller: AbortController;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  if (!parentSignal) {
+    return { controller, dispose: () => undefined };
+  }
+  if (parentSignal.aborted) {
+    controller.abort();
+    return { controller, dispose: () => undefined };
+  }
+  const onAbort = () => controller.abort();
+  parentSignal.addEventListener("abort", onAbort, { once: true });
+  return {
+    controller,
+    dispose: () => parentSignal.removeEventListener("abort", onAbort),
+  };
+}
+
+function cloneSnapshot<T>(value: T): T {
+  return structuredClone(value);
 }
 
 function toDiagnosticText(
@@ -285,11 +475,11 @@ export class RunExecutor {
     if (!run) {
       throw new Error(`Unknown run ${runId}.`);
     }
-    return {
+    return cloneSnapshot({
       run,
       nodes: getRunNodes(this.options.runtimeState, runId),
       result: run.result,
-    };
+    });
   }
 
   async execute(
@@ -320,10 +510,7 @@ export class RunExecutor {
       scope: params.scope ?? "both",
     };
 
-    const activeHandles = new Set<SpawnHandle>();
-    const abortActive = async () => {
-      await Promise.all([...activeHandles].map((handle) => handle.abort()));
-    };
+    const handleRegistry = new HandleRegistryActor();
 
     const notifyUpdate = () => {
       if (!onUpdate) return;
@@ -338,7 +525,7 @@ export class RunExecutor {
     };
 
     const onAbort = () => {
-      void abortActive();
+      void handleRegistry.abortAll();
     };
     if (signal) {
       if (signal.aborted) onAbort();
@@ -360,6 +547,8 @@ export class RunExecutor {
       },
       signal,
       createNodeId,
+      joinFailurePolicies: collectJoinFailurePolicies(flow),
+      handleRegistry,
     };
 
     try {
@@ -370,7 +559,6 @@ export class RunExecutor {
           parentNodeId: undefined,
         },
         ctx,
-        activeHandles,
         notifyUpdate,
         rootNodeId,
       );
@@ -400,7 +588,7 @@ export class RunExecutor {
         ctx,
       );
       notifyUpdate();
-      throw new RunExecutionError(message, this.buildSnapshot(runId));
+      throw new RunExecutionError(message, this.buildSnapshot(runId), error);
     } finally {
       if (signal) signal.removeEventListener("abort", onAbort);
     }
@@ -410,7 +598,6 @@ export class RunExecutor {
     spec: FlowSpec,
     state: EvaluationState,
     ctx: ExtensionContext,
-    activeHandles: Set<SpawnHandle>,
     notifyUpdate: () => void,
     forcedNodeId?: string,
     branchKey?: string,
@@ -438,13 +625,7 @@ export class RunExecutor {
       let result: FlowNodeResult;
       switch (spec.kind) {
         case "spawn":
-          result = await this.evaluateSpawn(
-            spec,
-            nodeId,
-            state,
-            ctx,
-            activeHandles,
-          );
+          result = await this.evaluateSpawn(spec, nodeId, state, ctx);
           break;
         case "sequence":
           result = await this.evaluateSequence(
@@ -452,7 +633,6 @@ export class RunExecutor {
             nodeId,
             state,
             ctx,
-            activeHandles,
             notifyUpdate,
           );
           break;
@@ -462,18 +642,11 @@ export class RunExecutor {
             nodeId,
             state,
             ctx,
-            activeHandles,
             notifyUpdate,
           );
           break;
         case "join":
-          result = await this.evaluateJoin(
-            spec,
-            nodeId,
-            state,
-            ctx,
-            activeHandles,
-          );
+          result = await this.evaluateJoin(spec, nodeId, state, ctx);
           break;
         case "loop":
           result = await this.evaluateLoop(
@@ -481,7 +654,6 @@ export class RunExecutor {
             nodeId,
             state,
             ctx,
-            activeHandles,
             notifyUpdate,
           );
           break;
@@ -521,10 +693,10 @@ export class RunExecutor {
     nodeId: string,
     state: EvaluationState,
     ctx: ExtensionContext,
-    activeHandles: Set<SpawnHandle>,
   ): Promise<SpawnNodeResult> {
     assertNotAborted(state.signal);
     await state.budgets.acquireSpawn(state.depth);
+    assertNotAborted(state.signal);
 
     const scope = spec.scope ?? state.scope;
     const cwd = spec.cwd ?? state.cwd;
@@ -541,26 +713,35 @@ export class RunExecutor {
 
     const task = buildDelegatedTask(spec.task, state.memory);
     const budgetLimits = await state.budgets.limits();
-    const handle = this.options.manager.spawn(
-      {
-        agent,
-        task,
-        cwd,
-        scope,
-        discoveryDiagnostics: diagnostics,
-        runId: state.runId,
-        parentNodeId: nodeId,
-        depth: state.depth,
-        env: {
-          PI_RUN_ID: state.runId,
-          PI_RUN_NODE_ID: nodeId,
-          PI_RUN_DEPTH: String(state.depth),
-          PI_RUN_BUDGETS: JSON.stringify(budgetLimits),
+    assertNotAborted(state.signal);
+    const handle = await state.handleRegistry.spawn(() =>
+      this.options.manager.spawn(
+        {
+          agent,
+          task,
+          cwd,
+          scope,
+          discoveryDiagnostics: diagnostics,
+          runId: state.runId,
+          parentNodeId: nodeId,
+          depth: state.depth,
+          env: {
+            PI_RUN_ID: state.runId,
+            PI_RUN_NODE_ID: nodeId,
+            PI_RUN_DEPTH: String(state.depth),
+            PI_RUN_BUDGETS: JSON.stringify(budgetLimits),
+          },
         },
-      },
-      ctx,
+        ctx,
+      ),
     );
-    activeHandles.add(handle);
+    const onAbort = () => {
+      void handle.abort();
+    };
+    if (state.signal) {
+      if (state.signal.aborted) onAbort();
+      else state.signal.addEventListener("abort", onAbort, { once: true });
+    }
 
     try {
       const spawnResult = await handle.wait();
@@ -583,7 +764,8 @@ export class RunExecutor {
       }
       throw error instanceof Error ? error : new Error(String(error));
     } finally {
-      activeHandles.delete(handle);
+      if (state.signal) state.signal.removeEventListener("abort", onAbort);
+      await state.handleRegistry.release(handle.id);
     }
   }
 
@@ -592,7 +774,6 @@ export class RunExecutor {
     nodeId: string,
     state: EvaluationState,
     ctx: ExtensionContext,
-    activeHandles: Set<SpawnHandle>,
     notifyUpdate: () => void,
   ): Promise<SequenceNodeResult> {
     const steps: FlowNodeResult[] = [];
@@ -610,7 +791,6 @@ export class RunExecutor {
           memory,
         },
         ctx,
-        activeHandles,
         notifyUpdate,
       );
       steps.push(result);
@@ -634,7 +814,6 @@ export class RunExecutor {
     nodeId: string,
     state: EvaluationState,
     ctx: ExtensionContext,
-    activeHandles: Set<SpawnHandle>,
     notifyUpdate: () => void,
   ): Promise<ForkNodeResult> {
     this.emit(
@@ -648,45 +827,86 @@ export class RunExecutor {
       ctx,
     );
 
-    const entries = Object.entries(spec.branches);
+    const entries = Object.entries(spec.branches) as Array<[string, FlowSpec]>;
     const concurrency = await state.budgets.getParallelismLimit(
       spec.concurrency,
     );
-    const branchResults = await mapWithConcurrencyLimit(
-      entries,
-      concurrency,
-      async ([key, branchSpec]) => {
-        const branchMemory = cloneMemory(state.memory);
-        try {
-          const result = await this.evaluateFlow(
-            branchSpec,
-            {
-              ...state,
-              parentNodeId: nodeId,
-              depth: state.depth + 1,
-              budgets: state.budgets,
-              memory: branchMemory,
-            },
-            ctx,
-            activeHandles,
-            notifyUpdate,
-            undefined,
-            key,
+    const failurePolicy =
+      state.joinFailurePolicies.get(spec.id) ?? "collectErrors";
+    const coordinator = new ForkCoordinatorActor(entries);
+    const workerCount = Math.max(1, Math.min(concurrency, entries.length));
+    const workerResults = await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        const results: ForkBranchResult[] = [];
+        while (true) {
+          const entry = await coordinator.next();
+          if (!entry) return results;
+
+          const [key, branchSpec] = entry;
+          const { controller, dispose } = createLinkedAbortController(
+            state.signal,
           );
-          return {
-            branchKey: key,
-            result,
-          } satisfies ForkBranchResult;
-        } catch (error) {
-          return {
-            branchKey: key,
-            error: error instanceof Error ? error.message : String(error),
-          } satisfies ForkBranchResult;
+          const registered = await coordinator.register(key, controller);
+          if (!registered) {
+            controller.abort();
+            dispose();
+            return results;
+          }
+
+          const branchMemory = cloneMemory(state.memory);
+          try {
+            const result = await this.evaluateFlow(
+              branchSpec,
+              {
+                ...state,
+                parentNodeId: nodeId,
+                depth: state.depth + 1,
+                budgets: state.budgets,
+                memory: branchMemory,
+                signal: controller.signal,
+              },
+              ctx,
+              notifyUpdate,
+              undefined,
+              key,
+            );
+            results.push({
+              branchKey: key,
+              result,
+            } satisfies ForkBranchResult);
+            await coordinator.complete(key);
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            results.push({
+              branchKey: key,
+              error: message,
+            } satisfies ForkBranchResult);
+            if (failurePolicy === "failFast") {
+              const { controllers } = await coordinator.recordFailure(
+                key,
+                message,
+              );
+              for (const sibling of controllers) {
+                sibling.abort();
+              }
+            } else {
+              await coordinator.complete(key);
+            }
+          } finally {
+            dispose();
+          }
         }
-      },
+      }),
     );
 
     assertNotAborted(state.signal);
+
+    const branchResults = workerResults.flat();
+    const primaryFailure = await coordinator.primaryFailure();
+    if (failurePolicy === "failFast" && primaryFailure) {
+      throw new Error(primaryFailure);
+    }
 
     const branches = Object.fromEntries(
       branchResults.map((result) => [result.branchKey, result]),
@@ -721,7 +941,6 @@ export class RunExecutor {
     nodeId: string,
     state: EvaluationState,
     ctx: ExtensionContext,
-    activeHandles: Set<SpawnHandle>,
   ): Promise<JoinNodeResult> {
     const forkResult = state.memory.bySpecId.get(spec.from);
     if (!forkResult || forkResult.kind !== "fork") {
@@ -830,7 +1049,6 @@ export class RunExecutor {
           memory: reducerMemory,
         },
         ctx,
-        activeHandles,
       );
       output = reducerSpawn.output;
     }
@@ -857,7 +1075,6 @@ export class RunExecutor {
     nodeId: string,
     state: EvaluationState,
     ctx: ExtensionContext,
-    activeHandles: Set<SpawnHandle>,
     notifyUpdate: () => void,
   ): Promise<LoopNodeResult> {
     const iterations: FlowNodeResult[] = [];
@@ -890,7 +1107,6 @@ export class RunExecutor {
           memory: loopMemory,
         },
         ctx,
-        activeHandles,
         notifyUpdate,
         undefined,
         undefined,

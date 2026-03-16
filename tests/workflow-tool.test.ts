@@ -231,6 +231,65 @@ describe("workflow tool", () => {
     expect(details.result.output.branches.b).toBe("result-b");
   });
 
+  it("delegates fork summarization to an agent reducer in join", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+    writeAgent(
+      path.join(projectAgentsDir(), "summarizer.md"),
+      "summarizer",
+      "Summarizer",
+    );
+    const inputs: string[] = [];
+    const spawnProcess = createSpawnProcess((input) => {
+      if (input.includes("branch A")) return "result-a";
+      if (input.includes("branch B")) return "result-b";
+      if (input.includes("Summarize")) return "combined summary";
+      return "unknown";
+    }, inputs);
+
+    const tool = setupWorkflowTool(spawnProcess);
+    const result = await tool.execute(
+      "call-reducer",
+      {
+        flow: {
+          kind: "sequence",
+          steps: [
+            {
+              kind: "fork",
+              id: "fanout",
+              branches: {
+                a: { kind: "spawn", agent: "worker", task: "branch A" },
+                b: { kind: "spawn", agent: "worker", task: "branch B" },
+              },
+            },
+            {
+              kind: "join",
+              from: "fanout",
+              mode: "all",
+              reducer: {
+                kind: "agent",
+                agent: "summarizer",
+                task: "Summarize the branch results.",
+              },
+              onFailure: "collectErrors",
+            },
+          ],
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    const details = result.details as RunResultDetails;
+    // The reducer agent should have received the join inputs.
+    const reducerInput = inputs.find((i) => i.includes("Summarize"));
+    expect(reducerInput).toBeDefined();
+    expect(reducerInput).toContain("result-a");
+    expect(reducerInput).toContain("result-b");
+    // The join output should be the reducer agent's response.
+    expect(details.result?.output).toBe("combined summary");
+  });
+
   it("does not start later sequence steps after cancellation", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "reviewer.md"),

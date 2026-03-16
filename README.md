@@ -183,12 +183,88 @@ Top-level parameters:
 
 ## 🧭 Commands
 
-| Command               | Description                                |
-| --------------------- | ------------------------------------------ |
-| `/agents`             | List discovered agents.                    |
-| `/agent <name>`       | Show full details for one agent.           |
-| `/runs`               | List runs recorded in the current session. |
-| `/run <id-or-prefix>` | Show details for one run.                  |
+| Command                        | Description                                |
+| ------------------------------ | ------------------------------------------ |
+| `/agents`                      | List discovered agents.                    |
+| `/agent <name>`                | Show full details for one agent.           |
+| `/runs`                        | List runs recorded in the current session. |
+| `/run <id-or-prefix>`          | Show details for one run.                  |
+| `/flow [id-or-prefix]`         | Show the ASCII flow tree for a run.        |
+| `/flow [id-or-prefix] mermaid` | Output the workflow as a Mermaid diagram.  |
+
+### Flow tree
+
+The `/flow` command renders a workflow's structure as an ASCII tree. Each node
+kind has a distinct icon:
+
+| Icon | Kind  |
+| ---- | ----- |
+| `●`  | spawn |
+| `◇`  | fork  |
+| `◆`  | join  |
+| `◎`  | loop  |
+
+Sequences are transparent — their children appear at the parent indentation
+level without extra nesting.
+
+When you inspect a completed or running workflow, the kind icons are replaced by
+status icons:
+
+| Icon | Status    |
+| ---- | --------- |
+| `✔`  | completed |
+| `✘`  | failed    |
+| `⠹`  | running   |
+| `◌`  | waiting   |
+| `■`  | aborted   |
+| `○`  | queued    |
+
+Example — static flow tree (before execution):
+
+```
+● initializer
+◇ parallel
+├─ fast → ● fast-worker
+└─ slow
+   ├─ ● prep
+   └─ ● slow-worker
+◆ join: all ← parallel
+◎ validate (max 3)
+└─ ● validator
+```
+
+Example — with status overlay (during execution):
+
+```
+✔ initializer
+⠹ parallel
+├─ fast → ✔ fast-worker
+└─ slow
+   ├─ ✔ prep
+   └─ ⠹ slow-worker
+◌ join: all ← parallel
+○ validate (max 3)
+└─ ○ validator
+```
+
+When you omit the run ID, `/flow` defaults to the latest run.
+
+### Mermaid export
+
+Append `mermaid` to get a Mermaid flowchart you can paste into GitHub, docs,
+or [mermaid.live](https://mermaid.live):
+
+```
+/flow 3a8bc2f1 mermaid
+```
+
+The output is deterministic — the same workflow always produces the same
+diagram. Node IDs are counter-based (`n0`, `n1`, …), fork branches are visited
+in sorted key order, and there are no random elements.
+
+The flow tree also appears inline when the `workflow` tool is invoked, giving
+you a structural preview of what is about to run. The live widget in the status
+bar overlays status icons so you can track progress at a glance.
 
 ## 🗂️ Node reference
 

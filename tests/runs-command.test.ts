@@ -108,6 +108,7 @@ function createSpawnProcess(
 function setupExtension(spawnProcess: SpawnProcess): {
   runsCommand: RegisteredCommand;
   runCommand: RegisteredCommand;
+  flowCommand: RegisteredCommand;
   agentTool: ToolDefinition;
   workflowTool: ToolDefinition;
   messages: CapturedMessage[];
@@ -166,11 +167,15 @@ function setupExtension(spawnProcess: SpawnProcess): {
   const runCommand = commands.get("run");
   if (!runCommand) throw new Error("/run command was not registered");
 
+  const flowCommand = commands.get("flow");
+  if (!flowCommand) throw new Error("/flow command was not registered");
+
   if (!agentTool) throw new Error("agent tool was not registered");
   if (!workflowTool) throw new Error("workflow tool was not registered");
   return {
     runsCommand,
     runCommand,
+    flowCommand,
     agentTool,
     workflowTool,
     messages,
@@ -340,5 +345,164 @@ describe("/run command", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain("explorer");
     expect(messages[0]?.content).toContain("completed");
+  });
+});
+
+describe("/flow command", () => {
+  it("shows the ASCII flow tree for a completed run", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const { flowCommand, workflowTool, messages } = setupExtension(
+      createSpawnProcess((input) => {
+        if (input.includes("branch A")) return "result-a";
+        if (input.includes("branch B")) return "result-b";
+        return "ok";
+      }, inputs),
+    );
+
+    const result = await workflowTool.execute(
+      "call-flow-1",
+      {
+        label: "Test Pipeline",
+        flow: {
+          kind: "sequence",
+          steps: [
+            {
+              kind: "fork",
+              id: "fanout",
+              branches: {
+                a: {
+                  kind: "spawn",
+                  id: "a",
+                  agent: "worker",
+                  task: "branch A",
+                },
+                b: {
+                  kind: "spawn",
+                  id: "b",
+                  agent: "worker",
+                  task: "branch B",
+                },
+              },
+            },
+            {
+              kind: "join",
+              id: "collect",
+              from: "fanout",
+              mode: "all",
+              reducer: { kind: "collect" },
+              onFailure: "collectErrors",
+            },
+          ],
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    const runId = result.details.run.id as string;
+    const prefix = runId.slice(0, 8);
+
+    messages.length = 0;
+    await flowCommand.handler(prefix, { cwd: workspaceDir });
+
+    expect(messages).toHaveLength(1);
+    const content = messages[0]?.content ?? "";
+    // Header
+    expect(content).toContain("Flow: Test Pipeline");
+    expect(content).toContain("completed");
+    // Kind icons replaced by status icons for completed run
+    expect(content).toContain("✔");
+    // Fork structure
+    expect(content).toContain("fanout");
+    expect(content).toContain("← fanout");
+  });
+
+  it("falls back to the latest run when no ID is given", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const { flowCommand, workflowTool, messages } = setupExtension(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    await workflowTool.execute(
+      "call-flow-latest",
+      {
+        label: "Latest Run",
+        flow: {
+          kind: "spawn",
+          id: "only",
+          agent: "worker",
+          task: "do work",
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    messages.length = 0;
+    await flowCommand.handler("", { cwd: workspaceDir });
+
+    expect(messages).toHaveLength(1);
+    const content = messages[0]?.content ?? "";
+    expect(content).toContain("Flow: Latest Run");
+    expect(content).toContain("worker");
+  });
+
+  it("outputs a Mermaid code fence with the mermaid suffix", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const { flowCommand, workflowTool, messages } = setupExtension(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    const result = await workflowTool.execute(
+      "call-flow-mermaid",
+      {
+        label: "Mermaid Test",
+        flow: {
+          kind: "spawn",
+          id: "only",
+          agent: "worker",
+          task: "do work",
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    const runId = result.details.run.id as string;
+    const prefix = runId.slice(0, 8);
+
+    messages.length = 0;
+    await flowCommand.handler(`${prefix} mermaid`, { cwd: workspaceDir });
+
+    expect(messages).toHaveLength(1);
+    const content = messages[0]?.content ?? "";
+    expect(content).toContain("```mermaid");
+    expect(content).toContain("flowchart TD");
+    expect(content).toContain('(["worker"])');
+    expect(content).toContain("```");
+  });
+
+  it("reports an error when no runs exist", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const { flowCommand, messages } = setupExtension(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    messages.length = 0;
+    await flowCommand.handler("", { cwd: workspaceDir });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toContain("No runs recorded");
   });
 });

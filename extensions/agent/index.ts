@@ -20,16 +20,17 @@ import { RUN_EVENT_CUSTOM_TYPE } from "./persistence.js";
 import {
   formatAgentDetails,
   formatAgentsOverview,
+  formatFlowCommandOutput,
   formatOutput,
   formatRunDetailsText,
   formatRunOverviewText,
   getRootSpawnResult,
+  RunWidgetManager,
   rebuildRuntimeState,
   renderAgentCall,
   renderAgentResult,
   renderWorkflowCall,
   renderWorkflowResult,
-  updateRunUI,
 } from "./presentation.js";
 import { createRunRuntimeState, getOrderedRuns } from "./state.js";
 import {
@@ -80,16 +81,17 @@ export function createAgentExtension(options?: {
   return function agentExtension(pi: ExtensionAPI) {
     const runtimeState = createRunRuntimeState();
     const manager = new AgentManager(engine);
+    const widgetManager = new RunWidgetManager(runtimeState);
     const executor = new RunExecutor({
       pi,
       manager,
       runtimeState,
-      onStateChanged: (ctx) => updateRunUI(ctx, runtimeState),
+      onStateChanged: (ctx) => widgetManager.update(ctx),
     });
 
     const reloadRunState = (_event: unknown, ctx: ExtensionContext) => {
       rebuildRuntimeState(runtimeState, ctx);
-      updateRunUI(ctx, runtimeState);
+      widgetManager.update(ctx);
     };
 
     pi.on("session_start", async (event, ctx) => {
@@ -205,6 +207,32 @@ export function createAgentExtension(options?: {
         const content = query
           ? formatRunDetailsText(runtimeState, query)
           : "Usage: /run <id-or-prefix>";
+        pi.sendMessage({
+          customType: RUN_EVENT_CUSTOM_TYPE,
+          content,
+          display: true,
+        });
+      },
+    });
+
+    pi.registerCommand("flow", {
+      description:
+        "Show the flow tree for a run (use 'mermaid' suffix for Mermaid output)",
+      getArgumentCompletions: (prefix) => {
+        const items = getOrderedRuns(runtimeState)
+          .map((run) => ({
+            value: run.id,
+            label: run.label,
+            description: `${run.status} · ${run.id.slice(0, 8)}`,
+          }))
+          .filter(
+            (item) =>
+              item.value.startsWith(prefix) || item.label.startsWith(prefix),
+          );
+        return items.length > 0 ? items : null;
+      },
+      handler: async (args) => {
+        const content = formatFlowCommandOutput(runtimeState, args);
         pi.sendMessage({
           customType: RUN_EVENT_CUSTOM_TYPE,
           content,

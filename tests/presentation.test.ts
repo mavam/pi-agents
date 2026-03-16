@@ -2,12 +2,13 @@ import { describe, expect, it } from "bun:test";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import { visibleWidth } from "@mariozechner/pi-tui";
 import {
-  renderActiveRunWidgetLines,
+  buildWidgetLines,
+  formatFlowTree,
   renderAgentCall,
   renderWorkflowResult,
 } from "../extensions/agent/presentation.ts";
 import { createRunRuntimeState } from "../extensions/agent/state.ts";
-import type { RunResultDetails } from "../extensions/agent/types.ts";
+import type { FlowSpec, RunResultDetails } from "../extensions/agent/types.ts";
 
 const theme = {
   fg(_color: string, text: string) {
@@ -103,7 +104,7 @@ describe("agent presentation", () => {
     }
   });
 
-  it("renders the runs widget without duplicate spinner rows for a single spawn", () => {
+  it("renders the runs widget with just a header for a single spawn", () => {
     const runtimeState = createRunRuntimeState();
     const startedAt = Date.now();
 
@@ -116,6 +117,7 @@ describe("agent presentation", () => {
       depth: 0,
       flow: {
         kind: "spawn",
+        id: "explorer",
         agent: "explorer",
         task: "find files",
       },
@@ -125,6 +127,7 @@ describe("agent presentation", () => {
     runtimeState.nodes.set("root:1", {
       id: "root:1",
       runId: "run-1",
+      specId: "explorer",
       kind: "spawn",
       label: "explorer",
       status: "running",
@@ -132,8 +135,117 @@ describe("agent presentation", () => {
     });
     runtimeState.order.push("run-1");
 
-    const lines = renderActiveRunWidgetLines(runtimeState);
+    const plainTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
 
-    expect(lines).toEqual(["● runs", "└─ ● explorer run-1 running"]);
+    const lines = buildWidgetLines(runtimeState, "⠹", plainTheme, 120);
+
+    // Heading + single header line, no redundant flow tree.
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("Runs");
+    expect(lines[1]).toContain("explorer");
+    expect(lines[1]).toContain("run-1");
+  });
+
+  it("renders a static flow tree for a complex workflow", () => {
+    const flow: FlowSpec = {
+      kind: "sequence",
+      steps: [
+        { kind: "spawn", id: "init", agent: "initializer", task: "init" },
+        {
+          kind: "fork",
+          id: "parallel",
+          branches: {
+            fast: { kind: "spawn", agent: "fast-worker", task: "fast" },
+            slow: {
+              kind: "sequence",
+              steps: [
+                { kind: "spawn", agent: "prep", task: "prepare" },
+                { kind: "spawn", agent: "slow-worker", task: "slow" },
+              ],
+            },
+          },
+        },
+        { kind: "join", from: "parallel", mode: "all" },
+        {
+          kind: "loop",
+          id: "validate",
+          maxIterations: 3,
+          body: { kind: "spawn", agent: "validator", task: "validate" },
+        },
+      ],
+    };
+
+    const lines = formatFlowTree(flow);
+
+    expect(lines).toEqual([
+      "● initializer",
+      "◇ parallel",
+      "├─ fast → ● fast-worker",
+      "└─ slow",
+      "   ├─ ● prep",
+      "   └─ ● slow-worker",
+      "◆ join: all ← parallel",
+      "◎ validate (max 3)",
+      "└─ ● validator",
+    ]);
+  });
+
+  it("overlays status icons from runtime state", () => {
+    const flow: FlowSpec = {
+      kind: "sequence",
+      steps: [
+        { kind: "spawn", id: "s1", agent: "analyzer", task: "analyze" },
+        { kind: "spawn", id: "s2", agent: "reviewer", task: "review" },
+      ],
+    };
+
+    const runtimeState = createRunRuntimeState();
+    const now = Date.now();
+    runtimeState.runs.set("r1", {
+      id: "r1",
+      rootNodeId: "seq:1",
+      label: "test",
+      status: "running",
+      startedAt: now,
+      depth: 0,
+      flow,
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.nodes.set("n1", {
+      id: "n1",
+      runId: "r1",
+      specId: "s1",
+      kind: "spawn",
+      status: "completed",
+      startedAt: now,
+      completedAt: now + 1,
+    });
+    runtimeState.nodes.set("n2", {
+      id: "n2",
+      runId: "r1",
+      specId: "s2",
+      kind: "spawn",
+      status: "running",
+      startedAt: now + 1,
+    });
+    runtimeState.order.push("r1");
+
+    const lines = formatFlowTree(flow, runtimeState, "r1");
+
+    expect(lines).toEqual(["✔ analyzer", "⠹ reviewer"]);
+  });
+
+  it("renders a single spawn without tree connectors", () => {
+    const flow: FlowSpec = {
+      kind: "spawn",
+      agent: "worker",
+      task: "work",
+    };
+    const lines = formatFlowTree(flow);
+    expect(lines).toEqual(["● worker"]);
   });
 });

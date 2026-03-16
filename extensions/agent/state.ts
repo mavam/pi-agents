@@ -1,4 +1,5 @@
 import type {
+  FlowSpec,
   NodeStatus,
   RunEvent,
   RunNode,
@@ -157,22 +158,34 @@ export function countStatuses(state: RunRuntimeState): {
   };
 }
 
-export function iconForStatus(
-  status: NodeStatus | RunStatus,
-  runningIcon = "⠹",
-): string {
+export function iconForStatus(status: NodeStatus | RunStatus): string {
   switch (status) {
     case "running":
-      return runningIcon;
+      return "⠹";
     case "waiting":
-      return "◐";
+      return "◌";
     case "completed":
-      return "✓";
+      return "✔";
     case "failed":
-      return "✗";
+      return "✘";
     case "aborted":
       return "■";
     case "queued":
       return "○";
+  }
+}
+
+export function iconForKind(kind: FlowSpec["kind"]): string {
+  switch (kind) {
+    case "spawn":
+      return "●";
+    case "fork":
+      return "◇";
+    case "join":
+      return "◆";
+    case "loop":
+      return "◎";
+    case "sequence":
+      return "";
   }
 }

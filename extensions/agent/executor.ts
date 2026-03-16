@@ -48,6 +48,7 @@ interface EvaluationState {
   budgets: BudgetActor;
   memory: FlowMemory;
   signal?: AbortSignal;
+  createNodeId: (spec: FlowSpec) => string;
 }
 
 interface ExecutorOptions {
@@ -186,14 +187,13 @@ function resolveContinueValue(
   memory: FlowMemory,
 ): unknown {
   if (!spec) return undefined;
-  const candidates: unknown[] = [
-    bodyResult,
-    summarizeForContext(bodyResult),
-    ...memory.history
-      .slice()
-      .reverse()
-      .flatMap((item) => [item, summarizeForContext(item)]),
-  ];
+  // Resolution priority (first defined value wins):
+  //  1. Direct path on the raw body result  (e.g. bodyResult.output.done)
+  //  2. Direct path on the summarized body  (e.g. summary.output.done)
+  //  3. Walk history in reverse, trying raw then summarized for each entry
+  // For simple (non-dotted) paths we also probe candidate.output.<path> so
+  // callers can write `path: "done"` instead of `path: "output.done"`.
+  const candidates: unknown[] = [bodyResult, summarizeForContext(bodyResult)];
 
   for (const candidate of candidates) {
     const direct = getPathValue(candidate, spec.path);
@@ -227,8 +227,6 @@ function assertNotAborted(signal?: AbortSignal): void {
 }
 
 export class RunExecutor {
-  private nodeCounter = 0;
-
   constructor(private readonly options: ExecutorOptions) {}
 
   private emit(event: RunEvent, ctx: ExtensionContext): void {
@@ -294,12 +292,6 @@ export class RunExecutor {
     };
   }
 
-  private createNodeId(spec: FlowSpec): string {
-    this.nodeCounter += 1;
-    const prefix = spec.id ?? spec.kind;
-    return `${prefix}:${this.nodeCounter}`;
-  }
-
   async execute(
     params: WorkflowParams,
     ctx: ExtensionContext,
@@ -307,7 +299,13 @@ export class RunExecutor {
     onUpdate?: (result: AgentToolResult<RunResultDetails>) => void,
   ): Promise<RunResultDetails> {
     const runId = crypto.randomUUID();
-    const rootNodeId = this.createNodeId(params.flow);
+    let nodeCounter = 0;
+    const createNodeId = (spec: FlowSpec): string => {
+      nodeCounter += 1;
+      const prefix = spec.id ?? spec.kind;
+      return `${prefix}:${nodeCounter}`;
+    };
+    const rootNodeId = createNodeId(params.flow);
     const flow = params.flow;
     const run: WorkflowRun = {
       id: runId,
@@ -361,6 +359,7 @@ export class RunExecutor {
         history: [],
       },
       signal,
+      createNodeId,
     };
 
     try {
@@ -419,7 +418,7 @@ export class RunExecutor {
   ): Promise<FlowNodeResult> {
     assertNotAborted(state.signal);
 
-    const nodeId = forcedNodeId ?? this.createNodeId(spec);
+    const nodeId = forcedNodeId ?? state.createNodeId(spec);
     const node: RunNode = {
       id: nodeId,
       runId: state.runId,

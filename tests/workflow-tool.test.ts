@@ -356,6 +356,353 @@ describe("workflow tool", () => {
     expect(details.result?.output).toBe("combined summary");
   });
 
+  it("short-circuits join(any) after the first successful branch", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+    let branchBKillCount = 0;
+    let branchCStarts = 0;
+
+    const spawnProcess: SpawnProcess = (_command, _args, _options) => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      let capturedInput = "";
+      const stdin = new Writable({
+        write(chunk, _encoding, callback) {
+          capturedInput += chunk.toString();
+          callback();
+        },
+        final(callback) {
+          queueMicrotask(() => {
+            if (capturedInput.includes("branch A")) {
+              const event = {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "result-a" }],
+                },
+              };
+              stdout.write(`${JSON.stringify(event)}\n`);
+              proc.emit("close", 0, null);
+              return;
+            }
+            if (capturedInput.includes("branch B")) {
+              return;
+            }
+            if (capturedInput.includes("branch C")) {
+              branchCStarts += 1;
+              const event = {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "result-c" }],
+                },
+              };
+              stdout.write(`${JSON.stringify(event)}\n`);
+              proc.emit("close", 0, null);
+            }
+          });
+          callback();
+        },
+      });
+      const proc =
+        new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+      Object.assign(proc, {
+        stdout,
+        stderr,
+        stdin,
+        exitCode: null,
+        signalCode: null,
+        kill(signal?: NodeJS.Signals) {
+          if (capturedInput.includes("branch B")) {
+            branchBKillCount += 1;
+          }
+          queueMicrotask(() => {
+            proc.emit("close", null, signal ?? "SIGTERM");
+          });
+          return true;
+        },
+      });
+      return proc;
+    };
+
+    const tool = setupWorkflowTool(spawnProcess);
+    const result = await tool.execute(
+      "call-any-short-circuit",
+      {
+        flow: {
+          kind: "sequence",
+          steps: [
+            {
+              kind: "fork",
+              id: "fanout",
+              concurrency: 2,
+              branches: {
+                a: { kind: "spawn", agent: "worker", task: "branch A" },
+                b: { kind: "spawn", agent: "worker", task: "branch B" },
+                c: { kind: "spawn", agent: "worker", task: "branch C" },
+              },
+            },
+            {
+              kind: "join",
+              from: "fanout",
+              mode: "any",
+              onFailure: "collectErrors",
+            },
+          ],
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    const details = result.details as RunResultDetails;
+    expect(details.result?.output.branches.a).toBe("result-a");
+    expect(details.result?.output.errors).toEqual({});
+    expect(branchBKillCount).toBeGreaterThan(0);
+    expect(branchCStarts).toBe(0);
+  });
+
+  it("short-circuits join(quorum) once the quorum is met", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+    let branchCKillCount = 0;
+    let branchDStarts = 0;
+
+    const spawnProcess: SpawnProcess = (_command, _args, _options) => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      let capturedInput = "";
+      const stdin = new Writable({
+        write(chunk, _encoding, callback) {
+          capturedInput += chunk.toString();
+          callback();
+        },
+        final(callback) {
+          queueMicrotask(() => {
+            if (capturedInput.includes("branch A")) {
+              const event = {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "result-a" }],
+                },
+              };
+              stdout.write(`${JSON.stringify(event)}\n`);
+              proc.emit("close", 0, null);
+              return;
+            }
+            if (capturedInput.includes("branch B")) {
+              const event = {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "result-b" }],
+                },
+              };
+              stdout.write(`${JSON.stringify(event)}\n`);
+              proc.emit("close", 0, null);
+              return;
+            }
+            if (capturedInput.includes("branch C")) {
+              return;
+            }
+            if (capturedInput.includes("branch D")) {
+              branchDStarts += 1;
+              const event = {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "result-d" }],
+                },
+              };
+              stdout.write(`${JSON.stringify(event)}\n`);
+              proc.emit("close", 0, null);
+            }
+          });
+          callback();
+        },
+      });
+      const proc =
+        new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+      Object.assign(proc, {
+        stdout,
+        stderr,
+        stdin,
+        exitCode: null,
+        signalCode: null,
+        kill(signal?: NodeJS.Signals) {
+          if (capturedInput.includes("branch C")) {
+            branchCKillCount += 1;
+          }
+          queueMicrotask(() => {
+            proc.emit("close", null, signal ?? "SIGTERM");
+          });
+          return true;
+        },
+      });
+      return proc;
+    };
+
+    const tool = setupWorkflowTool(spawnProcess);
+    const result = await tool.execute(
+      "call-quorum-short-circuit",
+      {
+        flow: {
+          kind: "sequence",
+          steps: [
+            {
+              kind: "fork",
+              id: "fanout",
+              concurrency: 3,
+              branches: {
+                a: { kind: "spawn", agent: "worker", task: "branch A" },
+                b: { kind: "spawn", agent: "worker", task: "branch B" },
+                c: { kind: "spawn", agent: "worker", task: "branch C" },
+                d: { kind: "spawn", agent: "worker", task: "branch D" },
+              },
+            },
+            {
+              kind: "join",
+              from: "fanout",
+              mode: "quorum",
+              quorum: 2,
+              onFailure: "collectErrors",
+            },
+          ],
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    const details = result.details as RunResultDetails;
+    expect(details.result?.output.branches.a).toBe("result-a");
+    expect(details.result?.output.branches.b).toBe("result-b");
+    expect(details.result?.output.errors).toEqual({});
+    expect(branchCKillCount).toBeGreaterThan(0);
+    expect(branchDStarts).toBe(0);
+  });
+
+  it("rejects multiple joins for the same fork", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const workflowTool = setupWorkflowTool(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    const error = (await workflowTool
+      .execute(
+        "call-duplicate-join",
+        {
+          flow: {
+            kind: "sequence",
+            steps: [
+              {
+                kind: "fork",
+                id: "fanout",
+                branches: {
+                  a: { kind: "spawn", agent: "worker", task: "first" },
+                },
+              },
+              { kind: "join", from: "fanout", mode: "all" },
+              { kind: "join", from: "fanout", mode: "all" },
+            ],
+          },
+        },
+        undefined,
+        undefined,
+        { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+      )
+      .then(() => null)
+      .catch((caught) => caught as Error)) as Error | null;
+
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toContain("already joined");
+    expect(inputs).toEqual([]);
+  });
+
+  it("rejects joins that reference future forks", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const workflowTool = setupWorkflowTool(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    const error = (await workflowTool
+      .execute(
+        "call-forward-join",
+        {
+          flow: {
+            kind: "sequence",
+            steps: [
+              { kind: "join", from: "fanout", mode: "all" },
+              {
+                kind: "fork",
+                id: "fanout",
+                branches: {
+                  a: { kind: "spawn", agent: "worker", task: "first" },
+                },
+              },
+            ],
+          },
+        },
+        undefined,
+        undefined,
+        { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+      )
+      .then(() => null)
+      .catch((caught) => caught as Error)) as Error | null;
+
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toContain("already available in this scope");
+    expect(inputs).toEqual([]);
+  });
+
+  it("rejects joins that reference out-of-scope forks", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const workflowTool = setupWorkflowTool(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    const error = (await workflowTool
+      .execute(
+        "call-out-of-scope-join",
+        {
+          flow: {
+            kind: "sequence",
+            steps: [
+              {
+                kind: "sequence",
+                steps: [
+                  {
+                    kind: "fork",
+                    id: "inner-fanout",
+                    branches: {
+                      a: { kind: "spawn", agent: "worker", task: "first" },
+                    },
+                  },
+                ],
+              },
+              { kind: "join", from: "inner-fanout", mode: "all" },
+            ],
+          },
+        },
+        undefined,
+        undefined,
+        { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+      )
+      .then(() => null)
+      .catch((caught) => caught as Error)) as Error | null;
+
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toContain("inside a different scope");
+    expect(inputs).toEqual([]);
+  });
+
   it("rejects duplicate workflow node ids", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
 

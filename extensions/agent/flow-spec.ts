@@ -183,9 +183,9 @@ function validateLoopSpec(
 
 function validateFlowReferences(flow: FlowSpec): void {
   const ids = new Map<string, FlowSpec["kind"]>();
-  const joins: Array<{ from: string; label: string }> = [];
+  const joinedForks = new Map<string, string>();
 
-  const visit = (spec: FlowSpec, label: string) => {
+  const collectIds = (spec: FlowSpec, label: string) => {
     if (spec.id) {
       const previous = ids.get(spec.id);
       if (previous) {
@@ -198,39 +198,81 @@ function validateFlowReferences(flow: FlowSpec): void {
 
     switch (spec.kind) {
       case "spawn":
+      case "join":
         return;
       case "sequence":
         for (const [index, step] of spec.steps.entries()) {
-          visit(step, `${label}.steps[${index}]`);
+          collectIds(step, `${label}.steps[${index}]`);
         }
         return;
       case "fork":
         for (const [branchKey, branchSpec] of Object.entries(spec.branches)) {
-          visit(branchSpec, `${label}.branches.${branchKey}`);
+          collectIds(branchSpec, `${label}.branches.${branchKey}`);
         }
         return;
-      case "join":
-        joins.push({ from: spec.from, label: `${label}.from` });
-        return;
       case "loop":
-        visit(spec.body, `${label}.body`);
+        collectIds(spec.body, `${label}.body`);
         return;
     }
   };
 
-  visit(flow, "flow");
+  const visit = (
+    spec: FlowSpec,
+    label: string,
+    visibleForks: ReadonlySet<string>,
+  ) => {
+    switch (spec.kind) {
+      case "spawn":
+        return;
+      case "sequence": {
+        const localVisibleForks = new Set(visibleForks);
+        for (const [index, step] of spec.steps.entries()) {
+          visit(step, `${label}.steps[${index}]`, localVisibleForks);
+          if (step.kind === "fork") {
+            localVisibleForks.add(step.id);
+          }
+        }
+        return;
+      }
+      case "fork":
+        for (const [branchKey, branchSpec] of Object.entries(spec.branches)) {
+          visit(branchSpec, `${label}.branches.${branchKey}`, visibleForks);
+        }
+        return;
+      case "join": {
+        const targetKind = ids.get(spec.from);
+        if (!targetKind) {
+          throw new Error(
+            `${label}.from references unknown fork "${spec.from}".`,
+          );
+        }
+        if (targetKind !== "fork") {
+          throw new Error(
+            `${label}.from must reference a fork node, but "${spec.from}" is a ${targetKind}.`,
+          );
+        }
+        if (!visibleForks.has(spec.from)) {
+          throw new Error(
+            `${label}.from must reference a fork that is already available in this scope. Fork "${spec.from}" is defined later or inside a different scope.`,
+          );
+        }
+        const previousJoin = joinedForks.get(spec.from);
+        if (previousJoin) {
+          throw new Error(
+            `${label}.from references fork "${spec.from}", which is already joined at ${previousJoin}. Each fork can only be joined once.`,
+          );
+        }
+        joinedForks.set(spec.from, `${label}.from`);
+        return;
+      }
+      case "loop":
+        visit(spec.body, `${label}.body`, new Set(visibleForks));
+        return;
+    }
+  };
 
-  for (const join of joins) {
-    const targetKind = ids.get(join.from);
-    if (!targetKind) {
-      throw new Error(`${join.label} references unknown fork "${join.from}".`);
-    }
-    if (targetKind !== "fork") {
-      throw new Error(
-        `${join.label} must reference a fork node, but "${join.from}" is a ${targetKind}.`,
-      );
-    }
-  }
+  collectIds(flow, "flow");
+  visit(flow, "flow", new Set());
 }
 
 export function validateFlowSpec(

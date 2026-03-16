@@ -2,15 +2,9 @@ import type {
   AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
-  Theme,
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
-import {
-  type Agent,
-  discoverAgents,
-  formatAgentList,
-  type Scope,
-} from "./agents.js";
+import { discoverAgents, formatAgentList, type Scope } from "./agents.js";
 import { toDiagnosticText } from "./diagnostics.js";
 import {
   createSubprocessSpawnEngine,

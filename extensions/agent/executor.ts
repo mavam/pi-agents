@@ -42,6 +42,12 @@ interface FlowMemory {
 
 type ForkFailurePolicy = "failFast" | "collectErrors";
 
+interface ForkJoinPlan {
+  mode: JoinFlowSpec["mode"];
+  quorum?: number;
+  onFailure: ForkFailurePolicy;
+}
+
 interface EvaluationState {
   runId: string;
   cwd: string;
@@ -54,7 +60,7 @@ interface EvaluationState {
   memory: FlowMemory;
   signal?: AbortSignal;
   createNodeId: (spec: FlowSpec) => string;
-  joinFailurePolicies: ReadonlyMap<string, ForkFailurePolicy>;
+  joinPlans: ReadonlyMap<string, ForkJoinPlan>;
   handleRegistry: HandleRegistryActor;
 }
 
@@ -127,11 +133,17 @@ class HandleRegistryActor {
   }
 }
 
+type ForkStopKind = "success" | "failure" | "impossible";
+
 interface ForkCoordinatorState {
   cursor: number;
   stopped: boolean;
   controllers: Map<string, AbortController>;
+  outcomes: ForkBranchResult[];
+  successes: number;
+  failures: number;
   primaryFailure?: string;
+  stopKind?: ForkStopKind;
 }
 
 class ForkCoordinatorActor {
@@ -139,12 +151,28 @@ class ForkCoordinatorActor {
     cursor: 0,
     stopped: false,
     controllers: new Map(),
+    outcomes: [],
+    successes: 0,
+    failures: 0,
   };
+  private readonly desiredSuccesses: number;
+  private readonly failurePolicy: ForkFailurePolicy;
+  private readonly shortCircuitOnSuccess: boolean;
   private mailbox: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly entries: ReadonlyArray<readonly [string, FlowSpec]>,
-  ) {}
+    plan?: ForkJoinPlan,
+  ) {
+    this.failurePolicy = plan?.onFailure ?? "collectErrors";
+    this.shortCircuitOnSuccess = plan !== undefined && plan.mode !== "all";
+    this.desiredSuccesses =
+      plan?.mode === "any"
+        ? 1
+        : plan?.mode === "quorum"
+          ? (plan.quorum ?? 0)
+          : entries.length;
+  }
 
   private send<T>(fn: (state: ForkCoordinatorState) => T): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -176,39 +204,91 @@ class ForkCoordinatorActor {
     });
   }
 
-  complete(key: string): Promise<void> {
+  recordSuccess(
+    key: string,
+    result: FlowNodeResult,
+  ): Promise<AbortController[]> {
     return this.send((state) => {
       state.controllers.delete(key);
+      state.outcomes.push({
+        branchKey: key,
+        result,
+      } satisfies ForkBranchResult);
+
+      if (state.stopKind) {
+        return [];
+      }
+
+      state.successes += 1;
+      if (
+        !this.shortCircuitOnSuccess ||
+        state.successes < this.desiredSuccesses
+      ) {
+        return [];
+      }
+
+      state.stopped = true;
+      state.stopKind = "success";
+      return [...state.controllers.values()];
     });
   }
 
   recordFailure(
     key: string,
     message: string,
-  ): Promise<{ primary: boolean; controllers: AbortController[] }> {
+  ): Promise<{ controllers: AbortController[]; primaryFailure?: string }> {
     return this.send((state) => {
       state.controllers.delete(key);
-      if (state.primaryFailure !== undefined) {
-        return { primary: false, controllers: [] };
+      state.outcomes.push({
+        branchKey: key,
+        error: message,
+      } satisfies ForkBranchResult);
+
+      if (state.stopKind) {
+        return { controllers: [], primaryFailure: state.primaryFailure };
       }
-      state.primaryFailure = message;
-      state.stopped = true;
-      return {
-        primary: true,
-        controllers: [...state.controllers.values()],
-      };
+
+      state.failures += 1;
+      if (this.failurePolicy === "failFast") {
+        state.stopped = true;
+        state.stopKind = "failure";
+        state.primaryFailure = message;
+        return {
+          controllers: [...state.controllers.values()],
+          primaryFailure: state.primaryFailure,
+        };
+      }
+
+      const remainingPotential =
+        this.entries.length - state.successes - state.failures;
+      if (
+        this.shortCircuitOnSuccess &&
+        state.successes + remainingPotential < this.desiredSuccesses
+      ) {
+        state.stopped = true;
+        state.stopKind = "impossible";
+        return { controllers: [...state.controllers.values()] };
+      }
+
+      return { controllers: [] };
     });
+  }
+
+  stopReason(): Promise<ForkStopKind | undefined> {
+    return this.send((state) => state.stopKind);
   }
 
   getPrimaryFailure(): Promise<string | undefined> {
     return this.send((state) => state.primaryFailure);
   }
+
+  outcomes(): Promise<ForkBranchResult[]> {
+    return this.send((state) => [...state.outcomes]);
+  }
 }
 
-function collectJoinFailurePolicies(
-  flow: FlowSpec,
-): ReadonlyMap<string, ForkFailurePolicy> {
-  const policies = new Map<string, ForkFailurePolicy>();
+function collectJoinPlans(flow: FlowSpec): ReadonlyMap<string, ForkJoinPlan> {
+  const plans = new Map<string, ForkJoinPlan>();
 
   const visit = (spec: FlowSpec) => {
     switch (spec.kind) {
@@ -220,13 +300,13 @@ function collectJoinFailurePolicies(
       case "fork":
         for (const branch of Object.values(spec.branches)) visit(branch);
         return;
-      case "join": {
-        const policy = spec.onFailure ?? "failFast";
-        if (policy === "failFast" || !policies.has(spec.from)) {
-          policies.set(spec.from, policy);
-        }
+      case "join":
+        plans.set(spec.from, {
+          mode: spec.mode,
+          quorum: spec.quorum,
+          onFailure: spec.onFailure ?? "failFast",
+        });
         return;
-      }
       case "loop":
         visit(spec.body);
         return;
@@ -234,7 +314,7 @@ function collectJoinFailurePolicies(
   };
 
   visit(flow);
-  return policies;
+  return plans;
 }
 
 function createLinkedAbortController(parentSignal?: AbortSignal): {
@@ -563,7 +643,7 @@ export class RunExecutor {
       },
       signal,
       createNodeId,
-      joinFailurePolicies: collectJoinFailurePolicies(flow),
+      joinPlans: collectJoinPlans(flow),
       handleRegistry,
     };
 
@@ -708,7 +788,7 @@ export class RunExecutor {
     spec: SpawnFlowSpec,
     nodeId: string,
     state: EvaluationState,
-    ctx: ExtensionContext,
+    _ctx: ExtensionContext,
   ): Promise<SpawnNodeResult> {
     assertNotAborted(state.signal);
     await state.budgets.acquireSpawn(state.depth);
@@ -841,16 +921,16 @@ export class RunExecutor {
     const concurrency = await state.budgets.getParallelismLimit(
       spec.concurrency,
     );
-    const failurePolicy =
-      state.joinFailurePolicies.get(spec.id) ?? "collectErrors";
-    const coordinator = new ForkCoordinatorActor(entries);
+    const plan = state.joinPlans.get(spec.id);
+    const failurePolicy = plan?.onFailure ?? "collectErrors";
+    const coordinator = new ForkCoordinatorActor(entries, plan);
     const workerCount = Math.max(1, Math.min(concurrency, entries.length));
-    const workerResults = await Promise.all(
+
+    await Promise.all(
       Array.from({ length: workerCount }, async () => {
-        const results: ForkBranchResult[] = [];
         while (true) {
           const entry = await coordinator.next();
-          if (!entry) return results;
+          if (!entry) return;
 
           const [key, branchSpec] = entry;
           const { controller, dispose } = createLinkedAbortController(
@@ -860,7 +940,7 @@ export class RunExecutor {
           if (!registered) {
             controller.abort();
             dispose();
-            return results;
+            return;
           }
 
           const branchMemory = cloneMemory(state.memory);
@@ -880,28 +960,27 @@ export class RunExecutor {
               undefined,
               key,
             );
-            results.push({
-              branchKey: key,
-              result,
-            } satisfies ForkBranchResult);
-            await coordinator.complete(key);
+            const controllers = await coordinator.recordSuccess(key, result);
+            for (const sibling of controllers) {
+              sibling.abort();
+            }
           } catch (error) {
             const message =
               error instanceof Error ? error.message : String(error);
-            results.push({
-              branchKey: key,
-              error: message,
-            } satisfies ForkBranchResult);
-            if (failurePolicy === "failFast") {
-              const { controllers } = await coordinator.recordFailure(
-                key,
-                message,
-              );
-              for (const sibling of controllers) {
-                sibling.abort();
+            if (message.includes("aborted")) {
+              const stopReason = await coordinator.stopReason();
+              if (stopReason) {
+                continue;
               }
-            } else {
-              await coordinator.complete(key);
+              throw error;
+            }
+
+            const { controllers } = await coordinator.recordFailure(
+              key,
+              message,
+            );
+            for (const sibling of controllers) {
+              sibling.abort();
             }
           } finally {
             dispose();
@@ -912,7 +991,7 @@ export class RunExecutor {
 
     assertNotAborted(state.signal);
 
-    const branchResults = workerResults.flat();
+    const branchResults = await coordinator.outcomes();
     const primaryFailure = await coordinator.getPrimaryFailure();
     if (failurePolicy === "failFast" && primaryFailure) {
       throw new Error(primaryFailure);

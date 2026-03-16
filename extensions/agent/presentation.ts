@@ -8,7 +8,6 @@ import type { Agent, Scope } from "./agents.js";
 import { type MermaidOptions, toMermaid } from "./mermaid.js";
 import { rebuildRunState } from "./persistence.js";
 import {
-  countStatuses,
   getOrderedRuns,
   getRunNodes,
   iconForKind,
@@ -929,12 +928,6 @@ export class RunWidgetManager {
       const lines = buildWidgetLines(this.runtimeState, spinner, theme, w);
       return { render: () => lines, invalidate: () => {} };
     });
-
-    const counts = countStatuses(this.runtimeState);
-    ctx.ui.setStatus(
-      "pi-agents-runs",
-      `${counts.runs} runs · ${counts.running} running · ${counts.waiting} waiting`,
-    );
   }
 
   private stop(ctx: ExtensionContext): void {
@@ -943,6 +936,5 @@ export class RunWidgetManager {
       this.interval = undefined;
     }
     ctx.ui.setWidget("pi-agents-runs", undefined);
-    ctx.ui.setStatus("pi-agents-runs", undefined);
   }
 }

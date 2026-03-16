@@ -13,6 +13,7 @@ import {
   isChildProcessRunning,
   type SpawnProcess,
 } from "./engine/subprocess.js";
+import { AgentEvents } from "./events.js";
 import { RunExecutionError, RunExecutor } from "./executor.js";
 import { validateWorkflowParams } from "./flow-spec.js";
 import { AgentManager } from "./manager.js";
@@ -32,7 +33,11 @@ import {
   renderWorkflowCall,
   renderWorkflowResult,
 } from "./presentation.js";
-import { createRunRuntimeState, getOrderedRuns } from "./state.js";
+import {
+  countStatuses,
+  createRunRuntimeState,
+  getOrderedRuns,
+} from "./state.js";
 import {
   AgentParamsSchema,
   type ToolPromptMetadata,
@@ -86,7 +91,13 @@ export function createAgentExtension(options?: {
       pi,
       manager,
       runtimeState,
-      onStateChanged: (ctx) => widgetManager.update(ctx),
+      onStateChanged: (ctx) => {
+        widgetManager.update(ctx);
+        pi.events.emit(
+          AgentEvents.RUN_COUNTS_CHANGED,
+          countStatuses(runtimeState),
+        );
+      },
     });
 
     const reloadRunState = (_event: unknown, ctx: ExtensionContext) => {

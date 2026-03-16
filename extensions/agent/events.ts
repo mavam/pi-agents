@@ -6,6 +6,7 @@ export const AgentEvents = {
   RUN_FAILED: "run:failed",
   RUN_ABORTED: "run:aborted",
   RUN_ITERATION: "run:iteration",
+  RUN_COUNTS_CHANGED: "run:counts_changed",
   AGENTS_SPAWNED: "agents:spawned",
   AGENTS_COMPLETED: "agents:completed",
   AGENTS_FAILED: "agents:failed",
@@ -51,12 +52,20 @@ export interface AgentsJoinedPayload {
   from: string;
 }
 
+export interface RunCountsPayload {
+  runs: number;
+  running: number;
+  waiting: number;
+  queued: number;
+}
+
 export interface AgentEventPayloads {
   [AgentEvents.RUN_CREATED]: RunCreatedPayload;
   [AgentEvents.RUN_COMPLETED]: RunStatusPayload;
   [AgentEvents.RUN_FAILED]: RunStatusPayload;
   [AgentEvents.RUN_ABORTED]: RunStatusPayload;
   [AgentEvents.RUN_ITERATION]: RunIterationPayload;
+  [AgentEvents.RUN_COUNTS_CHANGED]: RunCountsPayload;
   [AgentEvents.AGENTS_SPAWNED]: AgentsSpawnedPayload;
   [AgentEvents.AGENTS_COMPLETED]: AgentsCompletedPayload;
   [AgentEvents.AGENTS_FAILED]: AgentsFailedPayload;

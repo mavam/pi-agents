@@ -194,27 +194,48 @@ export function formatRunDetailsText(
 // Flow tree — ASCII visualization of a FlowSpec
 // ---------------------------------------------------------------------------
 
-/** Map from specId → RunNode for fast status lookups. */
-type NodeIndex = ReadonlyMap<string, RunNode>;
+/** Indexes RunNodes for fast status lookups by specId, label, and branchKey. */
+interface NodeIndex {
+  bySpecId: ReadonlyMap<string, RunNode>;
+  byLabel: ReadonlyMap<string, RunNode>;
+  byBranchKey: ReadonlyMap<string, RunNode>;
+}
 
 function buildNodeIndex(
   runtimeState: RunRuntimeState | undefined,
   runId: string | undefined,
 ): NodeIndex {
-  if (!runtimeState || !runId) return new Map();
+  const empty: NodeIndex = {
+    bySpecId: new Map(),
+    byLabel: new Map(),
+    byBranchKey: new Map(),
+  };
+  if (!runtimeState || !runId) return empty;
   const nodes = getRunNodes(runtimeState, runId);
-  const index = new Map<string, RunNode>();
+  const bySpecId = new Map<string, RunNode>();
+  const byLabel = new Map<string, RunNode>();
+  const byBranchKey = new Map<string, RunNode>();
   for (const node of nodes) {
-    if (node.specId) {
-      index.set(node.specId, node);
-    }
+    if (node.specId) bySpecId.set(node.specId, node);
+    if (node.label) byLabel.set(node.label, node);
+    if (node.branchKey) byBranchKey.set(node.branchKey, node);
   }
-  return index;
+  return { bySpecId, byLabel, byBranchKey };
 }
 
 function flowIcon(spec: FlowSpec, nodeIndex: NodeIndex): string {
+  // Try specId first (most reliable), then label, then kind fallback.
   if (spec.id) {
-    const node = nodeIndex.get(spec.id);
+    const node = nodeIndex.bySpecId.get(spec.id);
+    if (node) return iconForStatus(node.status);
+  }
+  if (spec.label) {
+    const node = nodeIndex.byLabel.get(spec.label);
+    if (node) return iconForStatus(node.status);
+  }
+  // For spawns without id/label, try matching by agent name via label index.
+  if (spec.kind === "spawn") {
+    const node = nodeIndex.byLabel.get(spec.agent);
     if (node) return iconForStatus(node.status);
   }
   return iconForKind(spec.kind);
@@ -237,7 +258,7 @@ function joinLabel(spec: JoinFlowSpec): string {
 function loopLabel(spec: LoopFlowSpec, nodeIndex: NodeIndex): string {
   const base = spec.label ?? spec.id;
   if (spec.id) {
-    const node = nodeIndex.get(spec.id);
+    const node = nodeIndex.bySpecId.get(spec.id);
     if (node?.iteration !== undefined) {
       return `${base} (${node.iteration}/${spec.maxIterations} iterations)`;
     }

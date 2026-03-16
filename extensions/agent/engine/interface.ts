@@ -9,7 +9,7 @@ export interface SpawnUpdate {
 
 export interface SpawnResult {
   id: string;
-  compositionId?: string;
+  runId?: string;
   parentNodeId?: string;
   depth: number;
   agent: string;
@@ -22,7 +22,7 @@ export interface SpawnResult {
 
 export interface SpawnHandle {
   id: string;
-  compositionId?: string;
+  runId?: string;
   parentNodeId?: string;
   depth: number;
   status: "queued" | "running" | "completed" | "failed" | "stopped" | "aborted";
@@ -42,7 +42,7 @@ export interface SpawnRequest {
   cwd: string;
   scope: Scope;
   discoveryDiagnostics: string[];
-  compositionId?: string;
+  runId?: string;
   parentNodeId?: string;
   depth?: number;
   env?: Record<string, string>;

@@ -3,41 +3,30 @@ import type {
   ExtensionAPI,
   SessionEntry,
 } from "@mariozechner/pi-coding-agent";
-import type { CompositionRuntimeState } from "./state.js";
-import {
-  applyCompositionEvent,
-  createCompositionRuntimeState,
-} from "./state.js";
-import type { CompositionEvent } from "./types.js";
+import { applyRunEvent, createRunRuntimeState } from "./state.js";
+import type { RunEvent } from "./types.js";
 
-export const COMPOSITION_EVENT_CUSTOM_TYPE = "pi-agents:composition-event";
+export const RUN_EVENT_CUSTOM_TYPE = "pi-agents:run-event";
 
-function isCompositionEventEntry(
-  entry: SessionEntry,
-): entry is CustomEntry<CompositionEvent> {
+function isRunEventEntry(entry: SessionEntry): entry is CustomEntry<RunEvent> {
   return (
     entry.type === "custom" &&
-    entry.customType === COMPOSITION_EVENT_CUSTOM_TYPE &&
+    entry.customType === RUN_EVENT_CUSTOM_TYPE &&
     entry.data !== undefined
   );
 }
 
-export function appendCompositionEvent(
-  pi: ExtensionAPI,
-  event: CompositionEvent,
-): void {
-  pi.appendEntry(COMPOSITION_EVENT_CUSTOM_TYPE, event);
+export function appendRunEvent(pi: ExtensionAPI, event: RunEvent): void {
+  pi.appendEntry(RUN_EVENT_CUSTOM_TYPE, event);
 }
 
-export function rebuildCompositionState(
-  entries: SessionEntry[],
-): CompositionRuntimeState {
-  const state = createCompositionRuntimeState();
+export function rebuildRunState(entries: SessionEntry[]) {
+  const state = createRunRuntimeState();
   for (const entry of entries) {
-    if (!isCompositionEventEntry(entry)) continue;
+    if (!isRunEventEntry(entry)) continue;
     const event = entry.data;
     if (!event) continue;
-    applyCompositionEvent(state, event);
+    applyRunEvent(state, event);
   }
   return state;
 }

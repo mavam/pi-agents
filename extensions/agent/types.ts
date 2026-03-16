@@ -101,7 +101,7 @@ export interface LoopFlowSpec {
   continueWhen?: ContinueSpec;
 }
 
-export interface ComposeParams {
+export interface WorkflowParams {
   label?: string;
   flow: FlowSpec;
   budgets?: Budgets;
@@ -117,15 +117,15 @@ export type NodeStatus =
   | "failed"
   | "aborted";
 
-export type CompositionStatus = "running" | "completed" | "failed" | "aborted";
+export type RunStatus = "running" | "completed" | "failed" | "aborted";
 
-export interface CompositionRun {
+export interface WorkflowRun {
   id: string;
-  parentCompositionId?: string;
+  parentRunId?: string;
   parentNodeId?: string;
   rootNodeId: string;
   label: string;
-  status: CompositionStatus;
+  status: RunStatus;
   startedAt: number;
   completedAt?: number;
   depth: number;
@@ -137,9 +137,9 @@ export interface CompositionRun {
   error?: string;
 }
 
-export interface CompositionNode {
+export interface RunNode {
   id: string;
-  compositionId: string;
+  runId: string;
   parentNodeId?: string;
   specId?: string;
   kind: FlowSpec["kind"];
@@ -217,70 +217,70 @@ export type FlowNodeResult =
   | JoinNodeResult
   | LoopNodeResult;
 
-export interface CompositionResultDetails {
-  composition: CompositionRun;
-  nodes: CompositionNode[];
+export interface RunResultDetails {
+  run: WorkflowRun;
+  nodes: RunNode[];
   result?: FlowNodeResult;
 }
 
-export type CompositionEvent =
+export type RunEvent =
   | {
-      type: "composition_created";
+      type: "run_created";
       at: number;
-      composition: CompositionRun;
+      run: WorkflowRun;
     }
   | {
       type: "node_started";
       at: number;
-      node: CompositionNode;
+      node: RunNode;
     }
   | {
       type: "node_waiting";
       at: number;
-      compositionId: string;
+      runId: string;
       nodeId: string;
       status: Extract<NodeStatus, "waiting">;
     }
   | {
       type: "node_completed";
       at: number;
-      compositionId: string;
+      runId: string;
       nodeId: string;
       output?: unknown;
     }
   | {
       type: "node_failed";
       at: number;
-      compositionId: string;
+      runId: string;
       nodeId: string;
       error: string;
     }
   | {
       type: "node_aborted";
       at: number;
-      compositionId: string;
+      runId: string;
       nodeId: string;
       error?: string;
     }
   | {
       type: "loop_iteration_started";
       at: number;
-      compositionId: string;
+      runId: string;
       nodeId: string;
       iteration: number;
     }
   | {
       type: "loop_iteration_completed";
       at: number;
-      compositionId: string;
+      runId: string;
       nodeId: string;
       iteration: number;
     }
   | {
-      type: "composition_completed";
+      type: "run_completed";
       at: number;
-      compositionId: string;
-      status: CompositionStatus;
+      runId: string;
+      status: RunStatus;
       result?: FlowNodeResult;
       error?: string;
     };

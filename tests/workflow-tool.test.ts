@@ -14,7 +14,7 @@ import {
   createAgentExtension,
   type SpawnProcess,
 } from "../extensions/agent/index.ts";
-import type { CompositionResultDetails } from "../extensions/agent/types.ts";
+import type { RunResultDetails } from "../extensions/agent/types.ts";
 
 let sandboxDir = "";
 let workspaceDir = "";
@@ -226,7 +226,7 @@ describe("workflow tool", () => {
       { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
     );
 
-    const details = result.details as CompositionResultDetails;
+    const details = result.details as RunResultDetails;
     expect(details.result.output.branches.a).toBe("result-a");
     expect(details.result.output.branches.b).toBe("result-b");
   });
@@ -271,7 +271,7 @@ describe("workflow tool", () => {
         },
         controller.signal,
         (update) => {
-          const details = update.details as CompositionResultDetails;
+          const details = update.details as RunResultDetails;
           if (
             !aborted &&
             details.nodes.some(
@@ -332,7 +332,7 @@ describe("workflow tool", () => {
       { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
     );
 
-    const details = result.details as CompositionResultDetails;
+    const details = result.details as RunResultDetails;
     expect(details.result.iterations).toHaveLength(2);
     expect(details.result.output.done).toBe(true);
   });

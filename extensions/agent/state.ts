@@ -1,18 +1,18 @@
 import type {
-  CompositionEvent,
-  CompositionNode,
-  CompositionRun,
-  CompositionStatus,
   NodeStatus,
+  RunEvent,
+  RunNode,
+  RunStatus,
+  WorkflowRun,
 } from "./types.js";
 
-export interface CompositionRuntimeState {
-  runs: Map<string, CompositionRun>;
-  nodes: Map<string, CompositionNode>;
+export interface RunRuntimeState {
+  runs: Map<string, WorkflowRun>;
+  nodes: Map<string, RunNode>;
   order: string[];
 }
 
-export function createCompositionRuntimeState(): CompositionRuntimeState {
+export function createRunRuntimeState(): RunRuntimeState {
   return {
     runs: new Map(),
     nodes: new Map(),
@@ -20,10 +20,7 @@ export function createCompositionRuntimeState(): CompositionRuntimeState {
   };
 }
 
-function setNodeStatus(
-  node: CompositionNode | undefined,
-  status: NodeStatus,
-): void {
+function setNodeStatus(node: RunNode | undefined, status: NodeStatus): void {
   if (!node) return;
   node.status = status;
   if (status === "running" && node.startedAt === undefined) {
@@ -34,15 +31,12 @@ function setNodeStatus(
   }
 }
 
-export function applyCompositionEvent(
-  state: CompositionRuntimeState,
-  event: CompositionEvent,
-): void {
+export function applyRunEvent(state: RunRuntimeState, event: RunEvent): void {
   switch (event.type) {
-    case "composition_created": {
-      state.runs.set(event.composition.id, { ...event.composition });
-      if (!state.order.includes(event.composition.id)) {
-        state.order.push(event.composition.id);
+    case "run_created": {
+      state.runs.set(event.run.id, { ...event.run });
+      if (!state.order.includes(event.run.id)) {
+        state.order.push(event.run.id);
       }
       return;
     }
@@ -93,8 +87,8 @@ export function applyCompositionEvent(
       }
       return;
     }
-    case "composition_completed": {
-      const run = state.runs.get(event.compositionId);
+    case "run_completed": {
+      const run = state.runs.get(event.runId);
       if (run) {
         run.status = event.status;
         run.completedAt = event.at;
@@ -106,15 +100,12 @@ export function applyCompositionEvent(
   }
 }
 
-export function markRunningCompositionsAborted(
-  state: CompositionRuntimeState,
-): void {
+export function markRunningRunsAborted(state: RunRuntimeState): void {
   for (const run of state.runs.values()) {
     if (run.status === "running") {
       run.status = "aborted";
       run.completedAt = Date.now();
-      run.error =
-        run.error ?? "Pi restarted before the composition could resume.";
+      run.error = run.error ?? "Pi restarted before the run could resume.";
     }
   }
 
@@ -122,18 +113,14 @@ export function markRunningCompositionsAborted(
     if (node.status === "running" || node.status === "waiting") {
       node.status = "aborted";
       node.completedAt = Date.now();
-      node.error =
-        node.error ?? "Pi restarted before the composition could resume.";
+      node.error = node.error ?? "Pi restarted before the run could resume.";
     }
   }
 }
 
-export function getCompositionNodes(
-  state: CompositionRuntimeState,
-  compositionId: string,
-): CompositionNode[] {
+export function getRunNodes(state: RunRuntimeState, runId: string): RunNode[] {
   return [...state.nodes.values()]
-    .filter((node) => node.compositionId === compositionId)
+    .filter((node) => node.runId === runId)
     .sort((a, b) => {
       const left = a.startedAt ?? 0;
       const right = b.startedAt ?? 0;
@@ -141,17 +128,15 @@ export function getCompositionNodes(
     });
 }
 
-export function getOrderedCompositions(
-  state: CompositionRuntimeState,
-): CompositionRun[] {
+export function getOrderedRuns(state: RunRuntimeState): WorkflowRun[] {
   return state.order
     .map((id) => state.runs.get(id))
-    .filter((run): run is CompositionRun => run !== undefined)
+    .filter((run): run is WorkflowRun => run !== undefined)
     .sort((a, b) => b.startedAt - a.startedAt);
 }
 
-export function countStatuses(state: CompositionRuntimeState): {
-  compositions: number;
+export function countStatuses(state: RunRuntimeState): {
+  runs: number;
   running: number;
   waiting: number;
   queued: number;
@@ -165,14 +150,14 @@ export function countStatuses(state: CompositionRuntimeState): {
     if (node.status === "queued") queued += 1;
   }
   return {
-    compositions: state.runs.size,
+    runs: state.runs.size,
     running,
     waiting,
     queued,
   };
 }
 
-export function iconForStatus(status: NodeStatus | CompositionStatus): string {
+export function iconForStatus(status: NodeStatus | RunStatus): string {
   switch (status) {
     case "running":
       return "⠹";

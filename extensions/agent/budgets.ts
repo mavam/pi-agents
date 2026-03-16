@@ -23,14 +23,14 @@ export function consumeChild(snapshot: BudgetSnapshot): void {
   snapshot.usedChildren += 1;
   const maxChildren = snapshot.limits.maxChildren;
   if (maxChildren !== undefined && snapshot.usedChildren > maxChildren) {
-    throw new Error(`Composition child budget exceeded (${maxChildren}).`);
+    throw new Error(`Run child budget exceeded (${maxChildren}).`);
   }
 }
 
 export function assertDepth(snapshot: BudgetSnapshot, depth: number): void {
   const maxDepth = snapshot.limits.maxDepth;
   if (maxDepth !== undefined && depth > maxDepth) {
-    throw new Error(`Composition depth budget exceeded (${maxDepth}).`);
+    throw new Error(`Run depth budget exceeded (${maxDepth}).`);
   }
 }
 

@@ -17,6 +17,54 @@ Agents are loaded from:
 
 The tools default to **both** project and user agents.
 
+## 📖 Concepts
+
+### Agent
+
+An **agent** is a markdown file that defines a delegated pi subprocess. Each
+file has YAML frontmatter (name, model, thinking level, skills) and a body that
+becomes the agent's system prompt. At runtime the framework launches the agent
+as an isolated pi process, waits for it to finish, and returns the result.
+
+### Workflow
+
+A **workflow** is a JSON-defined graph that orchestrates multiple agents. You
+pass the graph to the `workflow` tool, and the runtime walks it node by node.
+
+### Flow spec
+
+The JSON structure that describes a workflow graph is called a **flow spec**.
+A flow spec is a tree of **nodes**, where each node has a `kind` that
+determines its behavior:
+
+| Node       | Purpose                                                         |
+| ---------- | --------------------------------------------------------------- |
+| `spawn`    | Run a single agent as a subprocess and return its output.       |
+| `sequence` | Run a list of nodes one after another, threading results.       |
+| `fork`     | Run named branches concurrently (up to a concurrency limit).    |
+| `join`     | Wait for the branches of a previous `fork` and combine results. |
+| `loop`     | Repeat a body node until a condition is met or a cap is hit.    |
+
+Nodes nest recursively: a `sequence` can contain `fork` nodes, a `loop`
+body can be a `sequence`, and so on.
+
+### Budgets
+
+**Budgets** are optional limits that constrain a workflow execution:
+
+| Budget           | What it limits                                            |
+| ---------------- | --------------------------------------------------------- |
+| `maxDepth`       | Maximum nesting depth of the flow-spec tree.              |
+| `maxChildren`    | Maximum number of child nodes a single node may produce.  |
+| `maxParallelism` | Maximum concurrent subprocess agents across the workflow. |
+| `maxIterations`  | Maximum iterations for any single `loop` node.            |
+
+### Runs
+
+Every agent delegation and workflow execution is persisted as a **run** in the
+current pi session. Runs survive session reloads so you can inspect past
+results. The `/runs` and `/run` commands let you list and drill into them.
+
 ## 🚀 Quick start
 
 ### 1. Create an agent file
@@ -71,17 +119,10 @@ You can also call the `agent` tool directly:
 
 ### 4. Run a workflow
 
-You can run explicit, JSON-defined agent workflows with the `workflow` tool.
-
-Supported flow nodes:
-
-- `spawn`
-- `sequence`
-- `fork`
-- `join`
-- `loop`
-
-Example review loop:
+Use the `workflow` tool to run a multi-agent flow spec. The example below
+defines a review loop: a `reviewer` agent inspects the patch, then an
+`engineer` agent applies the findings, repeating until the reviewer signals
+`done` or three iterations have passed.
 
 ```json
 {
@@ -122,14 +163,14 @@ Example review loop:
 }
 ```
 
-The runtime is subprocess-backed in v1 and persists run lifecycle events in
-the session so pi can reconstruct run state after reload.
+The runtime launches each `spawn` as a subprocess and persists lifecycle events
+into the session so pi can reconstruct state after a reload.
 
 ## 🔧 Available tools
 
 ### `agent`
 
-Runs one isolated delegated agent.
+Runs one isolated delegated agent as a subprocess.
 
 Parameters:
 
@@ -140,22 +181,15 @@ Parameters:
 
 ### `workflow`
 
-Runs an explicit workflow graph over delegated agent runs.
+Runs a workflow defined by a flow spec.
 
 Top-level parameters:
 
-- `label`: Optional workflow label.
-- `flow`: A JSON-defined `FlowSpec`.
-- `budgets`: Optional runtime limits.
-- `scope`: Optional default agent scope.
-- `cwd`: Optional default working directory.
-
-Budget fields:
-
-- `maxDepth`
-- `maxChildren`
-- `maxParallelism`
-- `maxIterations`
+- `label`: Optional human-readable label for this workflow run.
+- `flow`: The flow spec (a JSON tree of nodes).
+- `budgets`: Optional budget limits (see [Budgets](#budgets)).
+- `scope`: Optional default agent scope for all `spawn` nodes.
+- `cwd`: Optional default working directory for all `spawn` nodes.
 
 ## 🧭 Commands
 
@@ -170,6 +204,9 @@ Budget fields:
 
 ### `spawn`
 
+Run a single agent as a subprocess. This is the leaf node of every flow spec—
+the only node kind that actually executes work.
+
 ```json
 {
   "kind": "spawn",
@@ -182,7 +219,16 @@ Budget fields:
 }
 ```
 
+- `id`: Optional identifier, used to reference this node's result elsewhere.
+- `agent`: Name of the agent (must match a discovered agent's frontmatter).
+- `task`: The task prompt sent to the agent.
+- `output`: `"text"` (default) or `"json"` (the agent's output is parsed as
+  JSON, useful for downstream `continueWhen` checks).
+
 ### `sequence`
+
+Run a list of nodes one after another. The output of the sequence is the output
+of its last step.
 
 ```json
 {
@@ -196,6 +242,9 @@ Budget fields:
 
 ### `fork`
 
+Run named branches concurrently. Each branch is an arbitrary flow spec. Use
+`concurrency` to cap how many branches run in parallel.
+
 ```json
 {
   "kind": "fork",
@@ -208,7 +257,13 @@ Budget fields:
 }
 ```
 
+- `id`: Required. Referenced by a downstream `join` node.
+- `branches`: A map of branch keys to flow specs.
+- `concurrency`: Optional cap on simultaneous branches.
+
 ### `join`
+
+Wait for the branches of a previous `fork` and combine their results.
 
 ```json
 {
@@ -220,9 +275,19 @@ Budget fields:
 }
 ```
 
-`mode` can be `all`, `any`, or `quorum`.
+- `from`: The `id` of the `fork` node to join.
+- `mode`: When to proceed—`"all"` (every branch must finish), `"any"` (first
+  success wins), or `"quorum"` (a minimum number of successes, set by the
+  `quorum` field).
+- `reducer`: How to combine branch results. `"collect"` gathers them into an
+  object keyed by branch name. `"agent"` delegates summarization to another
+  agent.
+- `onFailure`: `"failFast"` (default, abort on first branch error) or
+  `"collectErrors"` (continue and gather errors alongside successes).
 
 ### `loop`
+
+Repeat a body node until a condition is met or `maxIterations` is reached.
 
 ```json
 {
@@ -238,7 +303,13 @@ Budget fields:
 }
 ```
 
-`continueWhen` currently supports checking a single field in the latest result.
+- `id`: Required.
+- `body`: Any flow spec to execute each iteration.
+- `maxIterations`: Hard cap on repetitions.
+- `continueWhen`: Optional predicate evaluated after each iteration. Currently
+  supports `result_field`, which checks a single field in the body's JSON
+  output. The loop continues while the field matches `equals` and stops
+  otherwise.
 
 ## 📄 License
 

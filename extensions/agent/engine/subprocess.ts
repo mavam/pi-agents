@@ -350,7 +350,7 @@ export function createSubprocessSpawnEngine(options?: {
           cleanup();
           resolve({
             id,
-            compositionId: spec.compositionId,
+            runId: spec.runId,
             parentNodeId: spec.parentNodeId,
             depth,
             agent: spec.agent.name,
@@ -380,7 +380,7 @@ export function createSubprocessSpawnEngine(options?: {
 
       return {
         id,
-        compositionId: spec.compositionId,
+        runId: spec.runId,
         parentNodeId: spec.parentNodeId,
         depth,
         get status() {

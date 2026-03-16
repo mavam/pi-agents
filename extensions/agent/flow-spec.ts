@@ -1,5 +1,4 @@
 import type {
-  ComposeParams,
   ContinueSpec,
   FlowSpec,
   ForkFlowSpec,
@@ -7,6 +6,7 @@ import type {
   LoopFlowSpec,
   SequenceFlowSpec,
   SpawnFlowSpec,
+  WorkflowParams,
 } from "./types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -144,11 +144,13 @@ function validateJoinSpec(
     );
   }
   if (spec.reducer !== undefined) {
-    if (!isRecord(spec.reducer))
+    if (!isRecord(spec.reducer)) {
       throw new Error(`${label}.reducer must be an object.`);
+    }
     if (spec.reducer.kind === "collect") {
-      // nothing else
-    } else if (spec.reducer.kind === "agent") {
+      return;
+    }
+    if (spec.reducer.kind === "agent") {
       assertString(spec.reducer.agent, `${label}.reducer.agent`);
       assertString(spec.reducer.task, `${label}.reducer.task`);
       if (
@@ -158,9 +160,9 @@ function validateJoinSpec(
       ) {
         throw new Error(`${label}.reducer.output must be "text" or "json".`);
       }
-    } else {
-      throw new Error(`${label}.reducer.kind must be "collect" or "agent".`);
+      return;
     }
+    throw new Error(`${label}.reducer.kind must be "collect" or "agent".`);
   }
 }
 
@@ -207,11 +209,12 @@ export function validateFlowSpec(
   }
 }
 
-export function validateComposeParams(
+export function validateWorkflowParams(
   params: unknown,
-): asserts params is ComposeParams {
-  if (!isRecord(params))
-    throw new Error(`workflow parameters must be an object.`);
+): asserts params is WorkflowParams {
+  if (!isRecord(params)) {
+    throw new Error("workflow parameters must be an object.");
+  }
   assertOptionalString(params.label, "label");
   validateFlowSpec(params.flow, "flow");
   assertOptionalString(params.cwd, "cwd");
@@ -221,11 +224,12 @@ export function validateComposeParams(
     params.scope !== "project" &&
     params.scope !== "both"
   ) {
-    throw new Error(`scope must be "user", "project", or "both".`);
+    throw new Error('scope must be "user", "project", or "both".');
   }
   if (params.budgets !== undefined) {
-    if (!isRecord(params.budgets))
-      throw new Error(`budgets must be an object.`);
+    if (!isRecord(params.budgets)) {
+      throw new Error("budgets must be an object.");
+    }
     for (const key of [
       "maxDepth",
       "maxChildren",
@@ -240,8 +244,9 @@ export function validateComposeParams(
 
 export function parseJsonText(text: string): unknown {
   const trimmed = text.trim();
-  if (!trimmed)
+  if (!trimmed) {
     throw new Error("Expected JSON output but received empty text.");
+  }
 
   try {
     return JSON.parse(trimmed);

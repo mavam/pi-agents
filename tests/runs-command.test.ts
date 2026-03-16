@@ -210,7 +210,7 @@ describe("/run command", () => {
       { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
     );
 
-    const runId = workflowResult.details.composition.id as string;
+    const runId = workflowResult.details.run.id as string;
     const prefix = runId.slice(0, 8);
 
     messages.length = 0;

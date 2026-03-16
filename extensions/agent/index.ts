@@ -17,25 +17,22 @@ import {
   isChildProcessRunning,
   type SpawnProcess,
 } from "./engine/subprocess.js";
-import { CompositionExecutionError, CompositionExecutor } from "./executor.js";
-import { validateComposeParams } from "./flow-spec.js";
+import { RunExecutionError, RunExecutor } from "./executor.js";
+import { validateWorkflowParams } from "./flow-spec.js";
 import { AgentManager } from "./manager.js";
-import {
-  COMPOSITION_EVENT_CUSTOM_TYPE,
-  rebuildCompositionState,
-} from "./persistence.js";
+import { RUN_EVENT_CUSTOM_TYPE, rebuildRunState } from "./persistence.js";
 import {
   countStatuses,
-  createCompositionRuntimeState,
-  getCompositionNodes,
-  getOrderedCompositions,
+  createRunRuntimeState,
+  getOrderedRuns,
+  getRunNodes,
   iconForStatus,
-  markRunningCompositionsAborted,
+  markRunningRunsAborted,
 } from "./state.js";
 import type {
   AgentRunDetails,
-  ComposeParams,
-  CompositionResultDetails,
+  RunResultDetails,
+  WorkflowParams,
 } from "./types.js";
 
 interface AgentToolExecutionResult<T> extends AgentToolResult<T> {
@@ -171,16 +168,16 @@ function formatAgentDetails(
 }
 
 function formatRunOverviewText(
-  runtimeState: ReturnType<typeof createCompositionRuntimeState>,
+  runtimeState: ReturnType<typeof createRunRuntimeState>,
 ): string {
-  const runs = getOrderedCompositions(runtimeState);
+  const runs = getOrderedRuns(runtimeState);
   if (runs.length === 0) {
     return "No runs recorded in this session.";
   }
 
   const lines = ["Runs:"];
   for (const run of runs.slice(0, 10)) {
-    const nodes = getCompositionNodes(runtimeState, run.id);
+    const nodes = getRunNodes(runtimeState, run.id);
     lines.push(
       `- ${iconForStatus(run.status)} ${run.label} (${run.id.slice(0, 8)}) · ${run.status} · ${nodes.length} nodes`,
     );
@@ -189,13 +186,9 @@ function formatRunOverviewText(
 }
 
 function resolveRunId(
-  runtimeState: ReturnType<typeof createCompositionRuntimeState>,
+  runtimeState: ReturnType<typeof createRunRuntimeState>,
   query: string,
-):
-  | { runId: string }
-  | {
-      error: string;
-    } {
+): { runId: string } | { error: string } {
   const trimmed = query.trim();
   if (!trimmed) {
     return { error: "Run ID must not be empty." };
@@ -205,7 +198,7 @@ function resolveRunId(
     return { runId: trimmed };
   }
 
-  const matches = getOrderedCompositions(runtimeState).filter((item) =>
+  const matches = getOrderedRuns(runtimeState).filter((item) =>
     item.id.startsWith(trimmed),
   );
   const [match] = matches;
@@ -221,14 +214,14 @@ function resolveRunId(
     };
   }
 
-  const known = getOrderedCompositions(runtimeState)
+  const known = getOrderedRuns(runtimeState)
     .map((item) => `${item.id.slice(0, 8)} → ${item.id}`)
     .join(", ");
   return { error: `Unknown run "${trimmed}". Known: ${known || "none"}` };
 }
 
 function formatRunDetailsText(
-  runtimeState: ReturnType<typeof createCompositionRuntimeState>,
+  runtimeState: ReturnType<typeof createRunRuntimeState>,
   runId: string,
 ): string {
   const resolved = resolveRunId(runtimeState, runId);
@@ -241,7 +234,7 @@ function formatRunDetailsText(
     return `Unknown run "${runId}".`;
   }
 
-  const nodes = getCompositionNodes(runtimeState, run.id);
+  const nodes = getRunNodes(runtimeState, run.id);
   const lines = [
     `Run: ${run.label}`,
     `ID: ${run.id}`,
@@ -285,10 +278,10 @@ function formatOutput(value: unknown): string {
 
 function updateRunUI(
   ctx: ExtensionContext | undefined,
-  runtimeState: ReturnType<typeof createCompositionRuntimeState>,
+  runtimeState: ReturnType<typeof createRunRuntimeState>,
 ): void {
   if (!ctx?.hasUI) return;
-  const runs = getOrderedCompositions(runtimeState);
+  const runs = getOrderedRuns(runtimeState);
   const active = runs.filter((run) => run.status === "running");
 
   if (active.length === 0) {
@@ -299,7 +292,7 @@ function updateRunUI(
 
   const lines = ["● runs"];
   for (const run of active.slice(0, 5)) {
-    const nodes = getCompositionNodes(runtimeState, run.id);
+    const nodes = getRunNodes(runtimeState, run.id);
     const lastNodes = nodes.slice(-4);
     lines.push(
       `├─ ${iconForStatus(run.status)} ${run.label} ${run.id.slice(0, 8)} ${run.status}`,
@@ -314,7 +307,7 @@ function updateRunUI(
   ctx.ui.setWidget("pi-agents-runs", lines);
   ctx.ui.setStatus(
     "pi-agents-runs",
-    `${counts.compositions} runs · ${counts.running} agents running · ${counts.waiting} waiting nodes`,
+    `${counts.runs} runs · ${counts.running} agents running · ${counts.waiting} waiting nodes`,
   );
 }
 
@@ -326,9 +319,9 @@ export function createAgentExtension(options?: {
   });
 
   return function agentExtension(pi: ExtensionAPI) {
-    const runtimeState = createCompositionRuntimeState();
+    const runtimeState = createRunRuntimeState();
     const manager = new AgentManager(engine);
-    const executor = new CompositionExecutor({
+    const executor = new RunExecutor({
       pi,
       manager,
       runtimeState,
@@ -337,18 +330,18 @@ export function createAgentExtension(options?: {
 
     if (typeof (pi as { on?: unknown }).on === "function") {
       pi.on("session_start", async (_event, ctx) => {
-        const rebuilt = rebuildCompositionState(
-          ctx.sessionManager.getEntries(),
-        );
+        const rebuilt = rebuildRunState(ctx.sessionManager.getEntries());
         runtimeState.runs.clear();
         runtimeState.nodes.clear();
         runtimeState.order.length = 0;
-        for (const [id, run] of rebuilt.runs.entries())
+        for (const [id, run] of rebuilt.runs.entries()) {
           runtimeState.runs.set(id, run);
-        for (const [id, node] of rebuilt.nodes.entries())
+        }
+        for (const [id, node] of rebuilt.nodes.entries()) {
           runtimeState.nodes.set(id, node);
+        }
         runtimeState.order.push(...rebuilt.order);
-        markRunningCompositionsAborted(runtimeState);
+        markRunningRunsAborted(runtimeState);
         updateRunUI(ctx, runtimeState);
       });
     }
@@ -436,7 +429,7 @@ export function createAgentExtension(options?: {
             ].join("\n")
           : formatRunOverviewText(runtimeState);
         pi.sendMessage({
-          customType: COMPOSITION_EVENT_CUSTOM_TYPE,
+          customType: RUN_EVENT_CUSTOM_TYPE,
           content,
           display: true,
         });
@@ -446,7 +439,7 @@ export function createAgentExtension(options?: {
     pi.registerCommand("run", {
       description: "Show details for a specific run",
       getArgumentCompletions: (prefix) => {
-        const items = getOrderedCompositions(runtimeState)
+        const items = getOrderedRuns(runtimeState)
           .map((run) => ({
             value: run.id,
             label: run.label,
@@ -464,7 +457,7 @@ export function createAgentExtension(options?: {
           ? formatRunDetailsText(runtimeState, query)
           : "Usage: /run <id-or-prefix>";
         pi.sendMessage({
-          customType: COMPOSITION_EVENT_CUSTOM_TYPE,
+          customType: RUN_EVENT_CUSTOM_TYPE,
           content,
           display: true,
         });
@@ -556,9 +549,9 @@ export function createAgentExtension(options?: {
         signal,
         onUpdate,
         ctx,
-      ): Promise<AgentToolExecutionResult<CompositionResultDetails>> {
-        validateComposeParams(params);
-        const workflowParams = params as ComposeParams;
+      ): Promise<AgentToolExecutionResult<RunResultDetails>> {
+        validateWorkflowParams(params);
+        const workflowParams = params as WorkflowParams;
 
         try {
           const details = await executor.execute(
@@ -573,13 +566,13 @@ export function createAgentExtension(options?: {
                 type: "text",
                 text: details.result
                   ? formatOutput(details.result.output)
-                  : `Run ${details.composition.id} completed.`,
+                  : `Run ${details.run.id} completed.`,
               },
             ],
             details,
           };
         } catch (error) {
-          if (error instanceof CompositionExecutionError) throw error;
+          if (error instanceof RunExecutionError) throw error;
           throw error;
         }
       },

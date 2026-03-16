@@ -16,15 +16,10 @@ import type { SpawnHandle } from "./engine/interface.js";
 import { DelegatedAgentRunError } from "./engine/subprocess.js";
 import { parseJsonText } from "./flow-spec.js";
 import { type AgentManager, mapWithConcurrencyLimit } from "./manager.js";
-import { appendCompositionEvent } from "./persistence.js";
-import type { CompositionRuntimeState } from "./state.js";
-import { applyCompositionEvent, getCompositionNodes } from "./state.js";
+import { appendRunEvent } from "./persistence.js";
+import type { RunRuntimeState } from "./state.js";
+import { applyRunEvent, getRunNodes } from "./state.js";
 import type {
-  ComposeParams,
-  CompositionEvent,
-  CompositionNode,
-  CompositionResultDetails,
-  CompositionRun,
   ContinueSpec,
   FlowNodeResult,
   FlowSpec,
@@ -35,10 +30,15 @@ import type {
   JoinNodeResult,
   LoopFlowSpec,
   LoopNodeResult,
+  RunEvent,
+  RunNode,
+  RunResultDetails,
   SequenceFlowSpec,
   SequenceNodeResult,
   SpawnFlowSpec,
   SpawnNodeResult,
+  WorkflowParams,
+  WorkflowRun,
 } from "./types.js";
 
 interface FlowMemory {
@@ -47,7 +47,7 @@ interface FlowMemory {
 }
 
 interface EvaluationState {
-  compositionId: string;
+  runId: string;
   cwd: string;
   scope: Scope;
   parentNodeId?: string;
@@ -60,16 +60,16 @@ interface EvaluationState {
 interface ExecutorOptions {
   pi: ExtensionAPI;
   manager: AgentManager;
-  runtimeState: CompositionRuntimeState;
+  runtimeState: RunRuntimeState;
   onStateChanged?: (ctx: ExtensionContext) => void;
 }
 
-export class CompositionExecutionError extends Error {
-  readonly details: CompositionResultDetails;
+export class RunExecutionError extends Error {
+  readonly details: RunResultDetails;
 
-  constructor(message: string, details: CompositionResultDetails) {
+  constructor(message: string, details: RunResultDetails) {
     super(message);
-    this.name = "CompositionExecutionError";
+    this.name = "RunExecutionError";
     this.details = details;
   }
 }
@@ -233,30 +233,30 @@ function assertNotAborted(signal?: AbortSignal): void {
   }
 }
 
-export class CompositionExecutor {
+export class RunExecutor {
   private nodeCounter = 0;
 
   constructor(private readonly options: ExecutorOptions) {}
 
-  private emit(event: CompositionEvent, ctx: ExtensionContext): void {
-    applyCompositionEvent(this.options.runtimeState, event);
-    appendCompositionEvent(this.options.pi, event);
+  private emit(event: RunEvent, ctx: ExtensionContext): void {
+    applyRunEvent(this.options.runtimeState, event);
+    appendRunEvent(this.options.pi, event);
 
     switch (event.type) {
-      case "composition_created":
-        this.options.pi.events.emit("composition:created", {
-          compositionId: event.composition.id,
+      case "run_created":
+        this.options.pi.events.emit("run:created", {
+          runId: event.run.id,
         });
         break;
-      case "composition_completed":
-        this.options.pi.events.emit(`composition:${event.status}`, {
-          compositionId: event.compositionId,
+      case "run_completed":
+        this.options.pi.events.emit(`run:${event.status}`, {
+          runId: event.runId,
           status: event.status,
         });
         break;
       case "loop_iteration_completed":
-        this.options.pi.events.emit("composition:iteration", {
-          compositionId: event.compositionId,
+        this.options.pi.events.emit("run:iteration", {
+          runId: event.runId,
           nodeId: event.nodeId,
           iteration: event.iteration,
         });
@@ -264,20 +264,20 @@ export class CompositionExecutor {
       case "node_started":
         if (event.node.kind === "spawn") {
           this.options.pi.events.emit("agents:spawned", {
-            compositionId: event.node.compositionId,
+            runId: event.node.runId,
             nodeId: event.node.id,
           });
         }
         break;
       case "node_completed":
         this.options.pi.events.emit("agents:completed", {
-          compositionId: event.compositionId,
+          runId: event.runId,
           nodeId: event.nodeId,
         });
         break;
       case "node_failed":
         this.options.pi.events.emit("agents:failed", {
-          compositionId: event.compositionId,
+          runId: event.runId,
           nodeId: event.nodeId,
           error: event.error,
         });
@@ -289,15 +289,15 @@ export class CompositionExecutor {
     this.options.onStateChanged?.(ctx);
   }
 
-  private buildSnapshot(compositionId: string): CompositionResultDetails {
-    const composition = this.options.runtimeState.runs.get(compositionId);
-    if (!composition) {
-      throw new Error(`Unknown composition ${compositionId}.`);
+  private buildSnapshot(runId: string): RunResultDetails {
+    const run = this.options.runtimeState.runs.get(runId);
+    if (!run) {
+      throw new Error(`Unknown run ${runId}.`);
     }
     return {
-      composition,
-      nodes: getCompositionNodes(this.options.runtimeState, compositionId),
-      result: composition.result,
+      run,
+      nodes: getRunNodes(this.options.runtimeState, runId),
+      result: run.result,
     };
   }
 
@@ -308,16 +308,16 @@ export class CompositionExecutor {
   }
 
   async execute(
-    params: ComposeParams,
+    params: WorkflowParams,
     ctx: ExtensionContext,
     signal?: AbortSignal,
-    onUpdate?: (result: AgentToolResult<CompositionResultDetails>) => void,
-  ): Promise<CompositionResultDetails> {
-    const compositionId = crypto.randomUUID();
+    onUpdate?: (result: AgentToolResult<RunResultDetails>) => void,
+  ): Promise<RunResultDetails> {
+    const runId = crypto.randomUUID();
     const rootNodeId = this.createNodeId(params.flow);
     const flow = params.flow;
-    const composition: CompositionRun = {
-      id: compositionId,
+    const run: WorkflowRun = {
+      id: runId,
       rootNodeId,
       label: params.label ?? flow.label ?? flow.kind,
       status: "running",
@@ -336,7 +336,7 @@ export class CompositionExecutor {
 
     const notifyUpdate = () => {
       if (!onUpdate) return;
-      const snapshot = this.buildSnapshot(compositionId);
+      const snapshot = this.buildSnapshot(runId);
       const summary = snapshot.result
         ? formatOutputSummary(summarizeForContext(snapshot.result))
         : `${snapshot.nodes.length} nodes tracked`;
@@ -354,16 +354,13 @@ export class CompositionExecutor {
       else signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    this.emit(
-      { type: "composition_created", at: composition.startedAt, composition },
-      ctx,
-    );
+    this.emit({ type: "run_created", at: run.startedAt, run }, ctx);
     notifyUpdate();
 
     const initialState: EvaluationState = {
-      compositionId,
-      cwd: composition.cwd,
-      scope: composition.scope,
+      runId,
+      cwd: run.cwd,
+      scope: run.scope,
       depth: 1,
       budgets: createBudgetSnapshot(params.budgets),
       memory: {
@@ -385,38 +382,33 @@ export class CompositionExecutor {
         notifyUpdate,
         rootNodeId,
       );
-      const completedAt = Date.now();
       this.emit(
         {
-          type: "composition_completed",
-          at: completedAt,
-          compositionId,
+          type: "run_completed",
+          at: Date.now(),
+          runId,
           status: "completed",
           result,
         },
         ctx,
       );
       notifyUpdate();
-      return this.buildSnapshot(compositionId);
+      return this.buildSnapshot(runId);
     } catch (error) {
-      const completedAt = Date.now();
       const message = error instanceof Error ? error.message : String(error);
       const aborted = signal?.aborted || message.includes("aborted");
       this.emit(
         {
-          type: "composition_completed",
-          at: completedAt,
-          compositionId,
+          type: "run_completed",
+          at: Date.now(),
+          runId,
           status: aborted ? "aborted" : "failed",
           error: message,
         },
         ctx,
       );
       notifyUpdate();
-      throw new CompositionExecutionError(
-        message,
-        this.buildSnapshot(compositionId),
-      );
+      throw new RunExecutionError(message, this.buildSnapshot(runId));
     } finally {
       if (signal) signal.removeEventListener("abort", onAbort);
     }
@@ -435,9 +427,9 @@ export class CompositionExecutor {
     assertNotAborted(state.signal);
 
     const nodeId = forcedNodeId ?? this.createNodeId(spec);
-    const node: CompositionNode = {
+    const node: RunNode = {
       id: nodeId,
-      compositionId: state.compositionId,
+      runId: state.runId,
       parentNodeId: state.parentNodeId,
       specId: spec.id,
       kind: spec.kind,
@@ -507,7 +499,7 @@ export class CompositionExecutor {
         {
           type: "node_completed",
           at: Date.now(),
-          compositionId: state.compositionId,
+          runId: state.runId,
           nodeId,
           output: summarizeForContext(result),
         },
@@ -521,7 +513,7 @@ export class CompositionExecutor {
         {
           type: message.includes("aborted") ? "node_aborted" : "node_failed",
           at: Date.now(),
-          compositionId: state.compositionId,
+          runId: state.runId,
           nodeId,
           error: message,
         },
@@ -564,14 +556,14 @@ export class CompositionExecutor {
         cwd,
         scope,
         discoveryDiagnostics: diagnostics,
-        compositionId: state.compositionId,
+        runId: state.runId,
         parentNodeId: nodeId,
         depth: state.depth,
         env: {
-          PI_COMPOSITION_ID: state.compositionId,
-          PI_COMPOSITION_NODE_ID: nodeId,
-          PI_COMPOSITION_DEPTH: String(state.depth),
-          PI_COMPOSITION_BUDGETS: JSON.stringify(state.budgets.limits),
+          PI_RUN_ID: state.runId,
+          PI_RUN_NODE_ID: nodeId,
+          PI_RUN_DEPTH: String(state.depth),
+          PI_RUN_BUDGETS: JSON.stringify(state.budgets.limits),
         },
       },
       ctx,
@@ -657,7 +649,7 @@ export class CompositionExecutor {
       {
         type: "node_waiting",
         at: Date.now(),
-        compositionId: state.compositionId,
+        runId: state.runId,
         nodeId,
         status: "waiting",
       },
@@ -739,9 +731,7 @@ export class CompositionExecutor {
   ): Promise<JoinNodeResult> {
     const forkResult = state.memory.bySpecId.get(spec.from);
     if (!forkResult || forkResult.kind !== "fork") {
-      throw new Error(
-        `Join could not find fork "${spec.from}" in this composition.`,
-      );
+      throw new Error(`Join could not find fork "${spec.from}" in this run.`);
     }
 
     const successEntries = Object.entries(forkResult.branches).filter(
@@ -760,7 +750,11 @@ export class CompositionExecutor {
           (spec.onFailure ?? "failFast") === "failFast"
         ) {
           throw new Error(
-            `Join(all) failed because ${failureEntries.length} branch(es) failed: ${failureEntries.map(([key, value]) => `${key}: ${value.error ?? "unknown error"}`).join("; ")}`,
+            `Join(all) failed because ${failureEntries.length} branch(es) failed: ${failureEntries
+              .map(
+                ([key, value]) => `${key}: ${value.error ?? "unknown error"}`,
+              )
+              .join("; ")}`,
           );
         }
         break;
@@ -768,7 +762,7 @@ export class CompositionExecutor {
         const first = successEntries[0];
         if (!first) {
           throw new Error(
-            `Join(any) failed because no branch completed successfully.`,
+            "Join(any) failed because no branch completed successfully.",
           );
         }
         selected = [[first[0], first[1].result]];
@@ -857,7 +851,7 @@ export class CompositionExecutor {
     };
     rememberResult(spec, joinResult, state.memory);
     this.options.pi.events.emit("agents:joined", {
-      compositionId: state.compositionId,
+      runId: state.runId,
       nodeId,
       from: spec.from,
     });
@@ -885,7 +879,7 @@ export class CompositionExecutor {
         {
           type: "loop_iteration_started",
           at: Date.now(),
-          compositionId: state.compositionId,
+          runId: state.runId,
           nodeId,
           iteration,
         },
@@ -916,7 +910,7 @@ export class CompositionExecutor {
         {
           type: "loop_iteration_completed",
           at: Date.now(),
-          compositionId: state.compositionId,
+          runId: state.runId,
           nodeId,
           iteration,
         },

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import {
   getAgentDir,
   loadSkills,
@@ -9,15 +10,15 @@ import {
 
 // --- Types ---
 
-const THINKING_LEVELS = [
+const THINKING_LEVELS: ThinkingLevel[] = [
   "off",
   "minimal",
   "low",
   "medium",
   "high",
   "xhigh",
-] as const;
-export type Thinking = (typeof THINKING_LEVELS)[number];
+];
+export type Thinking = ThinkingLevel;
 
 export type Source = "user" | "project";
 export type Scope = Source | "both";

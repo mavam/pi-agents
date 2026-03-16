@@ -231,6 +231,20 @@ function describeFlow(flow: WorkflowParams["flow"]): string {
   }
 }
 
+function wrapLines(lines: string[], width: number): string[] {
+  const safeWidth = Math.max(1, width);
+  return lines.flatMap((line) => {
+    const segments = line.split("\n");
+    return segments.flatMap((segment) => {
+      if (segment.length === 0) {
+        return [""];
+      }
+      const wrapped = wrapTextWithAnsi(segment, safeWidth);
+      return wrapped.length > 0 ? wrapped : [""];
+    });
+  });
+}
+
 function createRenderer(lines: string[]) {
   let cachedWidth: number | undefined;
   let cachedLines: string[] | undefined;
@@ -241,17 +255,7 @@ function createRenderer(lines: string[]) {
         return cachedLines;
       }
 
-      const safeWidth = Math.max(1, width);
-      cachedLines = lines.flatMap((line) => {
-        const segments = line.split("\n");
-        return segments.flatMap((segment) => {
-          if (segment.length === 0) {
-            return [""];
-          }
-          const wrapped = wrapTextWithAnsi(segment, safeWidth);
-          return wrapped.length > 0 ? wrapped : [""];
-        });
-      });
+      cachedLines = wrapLines(lines, width);
       cachedWidth = width;
       return cachedLines;
     },
@@ -411,13 +415,53 @@ export function rebuildRuntimeState(
   markRunningRunsAborted(runtimeState);
 }
 
+export function renderActiveRunWidgetLines(
+  runtimeState: RunRuntimeState,
+): string[] {
+  const active = getOrderedRuns(runtimeState)
+    .filter((run) => run.status === "running")
+    .slice(0, 5);
+
+  if (active.length === 0) {
+    return [];
+  }
+
+  const lines = ["● runs"];
+  for (const [runIndex, run] of active.entries()) {
+    const nodes = getRunNodes(runtimeState, run.id);
+    const lastNodes = nodes.slice(-4);
+    const visibleNodes =
+      lastNodes.length === 1 &&
+      lastNodes[0]?.kind === "spawn" &&
+      (lastNodes[0].label ?? lastNodes[0].specId ?? lastNodes[0].kind) ===
+        run.label
+        ? []
+        : lastNodes;
+    const runPrefix = runIndex === active.length - 1 ? "└─" : "├─";
+    const nodeStem = runIndex === active.length - 1 ? "   " : "│  ";
+
+    lines.push(
+      `${runPrefix} ${iconForStatus(run.status, "●")} ${run.label} ${run.id.slice(0, 8)} ${run.status}`,
+    );
+
+    for (const [nodeIndex, node] of visibleNodes.entries()) {
+      const label = node.label ?? node.specId ?? node.kind;
+      const nodePrefix = `${nodeStem}${nodeIndex === visibleNodes.length - 1 ? "└─" : "├─"}`;
+      lines.push(`${nodePrefix} ${iconForStatus(node.status, "·")} ${label}`);
+    }
+  }
+
+  return lines;
+}
+
 export function updateRunUI(
   ctx: ExtensionContext | undefined,
   runtimeState: RunRuntimeState,
 ): void {
   if (!ctx?.hasUI) return;
-  const runs = getOrderedRuns(runtimeState);
-  const active = runs.filter((run) => run.status === "running");
+  const active = getOrderedRuns(runtimeState).filter(
+    (run) => run.status === "running",
+  );
 
   if (active.length === 0) {
     ctx.ui.setWidget("pi-agents-runs", undefined);
@@ -425,21 +469,8 @@ export function updateRunUI(
     return;
   }
 
-  const lines = ["● runs"];
-  for (const run of active.slice(0, 5)) {
-    const nodes = getRunNodes(runtimeState, run.id);
-    const lastNodes = nodes.slice(-4);
-    lines.push(
-      `├─ ${iconForStatus(run.status)} ${run.label} ${run.id.slice(0, 8)} ${run.status}`,
-    );
-    for (const node of lastNodes) {
-      const label = node.label ?? node.specId ?? node.kind;
-      lines.push(`│  ├─ ${iconForStatus(node.status)} ${label}`);
-    }
-  }
-
   const counts = countStatuses(runtimeState);
-  ctx.ui.setWidget("pi-agents-runs", lines);
+  ctx.ui.setWidget("pi-agents-runs", renderActiveRunWidgetLines(runtimeState));
   ctx.ui.setStatus(
     "pi-agents-runs",
     `${counts.runs} runs · ${counts.running} agents running · ${counts.waiting} waiting nodes`,

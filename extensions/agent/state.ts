@@ -157,10 +157,13 @@ export function countStatuses(state: RunRuntimeState): {
   };
 }
 
-export function iconForStatus(status: NodeStatus | RunStatus): string {
+export function iconForStatus(
+  status: NodeStatus | RunStatus,
+  runningIcon = "⠹",
+): string {
   switch (status) {
     case "running":
-      return "⠹";
+      return runningIcon;
     case "waiting":
       return "◐";
     case "completed":

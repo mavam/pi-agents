@@ -2,9 +2,11 @@ import { describe, expect, it } from "bun:test";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import { visibleWidth } from "@mariozechner/pi-tui";
 import {
+  renderActiveRunWidgetLines,
   renderAgentCall,
   renderWorkflowResult,
 } from "../extensions/agent/presentation.ts";
+import { createRunRuntimeState } from "../extensions/agent/state.ts";
 import type { RunResultDetails } from "../extensions/agent/types.ts";
 
 const theme = {
@@ -99,5 +101,39 @@ describe("agent presentation", () => {
     for (const line of lines) {
       expect(visibleWidth(line)).toBeLessThanOrEqual(32);
     }
+  });
+
+  it("renders the runs widget without duplicate spinner rows for a single spawn", () => {
+    const runtimeState = createRunRuntimeState();
+    const startedAt = Date.now();
+
+    runtimeState.runs.set("run-1", {
+      id: "run-1",
+      rootNodeId: "root:1",
+      label: "explorer",
+      status: "running",
+      startedAt,
+      depth: 0,
+      flow: {
+        kind: "spawn",
+        agent: "explorer",
+        task: "find files",
+      },
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.nodes.set("root:1", {
+      id: "root:1",
+      runId: "run-1",
+      kind: "spawn",
+      label: "explorer",
+      status: "running",
+      startedAt,
+    });
+    runtimeState.order.push("run-1");
+
+    const lines = renderActiveRunWidgetLines(runtimeState);
+
+    expect(lines).toEqual(["● runs", "└─ ● explorer run-1 running"]);
   });
 });

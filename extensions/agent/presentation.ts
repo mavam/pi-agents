@@ -832,6 +832,12 @@ export function buildWidgetLines(
     if (!isTrivial) {
       const tree = formatFlowTree(run.flow, runtimeState, run.id);
       for (const treeLine of tree) {
+        // Skip the root node line when its label duplicates the run header.
+        // Strip icon prefix (any single char + space) for comparison.
+        const bare = treeLine.replace(/^\S+\s/, "");
+        if (bare === run.label || bare === (run.flow.label ?? run.flow.id)) {
+          continue;
+        }
         // Replace the static running icon with the animated spinner frame.
         const themed = treeLine.replaceAll("⠹", spinner);
         lines.push(

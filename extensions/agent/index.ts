@@ -61,9 +61,9 @@ const AgentParamsSchema = Type.Object({
   ),
 });
 
-const ComposeParamsSchema = Type.Object({
+const WorkflowParamsSchema = Type.Object({
   label: Type.Optional(
-    Type.String({ description: "Optional label shown in composition UI" }),
+    Type.String({ description: "Optional label shown in workflow UI" }),
   ),
   flow: Type.Any({
     description:
@@ -170,15 +170,15 @@ function formatAgentDetails(
   return lines.join("\n");
 }
 
-function formatCompositionOverviewText(
+function formatRunOverviewText(
   runtimeState: ReturnType<typeof createCompositionRuntimeState>,
 ): string {
   const runs = getOrderedCompositions(runtimeState);
   if (runs.length === 0) {
-    return "No compositions recorded in this session.";
+    return "No runs recorded in this session.";
   }
 
-  const lines = ["Compositions:"];
+  const lines = ["Runs:"];
   for (const run of runs.slice(0, 10)) {
     const nodes = getCompositionNodes(runtimeState, run.id);
     lines.push(
@@ -188,21 +188,61 @@ function formatCompositionOverviewText(
   return lines.join("\n");
 }
 
-function formatCompositionDetailsText(
+function resolveRunId(
   runtimeState: ReturnType<typeof createCompositionRuntimeState>,
-  compositionId: string,
+  query: string,
+):
+  | { runId: string }
+  | {
+      error: string;
+    } {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return { error: "Run ID must not be empty." };
+  }
+
+  if (runtimeState.runs.has(trimmed)) {
+    return { runId: trimmed };
+  }
+
+  const matches = getOrderedCompositions(runtimeState).filter((item) =>
+    item.id.startsWith(trimmed),
+  );
+  if (matches.length === 1) {
+    return { runId: matches[0]!.id };
+  }
+
+  if (matches.length > 1) {
+    return {
+      error: `Ambiguous run ID prefix "${trimmed}". Matches: ${matches
+        .map((item) => `${item.id.slice(0, 8)} → ${item.id}`)
+        .join(", ")}`,
+    };
+  }
+
+  const known = getOrderedCompositions(runtimeState)
+    .map((item) => `${item.id.slice(0, 8)} → ${item.id}`)
+    .join(", ");
+  return { error: `Unknown run "${trimmed}". Known: ${known || "none"}` };
+}
+
+function formatRunDetailsText(
+  runtimeState: ReturnType<typeof createCompositionRuntimeState>,
+  runId: string,
 ): string {
-  const run = runtimeState.runs.get(compositionId);
+  const resolved = resolveRunId(runtimeState, runId);
+  if ("error" in resolved) {
+    return resolved.error;
+  }
+
+  const run = runtimeState.runs.get(resolved.runId);
   if (!run) {
-    const known = getOrderedCompositions(runtimeState)
-      .map((item) => item.id.slice(0, 8))
-      .join(", ");
-    return `Unknown composition "${compositionId}". Known: ${known || "none"}`;
+    return `Unknown run "${runId}".`;
   }
 
   const nodes = getCompositionNodes(runtimeState, run.id);
   const lines = [
-    `Composition: ${run.label}`,
+    `Run: ${run.label}`,
     `ID: ${run.id}`,
     `Status: ${run.status}`,
     `Scope: ${run.scope}`,
@@ -242,7 +282,7 @@ function formatOutput(value: unknown): string {
   }
 }
 
-function updateCompositionUI(
+function updateRunUI(
   ctx: ExtensionContext | undefined,
   runtimeState: ReturnType<typeof createCompositionRuntimeState>,
 ): void {
@@ -251,12 +291,12 @@ function updateCompositionUI(
   const active = runs.filter((run) => run.status === "running");
 
   if (active.length === 0) {
-    ctx.ui.setWidget("pi-agents-compositions", undefined);
-    ctx.ui.setStatus("pi-agents-compositions", undefined);
+    ctx.ui.setWidget("pi-agents-runs", undefined);
+    ctx.ui.setStatus("pi-agents-runs", undefined);
     return;
   }
 
-  const lines = ["● compositions"];
+  const lines = ["● runs"];
   for (const run of active.slice(0, 5)) {
     const nodes = getCompositionNodes(runtimeState, run.id);
     const lastNodes = nodes.slice(-4);
@@ -270,10 +310,10 @@ function updateCompositionUI(
   }
 
   const counts = countStatuses(runtimeState);
-  ctx.ui.setWidget("pi-agents-compositions", lines);
+  ctx.ui.setWidget("pi-agents-runs", lines);
   ctx.ui.setStatus(
-    "pi-agents-compositions",
-    `${counts.compositions} compositions · ${counts.running} agents running · ${counts.waiting} joins waiting`,
+    "pi-agents-runs",
+    `${counts.compositions} runs · ${counts.running} agents running · ${counts.waiting} waiting nodes`,
   );
 }
 
@@ -291,7 +331,7 @@ export function createAgentExtension(options?: {
       pi,
       manager,
       runtimeState,
-      onStateChanged: (ctx) => updateCompositionUI(ctx, runtimeState),
+      onStateChanged: (ctx) => updateRunUI(ctx, runtimeState),
     });
 
     if (typeof (pi as { on?: unknown }).on === "function") {
@@ -308,7 +348,7 @@ export function createAgentExtension(options?: {
           runtimeState.nodes.set(id, node);
         runtimeState.order.push(...rebuilt.order);
         markRunningCompositionsAborted(runtimeState);
-        updateCompositionUI(ctx, runtimeState);
+        updateRunUI(ctx, runtimeState);
       });
     }
 
@@ -359,8 +399,8 @@ export function createAgentExtension(options?: {
       },
     });
 
-    pi.registerCommand("compositions", {
-      description: "List compositions, or show details for a specific run",
+    pi.registerCommand("runs", {
+      description: "List agent runs, or show details for a specific run",
       getArgumentCompletions: (prefix) => {
         const items = getOrderedCompositions(runtimeState)
           .map((run) => ({
@@ -377,8 +417,8 @@ export function createAgentExtension(options?: {
       handler: async (args) => {
         const query = args.trim();
         const content = query
-          ? formatCompositionDetailsText(runtimeState, query)
-          : formatCompositionOverviewText(runtimeState);
+          ? formatRunDetailsText(runtimeState, query)
+          : formatRunOverviewText(runtimeState);
         pi.sendMessage({
           customType: COMPOSITION_EVENT_CUSTOM_TYPE,
           content,
@@ -461,11 +501,11 @@ export function createAgentExtension(options?: {
     });
 
     pi.registerTool({
-      name: "compose",
-      label: "Compose",
+      name: "workflow",
+      label: "Workflow",
       description:
-        "Execute an explicit, serializable workflow graph over isolated agent runs.",
-      parameters: ComposeParamsSchema,
+        "Run an explicit, JSON-defined agent workflow over isolated agent runs.",
+      parameters: WorkflowParamsSchema,
       async execute(
         _toolCallId,
         params,
@@ -474,11 +514,11 @@ export function createAgentExtension(options?: {
         ctx,
       ): Promise<AgentToolExecutionResult<CompositionResultDetails>> {
         validateComposeParams(params);
-        const composeParams = params as ComposeParams;
+        const workflowParams = params as ComposeParams;
 
         try {
           const details = await executor.execute(
-            composeParams,
+            workflowParams,
             ctx,
             signal,
             onUpdate,
@@ -489,7 +529,7 @@ export function createAgentExtension(options?: {
                 type: "text",
                 text: details.result
                   ? formatOutput(details.result.output)
-                  : `Composition ${details.composition.id} completed.`,
+                  : `Run ${details.composition.id} completed.`,
               },
             ],
             details,

@@ -45,7 +45,7 @@ function writeAgent(filePath: string, name: string, description: string): void {
   );
 }
 
-function setupComposeTool(spawnProcess: SpawnProcess): ToolDefinition {
+function setupWorkflowTool(spawnProcess: SpawnProcess): ToolDefinition {
   let tool: ToolDefinition | undefined;
 
   createAgentExtension({ spawnProcess })({
@@ -53,7 +53,7 @@ function setupComposeTool(spawnProcess: SpawnProcess): ToolDefinition {
       // not needed
     },
     registerTool(registered: ToolDefinition) {
-      if (registered.name === "compose") tool = registered;
+      if (registered.name === "workflow") tool = registered;
     },
     sendMessage() {
       // not needed
@@ -71,13 +71,13 @@ function setupComposeTool(spawnProcess: SpawnProcess): ToolDefinition {
     },
   } as unknown as ExtensionAPI);
 
-  if (!tool) throw new Error("compose tool was not registered");
+  if (!tool) throw new Error("workflow tool was not registered");
   return tool;
 }
 
 beforeEach(() => {
-  sandboxDir = mkdtempSync(path.join(os.tmpdir(), "pi-compose-test-"));
-  workspaceDir = mkdtempSync(path.join(os.tmpdir(), "pi-compose-workspace-"));
+  sandboxDir = mkdtempSync(path.join(os.tmpdir(), "pi-workflow-test-"));
+  workspaceDir = mkdtempSync(path.join(os.tmpdir(), "pi-workflow-workspace-"));
   previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = path.join(sandboxDir, ".pi", "agent");
 });
@@ -141,8 +141,8 @@ function createSpawnProcess(
   };
 }
 
-describe("compose tool", () => {
-  it("passes prior sequence results as composition context", async () => {
+describe("workflow tool", () => {
+  it("passes prior sequence results as workflow context", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "reviewer.md"),
       "reviewer",
@@ -154,7 +154,7 @@ describe("compose tool", () => {
       return "alpha";
     }, inputs);
 
-    const tool = setupComposeTool(spawnProcess);
+    const tool = setupWorkflowTool(spawnProcess);
     const result = await tool.execute(
       "call-1",
       {
@@ -183,9 +183,7 @@ describe("compose tool", () => {
 
     expect(result.content[0]?.type).toBe("text");
     expect(inputs).toHaveLength(2);
-    expect(inputs[1]).toContain(
-      "Composition context from prior completed steps",
-    );
+    expect(inputs[1]).toContain("Workflow context from prior completed steps");
     expect(inputs[1]).toContain("alpha");
   });
 
@@ -198,7 +196,7 @@ describe("compose tool", () => {
       return "unknown";
     }, inputs);
 
-    const tool = setupComposeTool(spawnProcess);
+    const tool = setupWorkflowTool(spawnProcess);
     const result = await tool.execute(
       "call-2",
       {
@@ -233,6 +231,67 @@ describe("compose tool", () => {
     expect(details.result.output.branches.b).toBe("result-b");
   });
 
+  it("does not start later sequence steps after cancellation", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "reviewer.md"),
+      "reviewer",
+      "Reviewer",
+    );
+    const inputs: string[] = [];
+    const spawnProcess = createSpawnProcess((input) => {
+      if (input.includes("first step")) return "alpha";
+      return "beta";
+    }, inputs);
+
+    const tool = setupWorkflowTool(spawnProcess);
+    const controller = new AbortController();
+    let aborted = false;
+
+    const error = await tool
+      .execute(
+        "call-cancel",
+        {
+          flow: {
+            kind: "sequence",
+            steps: [
+              {
+                kind: "spawn",
+                id: "first",
+                agent: "reviewer",
+                task: "first step",
+              },
+              {
+                kind: "spawn",
+                id: "second",
+                agent: "reviewer",
+                task: "second step",
+              },
+            ],
+          },
+        },
+        controller.signal,
+        (update) => {
+          const details = update.details as CompositionResultDetails;
+          if (
+            !aborted &&
+            details.nodes.some(
+              (node) => node.kind === "spawn" && node.status === "completed",
+            )
+          ) {
+            aborted = true;
+            controller.abort();
+          }
+        },
+        { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+      )
+      .then(() => null)
+      .catch((caught) => caught as Error);
+
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toContain("Workflow aborted");
+    expect(inputs).toHaveLength(1);
+  });
+
   it("stops looping when continueWhen no longer matches", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "reviewer.md"),
@@ -246,7 +305,7 @@ describe("compose tool", () => {
       return JSON.stringify({ done: count >= 2, round: count });
     }, inputs);
 
-    const tool = setupComposeTool(spawnProcess);
+    const tool = setupWorkflowTool(spawnProcess);
     const result = await tool.execute(
       "call-3",
       {

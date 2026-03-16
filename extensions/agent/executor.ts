@@ -54,6 +54,7 @@ interface EvaluationState {
   depth: number;
   budgets: BudgetSnapshot;
   memory: FlowMemory;
+  signal?: AbortSignal;
 }
 
 interface ExecutorOptions {
@@ -171,7 +172,7 @@ function buildDelegatedTask(task: string, memory: FlowMemory): string {
   return [
     task,
     "",
-    "Composition context from prior completed steps:",
+    "Workflow context from prior completed steps:",
     "```json",
     JSON.stringify(payload, null, 2),
     "```",
@@ -223,6 +224,12 @@ function formatOutputSummary(output: unknown): string {
     return JSON.stringify(output, null, 2);
   } catch {
     return String(output);
+  }
+}
+
+function assertNotAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error("Workflow aborted.");
   }
 }
 
@@ -363,6 +370,7 @@ export class CompositionExecutor {
         bySpecId: new Map(),
         history: [],
       },
+      signal,
     };
 
     try {
@@ -424,6 +432,8 @@ export class CompositionExecutor {
     branchKey?: string,
     iteration?: number,
   ): Promise<FlowNodeResult> {
+    assertNotAborted(state.signal);
+
     const nodeId = forcedNodeId ?? this.createNodeId(spec);
     const node: CompositionNode = {
       id: nodeId,
@@ -529,6 +539,7 @@ export class CompositionExecutor {
     ctx: ExtensionContext,
     activeHandles: Set<SpawnHandle>,
   ): Promise<SpawnNodeResult> {
+    assertNotAborted(state.signal);
     assertDepth(state.budgets, state.depth);
     consumeChild(state.budgets);
 
@@ -688,6 +699,8 @@ export class CompositionExecutor {
         }
       },
     );
+
+    assertNotAborted(state.signal);
 
     const branches = Object.fromEntries(
       branchResults.map((result) => [result.branchKey, result]),

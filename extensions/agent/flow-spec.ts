@@ -211,7 +211,7 @@ export function validateComposeParams(
   params: unknown,
 ): asserts params is ComposeParams {
   if (!isRecord(params))
-    throw new Error(`compose parameters must be an object.`);
+    throw new Error(`workflow parameters must be an object.`);
   assertOptionalString(params.label, "label");
   validateFlowSpec(params.flow, "flow");
   assertOptionalString(params.cwd, "cwd");

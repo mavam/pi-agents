@@ -160,6 +160,27 @@ describe("agent tool delegated process execution", () => {
     expect(capturedInput).toBe("--help");
   });
 
+  it("throws for unknown agent names so the tool result is marked as an error", async () => {
+    const tool = setupTool();
+    const error = (await tool
+      .execute(
+        "call-missing",
+        { name: "missing", task: "do work" },
+        undefined,
+        undefined,
+        { cwd: workspaceDir } as unknown as ExtensionContext,
+      )
+      .then(() => null)
+      .catch(
+        (caught) => caught as ErrorWithDetails,
+      )) as ErrorWithDetails | null;
+
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toContain('Unknown agent "missing"');
+    expect(error?.details?.agent).toBe("missing");
+    expect(error?.details?.discoveryDiagnostics).toEqual([]);
+  });
+
   it("surfaces spawn errors with actionable diagnostics", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),

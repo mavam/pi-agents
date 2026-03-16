@@ -7,6 +7,7 @@ import { discoverAgents, type Scope } from "./agents.js";
 import { BudgetActor } from "./budgets.js";
 import type { SpawnHandle } from "./engine/interface.js";
 import { DelegatedAgentRunError } from "./engine/subprocess.js";
+import { AgentEvents } from "./events.js";
 import { parseJsonText } from "./flow-spec.js";
 import type { AgentManager } from "./manager.js";
 import { appendRunEvent } from "./persistence.js";
@@ -374,7 +375,7 @@ function resolveStructuredOutput(
 function resolveContinueValue(
   spec: ContinueSpec | undefined,
   bodyResult: FlowNodeResult,
-  memory: FlowMemory,
+  _memory: FlowMemory,
 ): unknown {
   if (!spec) return undefined;
   // Resolution priority (first defined value wins):
@@ -425,18 +426,25 @@ export class RunExecutor {
 
     switch (event.type) {
       case "run_created":
-        this.options.pi.events.emit("run:created", {
+        this.options.pi.events.emit(AgentEvents.RUN_CREATED, {
           runId: event.run.id,
         });
         break;
       case "run_completed":
-        this.options.pi.events.emit(`run:${event.status}`, {
-          runId: event.runId,
-          status: event.status,
-        });
+        this.options.pi.events.emit(
+          event.status === "completed"
+            ? AgentEvents.RUN_COMPLETED
+            : event.status === "failed"
+              ? AgentEvents.RUN_FAILED
+              : AgentEvents.RUN_ABORTED,
+          {
+            runId: event.runId,
+            status: event.status,
+          },
+        );
         break;
       case "loop_iteration_completed":
-        this.options.pi.events.emit("run:iteration", {
+        this.options.pi.events.emit(AgentEvents.RUN_ITERATION, {
           runId: event.runId,
           nodeId: event.nodeId,
           iteration: event.iteration,
@@ -444,20 +452,20 @@ export class RunExecutor {
         break;
       case "node_started":
         if (event.node.kind === "spawn") {
-          this.options.pi.events.emit("agents:spawned", {
+          this.options.pi.events.emit(AgentEvents.AGENTS_SPAWNED, {
             runId: event.node.runId,
             nodeId: event.node.id,
           });
         }
         break;
       case "node_completed":
-        this.options.pi.events.emit("agents:completed", {
+        this.options.pi.events.emit(AgentEvents.AGENTS_COMPLETED, {
           runId: event.runId,
           nodeId: event.nodeId,
         });
         break;
       case "node_failed":
-        this.options.pi.events.emit("agents:failed", {
+        this.options.pi.events.emit(AgentEvents.AGENTS_FAILED, {
           runId: event.runId,
           nodeId: event.nodeId,
           error: event.error,
@@ -1062,7 +1070,7 @@ export class RunExecutor {
       output,
     };
     rememberResult(spec, joinResult, state.memory);
-    this.options.pi.events.emit("agents:joined", {
+    this.options.pi.events.emit(AgentEvents.AGENTS_JOINED, {
       runId: state.runId,
       nodeId,
       from: spec.from,

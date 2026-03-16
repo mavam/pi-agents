@@ -3,6 +3,8 @@ import type {
   AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
+  Theme,
+  ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
@@ -37,8 +39,19 @@ import type {
   WorkflowParams,
 } from "./types.js";
 
-interface AgentToolExecutionResult<T> extends AgentToolResult<T> {
-  isError?: boolean;
+type ToolPromptMetadata = {
+  promptSnippet?: string;
+  promptGuidelines?: string[];
+};
+
+class UnknownAgentError extends Error {
+  readonly details: AgentRunDetails;
+
+  constructor(message: string, details: AgentRunDetails) {
+    super(message);
+    this.name = "UnknownAgentError";
+    this.details = details;
+  }
 }
 
 const ScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -278,6 +291,188 @@ function formatOutput(value: unknown): string {
   }
 }
 
+function extractTextContent(result: AgentToolResult<unknown>): string {
+  return result.content
+    .filter(
+      (
+        item,
+      ): item is Extract<(typeof result.content)[number], { type: "text" }> =>
+        item.type === "text",
+    )
+    .map((item) => item.text)
+    .join("\n\n")
+    .trim();
+}
+
+function formatUsageSummary(details: AgentRunDetails): string {
+  const usage = details.usage;
+  return [
+    `input=${usage.input}`,
+    `output=${usage.output}`,
+    `context=${usage.contextTokens}`,
+    `turns=${usage.turns}`,
+    `cost=${usage.cost}`,
+  ].join(" · ");
+}
+
+function previewText(text: string, expanded: boolean, maxLines = 8): string {
+  const lines = text.split("\n");
+  if (expanded || lines.length <= maxLines) {
+    return text;
+  }
+  const remaining = lines.length - maxLines;
+  return `${lines.slice(0, maxLines).join("\n")}\n... (${remaining} more lines)`;
+}
+
+function describeFlow(flow: WorkflowParams["flow"]): string {
+  switch (flow.kind) {
+    case "spawn":
+      return `spawn ${flow.agent}`;
+    case "sequence":
+      return `sequence (${flow.steps.length} steps)`;
+    case "fork":
+      return `fork (${Object.keys(flow.branches).length} branches${flow.concurrency ? `, concurrency=${flow.concurrency}` : ""})`;
+    case "join":
+      return `join from ${flow.from} (${flow.mode})`;
+    case "loop":
+      return `loop (${flow.maxIterations} iterations max)`;
+  }
+}
+
+function createRenderer(lines: string[]) {
+  return {
+    render() {
+      return lines;
+    },
+    invalidate() {},
+  };
+}
+
+function pushSection(
+  lines: string[],
+  title: string,
+  body: string | undefined,
+  theme: Theme,
+): void {
+  if (!body) {
+    return;
+  }
+  if (lines.length > 0) {
+    lines.push("");
+  }
+  lines.push(theme.fg("toolTitle", theme.bold(title)));
+  lines.push(theme.fg("toolOutput", body));
+}
+
+function renderAgentCall(
+  args: { name: string; task: string; scope?: Scope; cwd?: string },
+  theme: Theme,
+) {
+  const lines = [theme.fg("toolTitle", theme.bold(`agent ${args.name}`))];
+  const metadata = [
+    `scope=${args.scope ?? "both"}`,
+    args.cwd ? `cwd=${args.cwd}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  if (metadata) {
+    lines.push(theme.fg("muted", metadata));
+  }
+  pushSection(lines, "Task", previewText(args.task, false, 6), theme);
+  return createRenderer(lines);
+}
+
+function renderAgentResult(
+  result: AgentToolResult<AgentRunDetails>,
+  expanded: boolean,
+  theme: Theme,
+) {
+  const details = result.details;
+  const lines = [
+    theme.fg(
+      "toolTitle",
+      theme.bold(
+        `${details.agent} · ${details.agentSource} · exit ${details.exitCode}`,
+      ),
+    ),
+    theme.fg("muted", formatUsageSummary(details)),
+  ];
+
+  if (details.missingSkills.length > 0) {
+    pushSection(
+      lines,
+      "Missing skills",
+      details.missingSkills.join(", "),
+      theme,
+    );
+  }
+  if (details.discoveryDiagnostics.length > 0) {
+    pushSection(
+      lines,
+      "Discovery diagnostics",
+      details.discoveryDiagnostics.join("\n"),
+      theme,
+    );
+  }
+
+  const output = extractTextContent(result);
+  if (output) {
+    pushSection(lines, "Output", previewText(output, expanded, 10), theme);
+  }
+  return createRenderer(lines);
+}
+
+function renderWorkflowCall(args: WorkflowParams, theme: Theme) {
+  const lines = [
+    theme.fg(
+      "toolTitle",
+      theme.bold(args.label ? `workflow ${args.label}` : "workflow"),
+    ),
+    theme.fg(
+      "muted",
+      [
+        describeFlow(args.flow),
+        `scope=${args.scope ?? "both"}`,
+        args.cwd ? `cwd=${args.cwd}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    ),
+  ];
+  if (args.budgets) {
+    pushSection(lines, "Budgets", formatOutput(args.budgets), theme);
+  }
+  return createRenderer(lines);
+}
+
+function renderWorkflowResult(
+  result: AgentToolResult<RunResultDetails>,
+  expanded: boolean,
+  theme: Theme,
+) {
+  const details = result.details;
+  const lines = [
+    theme.fg(
+      "toolTitle",
+      theme.bold(`${details.run.label} · ${details.run.status}`),
+    ),
+    theme.fg(
+      "muted",
+      `run=${details.run.id.slice(0, 8)} · nodes=${details.nodes.length} · scope=${details.run.scope}`,
+    ),
+  ];
+  const output = details.result
+    ? formatOutput(details.result.output)
+    : extractTextContent(result);
+  if (output) {
+    pushSection(lines, "Result", previewText(output, expanded, 12), theme);
+  }
+  if (details.run.error) {
+    pushSection(lines, "Error", details.run.error, theme);
+  }
+  return createRenderer(lines);
+}
+
 function getRootSpawnResult(
   details: RunResultDetails,
 ): SpawnNodeResult | undefined {
@@ -336,23 +531,21 @@ export function createAgentExtension(options?: {
       onStateChanged: (ctx) => updateRunUI(ctx, runtimeState),
     });
 
-    if (typeof (pi as { on?: unknown }).on === "function") {
-      pi.on("session_start", async (_event, ctx) => {
-        const rebuilt = rebuildRunState(ctx.sessionManager.getEntries());
-        runtimeState.runs.clear();
-        runtimeState.nodes.clear();
-        runtimeState.order.length = 0;
-        for (const [id, run] of rebuilt.runs.entries()) {
-          runtimeState.runs.set(id, run);
-        }
-        for (const [id, node] of rebuilt.nodes.entries()) {
-          runtimeState.nodes.set(id, node);
-        }
-        runtimeState.order.push(...rebuilt.order);
-        markRunningRunsAborted(runtimeState);
-        updateRunUI(ctx, runtimeState);
-      });
-    }
+    pi.on("session_start", async (_event, ctx) => {
+      const rebuilt = rebuildRunState(ctx.sessionManager.getEntries());
+      runtimeState.runs.clear();
+      runtimeState.nodes.clear();
+      runtimeState.order.length = 0;
+      for (const [id, run] of rebuilt.runs.entries()) {
+        runtimeState.runs.set(id, run);
+      }
+      for (const [id, node] of rebuilt.nodes.entries()) {
+        runtimeState.nodes.set(id, node);
+      }
+      runtimeState.order.push(...rebuilt.order);
+      markRunningRunsAborted(runtimeState);
+      updateRunUI(ctx, runtimeState);
+    });
 
     pi.registerCommand("agents", {
       description: "List available agents",
@@ -462,19 +655,29 @@ export function createAgentExtension(options?: {
       },
     });
 
-    pi.registerTool({
+    const agentTool: ToolDefinition<typeof AgentParamsSchema, AgentRunDetails> &
+      ToolPromptMetadata = {
       name: "agent",
       label: "Agent",
       description:
         "Run an isolated pi agent from an agent markdown definition (name, description, model, thinking, skills).",
+      promptSnippet:
+        "Delegate a focused subtask to a named agent definition in an isolated pi subprocess.",
+      promptGuidelines: [
+        "Use agent for a single delegated subtask handled by one named agent.",
+        "Prefer workflow instead when you need sequencing, branching, joins, or loops across multiple agents.",
+      ],
       parameters: AgentParamsSchema,
+      renderCall: (args, theme) => renderAgentCall(args, theme),
+      renderResult: (result, options, theme) =>
+        renderAgentResult(result, options.expanded, theme),
       async execute(
         _toolCallId,
         params,
         signal,
         onUpdate,
         ctx,
-      ): Promise<AgentToolExecutionResult<AgentRunDetails>> {
+      ): Promise<AgentToolResult<AgentRunDetails>> {
         const scope: Scope = params.scope ?? "both";
         const discovery = discoverAgents(ctx.cwd, scope);
         const diagnostics = toDiagnosticText(scope, discovery.diagnostics);
@@ -483,14 +686,10 @@ export function createAgentExtension(options?: {
         if (!agent) {
           const available = formatAgentList(discovery.agents);
           const message = `Unknown agent "${params.name}". Available: ${available}`;
-          return {
-            content: [{ type: "text", text: message }],
-            details: {
-              ...initialAgentDetails(scope, params.name),
-              discoveryDiagnostics: diagnostics,
-            },
-            isError: true,
-          };
+          throw new UnknownAgentError(message, {
+            ...initialAgentDetails(scope, params.name),
+            discoveryDiagnostics: diagnostics,
+          });
         }
 
         const workflow: WorkflowParams = {
@@ -549,21 +748,37 @@ export function createAgentExtension(options?: {
           throw error;
         }
       },
-    });
+    };
 
-    pi.registerTool({
+    pi.registerTool(agentTool);
+
+    const workflowTool: ToolDefinition<
+      typeof WorkflowParamsSchema,
+      RunResultDetails
+    > &
+      ToolPromptMetadata = {
       name: "workflow",
       label: "Workflow",
       description:
         "Run an explicit, JSON-defined agent workflow over isolated agent runs.",
+      promptSnippet:
+        "Run a structured multi-agent workflow with sequencing, forks, joins, and loops.",
+      promptGuidelines: [
+        "Use workflow when you need orchestration across multiple agents or multiple execution steps.",
+        "Keep workflow definitions explicit and JSON-serializable.",
+      ],
       parameters: WorkflowParamsSchema,
+      renderCall: (args, theme) =>
+        renderWorkflowCall(args as WorkflowParams, theme),
+      renderResult: (result, options, theme) =>
+        renderWorkflowResult(result, options.expanded, theme),
       async execute(
         _toolCallId,
         params,
         signal,
         onUpdate,
         ctx,
-      ): Promise<AgentToolExecutionResult<RunResultDetails>> {
+      ): Promise<AgentToolResult<RunResultDetails>> {
         validateWorkflowParams(params);
         const workflowParams = params as WorkflowParams;
 
@@ -590,9 +805,12 @@ export function createAgentExtension(options?: {
           throw error;
         }
       },
-    });
+    };
+
+    pi.registerTool(workflowTool);
   };
 }
 
 export default createAgentExtension();
+export * from "./events.js";
 export { formatFailureReason, isChildProcessRunning, type SpawnProcess };

@@ -66,6 +66,9 @@ function setupExtension(): {
     sendMessage(message) {
       messages.push(message as CapturedMessage);
     },
+    on() {
+      // not needed for command tests
+    },
   } as unknown as ExtensionAPI);
 
   const agentsCommand = commands.get("agents");

@@ -150,6 +150,18 @@ function createSpawnProcess(
 }
 
 describe("workflow tool", () => {
+  it("exposes a structured flow schema to tool callers", () => {
+    const tool = setupWorkflowTool(createSpawnProcess(() => "ok", []));
+    const serialized = JSON.stringify(tool.parameters);
+
+    expect(serialized).toContain('"required":["flow"]');
+    expect(serialized).toContain('"const":"spawn"');
+    expect(serialized).toContain('"const":"sequence"');
+    expect(serialized).toContain('"const":"fork"');
+    expect(serialized).toContain('"const":"join"');
+    expect(serialized).toContain('"const":"loop"');
+  });
+
   it("passes prior sequence results as workflow context", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "reviewer.md"),

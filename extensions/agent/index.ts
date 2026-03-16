@@ -73,20 +73,95 @@ const AgentParamsSchema = Type.Object({
   ),
 });
 
+const PositiveIntegerSchema = Type.Integer({ minimum: 1 });
+const OutputModeSchema = StringEnum(["text", "json"] as const);
+const JoinModeSchema = StringEnum(["all", "any", "quorum"] as const);
+const JoinFailureSchema = StringEnum(["failFast", "collectErrors"] as const);
+
+const ContinueSpecSchema = Type.Object({
+  kind: Type.Literal("result_field"),
+  path: Type.String({
+    description: "Field path to inspect on the body result",
+  }),
+  equals: Type.Boolean({
+    description: "Loop while the field equals this value",
+  }),
+});
+
+const JoinReducerSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("collect") }),
+  Type.Object({
+    kind: Type.Literal("agent"),
+    agent: Type.String({ description: "Agent used to reduce branch results" }),
+    task: Type.String({ description: "Reducer task prompt" }),
+    output: Type.Optional(OutputModeSchema),
+  }),
+]);
+
+const FlowSpecSchema = Type.Recursive((Self) =>
+  Type.Union([
+    Type.Object({
+      kind: Type.Literal("spawn"),
+      id: Type.Optional(Type.String()),
+      label: Type.Optional(Type.String()),
+      agent: Type.String({ description: "Agent name to execute" }),
+      task: Type.String({ description: "Task prompt passed to the agent" }),
+      cwd: Type.Optional(Type.String()),
+      scope: Type.Optional(ScopeSchema),
+      output: Type.Optional(OutputModeSchema),
+    }),
+    Type.Object({
+      kind: Type.Literal("sequence"),
+      id: Type.Optional(Type.String()),
+      label: Type.Optional(Type.String()),
+      steps: Type.Array(Self, {
+        description:
+          "Nodes executed in order; the last output becomes the sequence output",
+      }),
+    }),
+    Type.Object({
+      kind: Type.Literal("fork"),
+      id: Type.String({
+        description: "Unique fork identifier for downstream joins",
+      }),
+      label: Type.Optional(Type.String()),
+      branches: Type.Record(Type.String(), Self, {
+        description: "Named branches executed concurrently",
+      }),
+      concurrency: Type.Optional(PositiveIntegerSchema),
+    }),
+    Type.Object({
+      kind: Type.Literal("join"),
+      id: Type.Optional(Type.String()),
+      label: Type.Optional(Type.String()),
+      from: Type.String({ description: "Fork id to join" }),
+      mode: JoinModeSchema,
+      quorum: Type.Optional(PositiveIntegerSchema),
+      reducer: Type.Optional(JoinReducerSchema),
+      onFailure: Type.Optional(JoinFailureSchema),
+    }),
+    Type.Object({
+      kind: Type.Literal("loop"),
+      id: Type.String({ description: "Unique loop identifier" }),
+      label: Type.Optional(Type.String()),
+      body: Self,
+      maxIterations: PositiveIntegerSchema,
+      continueWhen: Type.Optional(ContinueSpecSchema),
+    }),
+  ]),
+);
+
 const WorkflowParamsSchema = Type.Object({
   label: Type.Optional(
     Type.String({ description: "Optional label shown in workflow UI" }),
   ),
-  flow: Type.Any({
-    description:
-      "Serializable FlowSpec: spawn | sequence | fork | join | loop.",
-  }),
+  flow: FlowSpecSchema,
   budgets: Type.Optional(
     Type.Object({
-      maxDepth: Type.Optional(Type.Number()),
-      maxChildren: Type.Optional(Type.Number()),
-      maxParallelism: Type.Optional(Type.Number()),
-      maxIterations: Type.Optional(Type.Number()),
+      maxDepth: Type.Optional(PositiveIntegerSchema),
+      maxChildren: Type.Optional(PositiveIntegerSchema),
+      maxParallelism: Type.Optional(PositiveIntegerSchema),
+      maxIterations: Type.Optional(PositiveIntegerSchema),
     }),
   ),
   scope: Type.Optional(ScopeSchema),

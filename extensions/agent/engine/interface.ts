@@ -1,4 +1,3 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Agent, Scope, Thinking } from "../agents.js";
 import type { AgentRunDetails } from "../types.js";
 
@@ -51,5 +50,5 @@ export interface SpawnRequest {
 }
 
 export interface SpawnEngine {
-  spawn(spec: SpawnRequest, ctx: ExtensionContext): SpawnHandle;
+  spawn(spec: SpawnRequest): SpawnHandle;
 }

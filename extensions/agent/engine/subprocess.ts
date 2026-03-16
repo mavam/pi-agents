@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { buildSkillsPrompt } from "../agents.js";
 import type { AgentRunDetails, UsageStats } from "../types.js";
 import type {
@@ -161,7 +160,7 @@ export function createSubprocessSpawnEngine(options?: {
   const spawnProcess = options?.spawnProcess ?? spawn;
 
   return {
-    spawn(spec: SpawnRequest, _ctx: ExtensionContext): SpawnHandle {
+    spawn(spec: SpawnRequest): SpawnHandle {
       const updates = new AsyncQueue<SpawnUpdate>();
       const id = crypto.randomUUID();
       const depth = spec.depth ?? 0;

@@ -1,4 +1,3 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type {
   SpawnEngine,
   SpawnHandle,
@@ -10,8 +9,8 @@ export class AgentManager {
 
   constructor(private readonly engine: SpawnEngine) {}
 
-  spawn(spec: SpawnRequest, ctx: ExtensionContext): SpawnHandle {
-    const handle = this.engine.spawn(spec, ctx);
+  spawn(spec: SpawnRequest): SpawnHandle {
+    const handle = this.engine.spawn(spec);
     this.running.set(handle.id, handle);
     void handle
       .wait()

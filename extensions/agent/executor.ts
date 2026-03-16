@@ -748,27 +748,24 @@ export class RunExecutor {
     const budgetLimits = await state.budgets.limits();
     assertNotAborted(state.signal);
     const handle = await state.handleRegistry.spawn(() =>
-      this.options.manager.spawn(
-        {
-          agent,
-          task,
-          cwd,
-          scope,
-          discoveryDiagnostics: diagnostics,
-          runId: state.runId,
-          parentNodeId: nodeId,
-          depth: state.depth,
-          env: {
-            PI_RUN_ID: state.runId,
-            PI_RUN_NODE_ID: nodeId,
-            PI_RUN_DEPTH: String(state.depth),
-            PI_RUN_BUDGETS: JSON.stringify(budgetLimits),
-          },
-          defaultModel: state.defaultModel,
-          defaultThinking: state.defaultThinking,
+      this.options.manager.spawn({
+        agent,
+        task,
+        cwd,
+        scope,
+        discoveryDiagnostics: diagnostics,
+        runId: state.runId,
+        parentNodeId: nodeId,
+        depth: state.depth,
+        env: {
+          PI_RUN_ID: state.runId,
+          PI_RUN_NODE_ID: nodeId,
+          PI_RUN_DEPTH: String(state.depth),
+          PI_RUN_BUDGETS: JSON.stringify(budgetLimits),
         },
-        ctx,
-      ),
+        defaultModel: state.defaultModel,
+        defaultThinking: state.defaultThinking,
+      }),
     );
     const onAbort = () => {
       void handle.abort();

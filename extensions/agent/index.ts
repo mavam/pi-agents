@@ -348,6 +348,10 @@ function createRenderer(lines: string[]) {
   };
 }
 
+function getCurrentModelId(ctx: ExtensionContext): string | undefined {
+  return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+}
+
 function pushSection(
   lines: string[],
   title: string,
@@ -725,6 +729,10 @@ export function createAgentExtension(options?: {
                   });
                 }
               : undefined,
+            {
+              model: getCurrentModelId(ctx),
+              thinking: pi.getThinkingLevel(),
+            },
           );
           const spawnResult = getRootSpawnResult(details);
           if (!spawnResult) {
@@ -788,6 +796,10 @@ export function createAgentExtension(options?: {
             ctx,
             signal,
             onUpdate,
+            {
+              model: getCurrentModelId(ctx),
+              thinking: pi.getThinkingLevel(),
+            },
           );
           return {
             content: [

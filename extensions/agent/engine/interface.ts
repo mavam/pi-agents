@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Agent, Scope } from "../agents.js";
+import type { Agent, Scope, Thinking } from "../agents.js";
 import type { AgentRunDetails } from "../types.js";
 
 export interface SpawnUpdate {
@@ -46,6 +46,8 @@ export interface SpawnRequest {
   parentNodeId?: string;
   depth?: number;
   env?: Record<string, string>;
+  defaultModel?: string;
+  defaultThinking?: Thinking;
 }
 
 export interface SpawnEngine {

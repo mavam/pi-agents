@@ -3,7 +3,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import { discoverAgents, type Scope } from "./agents.js";
+import { discoverAgents, type Scope, type Thinking } from "./agents.js";
 import { BudgetActor } from "./budgets.js";
 import type { SpawnHandle } from "./engine/interface.js";
 import { DelegatedAgentRunError } from "./engine/subprocess.js";
@@ -46,6 +46,8 @@ interface EvaluationState {
   runId: string;
   cwd: string;
   scope: Scope;
+  defaultModel?: string;
+  defaultThinking?: Thinking;
   parentNodeId?: string;
   depth: number;
   budgets: BudgetActor;
@@ -495,6 +497,7 @@ export class RunExecutor {
     ctx: ExtensionContext,
     signal?: AbortSignal,
     onUpdate?: (result: AgentToolResult<RunResultDetails>) => void,
+    defaults?: { model?: string; thinking?: Thinking },
   ): Promise<RunResultDetails> {
     const runId = crypto.randomUUID();
     let nodeCounter = 0;
@@ -547,6 +550,8 @@ export class RunExecutor {
       runId,
       cwd: run.cwd,
       scope: run.scope,
+      defaultModel: defaults?.model,
+      defaultThinking: defaults?.thinking,
       depth: 1,
       budgets: new BudgetActor(params.budgets),
       memory: {
@@ -739,6 +744,8 @@ export class RunExecutor {
             PI_RUN_DEPTH: String(state.depth),
             PI_RUN_BUDGETS: JSON.stringify(budgetLimits),
           },
+          defaultModel: state.defaultModel,
+          defaultThinking: state.defaultThinking,
         },
         ctx,
       ),

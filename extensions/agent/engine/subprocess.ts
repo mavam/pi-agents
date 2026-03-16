@@ -177,14 +177,16 @@ export function createSubprocessSpawnEngine(options?: {
       const usage = initialUsage();
       let stopReason: string | undefined;
       let errorMessage: string | undefined;
-      let resolvedModel = spec.agent.model;
+      const effectiveModel = spec.agent.model ?? spec.defaultModel;
+      const effectiveThinking = spec.agent.thinking ?? spec.defaultThinking;
+      let resolvedModel = effectiveModel;
       let stderr = "";
 
       const details = (exitCode: number): AgentRunDetails => ({
         agent: spec.agent.name,
         agentSource: spec.agent.source,
         model: resolvedModel,
-        thinking: spec.agent.thinking,
+        thinking: effectiveThinking,
         skills: [...spec.agent.skills],
         missingSkills,
         exitCode,
@@ -206,8 +208,8 @@ export function createSubprocessSpawnEngine(options?: {
       ].filter(Boolean);
 
       const args: string[] = ["--mode", "json", "-p", "--no-session"];
-      if (spec.agent.model) args.push("--model", spec.agent.model);
-      if (spec.agent.thinking) args.push("--thinking", spec.agent.thinking);
+      if (effectiveModel) args.push("--model", effectiveModel);
+      if (effectiveThinking) args.push("--thinking", effectiveThinking);
       if (appendParts.length > 0) {
         const tmp = writePromptToTempFile(
           spec.agent.name,

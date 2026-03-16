@@ -31,7 +31,12 @@ function projectAgentsDir(): string {
   return path.join(workspaceDir, ".pi", "agents");
 }
 
-function writeAgent(filePath: string, name: string, description: string): void {
+function writeAgent(
+  filePath: string,
+  name: string,
+  description: string,
+  options?: { model?: string; thinking?: string },
+): void {
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(
     filePath,
@@ -39,8 +44,8 @@ function writeAgent(filePath: string, name: string, description: string): void {
       "---",
       `name: ${name}`,
       `description: ${description}`,
-      "model: openai-codex/gpt-5.3-codex-spark",
-      "thinking: low",
+      ...(options?.model ? [`model: ${options.model}`] : []),
+      ...(options?.thinking ? [`thinking: ${options.thinking}`] : []),
       "skills:",
       "  - search",
       "---",
@@ -52,7 +57,12 @@ function writeAgent(filePath: string, name: string, description: string): void {
   );
 }
 
-function setupTool(register = agentExtension) {
+function setupTool(
+  register = agentExtension,
+  options?: {
+    thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  },
+) {
   let tool: ToolDefinition | undefined;
 
   const api = {
@@ -70,6 +80,9 @@ function setupTool(register = agentExtension) {
     },
     on() {
       // not needed for tool tests
+    },
+    getThinkingLevel() {
+      return options?.thinkingLevel ?? "off";
     },
     events: {
       emit() {
@@ -158,6 +171,70 @@ describe("agent tool delegated process execution", () => {
     expect(capturedArgs).not.toContain("--");
     expect(capturedArgs).not.toContain("--help");
     expect(capturedInput).toBe("--help");
+  });
+
+  it("inherits the current session model and thinking when the agent omits them", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "explorer.md"),
+      "explorer",
+      "Project explorer",
+    );
+    let capturedArgs: string[] = [];
+    const spawnProcess: SpawnProcess = (_command, args) => {
+      capturedArgs = [...args];
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const stdin = new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      });
+      const proc = new EventEmitter() as ChildProcessWithoutNullStreams;
+      Object.assign(proc, {
+        stdout,
+        stderr,
+        stdin,
+        exitCode: null,
+        signalCode: null,
+        kill() {
+          return true;
+        },
+      });
+      queueMicrotask(() => {
+        const event = {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "ok" }],
+          },
+        };
+        stdout.write(`${JSON.stringify(event)}\n`);
+        proc.emit("close", 0);
+      });
+      return proc;
+    };
+
+    const tool = setupTool(createAgentExtension({ spawnProcess }), {
+      thinkingLevel: "high",
+    });
+    await tool.execute(
+      "call-inherit",
+      { name: "explorer", task: "do work" },
+      undefined,
+      undefined,
+      {
+        cwd: workspaceDir,
+        model: {
+          provider: "anthropic",
+          id: "claude-sonnet-4-5",
+        },
+      } as unknown as ExtensionContext,
+    );
+
+    expect(capturedArgs).toContain("--model");
+    expect(capturedArgs).toContain("anthropic/claude-sonnet-4-5");
+    expect(capturedArgs).toContain("--thinking");
+    expect(capturedArgs).toContain("high");
   });
 
   it("throws for unknown agent names so the tool result is marked as an error", async () => {

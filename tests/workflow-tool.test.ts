@@ -45,7 +45,12 @@ function writeAgent(filePath: string, name: string, description: string): void {
   );
 }
 
-function setupWorkflowTool(spawnProcess: SpawnProcess): ToolDefinition {
+function setupWorkflowTool(
+  spawnProcess: SpawnProcess,
+  options?: {
+    thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  },
+): ToolDefinition {
   let tool: ToolDefinition | undefined;
 
   createAgentExtension({ spawnProcess })({
@@ -63,6 +68,9 @@ function setupWorkflowTool(spawnProcess: SpawnProcess): ToolDefinition {
     },
     appendEntry() {
       // not needed
+    },
+    getThinkingLevel() {
+      return options?.thinkingLevel ?? "off";
     },
     events: {
       emit() {

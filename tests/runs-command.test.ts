@@ -134,6 +134,9 @@ function setupExtension(spawnProcess: SpawnProcess): {
     appendEntry() {
       // not needed in tests
     },
+    getThinkingLevel() {
+      return "off";
+    },
     events: {
       emit() {
         // not needed in tests

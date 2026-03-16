@@ -483,6 +483,24 @@ function getRootSpawnResult(
   return details.result?.kind === "spawn" ? details.result : undefined;
 }
 
+function rebuildRuntimeState(
+  runtimeState: ReturnType<typeof createRunRuntimeState>,
+  ctx: ExtensionContext,
+): void {
+  const rebuilt = rebuildRunState(ctx.sessionManager.getBranch());
+  runtimeState.runs.clear();
+  runtimeState.nodes.clear();
+  runtimeState.order.length = 0;
+  for (const [id, run] of rebuilt.runs.entries()) {
+    runtimeState.runs.set(id, run);
+  }
+  for (const [id, node] of rebuilt.nodes.entries()) {
+    runtimeState.nodes.set(id, node);
+  }
+  runtimeState.order.push(...rebuilt.order);
+  markRunningRunsAborted(runtimeState);
+}
+
 function updateRunUI(
   ctx: ExtensionContext | undefined,
   runtimeState: ReturnType<typeof createRunRuntimeState>,
@@ -535,20 +553,22 @@ export function createAgentExtension(options?: {
       onStateChanged: (ctx) => updateRunUI(ctx, runtimeState),
     });
 
-    pi.on("session_start", async (_event, ctx) => {
-      const rebuilt = rebuildRunState(ctx.sessionManager.getEntries());
-      runtimeState.runs.clear();
-      runtimeState.nodes.clear();
-      runtimeState.order.length = 0;
-      for (const [id, run] of rebuilt.runs.entries()) {
-        runtimeState.runs.set(id, run);
-      }
-      for (const [id, node] of rebuilt.nodes.entries()) {
-        runtimeState.nodes.set(id, node);
-      }
-      runtimeState.order.push(...rebuilt.order);
-      markRunningRunsAborted(runtimeState);
+    const reloadRunState = (_event: unknown, ctx: ExtensionContext) => {
+      rebuildRuntimeState(runtimeState, ctx);
       updateRunUI(ctx, runtimeState);
+    };
+
+    pi.on("session_start", async (event, ctx) => {
+      reloadRunState(event, ctx);
+    });
+    pi.on("session_switch", async (event, ctx) => {
+      reloadRunState(event, ctx);
+    });
+    pi.on("session_fork", async (event, ctx) => {
+      reloadRunState(event, ctx);
+    });
+    pi.on("session_tree", async (event, ctx) => {
+      reloadRunState(event, ctx);
     });
 
     pi.registerCommand("agents", {

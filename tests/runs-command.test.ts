@@ -111,9 +111,19 @@ function setupExtension(spawnProcess: SpawnProcess): {
   agentTool: ToolDefinition;
   workflowTool: ToolDefinition;
   messages: CapturedMessage[];
+  appendEntries: Array<{ customType: string; data: unknown }>;
+  events: Map<
+    string,
+    (event: unknown, ctx: ExtensionContext) => Promise<void> | void
+  >;
 } {
   const commands = new Map<string, RegisteredCommand>();
   const messages: CapturedMessage[] = [];
+  const appendEntries: Array<{ customType: string; data: unknown }> = [];
+  const events = new Map<
+    string,
+    (event: unknown, ctx: ExtensionContext) => Promise<void> | void
+  >();
   let agentTool: ToolDefinition | undefined;
   let workflowTool: ToolDefinition | undefined;
 
@@ -128,11 +138,17 @@ function setupExtension(spawnProcess: SpawnProcess): {
     sendMessage(message) {
       messages.push(message as CapturedMessage);
     },
-    on() {
-      // not needed in tests
+    on(name, handler) {
+      events.set(
+        name,
+        handler as (
+          event: unknown,
+          ctx: ExtensionContext,
+        ) => Promise<void> | void,
+      );
     },
-    appendEntry() {
-      // not needed in tests
+    appendEntry(customType, data) {
+      appendEntries.push({ customType, data });
     },
     getThinkingLevel() {
       return "off";
@@ -152,7 +168,15 @@ function setupExtension(spawnProcess: SpawnProcess): {
 
   if (!agentTool) throw new Error("agent tool was not registered");
   if (!workflowTool) throw new Error("workflow tool was not registered");
-  return { runsCommand, runCommand, agentTool, workflowTool, messages };
+  return {
+    runsCommand,
+    runCommand,
+    agentTool,
+    workflowTool,
+    messages,
+    appendEntries,
+    events,
+  };
 }
 
 beforeEach(() => {
@@ -186,6 +210,68 @@ describe("/runs command", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain("No runs recorded in this session.");
+  });
+
+  it("rebuilds runs when switching sessions or tree branches", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "explorer.md"),
+      "explorer",
+      "Project explorer",
+    );
+
+    const inputs: string[] = [];
+    const { agentTool, runsCommand, messages, appendEntries, events } =
+      setupExtension(createSpawnProcess(() => "ok", inputs));
+
+    await agentTool.execute(
+      "call-agent-branch",
+      { name: "explorer", task: "inspect" },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    messages.length = 0;
+    await runsCommand.handler("", { cwd: workspaceDir });
+    expect(messages[0]?.content).toContain("explorer");
+
+    const sessionSwitch = events.get("session_switch");
+    const sessionTree = events.get("session_tree");
+    if (!sessionSwitch || !sessionTree) {
+      throw new Error("expected session lifecycle handlers to be registered");
+    }
+
+    await sessionSwitch({}, {
+      cwd: workspaceDir,
+      hasUI: false,
+      sessionManager: {
+        getBranch() {
+          return [];
+        },
+      },
+    } as unknown as ExtensionContext);
+
+    messages.length = 0;
+    await runsCommand.handler("", { cwd: workspaceDir });
+    expect(messages[0]?.content).toContain("No runs recorded in this session.");
+
+    await sessionTree({}, {
+      cwd: workspaceDir,
+      hasUI: false,
+      sessionManager: {
+        getBranch() {
+          return appendEntries.map((entry) => ({
+            type: "custom",
+            customType: entry.customType,
+            data: entry.data,
+          }));
+        },
+      },
+    } as unknown as ExtensionContext);
+
+    messages.length = 0;
+    await runsCommand.handler("", { cwd: workspaceDir });
+    expect(messages[0]?.content).toContain("explorer");
   });
 });
 

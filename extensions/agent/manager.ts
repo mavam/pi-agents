@@ -32,46 +32,6 @@ export class AgentManager {
     );
   }
 
-  async joinAll(
-    handles: SpawnHandle[],
-  ): Promise<Awaited<ReturnType<SpawnHandle["wait"]>>[]> {
-    return Promise.all(handles.map((handle) => handle.wait()));
-  }
-
-  async joinAny(
-    handles: SpawnHandle[],
-  ): Promise<Awaited<ReturnType<SpawnHandle["wait"]>>> {
-    const attempts = handles.map((handle) => handle.wait());
-    return Promise.any(attempts);
-  }
-
-  async joinQuorum(
-    handles: SpawnHandle[],
-    quorum: number,
-  ): Promise<Awaited<ReturnType<SpawnHandle["wait"]>>[]> {
-    const results: Awaited<ReturnType<SpawnHandle["wait"]>>[] = [];
-    const errors: unknown[] = [];
-
-    await Promise.all(
-      handles.map(async (handle) => {
-        try {
-          const result = await handle.wait();
-          results.push(result);
-        } catch (error) {
-          errors.push(error);
-        }
-      }),
-    );
-
-    if (results.length < quorum) {
-      throw new Error(
-        `Join quorum ${quorum} was not reached (${results.length} succeeded, ${errors.length} failed).`,
-      );
-    }
-
-    return results.slice(0, quorum);
-  }
-
   getRunningIds(): string[] {
     return [...this.running.keys()];
   }

@@ -19,6 +19,9 @@ The tools default to **both** project and user agents.
 
 ## 📖 Concepts
 
+The following concepts form the building blocks of the framework: **agents**,
+**workflows**, and **runs**.
+
 ### Agent
 
 An **agent** is a markdown file that defines a delegated pi subprocess. Each
@@ -30,11 +33,7 @@ as an isolated pi process, waits for it to finish, and returns the result.
 
 A **workflow** is a JSON-defined graph that orchestrates multiple agents. You
 pass the graph to the `workflow` tool, and the runtime walks it node by node.
-
-### Flow spec
-
-The JSON structure that describes a workflow graph is called a **flow spec**.
-A flow spec is a tree of **nodes**, where each node has a `kind` that
+A workflow is defined as a tree of **nodes**, where each node has a `kind` that
 determines its behavior:
 
 | Node       | Purpose                                                         |
@@ -46,18 +45,8 @@ determines its behavior:
 | `loop`     | Repeat a body node until a condition is met or a cap is hit.    |
 
 Nodes nest recursively: a `sequence` can contain `fork` nodes, a `loop`
-body can be a `sequence`, and so on.
-
-### Budgets
-
-**Budgets** are optional limits that constrain a workflow execution:
-
-| Budget           | What it limits                                            |
-| ---------------- | --------------------------------------------------------- |
-| `maxDepth`       | Maximum nesting depth of the flow-spec tree.              |
-| `maxChildren`    | Maximum number of child nodes a single node may produce.  |
-| `maxParallelism` | Maximum concurrent subprocess agents across the workflow. |
-| `maxIterations`  | Maximum iterations for any single `loop` node.            |
+body can be a `sequence`, and so on. You can optionally set **budgets** to
+constrain execution (max depth, max parallelism, max iterations, etc.).
 
 ### Runs
 
@@ -119,7 +108,7 @@ You can also call the `agent` tool directly:
 
 ### 4. Run a workflow
 
-Use the `workflow` tool to run a multi-agent flow spec. The example below
+Use the `workflow` tool to run a multi-agent workflow. The example below
 defines a review loop: a `reviewer` agent inspects the patch, then an
 `engineer` agent applies the findings, repeating until the reviewer signals
 `done` or three iterations have passed.
@@ -181,13 +170,14 @@ Parameters:
 
 ### `workflow`
 
-Runs a workflow defined by a flow spec.
+Runs a workflow defined by a JSON tree of nodes.
 
 Top-level parameters:
 
 - `label`: Optional human-readable label for this workflow run.
-- `flow`: The flow spec (a JSON tree of nodes).
-- `budgets`: Optional budget limits (see [Budgets](#budgets)).
+- `flow`: The workflow definition (a JSON tree of nodes).
+- `budgets`: Optional limits—`maxDepth`, `maxChildren`, `maxParallelism`,
+  `maxIterations`.
 - `scope`: Optional default agent scope for all `spawn` nodes.
 - `cwd`: Optional default working directory for all `spawn` nodes.
 
@@ -200,12 +190,12 @@ Top-level parameters:
 | `/runs`               | List runs recorded in the current session. |
 | `/run <id-or-prefix>` | Show details for one run.                  |
 
-## 🗂️ Flow spec reference
+## 🗂️ Node reference
 
 ### `spawn`
 
-Run a single agent as a subprocess. This is the leaf node of every flow spec—
-the only node kind that actually executes work.
+Run a single agent as a subprocess. This is the leaf node of every workflow—the
+only node kind that actually executes work.
 
 ```json
 {
@@ -242,7 +232,7 @@ of its last step.
 
 ### `fork`
 
-Run named branches concurrently. Each branch is an arbitrary flow spec. Use
+Run named branches concurrently. Each branch is an arbitrary node tree. Use
 `concurrency` to cap how many branches run in parallel.
 
 ```json
@@ -258,7 +248,7 @@ Run named branches concurrently. Each branch is an arbitrary flow spec. Use
 ```
 
 - `id`: Required. Referenced by a downstream `join` node.
-- `branches`: A map of branch keys to flow specs.
+- `branches`: A map of branch keys to node trees.
 - `concurrency`: Optional cap on simultaneous branches.
 
 ### `join`
@@ -304,7 +294,7 @@ Repeat a body node until a condition is met or `maxIterations` is reached.
 ```
 
 - `id`: Required.
-- `body`: Any flow spec to execute each iteration.
+- `body`: Any node tree to execute each iteration.
 - `maxIterations`: Hard cap on repetitions.
 - `continueWhen`: Optional predicate evaluated after each iteration. Currently
   supports `result_field`, which checks a single field in the body's JSON

@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
   Theme,
 } from "@mariozechner/pi-coding-agent";
+import { wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { Agent, Scope } from "./agents.js";
 import { rebuildRunState } from "./persistence.js";
 import {
@@ -231,11 +232,33 @@ function describeFlow(flow: WorkflowParams["flow"]): string {
 }
 
 function createRenderer(lines: string[]) {
+  let cachedWidth: number | undefined;
+  let cachedLines: string[] | undefined;
+
   return {
-    render() {
-      return lines;
+    render(width: number) {
+      if (cachedLines && cachedWidth === width) {
+        return cachedLines;
+      }
+
+      const safeWidth = Math.max(1, width);
+      cachedLines = lines.flatMap((line) => {
+        const segments = line.split("\n");
+        return segments.flatMap((segment) => {
+          if (segment.length === 0) {
+            return [""];
+          }
+          const wrapped = wrapTextWithAnsi(segment, safeWidth);
+          return wrapped.length > 0 ? wrapped : [""];
+        });
+      });
+      cachedWidth = width;
+      return cachedLines;
     },
-    invalidate() {},
+    invalidate() {
+      cachedWidth = undefined;
+      cachedLines = undefined;
+    },
   };
 }
 

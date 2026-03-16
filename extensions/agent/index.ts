@@ -354,12 +354,7 @@ export function createAgentExtension(options?: {
         const diagnostics = toDiagnosticText(scope, discovery.diagnostics);
         const query = args.trim();
         const content = query
-          ? [
-              "/agents does not accept arguments.",
-              `Use /agent ${query} for full details.`,
-              "",
-              formatAgentsOverview(scope, discovery.agents, diagnostics),
-            ].join("\n")
+          ? `Did you mean /agent ${query}? Use /agent <name> for full details.`
           : formatAgentsOverview(scope, discovery.agents, diagnostics);
 
         pi.sendMessage({
@@ -421,12 +416,7 @@ export function createAgentExtension(options?: {
       handler: async (args) => {
         const query = args.trim();
         const content = query
-          ? [
-              "/runs does not accept arguments.",
-              `Use /run ${query} for full details.`,
-              "",
-              formatRunOverviewText(runtimeState),
-            ].join("\n")
+          ? `Did you mean /run ${query}? Use /run <id> for full details.`
           : formatRunOverviewText(runtimeState);
         pi.sendMessage({
           customType: RUN_EVENT_CUSTOM_TYPE,

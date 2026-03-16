@@ -4,14 +4,7 @@ import type {
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 import { discoverAgents, type Scope } from "./agents.js";
-import {
-  assertDepth,
-  type BudgetSnapshot,
-  consumeChild,
-  createBudgetSnapshot,
-  getLoopIterationLimit,
-  getParallelismLimit,
-} from "./budgets.js";
+import { BudgetActor } from "./budgets.js";
 import type { SpawnHandle } from "./engine/interface.js";
 import { DelegatedAgentRunError } from "./engine/subprocess.js";
 import { parseJsonText } from "./flow-spec.js";
@@ -52,7 +45,7 @@ interface EvaluationState {
   scope: Scope;
   parentNodeId?: string;
   depth: number;
-  budgets: BudgetSnapshot;
+  budgets: BudgetActor;
   memory: FlowMemory;
   signal?: AbortSignal;
 }
@@ -362,7 +355,7 @@ export class RunExecutor {
       cwd: run.cwd,
       scope: run.scope,
       depth: 1,
-      budgets: createBudgetSnapshot(params.budgets),
+      budgets: new BudgetActor(params.budgets),
       memory: {
         bySpecId: new Map(),
         history: [],
@@ -532,8 +525,7 @@ export class RunExecutor {
     activeHandles: Set<SpawnHandle>,
   ): Promise<SpawnNodeResult> {
     assertNotAborted(state.signal);
-    assertDepth(state.budgets, state.depth);
-    consumeChild(state.budgets);
+    await state.budgets.acquireSpawn(state.depth);
 
     const scope = spec.scope ?? state.scope;
     const cwd = spec.cwd ?? state.cwd;
@@ -549,6 +541,7 @@ export class RunExecutor {
     }
 
     const task = buildDelegatedTask(spec.task, state.memory);
+    const budgetLimits = await state.budgets.limits();
     const handle = this.options.manager.spawn(
       {
         agent,
@@ -563,7 +556,7 @@ export class RunExecutor {
           PI_RUN_ID: state.runId,
           PI_RUN_NODE_ID: nodeId,
           PI_RUN_DEPTH: String(state.depth),
-          PI_RUN_BUDGETS: JSON.stringify(state.budgets.limits),
+          PI_RUN_BUDGETS: JSON.stringify(budgetLimits),
         },
       },
       ctx,
@@ -657,7 +650,9 @@ export class RunExecutor {
     );
 
     const entries = Object.entries(spec.branches);
-    const concurrency = getParallelismLimit(state.budgets, spec.concurrency);
+    const concurrency = await state.budgets.getParallelismLimit(
+      spec.concurrency,
+    );
     const branchResults = await mapWithConcurrencyLimit(
       entries,
       concurrency,
@@ -868,8 +863,7 @@ export class RunExecutor {
   ): Promise<LoopNodeResult> {
     const iterations: FlowNodeResult[] = [];
     const loopMemory = cloneMemory(state.memory);
-    const iterationLimit = getLoopIterationLimit(
-      state.budgets,
+    const iterationLimit = await state.budgets.getLoopIterationLimit(
       spec.maxIterations,
     );
     let latestOutput: unknown;

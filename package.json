@@ -39,7 +39,6 @@
     "check": "bun run typecheck && bun run test && bun run biome:check"
   },
   "devDependencies": {
-    "@mariozechner/pi-agent-core": "*",
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
     "@sinclair/typebox": "*",

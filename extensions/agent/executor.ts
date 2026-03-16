@@ -7,7 +7,6 @@ import { discoverAgents, type Scope, type Thinking } from "./agents.js";
 import { BudgetActor } from "./budgets.js";
 import { toDiagnosticText } from "./diagnostics.js";
 import type { SpawnHandle } from "./engine/interface.js";
-import { DelegatedAgentRunError } from "./engine/subprocess.js";
 import { AgentEvents } from "./events.js";
 import { parseJsonText } from "./flow-spec.js";
 import type { AgentManager } from "./manager.js";
@@ -201,7 +200,7 @@ class ForkCoordinatorActor {
     });
   }
 
-  primaryFailure(): Promise<string | undefined> {
+  getPrimaryFailure(): Promise<string | undefined> {
     return this.send((state) => state.primaryFailure);
   }
 }
@@ -397,31 +396,15 @@ function resolveStructuredOutput(
 function resolveContinueValue(
   spec: ContinueSpec | undefined,
   bodyResult: FlowNodeResult,
-  _memory: FlowMemory,
 ): unknown {
   if (!spec) return undefined;
-  // Resolution priority (first defined value wins):
-  //  1. Direct path on the raw body result  (e.g. bodyResult.output.done)
-  //  2. Direct path on the summarized body  (e.g. summary.output.done)
-  //  3. Walk history in reverse, trying raw then summarized for each entry
-  // For simple (non-dotted) paths we also probe candidate.output.<path> so
-  // callers can write `path: "done"` instead of `path: "output.done"`.
-  const candidates: unknown[] = [bodyResult, summarizeForContext(bodyResult)];
-
-  for (const candidate of candidates) {
-    const direct = getPathValue(candidate, spec.path);
-    if (direct !== undefined) return direct;
-    if (
-      !spec.path.includes(".") &&
-      typeof candidate === "object" &&
-      candidate !== null
-    ) {
-      const output = (candidate as Record<string, unknown>).output;
-      const nested = getPathValue(output, spec.path);
-      if (nested !== undefined) return nested;
-    }
-  }
-  return undefined;
+  // Try `output.<path>` first (e.g. bodyResult.output.done), then fall back
+  // to `<path>` on the raw result itself. This lets callers write
+  // `path: "done"` instead of the longer `path: "output.done"`.
+  const output = (bodyResult as unknown as Record<string, unknown>).output;
+  const fromOutput = getPathValue(output, spec.path);
+  if (fromOutput !== undefined) return fromOutput;
+  return getPathValue(bodyResult, spec.path);
 }
 
 function formatOutputSummary(output: unknown): string {
@@ -790,11 +773,6 @@ export class RunExecutor {
       };
       rememberResult(spec, result, state.memory);
       return result;
-    } catch (error) {
-      if (error instanceof DelegatedAgentRunError) {
-        throw error;
-      }
-      throw error instanceof Error ? error : new Error(String(error));
     } finally {
       if (state.signal) state.signal.removeEventListener("abort", onAbort);
       await state.handleRegistry.release(handle.id);
@@ -935,7 +913,7 @@ export class RunExecutor {
     assertNotAborted(state.signal);
 
     const branchResults = workerResults.flat();
-    const primaryFailure = await coordinator.primaryFailure();
+    const primaryFailure = await coordinator.getPrimaryFailure();
     if (failurePolicy === "failFast" && primaryFailure) {
       throw new Error(primaryFailure);
     }
@@ -1160,11 +1138,7 @@ export class RunExecutor {
       notifyUpdate();
 
       if (!spec.continueWhen) break;
-      const continueValue = resolveContinueValue(
-        spec.continueWhen,
-        bodyResult,
-        loopMemory,
-      );
+      const continueValue = resolveContinueValue(spec.continueWhen, bodyResult);
       if (continueValue !== spec.continueWhen.equals) break;
     }
 

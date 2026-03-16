@@ -13,6 +13,7 @@ import {
   formatAgentList,
   type Scope,
 } from "./agents.js";
+import { toDiagnosticText } from "./diagnostics.js";
 import {
   createSubprocessSpawnEngine,
   DelegatedAgentRunError,
@@ -192,14 +193,6 @@ function initialAgentDetails(scope: Scope, agent: string): AgentRunDetails {
     discoveryDiagnostics: [],
     scope,
   };
-}
-
-function toDiagnosticText(
-  scope: Scope,
-  diagnostics: Array<{ filePath: string; message: string }>,
-): string[] {
-  const prefix = `scope=${scope}`;
-  return diagnostics.map((d) => `${prefix}: ${d.filePath}: ${d.message}`);
 }
 
 function formatAgentsOverview(

@@ -5,6 +5,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { discoverAgents, type Scope, type Thinking } from "./agents.js";
 import { BudgetActor } from "./budgets.js";
+import { toDiagnosticText } from "./diagnostics.js";
 import type { SpawnHandle } from "./engine/interface.js";
 import { DelegatedAgentRunError } from "./engine/subprocess.js";
 import { AgentEvents } from "./events.js";
@@ -259,14 +260,6 @@ function createLinkedAbortController(parentSignal?: AbortSignal): {
 
 function cloneSnapshot<T>(value: T): T {
   return structuredClone(value);
-}
-
-function toDiagnosticText(
-  scope: Scope,
-  diagnostics: Array<{ filePath: string; message: string }>,
-): string[] {
-  const prefix = `scope=${scope}`;
-  return diagnostics.map((d) => `${prefix}: ${d.filePath}: ${d.message}`);
 }
 
 function cloneMemory(memory: FlowMemory): FlowMemory {

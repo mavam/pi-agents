@@ -230,6 +230,9 @@ of its last step.
 }
 ```
 
+- `id`: Optional. When set, downstream nodes can reference this sequence's
+  result by name.
+
 ### `fork`
 
 Run named branches concurrently. Each branch is an arbitrary node tree. Use
@@ -265,6 +268,7 @@ Wait for the branches of a previous `fork` and combine their results.
 }
 ```
 
+- `id`: Optional. When set, downstream nodes can reference this join's result.
 - `from`: The `id` of the `fork` node to join.
 - `mode`: When to proceed—`"all"` (every branch must finish), `"any"` (first
   success wins), or `"quorum"` (a minimum number of successes, set by the

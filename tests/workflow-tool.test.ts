@@ -195,6 +195,52 @@ describe("workflow tool", () => {
     expect(inputs[1]).toContain("alpha");
   });
 
+  it("truncates workflow context before passing it downstream", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "reviewer.md"),
+      "reviewer",
+      "Reviewer",
+    );
+    const hugeOutput = "alpha".repeat(5_000);
+    const inputs: string[] = [];
+    const spawnProcess = createSpawnProcess((input) => {
+      if (input.includes("second step")) return "beta";
+      return hugeOutput;
+    }, inputs);
+
+    const tool = setupWorkflowTool(spawnProcess);
+    await tool.execute(
+      "call-context-truncation",
+      {
+        flow: {
+          kind: "sequence",
+          steps: [
+            {
+              kind: "spawn",
+              id: "first",
+              agent: "reviewer",
+              task: "first step",
+            },
+            {
+              kind: "spawn",
+              id: "second",
+              agent: "reviewer",
+              task: "second step",
+            },
+          ],
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    expect(inputs).toHaveLength(2);
+    expect(inputs[1]).toContain("Workflow context from prior completed steps");
+    expect(inputs[1].length).toBeLessThan(12_500);
+    expect(inputs[1]).toContain("more chars");
+  });
+
   it("collects fork results through join", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
     const inputs: string[] = [];

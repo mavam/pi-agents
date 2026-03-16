@@ -295,6 +295,19 @@ function getPathValue(value: unknown, path: string): unknown {
   return current;
 }
 
+const MAX_CONTEXT_PREVIEW_CHARS = 2_000;
+const MAX_CONTEXT_NODES = 12;
+const MAX_WORKFLOW_CONTEXT_CHARS = 12_000;
+
+function previewContextValue(value: unknown): string {
+  const summary = formatOutputSummary(value);
+  if (summary.length <= MAX_CONTEXT_PREVIEW_CHARS) {
+    return summary;
+  }
+  const remaining = summary.length - MAX_CONTEXT_PREVIEW_CHARS;
+  return `${summary.slice(0, MAX_CONTEXT_PREVIEW_CHARS)}… (${remaining} more chars)`;
+}
+
 function summarizeForContext(result: FlowNodeResult): unknown {
   switch (result.kind) {
     case "spawn":
@@ -302,15 +315,14 @@ function summarizeForContext(result: FlowNodeResult): unknown {
         kind: result.kind,
         nodeId: result.nodeId,
         agent: result.agent,
-        text: result.text,
-        output: result.output,
+        output: previewContextValue(result.output),
       };
     case "sequence":
       return {
         kind: result.kind,
         nodeId: result.nodeId,
-        output: result.output,
-        steps: result.steps.map((step) => summarizeForContext(step)),
+        steps: result.steps.length,
+        output: previewContextValue(result.output),
       };
     case "fork":
       return {
@@ -320,25 +332,25 @@ function summarizeForContext(result: FlowNodeResult): unknown {
           Object.entries(result.branches).map(([key, branch]) => [
             key,
             branch.result
-              ? summarizeForContext(branch.result)
+              ? previewContextValue(branch.result.output)
               : { error: branch.error },
           ]),
         ),
-        output: result.output,
+        output: previewContextValue(result.output),
       };
     case "join":
       return {
         kind: result.kind,
         nodeId: result.nodeId,
         selectedBranches: result.selectedBranches,
-        output: result.output,
+        output: previewContextValue(result.output),
       };
     case "loop":
       return {
         kind: result.kind,
         nodeId: result.nodeId,
-        iterations: result.iterations.map((item) => summarizeForContext(item)),
-        output: result.output,
+        iterations: result.iterations.length,
+        output: previewContextValue(result.output),
       };
   }
 }
@@ -346,22 +358,37 @@ function summarizeForContext(result: FlowNodeResult): unknown {
 function buildDelegatedTask(task: string, memory: FlowMemory): string {
   if (memory.history.length === 0) return task;
   const latest = memory.history[memory.history.length - 1];
-  const nodes = Object.fromEntries(
-    [...memory.bySpecId.entries()].map(([key, value]) => [
-      key,
-      summarizeForContext(value),
-    ]),
-  );
+  const nodeEntries = [...memory.bySpecId.entries()];
+  const keptEntries = nodeEntries.slice(-MAX_CONTEXT_NODES);
+  const truncatedNodes = nodeEntries.length - keptEntries.length;
   const payload = {
     latest: latest ? summarizeForContext(latest) : undefined,
-    nodes,
+    nodes: Object.fromEntries(
+      keptEntries.map(([key, value]) => [key, summarizeForContext(value)]),
+    ),
+    ...(truncatedNodes > 0
+      ? { truncatedNodes: `${truncatedNodes} earlier named node(s) omitted` }
+      : {}),
   };
+
+  let payloadText = JSON.stringify(payload, null, 2);
+  if (payloadText.length > MAX_WORKFLOW_CONTEXT_CHARS) {
+    payloadText = JSON.stringify(
+      {
+        latest: latest ? summarizeForContext(latest) : undefined,
+        note: "Workflow context truncated to stay within the prompt budget.",
+      },
+      null,
+      2,
+    );
+  }
+
   return [
     task,
     "",
     "Workflow context from prior completed steps:",
     "```json",
-    JSON.stringify(payload, null, 2),
+    payloadText,
     "```",
   ].join("\n");
 }

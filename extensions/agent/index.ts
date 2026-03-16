@@ -137,7 +137,7 @@ function formatAgentsOverview(
   for (const agent of agents) {
     lines.push(`- ${agent.name} (${agent.source}) — ${agent.description}`);
   }
-  lines.push("", "Use /agents <name> for full details.");
+  lines.push("", "Use /agent <name> for full details.");
   if (diagnostics.length > 0) {
     lines.push("", "Diagnostics:", ...diagnostics.map((d) => `- ${d}`));
   }
@@ -208,8 +208,9 @@ function resolveRunId(
   const matches = getOrderedCompositions(runtimeState).filter((item) =>
     item.id.startsWith(trimmed),
   );
-  if (matches.length === 1) {
-    return { runId: matches[0]!.id };
+  const [match] = matches;
+  if (matches.length === 1 && match) {
+    return { runId: match.id };
   }
 
   if (matches.length > 1) {
@@ -353,8 +354,31 @@ export function createAgentExtension(options?: {
     }
 
     pi.registerCommand("agents", {
-      description:
-        "List available agents, or show details for a specific agent",
+      description: "List available agents",
+      handler: async (args, ctx) => {
+        const scope: Scope = "both";
+        const discovery = discoverAgents(ctx.cwd, scope);
+        const diagnostics = toDiagnosticText(scope, discovery.diagnostics);
+        const query = args.trim();
+        const content = query
+          ? [
+              "/agents does not accept arguments.",
+              `Use /agent ${query} for full details.`,
+              "",
+              formatAgentsOverview(scope, discovery.agents, diagnostics),
+            ].join("\n")
+          : formatAgentsOverview(scope, discovery.agents, diagnostics);
+
+        pi.sendMessage({
+          customType: "agents",
+          content,
+          display: true,
+        });
+      },
+    });
+
+    pi.registerCommand("agent", {
+      description: "Show details for a specific agent",
       getArgumentCompletions: (prefix) => {
         const discovery = discoverAgents(process.cwd(), "both");
         const items = discovery.agents
@@ -375,7 +399,7 @@ export function createAgentExtension(options?: {
         if (!query) {
           pi.sendMessage({
             customType: "agents",
-            content: formatAgentsOverview(scope, discovery.agents, diagnostics),
+            content: "Usage: /agent <name>",
             display: true,
           });
           return;
@@ -400,7 +424,27 @@ export function createAgentExtension(options?: {
     });
 
     pi.registerCommand("runs", {
-      description: "List agent runs, or show details for a specific run",
+      description: "List agent runs",
+      handler: async (args) => {
+        const query = args.trim();
+        const content = query
+          ? [
+              "/runs does not accept arguments.",
+              `Use /run ${query} for full details.`,
+              "",
+              formatRunOverviewText(runtimeState),
+            ].join("\n")
+          : formatRunOverviewText(runtimeState);
+        pi.sendMessage({
+          customType: COMPOSITION_EVENT_CUSTOM_TYPE,
+          content,
+          display: true,
+        });
+      },
+    });
+
+    pi.registerCommand("run", {
+      description: "Show details for a specific run",
       getArgumentCompletions: (prefix) => {
         const items = getOrderedCompositions(runtimeState)
           .map((run) => ({
@@ -418,7 +462,7 @@ export function createAgentExtension(options?: {
         const query = args.trim();
         const content = query
           ? formatRunDetailsText(runtimeState, query)
-          : formatRunOverviewText(runtimeState);
+          : "Usage: /run <id-or-prefix>";
         pi.sendMessage({
           customType: COMPOSITION_EVENT_CUSTOM_TYPE,
           content,

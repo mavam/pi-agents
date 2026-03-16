@@ -159,12 +159,12 @@ Budget fields:
 
 ## 🧭 Commands
 
-| Command                | Description                                |
-| ---------------------- | ------------------------------------------ |
-| `/agents`              | List discovered agents.                    |
-| `/agents <name>`       | Show full details for one agent.           |
-| `/runs`                | List runs recorded in the current session. |
-| `/runs <id-or-prefix>` | Show details for one run.                  |
+| Command               | Description                                |
+| --------------------- | ------------------------------------------ |
+| `/agents`             | List discovered agents.                    |
+| `/agent <name>`       | Show full details for one agent.           |
+| `/runs`               | List runs recorded in the current session. |
+| `/run <id-or-prefix>` | Show details for one run.                  |
 
 ## 🗂️ Flow spec reference
 

@@ -106,7 +106,8 @@ function createSpawnProcess(
 }
 
 function setupExtension(spawnProcess: SpawnProcess): {
-  command: RegisteredCommand;
+  runsCommand: RegisteredCommand;
+  runCommand: RegisteredCommand;
   workflowTool: ToolDefinition;
   messages: CapturedMessage[];
 } {
@@ -137,10 +138,14 @@ function setupExtension(spawnProcess: SpawnProcess): {
     },
   } as unknown as ExtensionAPI);
 
-  const command = commands.get("runs");
-  if (!command) throw new Error("/runs command was not registered");
+  const runsCommand = commands.get("runs");
+  if (!runsCommand) throw new Error("/runs command was not registered");
+
+  const runCommand = commands.get("run");
+  if (!runCommand) throw new Error("/run command was not registered");
+
   if (!workflowTool) throw new Error("workflow tool was not registered");
-  return { command, workflowTool, messages };
+  return { runsCommand, runCommand, workflowTool, messages };
 }
 
 beforeEach(() => {
@@ -167,15 +172,17 @@ describe("/runs command", () => {
     );
 
     const inputs: string[] = [];
-    const { command, messages } = setupExtension(
+    const { runsCommand, messages } = setupExtension(
       createSpawnProcess(() => "ok", inputs),
     );
-    await command.handler("", { cwd: workspaceDir });
+    await runsCommand.handler("", { cwd: workspaceDir });
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain("No runs recorded in this session.");
   });
+});
 
+describe("/run command", () => {
   it("resolves unique run ID prefixes shown in the overview", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),
@@ -184,7 +191,7 @@ describe("/runs command", () => {
     );
 
     const inputs: string[] = [];
-    const { command, workflowTool, messages } = setupExtension(
+    const { runCommand, workflowTool, messages } = setupExtension(
       createSpawnProcess(() => "ok", inputs),
     );
 
@@ -207,7 +214,7 @@ describe("/runs command", () => {
     const prefix = runId.slice(0, 8);
 
     messages.length = 0;
-    await command.handler(prefix, { cwd: workspaceDir });
+    await runCommand.handler(prefix, { cwd: workspaceDir });
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain(`ID: ${runId}`);

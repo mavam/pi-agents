@@ -49,7 +49,8 @@ function writeAgent(filePath: string, name: string, description: string): void {
 }
 
 function setupExtension(): {
-  command: RegisteredCommand;
+  agentsCommand: RegisteredCommand;
+  agentCommand: RegisteredCommand;
   messages: CapturedMessage[];
 } {
   const commands = new Map<string, RegisteredCommand>();
@@ -67,9 +68,13 @@ function setupExtension(): {
     },
   } as unknown as ExtensionAPI);
 
-  const command = commands.get("agents");
-  if (!command) throw new Error("/agents command was not registered");
-  return { command, messages };
+  const agentsCommand = commands.get("agents");
+  if (!agentsCommand) throw new Error("/agents command was not registered");
+
+  const agentCommand = commands.get("agent");
+  if (!agentCommand) throw new Error("/agent command was not registered");
+
+  return { agentsCommand, agentCommand, messages };
 }
 
 beforeEach(() => {
@@ -102,15 +107,20 @@ describe("/agents command", () => {
       "Project worker",
     );
 
-    const { command, messages } = setupExtension();
-    await command.handler("", { cwd: workspaceDir });
+    const { agentsCommand, messages } = setupExtension();
+    await agentsCommand.handler("", { cwd: workspaceDir });
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain("Available agents");
     expect(messages[0]?.content).toContain("explorer (user)");
     expect(messages[0]?.content).toContain("worker (project)");
+    expect(messages[0]?.content).toContain(
+      "Use /agent <name> for full details.",
+    );
   });
+});
 
+describe("/agent command", () => {
   it("shows details for a specific agent", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),
@@ -118,8 +128,8 @@ describe("/agents command", () => {
       "Project explorer",
     );
 
-    const { command, messages } = setupExtension();
-    await command.handler("explorer", { cwd: workspaceDir });
+    const { agentCommand, messages } = setupExtension();
+    await agentCommand.handler("explorer", { cwd: workspaceDir });
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain("Agent: explorer");
@@ -135,8 +145,8 @@ describe("/agents command", () => {
       "User explorer",
     );
 
-    const { command, messages } = setupExtension();
-    await command.handler("missing", { cwd: workspaceDir });
+    const { agentCommand, messages } = setupExtension();
+    await agentCommand.handler("missing", { cwd: workspaceDir });
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain('Unknown agent "missing"');

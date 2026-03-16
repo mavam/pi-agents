@@ -237,6 +237,67 @@ describe("agent tool delegated process execution", () => {
     expect(capturedArgs).toContain("high");
   });
 
+  it("discovers agents relative to the delegated cwd", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "explorer.md"),
+      "explorer",
+      "Project explorer",
+    );
+    const otherCwd = mkdtempSync(
+      path.join(os.tmpdir(), "pi-agent-tool-other-"),
+    );
+    const spawnProcess: SpawnProcess = () => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const stdin = new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      });
+      const proc = new EventEmitter() as ChildProcessWithoutNullStreams;
+      Object.assign(proc, {
+        stdout,
+        stderr,
+        stdin,
+        exitCode: null,
+        signalCode: null,
+        kill() {
+          return true;
+        },
+      });
+      queueMicrotask(() => {
+        const event = {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "ok" }],
+          },
+        };
+        stdout.write(`${JSON.stringify(event)}\n`);
+        proc.emit("close", 0);
+      });
+      return proc;
+    };
+
+    try {
+      const tool = setupTool(createAgentExtension({ spawnProcess }));
+      const result = await tool.execute(
+        "call-cwd",
+        { name: "explorer", task: "do work", cwd: workspaceDir },
+        undefined,
+        undefined,
+        { cwd: otherCwd } as unknown as ExtensionContext,
+      );
+
+      expect(result.isError).toBeFalsy();
+      const text = result.content[0];
+      expect(text?.type).toBe("text");
+      expect(text?.text).toBe("ok");
+    } finally {
+      rmSync(otherCwd, { recursive: true, force: true });
+    }
+  });
+
   it("throws for unknown agent names so the tool result is marked as an error", async () => {
     const tool = setupTool();
     const error = (await tool

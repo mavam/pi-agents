@@ -703,7 +703,8 @@ export function createAgentExtension(options?: {
         ctx,
       ): Promise<AgentToolResult<AgentRunDetails>> {
         const scope: Scope = params.scope ?? "both";
-        const discovery = discoverAgents(ctx.cwd, scope);
+        const effectiveCwd = params.cwd ?? ctx.cwd;
+        const discovery = discoverAgents(effectiveCwd, scope);
         const diagnostics = toDiagnosticText(scope, discovery.diagnostics);
         const agent = discovery.agents.find((a) => a.name === params.name);
 
@@ -718,7 +719,7 @@ export function createAgentExtension(options?: {
 
         const workflow: WorkflowParams = {
           label: agent.name,
-          cwd: params.cwd ?? ctx.cwd,
+          cwd: effectiveCwd,
           scope,
           flow: {
             kind: "spawn",

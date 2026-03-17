@@ -9,12 +9,14 @@ import {
   formatNodeResultLines,
   formatWorkflowResultXml,
   renderAgentCall,
+  renderAgentResult,
   renderRunNotificationMessage,
   renderWorkflowResult,
   stripResultXmlEnvelope,
 } from "../extensions/agent/presentation.ts";
 import { createRunRuntimeState } from "../extensions/agent/state.ts";
 import type {
+  AgentRunDetails,
   FlowSpec,
   RunNode,
   RunNotificationDetails,
@@ -62,6 +64,55 @@ describe("agent presentation", () => {
     );
     expect(xml).not.toContain(raw);
     expect(stripResultXmlEnvelope(xml)).toBe(raw);
+  });
+
+  it("renders agent output previews with expand and collapse hints", () => {
+    const details: AgentRunDetails = {
+      agent: "explorer",
+      agentSource: "project",
+      exitCode: 0,
+      stderr: "",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        contextTokens: 1,
+        turns: 1,
+      },
+      discoveryDiagnostics: [],
+      missingSkills: [],
+      scope: "both",
+      skills: [],
+    };
+
+    const text = Array.from(
+      { length: 12 },
+      (_, index) => `Line ${index + 1}`,
+    ).join("\n");
+
+    const collapsed = renderAgentResult(
+      { content: [{ type: "text", text }], details },
+      false,
+      theme,
+    )
+      .render(120)
+      .join("\n");
+    expect(collapsed).toContain("Line 1");
+    expect(collapsed).toContain("... (2 more lines)");
+    expect(collapsed).toContain("to expand");
+    expect(collapsed).not.toContain("Line 12");
+
+    const expanded = renderAgentResult(
+      { content: [{ type: "text", text }], details },
+      true,
+      theme,
+    )
+      .render(120)
+      .join("\n");
+    expect(expanded).toContain("Line 12");
+    expect(expanded).toContain("to collapse");
   });
 
   it("preserves arbitrary workflow JSON outputs losslessly", () => {

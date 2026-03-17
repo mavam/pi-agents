@@ -1022,6 +1022,14 @@ function previewText(text: string, expanded: boolean, maxLines = 8): string {
   return `${lines.slice(0, maxLines).join("\n")}\n... (${remaining} more lines)`;
 }
 
+function isPreviewTruncated(
+  text: string,
+  expanded: boolean,
+  maxLines: number,
+): boolean {
+  return !expanded && text.split("\n").length > maxLines;
+}
+
 // ---------------------------------------------------------------------------
 // Line wrapping / renderer
 // ---------------------------------------------------------------------------
@@ -1077,6 +1085,38 @@ function pushSection(
   lines.push(theme.fg("toolOutput", body));
 }
 
+function pushPreviewSection(
+  lines: string[],
+  title: string,
+  body: string | undefined,
+  expanded: boolean,
+  maxLines: number,
+  theme: Theme,
+): void {
+  if (!body) {
+    return;
+  }
+  if (lines.length > 0) {
+    lines.push("");
+  }
+  lines.push(theme.fg("toolTitle", theme.bold(title)));
+
+  const preview = previewText(body, expanded, maxLines);
+  const previewLines = preview.split("\n");
+  const truncated = isPreviewTruncated(body, expanded, maxLines);
+
+  for (const [index, line] of previewLines.entries()) {
+    const isMoreLines = truncated && index === previewLines.length - 1;
+    lines.push(theme.fg(isMoreLines ? "dim" : "toolOutput", line));
+  }
+
+  if (body.split("\n").length > maxLines) {
+    lines.push(
+      `(${notificationKeyHint(theme, expanded ? "to collapse" : "to expand")})`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tool call / result renderers
 // ---------------------------------------------------------------------------
@@ -1095,7 +1135,7 @@ export function renderAgentCall(
   if (metadata) {
     lines.push(theme.fg("muted", metadata));
   }
-  pushSection(lines, "Task", previewText(args.task, false, 6), theme);
+  pushPreviewSection(lines, "Task", args.task, false, 6, theme);
   return createRenderer(lines);
 }
 
@@ -1135,7 +1175,7 @@ export function renderAgentResult(
   const rawOutput = extractTextContent(result);
   const output = rawOutput ? stripResultXmlEnvelope(rawOutput) : rawOutput;
   if (output) {
-    pushSection(lines, "Output", previewText(output, expanded, 10), theme);
+    pushPreviewSection(lines, "Output", output, expanded, 10, theme);
   }
   return createRenderer(lines);
 }
@@ -1209,7 +1249,7 @@ export function renderWorkflowResult(
           formatOutput(details.result.output))
       : stripResultXmlEnvelope(extractTextContent(result));
   if (output) {
-    pushSection(lines, "Result", previewText(output, expanded, 12), theme);
+    pushPreviewSection(lines, "Result", output, expanded, 12, theme);
   }
   if (details.run.error) {
     pushSection(lines, "Error", details.run.error, theme);
@@ -1445,10 +1485,7 @@ export function buildWidgetLines(
       for (const treeLine of tree) {
         // Skip the root node line when its label duplicates the run header.
         // Strip ANSI escapes + icon prefix for comparison.
-        const stripped = treeLine.replace(
-          new RegExp("\\u001b\\[[0-9;]*m", "g"),
-          "",
-        );
+        const stripped = treeLine.replace(/\u001b\[[0-9;]*m/g, "");
         const bare = stripped.replace(/^\S+\s/, "");
         if (bare === run.label || bare === (run.flow.label ?? run.flow.id)) {
           continue;

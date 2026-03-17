@@ -301,13 +301,29 @@ function aggregatedStatus(
   return latest?.status;
 }
 
-function flowIcon(
-  spec: FlowSpec,
-  specPath: string,
-  nodeIndex: NodeIndex,
-): string {
-  const status = aggregatedStatus(nodeIndex.bySpecPath.get(specPath));
-  return status ? iconForStatus(status) : iconForKind(spec.kind);
+function colorIcon(icon: string, theme: Theme): string {
+  switch (icon) {
+    case "✔":
+      return theme.fg("success", icon);
+    case "✘":
+      return theme.fg("error", icon);
+    case "⠹":
+      return theme.fg("accent", icon);
+    case "◌":
+      return theme.fg("dim", icon);
+    case "■":
+      return theme.fg("warning", icon);
+    case "○":
+      return theme.fg("dim", icon);
+    default:
+      return theme.fg("accent", icon);
+  }
+}
+
+function flowIcon(spec: FlowSpec, specPath: string, ctx: TreeContext): string {
+  const status = aggregatedStatus(ctx.nodeIndex.bySpecPath.get(specPath));
+  const icon = status ? iconForStatus(status) : iconForKind(spec.kind);
+  return ctx.theme ? colorIcon(icon, ctx.theme) : icon;
 }
 
 function spawnLabel(spec: SpawnFlowSpec): string {
@@ -393,6 +409,13 @@ function loopLabel(
 interface TreeContext {
   lines: string[];
   nodeIndex: NodeIndex;
+  theme?: Theme;
+}
+
+/** Dim runs of tree-drawing characters (├─ └─ │) when a theme is available. */
+function dimChrome(text: string, theme: Theme | undefined): string {
+  if (!theme) return text;
+  return text.replace(/[├└│─]+/g, (run) => theme.fg("dim", run));
 }
 
 /**
@@ -431,7 +454,7 @@ function emitSpec(
 ): void {
   switch (spec.kind) {
     case "spawn": {
-      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx);
       ctx.lines.push(`${prefix}${connector} ${icon} ${spawnLabel(spec)}`);
       return;
     }
@@ -462,7 +485,7 @@ function emitSpec(
       return;
     }
     case "fork": {
-      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx);
       ctx.lines.push(`${prefix}${connector} ${icon} ${forkLabel(spec)}`);
 
       const keys = Object.keys(spec.branches).sort();
@@ -477,7 +500,7 @@ function emitSpec(
         const branchPath = forkBranchPath(specPath, key);
 
         if (branchSpec.kind === "spawn") {
-          const spawnIcon = flowIcon(branchSpec, branchPath, ctx.nodeIndex);
+          const spawnIcon = flowIcon(branchSpec, branchPath, ctx);
           ctx.lines.push(
             `${childPrefix}${branchConnector} ${spawnIcon} ${spawnLabel(branchSpec)}: ${key}`,
           );
@@ -500,12 +523,12 @@ function emitSpec(
       return;
     }
     case "join": {
-      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx);
       ctx.lines.push(`${prefix}${connector} ${icon} ${joinLabel(spec)}`);
       return;
     }
     case "loop": {
-      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx);
       ctx.lines.push(
         `${prefix}${connector} ${icon} ${loopLabel(spec, specPath, ctx.nodeIndex)}`,
       );
@@ -538,10 +561,12 @@ export function formatFlowTree(
   flow: FlowSpec,
   runtimeState?: RunRuntimeState,
   runId?: string,
+  theme?: Theme,
 ): string[] {
   const ctx: TreeContext = {
     lines: [],
     nodeIndex: buildNodeIndex(runtimeState, runId),
+    theme,
   };
 
   if (flow.kind === "sequence") {
@@ -557,7 +582,7 @@ export function formatFlowTree(
     emitRootChild(flow, ROOT_FLOW_PATH, ctx);
   }
 
-  return ctx.lines;
+  return theme ? ctx.lines.map((line) => dimChrome(line, theme)) : ctx.lines;
 }
 
 /** Emit a root-level child with no tree prefix. */
@@ -568,7 +593,7 @@ function emitRootChild(
 ): void {
   switch (spec.kind) {
     case "spawn": {
-      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx);
       ctx.lines.push(`${icon} ${spawnLabel(spec)}`);
       return;
     }
@@ -580,7 +605,7 @@ function emitRootChild(
       return;
     }
     case "fork": {
-      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx);
       ctx.lines.push(`${icon} ${forkLabel(spec)}`);
 
       const keys = Object.keys(spec.branches).sort();
@@ -593,7 +618,7 @@ function emitRootChild(
         const branchPath = forkBranchPath(specPath, key);
 
         if (branchSpec.kind === "spawn") {
-          const spawnIcon = flowIcon(branchSpec, branchPath, ctx.nodeIndex);
+          const spawnIcon = flowIcon(branchSpec, branchPath, ctx);
           ctx.lines.push(
             `${branchConnector} ${spawnIcon} ${spawnLabel(branchSpec)}: ${key}`,
           );
@@ -616,12 +641,12 @@ function emitRootChild(
       return;
     }
     case "join": {
-      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx);
       ctx.lines.push(`${icon} ${joinLabel(spec)}`);
       return;
     }
     case "loop": {
-      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx);
       ctx.lines.push(`${icon} ${loopLabel(spec, specPath, ctx.nodeIndex)}`);
 
       const bodyPath = loopBodyPath(specPath);
@@ -1012,11 +1037,11 @@ export function renderWorkflowCall(args: WorkflowParams, theme: Theme) {
     lines.push(theme.fg("muted", metadata));
   }
 
-  const tree = formatFlowTree(normalized.flow);
+  const tree = formatFlowTree(normalized.flow, undefined, undefined, theme);
   if (tree.length > 0) {
     lines.push("");
     for (const treeLine of tree) {
-      lines.push(theme.fg("toolOutput", treeLine));
+      lines.push(treeLine);
     }
   }
 
@@ -1286,19 +1311,18 @@ export function buildWidgetLines(
         run.flow.steps[0]?.kind === "spawn");
 
     if (!isTrivial) {
-      const tree = formatFlowTree(run.flow, runtimeState, run.id);
+      const tree = formatFlowTree(run.flow, runtimeState, run.id, theme);
       for (const treeLine of tree) {
         // Skip the root node line when its label duplicates the run header.
-        // Strip icon prefix (any single char + space) for comparison.
-        const bare = treeLine.replace(/^\S+\s/, "");
+        // Strip ANSI escapes + icon prefix for comparison.
+        const stripped = treeLine.replace(/\x1b\[[0-9;]*m/g, "");
+        const bare = stripped.replace(/^\S+\s/, "");
         if (bare === run.label || bare === (run.flow.label ?? run.flow.id)) {
           continue;
         }
         // Replace the static running icon with the animated spinner frame.
         const themed = treeLine.replaceAll("⠹", spinner);
-        lines.push(
-          truncate(`${theme.fg("dim", indent)}${theme.fg("muted", themed)}`),
-        );
+        lines.push(truncate(`${theme.fg("dim", indent)}${themed}`));
       }
     }
   }

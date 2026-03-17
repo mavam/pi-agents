@@ -279,7 +279,7 @@ class FlowWatchComponent implements Component {
 
     const spinner = SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length] ?? "⠹";
     const tree = replaceRunningIcons(
-      formatFlowTree(run.flow, this.runtimeState, run.id),
+      formatFlowTree(run.flow, this.runtimeState, run.id, this.theme),
       spinner,
     );
     const lines: string[] = [

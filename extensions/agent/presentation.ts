@@ -574,63 +574,46 @@ export function formatOutput(value: unknown): string {
 // XML envelope formatting — structured tool results for the LLM
 // ---------------------------------------------------------------------------
 
-function escapeXmlAttr(text: string): string {
+function escapeXmlText(text: string): string {
   return text
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
-/**
- * Try to format a `{ branches, errors }` output object as XML `<branch>`
- * and `<error>` elements.  Returns `undefined` when the value does not
- * match the expected shape (so callers can fall back to `formatOutput`).
- */
-function tryFormatBranchesXml(output: unknown): string | undefined {
-  if (typeof output !== "object" || output === null) return undefined;
-  const obj = output as Record<string, unknown>;
-  if (
-    !("branches" in obj) ||
-    typeof obj.branches !== "object" ||
-    obj.branches === null
-  ) {
-    return undefined;
-  }
+function unescapeXmlText(text: string): string {
+  return text
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
 
-  const branches = obj.branches as Record<string, unknown>;
-  const errors =
-    "errors" in obj && typeof obj.errors === "object" && obj.errors !== null
-      ? (obj.errors as Record<string, string>)
-      : {};
+function escapeXmlAttr(text: string): string {
+  return escapeXmlText(text)
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
 
-  const branchKeys = Object.keys(branches);
-  const errorKeys = Object.keys(errors);
-  if (branchKeys.length === 0 && errorKeys.length === 0) return undefined;
-
-  const parts: string[] = [];
-  for (const [key, value] of Object.entries(branches)) {
-    parts.push(
-      `<branch name="${escapeXmlAttr(key)}">\n${formatOutput(value)}\n</branch>`,
-    );
-  }
-  for (const [key, value] of Object.entries(errors)) {
-    if (value) {
-      parts.push(`<error name="${escapeXmlAttr(key)}">${value}</error>`);
-    }
-  }
-  return parts.join("\n");
+function formatXmlLeaf(tag: string, text: string, attrs?: string): string {
+  const attrText = attrs ? ` ${attrs}` : "";
+  return `<${tag}${attrText}>${escapeXmlText(text)}</${tag}>`;
 }
 
 function formatFlowResultInnerXml(result: FlowNodeResult): string {
-  const branchXml = tryFormatBranchesXml(result.output);
-  if (branchXml !== undefined) return branchXml;
-  return formatOutput(result.output);
+  const output = formatOutput(result.output);
+  const format = typeof result.output === "string" ? "text" : "json";
+  return formatXmlLeaf("output", output, `format="${escapeXmlAttr(format)}"`);
 }
 
 /** Wrap a single-agent result in an XML envelope for the LLM. */
 export function formatAgentResultXml(agent: string, text: string): string {
-  return `<agent_result agent="${escapeXmlAttr(agent)}">\n${text}\n</agent_result>`;
+  return [
+    `<agent_result agent="${escapeXmlAttr(agent)}">`,
+    formatXmlLeaf("text", text),
+    "</agent_result>",
+  ].join("\n");
 }
 
 /** Wrap a workflow result in an XML envelope for the LLM. */
@@ -638,11 +621,18 @@ export function formatWorkflowResultXml(
   result: FlowNodeResult | undefined,
   runId: string,
 ): string {
-  if (!result) {
-    return `<workflow_result run="${escapeXmlAttr(runId)}">completed</workflow_result>`;
+  const attrs = [`run="${escapeXmlAttr(runId)}"`];
+  if (result) {
+    attrs.push(`kind="${escapeXmlAttr(result.kind)}"`);
   }
-  const inner = formatFlowResultInnerXml(result);
-  return `<workflow_result>\n${inner}\n</workflow_result>`;
+
+  return [
+    `<workflow_result ${attrs.join(" ")}>`,
+    result
+      ? formatFlowResultInnerXml(result)
+      : formatXmlLeaf("status", "completed"),
+    "</workflow_result>",
+  ].join("\n");
 }
 
 /**
@@ -650,10 +640,20 @@ export function formatWorkflowResultXml(
  * renderers show clean text.
  */
 export function stripResultXmlEnvelope(text: string): string {
-  const match = text.match(
-    /^<(?:agent_result|workflow_result)[^>]*>\n?([\s\S]*?)\n?<\/(?:agent_result|workflow_result)>$/,
-  );
-  return match?.[1] ?? text;
+  const patterns = [
+    /^<agent_result\b[^>]*>\s*<text>([\s\S]*?)<\/text>\s*<\/agent_result>$/,
+    /^<workflow_result\b[^>]*>\s*<output\b[^>]*>([\s\S]*?)<\/output>\s*<\/workflow_result>$/,
+    /^<workflow_result\b[^>]*>\s*<status>([\s\S]*?)<\/status>\s*<\/workflow_result>$/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1] !== undefined) {
+      return unescapeXmlText(match[1]);
+    }
+  }
+
+  return text;
 }
 
 function firstMeaningfulLine(value: unknown): string {

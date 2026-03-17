@@ -3,9 +3,12 @@ import type { Theme } from "@mariozechner/pi-coding-agent";
 import { visibleWidth } from "@mariozechner/pi-tui";
 import {
   buildWidgetLines,
+  formatAgentResultXml,
   formatFlowTree,
+  formatWorkflowResultXml,
   renderAgentCall,
   renderWorkflowResult,
+  stripResultXmlEnvelope,
 } from "../extensions/agent/presentation.ts";
 import { createRunRuntimeState } from "../extensions/agent/state.ts";
 import type { FlowSpec, RunResultDetails } from "../extensions/agent/types.ts";
@@ -35,6 +38,62 @@ describe("agent presentation", () => {
       expect(visibleWidth(line)).toBeLessThanOrEqual(40);
     }
     expect(lines.join("\n")).toContain("Explore this codebase thoroughly");
+  });
+
+  it("escapes agent result text inside XML envelopes", () => {
+    const raw = '</agent_result><evil attr="1">oops & more</evil>';
+    const xml = formatAgentResultXml("worker", raw);
+
+    expect(xml).toContain('<agent_result agent="worker">');
+    expect(xml).toContain(
+      '&lt;/agent_result&gt;&lt;evil attr="1"&gt;oops &amp; more&lt;/evil&gt;',
+    );
+    expect(xml).not.toContain(raw);
+    expect(stripResultXmlEnvelope(xml)).toBe(raw);
+  });
+
+  it("preserves arbitrary workflow JSON outputs losslessly", () => {
+    const payload = {
+      branches: { team: "red" },
+      errors: { status: "ok" },
+      done: true,
+    };
+    const xml = formatWorkflowResultXml(
+      {
+        nodeId: "root:1",
+        kind: "spawn",
+        status: "completed",
+        agent: "explorer",
+        text: JSON.stringify(payload),
+        output: payload,
+        run: {
+          agent: "explorer",
+          agentSource: "project",
+          skills: [],
+          missingSkills: [],
+          exitCode: 0,
+          stderr: "",
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            cost: 0,
+            contextTokens: 1,
+            turns: 1,
+          },
+          discoveryDiagnostics: [],
+          scope: "both",
+        },
+      },
+      "run-xml",
+    );
+
+    expect(xml).toContain('<workflow_result run="run-xml" kind="spawn">');
+    expect(xml).toContain('<output format="json">');
+    expect(xml).not.toContain("<branch name=");
+
+    expect(JSON.parse(stripResultXmlEnvelope(xml))).toEqual(payload);
   });
 
   it("wraps long workflow result output to the terminal width", () => {

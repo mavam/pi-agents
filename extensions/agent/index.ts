@@ -28,7 +28,6 @@ import {
   formatAgentResultXml,
   formatAgentsOverview,
   formatFlowCommandOutput,
-  formatOutput,
   formatRunDetailsText,
   formatRunOverviewText,
   formatWorkflowResultXml,

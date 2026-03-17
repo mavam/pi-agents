@@ -172,6 +172,61 @@ describe("agent presentation", () => {
     }
   });
 
+  it("renders run notifications collapsed with an expand hint and expanded with full output", () => {
+    const details: RunNotificationDetails = {
+      kind: "spawn_update",
+      runId: "run-notify-12345678",
+      runLabel: "Sequence",
+      status: "completed",
+      nodeId: "node-2",
+      nodeLabel: "explorer",
+      agent: "explorer",
+      summary: [
+        "Line 1",
+        "Line 2",
+        "Line 3",
+        "Line 4",
+        "Line 5",
+        "Line 6",
+      ].join("\n"),
+      timestamp: Date.now(),
+    };
+
+    const collapsed = renderRunNotificationMessage(
+      {
+        customType: "pi-agents:notification",
+        content: "",
+        display: true,
+        details,
+      },
+      { expanded: false },
+      theme,
+    )
+      .render(120)
+      .join("\n");
+    expect(collapsed).toContain("Line 1");
+    expect(collapsed).toContain("... (2 more lines)");
+    expect(collapsed).toContain("to expand");
+    expect(collapsed).not.toContain("agent=explorer");
+
+    const expanded = renderRunNotificationMessage(
+      {
+        customType: "pi-agents:notification",
+        content: "",
+        display: true,
+        details,
+      },
+      { expanded: true },
+      theme,
+    )
+      .render(120)
+      .join("\n");
+    expect(expanded).toContain("agent=explorer");
+    expect(expanded).toContain("node=node-2");
+    expect(expanded).toContain("Line 6");
+    expect(expanded).toContain("to collapse");
+  });
+
   it("collapses structured workflow outputs by default", () => {
     const details: RunResultDetails = {
       run: {

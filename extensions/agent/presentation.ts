@@ -5,7 +5,13 @@ import type {
   SessionEntry,
   Theme,
 } from "@mariozechner/pi-coding-agent";
-import { Box, Text, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { editorKey } from "@mariozechner/pi-coding-agent";
+import {
+  Box,
+  Text,
+  truncateToWidth,
+  wrapTextWithAnsi,
+} from "@mariozechner/pi-tui";
 import type { Agent, Scope } from "./agents.js";
 import {
   forkBranchPath,
@@ -1101,6 +1107,20 @@ export function summarizeWorkflowOutput(value: unknown): string | undefined {
   return summarizeStructuredWorkflowOutput(value) ?? firstMeaningfulLine(value);
 }
 
+function canExpandRunNotification(details: RunNotificationDetails): boolean {
+  if (details.kind === "run_final") return true;
+  if (details.agent || details.error) return true;
+  if (details.summary && details.summary.split("\n").length > 4) return true;
+  return false;
+}
+
+function notificationKeyHint(theme: Theme, description: string): string {
+  return (
+    theme.fg("dim", editorKey("expandTools")) +
+    theme.fg("muted", ` ${description}`)
+  );
+}
+
 export function renderRunNotificationMessage(
   message: CustomMessage<RunNotificationDetails>,
   options: { expanded: boolean },
@@ -1124,12 +1144,18 @@ export function renderRunNotificationMessage(
     lines.push(
       theme.fg("dim", new Date(details.timestamp).toLocaleTimeString()),
     );
+    if (canExpandRunNotification(details)) {
+      lines.push(`(${notificationKeyHint(theme, "to collapse")})`);
+    }
   } else if (details.error) {
-    lines.push(theme.fg("error", details.error));
+    lines.push(theme.fg("error", previewText(details.error, false, 4)));
   } else if (details.summary) {
-    lines.push(theme.fg("toolOutput", details.summary));
+    lines.push(theme.fg("toolOutput", previewText(details.summary, false, 4)));
   } else if (details.kind === "run_final") {
     lines.push(theme.fg("dim", `Use /flow ${details.runId} to inspect.`));
+  }
+  if (!options.expanded && canExpandRunNotification(details)) {
+    lines.push(`(${notificationKeyHint(theme, "to expand")})`);
   }
 
   const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));

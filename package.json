@@ -11,8 +11,7 @@
     "pi-package",
     "pi-extension",
     "coding-agent",
-    "agent-orchestration",
-    "tenzir"
+    "agent-orchestration"
   ],
   "author": "Tenzir",
   "license": "Apache-2.0",

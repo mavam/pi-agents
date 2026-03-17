@@ -4,6 +4,7 @@ type: feature
 authors:
   - mavam
   - codex
+  - claude
 created: 2026-03-15T00:00:00Z
 ---
 
@@ -46,14 +47,15 @@ until the reviewer signals `done` (or three iterations pass):
           "kind": "spawn",
           "id": "review",
           "agent": "reviewer",
-          "task": "Review the current patch. Return JSON with done, findings, and summary.",
+          "task": "Review the current patch. Return JSON with done:boolean, findings:string[], and summary:string.",
           "output": "json"
         },
         {
           "kind": "spawn",
           "id": "implement",
           "agent": "engineer",
-          "task": "Implement the latest review findings."
+          "task": "Implement the latest review findings.",
+          "output": "text"
         }
       ]
     }

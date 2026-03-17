@@ -221,7 +221,7 @@ export function formatFlowInspectText(
     lines.push(`Error: ${run.error}`);
   }
 
-  const tree = formatFlowTree(run.flow, runtimeState, run.id);
+  const tree = formatFlowTree(run.flow);
   if (tree.length > 0) {
     lines.push("", "Structure:", ...tree);
   }

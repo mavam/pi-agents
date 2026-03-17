@@ -4,18 +4,27 @@ import { visibleWidth } from "@mariozechner/pi-tui";
 import {
   buildWidgetLines,
   formatAgentResultXml,
+  formatFlowInspectText,
   formatFlowTree,
   formatWorkflowResultXml,
   renderAgentCall,
+  renderRunNotificationMessage,
   renderWorkflowResult,
   stripResultXmlEnvelope,
 } from "../extensions/agent/presentation.ts";
 import { createRunRuntimeState } from "../extensions/agent/state.ts";
-import type { FlowSpec, RunResultDetails } from "../extensions/agent/types.ts";
+import type {
+  FlowSpec,
+  RunNotificationDetails,
+  RunResultDetails,
+} from "../extensions/agent/types.ts";
 
 const theme = {
   fg(_color: string, text: string) {
     return `\u001b[36m${text}\u001b[39m`;
+  },
+  bg(_color: string, text: string) {
+    return text;
   },
   bold(text: string) {
     return `\u001b[1m${text}\u001b[22m`;
@@ -487,6 +496,86 @@ describe("agent presentation", () => {
     const lines = formatFlowTree(flow, runtimeState, "r1");
 
     expect(lines).toEqual(["✔ analyzer", "⠹ reviewer"]);
+  });
+
+  it("keeps inspect structure static even when runtime state has live statuses", () => {
+    const flow: FlowSpec = {
+      kind: "fork",
+      id: "parallel",
+      label: "Parallel codebase exploration",
+      branches: {
+        developer_facing: {
+          kind: "spawn",
+          id: "developer-facing",
+          label: "developer-facing",
+          agent: "explorer",
+          task: "dev",
+        },
+        user_facing: {
+          kind: "spawn",
+          id: "user-facing",
+          label: "user-facing",
+          agent: "explorer",
+          task: "user",
+        },
+      },
+    };
+
+    const runtimeState = createRunRuntimeState();
+    const now = Date.now();
+    runtimeState.runs.set("r-inspect", {
+      id: "r-inspect",
+      rootNodeId: "fork:1",
+      label: "Parallel codebase exploration",
+      status: "running",
+      startedAt: now,
+      depth: 0,
+      flow,
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.nodes.set("n-fork", {
+      id: "n-fork",
+      runId: "r-inspect",
+      specId: "parallel",
+      specPath: "flow",
+      kind: "fork",
+      status: "waiting",
+      startedAt: now,
+    });
+    runtimeState.nodes.set("n-dev", {
+      id: "n-dev",
+      runId: "r-inspect",
+      specId: "developer-facing",
+      specPath: "flow.branches.developer_facing",
+      kind: "spawn",
+      status: "completed",
+      branchKey: "developer_facing",
+      startedAt: now,
+      completedAt: now + 1,
+    });
+    runtimeState.nodes.set("n-user", {
+      id: "n-user",
+      runId: "r-inspect",
+      specId: "user-facing",
+      specPath: "flow.branches.user_facing",
+      kind: "spawn",
+      status: "running",
+      branchKey: "user_facing",
+      startedAt: now + 1,
+    });
+    runtimeState.order.push("r-inspect");
+
+    const text = formatFlowInspectText(runtimeState, "r-inspect");
+
+    expect(text).toContain("Structure:");
+    expect(text).toContain("◇ Parallel codebase exploration");
+    expect(text).toContain("├─ developer_facing → ● developer-facing");
+    expect(text).toContain("└─ user_facing → ● user-facing");
+    expect(text).not.toContain("◌ Parallel codebase exploration");
+    expect(text).not.toContain("✔ developer-facing");
+    expect(text).not.toContain("⠹ user-facing");
+    expect(text).toContain("Nodes: 1 running · 1 waiting · 1 completed");
   });
 
   it("renders a single spawn without tree connectors", () => {

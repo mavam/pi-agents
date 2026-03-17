@@ -816,7 +816,7 @@ describe("/flow command", () => {
 
     const content = messages[0]?.content ?? "";
     expect(content).toContain("Structure:");
-    expect(content).toContain("✔ Codebase Explorer");
+    expect(content).toContain("◇ Codebase Explorer");
     expect(content).toContain("Latest node: ✔ User-Facing Explorer");
     expect(content).not.toContain("Latest node: ✔ spawn");
     expect(content).not.toContain("Latest node: ✔ fork explore:1");

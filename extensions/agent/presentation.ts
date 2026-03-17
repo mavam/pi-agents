@@ -998,10 +998,11 @@ function notificationStatusTone(
 }
 
 function formatNotificationTitle(details: RunNotificationDetails): string {
+  const icon = iconForStatus(details.status);
   if (details.kind === "spawn_update") {
-    return `${details.runLabel} · ${details.nodeLabel} · ${details.status}`;
+    return `${icon} ${details.runLabel} · ${details.nodeLabel}`;
   }
-  return `${details.runLabel} · ${details.status}`;
+  return `${icon} ${details.runLabel}`;
 }
 
 function formatNotificationBody(details: RunNotificationDetails): string[] {

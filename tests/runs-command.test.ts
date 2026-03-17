@@ -934,7 +934,7 @@ describe("detached workflow notifications", () => {
       (message) => message.customType === "pi-agents:notification",
     );
     expect(notifications[0]?.content).toContain("Only Step");
-    expect(notifications[0]?.content).toContain("completed");
+    expect(notifications[0]?.content).toContain("✔");
     expect(notifications[1]?.content).toContain("Detached Notify");
     expect(notifications[1]?.content).toContain("Use /flow");
   });

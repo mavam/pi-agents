@@ -6,6 +6,7 @@ import {
   formatAgentResultXml,
   formatFlowInspectText,
   formatFlowTree,
+  formatNodeResultLines,
   formatWorkflowResultXml,
   renderAgentCall,
   renderRunNotificationMessage,
@@ -15,8 +16,10 @@ import {
 import { createRunRuntimeState } from "../extensions/agent/state.ts";
 import type {
   FlowSpec,
+  RunNode,
   RunNotificationDetails,
   RunResultDetails,
+  WorkflowRun,
 } from "../extensions/agent/types.ts";
 
 const theme = {
@@ -631,6 +634,86 @@ describe("agent presentation", () => {
     expect(text).not.toContain("✔ developer-facing");
     expect(text).not.toContain("⠹ user-facing");
     expect(text).toContain("Nodes: 1 running · 1 waiting · 1 completed");
+  });
+
+  it("formats recent node result lines for live watch mode", () => {
+    const flow: FlowSpec = {
+      kind: "sequence",
+      steps: [
+        {
+          kind: "spawn",
+          id: "first",
+          label: "First Step",
+          agent: "worker",
+          task: "one",
+        },
+        {
+          kind: "spawn",
+          id: "second",
+          label: "Second Step",
+          agent: "worker",
+          task: "two",
+        },
+        {
+          kind: "spawn",
+          id: "third",
+          label: "Third Step",
+          agent: "worker",
+          task: "three",
+        },
+      ],
+    };
+    const run: WorkflowRun = {
+      id: "r-watch",
+      rootNodeId: "root:1",
+      label: "Watch Me",
+      status: "running",
+      startedAt: Date.now(),
+      depth: 0,
+      flow,
+      cwd: "/tmp",
+      scope: "both",
+    };
+    const nodes: RunNode[] = [
+      {
+        id: "root:1",
+        runId: "r-watch",
+        specPath: "flow",
+        kind: "sequence",
+        status: "running",
+      },
+      {
+        id: "first:1",
+        runId: "r-watch",
+        specId: "first",
+        specPath: "flow.steps[0]",
+        kind: "spawn",
+        status: "completed",
+        output: { kind: "spawn", agent: "worker", output: "alpha" },
+      },
+      {
+        id: "second:1",
+        runId: "r-watch",
+        specId: "second",
+        specPath: "flow.steps[1]",
+        kind: "spawn",
+        status: "failed",
+        error: "boom",
+      },
+      {
+        id: "third:1",
+        runId: "r-watch",
+        specId: "third",
+        specPath: "flow.steps[2]",
+        kind: "spawn",
+        status: "completed",
+        output: { kind: "spawn", agent: "worker", output: "gamma" },
+      },
+    ];
+
+    const lines = formatNodeResultLines(run, nodes, { limit: 2 });
+
+    expect(lines).toEqual(["- ✘ Second Step: boom", "- ✔ Third Step: gamma"]);
   });
 
   it("renders a single spawn without tree connectors", () => {

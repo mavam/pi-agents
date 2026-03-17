@@ -14,6 +14,7 @@ import {
 import type { LiveRunRegistry } from "./live-runs.js";
 import {
   formatFlowTree,
+  formatNodeResultLines,
   formatOutput,
   formatRunStatus,
   resolveFlowId,
@@ -293,9 +294,26 @@ class FlowWatchComponent implements Component {
     if (summary) {
       lines.push("", this.theme.fg("muted", summary));
     }
+
+    const nodeResults = formatNodeResultLines(
+      run,
+      getRunNodes(this.runtimeState, run.id),
+    );
+    if (nodeResults.length > 0) {
+      lines.push(
+        "",
+        this.theme.fg(
+          "muted",
+          run.status === "running" ? "Results so far:" : "Node Results:",
+        ),
+        ...nodeResults.map((line) => this.theme.fg("toolOutput", line)),
+      );
+    }
+
     const result = resultSummary(run.result);
     if (result && run.status !== "running") {
-      lines.push("", this.theme.fg("toolOutput", result));
+      lines.push("", this.theme.fg("muted", "Result:"));
+      lines.push(this.theme.fg("toolOutput", result));
     }
     if (run.error) {
       lines.push("", this.theme.fg("error", run.error));

@@ -1,6 +1,5 @@
 import type {
   AgentToolResult,
-  CustomMessage,
   ExtensionContext,
   SessionEntry,
   Theme,
@@ -49,6 +48,11 @@ import type {
 } from "./types.js";
 
 export const RUN_NOTIFICATION_CUSTOM_TYPE = "pi-agents:notification";
+
+interface RenderableCustomMessage<T> {
+  content: string | unknown[];
+  details?: T;
+}
 
 // ---------------------------------------------------------------------------
 // Agent listing
@@ -289,9 +293,10 @@ function formatInspectNodeLine(
   return `- ${iconForStatus(node.status)} ${label}${suffix.length > 0 ? ` (${suffix.join(", ")})` : ""}: ${summary}`;
 }
 
-function formatInspectNodeResults(
+export function formatNodeResultLines(
   run: WorkflowRun,
   nodes: RunNode[],
+  options?: { limit?: number },
 ): string[] {
   const interesting = nodes.filter(
     (node) =>
@@ -302,10 +307,21 @@ function formatInspectNodeResults(
       (node.output !== undefined || node.error),
   );
 
-  const lines = interesting
+  const selected =
+    options?.limit && options.limit > 0
+      ? interesting.slice(-options.limit)
+      : interesting;
+
+  return selected
     .map((node) => formatInspectNodeLine(run.flow, node))
     .filter((line): line is string => Boolean(line));
+}
 
+function formatInspectNodeResults(
+  run: WorkflowRun,
+  nodes: RunNode[],
+): string[] {
+  const lines = formatNodeResultLines(run, nodes);
   return lines.length > 0 ? ["", "Node Results:", ...lines] : [];
 }
 
@@ -1279,7 +1295,7 @@ function notificationKeyHint(theme: Theme, description: string): string {
 }
 
 export function renderRunNotificationMessage(
-  message: CustomMessage<RunNotificationDetails>,
+  message: RenderableCustomMessage<RunNotificationDetails>,
   options: { expanded: boolean },
   theme: Theme,
 ) {
@@ -1429,7 +1445,10 @@ export function buildWidgetLines(
       for (const treeLine of tree) {
         // Skip the root node line when its label duplicates the run header.
         // Strip ANSI escapes + icon prefix for comparison.
-        const stripped = treeLine.replace(/\x1b\[[0-9;]*m/g, "");
+        const stripped = treeLine.replace(
+          new RegExp("\\u001b\\[[0-9;]*m", "g"),
+          "",
+        );
         const bare = stripped.replace(/^\S+\s/, "");
         if (bare === run.label || bare === (run.flow.label ?? run.flow.id)) {
           continue;

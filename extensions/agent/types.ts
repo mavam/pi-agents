@@ -226,6 +226,29 @@ export interface RunResultDetails {
   result?: FlowNodeResult;
 }
 
+export type RunNotificationDetails =
+  | {
+      kind: "spawn_update";
+      runId: string;
+      runLabel: string;
+      status: "completed" | "failed";
+      nodeId: string;
+      nodeLabel: string;
+      agent?: string;
+      summary?: string;
+      error?: string;
+      timestamp: number;
+    }
+  | {
+      kind: "run_final";
+      runId: string;
+      runLabel: string;
+      status: Exclude<RunStatus, "running">;
+      summary?: string;
+      error?: string;
+      timestamp: number;
+    };
+
 export type RunEvent =
   | {
       type: "run_created";

@@ -85,6 +85,7 @@ interface ExecutorOptions {
 export interface RunExecutionControls {
   appendEvent?: (event: RunEvent) => void;
   onRunCreated?: (runId: string) => void;
+  onEvent?: (event: RunEvent) => void;
 }
 
 export class RunExecutionError extends Error {
@@ -739,6 +740,7 @@ export class RunExecutor {
     }
 
     this.options.onStateChanged?.(ctx);
+    controls?.onEvent?.(event);
   }
 
   private buildSnapshot(runId: string): RunResultDetails {

@@ -1,10 +1,11 @@
 import type {
   AgentToolResult,
+  CustomMessage,
   ExtensionContext,
   SessionEntry,
   Theme,
 } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { Box, Text, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { Agent, Scope } from "./agents.js";
 import {
   forkBranchPath,
@@ -33,11 +34,14 @@ import type {
   JoinFlowSpec,
   LoopFlowSpec,
   RunNode,
+  RunNotificationDetails,
   RunResultDetails,
   SpawnFlowSpec,
   SpawnNodeResult,
   WorkflowParams,
 } from "./types.js";
+
+export const RUN_NOTIFICATION_CUSTOM_TYPE = "pi-agents:notification";
 
 // ---------------------------------------------------------------------------
 // Agent listing
@@ -978,6 +982,104 @@ export function renderWorkflowResult(
     pushSection(lines, "Error", details.run.error, theme);
   }
   return createRenderer(lines);
+}
+
+function notificationStatusTone(
+  status: RunNotificationDetails["status"],
+): "success" | "warning" | "error" | "accent" {
+  switch (status) {
+    case "completed":
+      return "success";
+    case "failed":
+      return "error";
+    case "aborted":
+      return "warning";
+  }
+}
+
+function formatNotificationTitle(details: RunNotificationDetails): string {
+  if (details.kind === "spawn_update") {
+    return `${details.runLabel} · ${details.nodeLabel} · ${details.status}`;
+  }
+  return `${details.runLabel} · ${details.status}`;
+}
+
+function formatNotificationBody(details: RunNotificationDetails): string[] {
+  const lines: string[] = [];
+
+  if (details.kind === "spawn_update" && details.agent) {
+    lines.push(`agent=${details.agent}`);
+  }
+
+  lines.push(`run=${details.runId.slice(0, 8)}`);
+
+  if (details.kind === "spawn_update") {
+    lines.push(`node=${details.nodeId}`);
+  }
+
+  if (details.summary) {
+    lines.push("");
+    lines.push(details.summary);
+  }
+  if (details.error) {
+    lines.push("");
+    lines.push(details.error);
+  }
+
+  if (details.kind === "run_final") {
+    lines.push("");
+    lines.push(`Use /flow ${details.runId} to inspect the full run.`);
+  }
+
+  return lines;
+}
+
+export function formatRunNotificationContent(
+  details: RunNotificationDetails,
+): string {
+  return [formatNotificationTitle(details), ...formatNotificationBody(details)]
+    .join("\n")
+    .trim();
+}
+
+export function summarizeWorkflowOutput(value: unknown): string | undefined {
+  return summarizeStructuredWorkflowOutput(value) ?? firstMeaningfulLine(value);
+}
+
+export function renderRunNotificationMessage(
+  message: CustomMessage<RunNotificationDetails>,
+  options: { expanded: boolean },
+  theme: Theme,
+) {
+  const details = message.details;
+  if (!details) {
+    return new Text(String(message.content), 0, 0);
+  }
+
+  const lines = [
+    theme.fg(
+      notificationStatusTone(details.status),
+      theme.bold(formatNotificationTitle(details)),
+    ),
+  ];
+
+  if (options.expanded) {
+    lines.push(...formatNotificationBody(details));
+    lines.push("");
+    lines.push(
+      theme.fg("dim", new Date(details.timestamp).toLocaleTimeString()),
+    );
+  } else if (details.error) {
+    lines.push(theme.fg("error", details.error));
+  } else if (details.summary) {
+    lines.push(theme.fg("toolOutput", details.summary));
+  } else if (details.kind === "run_final") {
+    lines.push(theme.fg("dim", `Use /flow ${details.runId} to inspect.`));
+  }
+
+  const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+  box.addChild(new Text(lines.join("\n"), 0, 0));
+  return box;
 }
 
 // ---------------------------------------------------------------------------

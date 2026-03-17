@@ -39,16 +39,20 @@ import {
   formatFlowInspectText,
   formatFlowMermaidOutput,
   formatFlowOverviewText,
+  formatRunNotificationContent,
   formatRunStatus,
   formatWorkflowResultXml,
   getRootSpawnResult,
+  RUN_NOTIFICATION_CUSTOM_TYPE,
   RunWidgetManager,
   rebuildRuntimeState,
   renderAgentCall,
   renderAgentResult,
+  renderRunNotificationMessage,
   renderWorkflowCall,
   renderWorkflowResult,
   resolveFlowId,
+  summarizeWorkflowOutput,
 } from "./presentation.js";
 import { RunEventCache } from "./session-events.js";
 import {
@@ -65,6 +69,7 @@ import {
 } from "./tool-definitions.js";
 import type {
   AgentRunDetails,
+  RunNotificationDetails,
   RunEvent,
   RunResultDetails,
   WorkflowParams,
@@ -98,6 +103,17 @@ function initialAgentDetails(scope: Scope, agent: string): AgentRunDetails {
 
 function getCurrentModelId(ctx: ExtensionContext): string | undefined {
   return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+}
+
+function getSessionFile(ctx: ExtensionContext | undefined): string | undefined {
+  if (!ctx) return undefined;
+  return typeof ctx.sessionManager?.getSessionFile === "function"
+    ? ctx.sessionManager.getSessionFile()
+    : undefined;
+}
+
+function isIdle(ctx: ExtensionContext | undefined): boolean {
+  return typeof ctx?.isIdle === "function" ? ctx.isIdle() : true;
 }
 
 function formatDetachedToolText(runId: string): string {
@@ -140,6 +156,15 @@ export function createAgentExtension(options?: {
     const liveRuns = new LiveRunRegistry();
     const runEventCache = new RunEventCache();
     const widgetManager = new RunWidgetManager(runtimeState);
+    const detachedNotifications = new Map<
+      string,
+      {
+        originSessionFile?: string;
+        pendingSpawnUpdates: RunNotificationDetails[];
+        pendingFinal?: RunNotificationDetails;
+      }
+    >();
+    let currentContext: ExtensionContext | undefined;
     let workflowUsedInCurrentAgentRun = false;
     let workflowUsedInPreviousAgentRun = false;
     const executor = new RunExecutor({
@@ -154,6 +179,175 @@ export function createAgentExtension(options?: {
         );
       },
     });
+
+    if (typeof pi.registerMessageRenderer === "function") {
+      pi.registerMessageRenderer(
+        RUN_NOTIFICATION_CUSTOM_TYPE,
+        renderRunNotificationMessage,
+      );
+    }
+
+    const sendNotification = (details: RunNotificationDetails): void => {
+      pi.sendMessage({
+        customType: RUN_NOTIFICATION_CUSTOM_TYPE,
+        content: formatRunNotificationContent(details),
+        display: true,
+        details,
+      });
+    };
+
+    const canDeliverToOriginSession = (
+      notificationState: {
+        originSessionFile?: string;
+      },
+      ctx: ExtensionContext | undefined,
+    ): boolean => {
+      if (!ctx || !isIdle(ctx)) return false;
+      if (!notificationState.originSessionFile) return true;
+      return getSessionFile(ctx) === notificationState.originSessionFile;
+    };
+
+    const flushBufferedNotifications = (
+      ctx: ExtensionContext | undefined = currentContext,
+    ): void => {
+      if (ctx) currentContext = ctx;
+      const activeSessionFile = getSessionFile(ctx);
+
+      for (const [runId, notificationState] of detachedNotifications) {
+        if (
+          notificationState.originSessionFile &&
+          activeSessionFile !== notificationState.originSessionFile
+        ) {
+          notificationState.pendingSpawnUpdates = [];
+          continue;
+        }
+        if (!canDeliverToOriginSession(notificationState, ctx)) {
+          continue;
+        }
+
+        for (const update of notificationState.pendingSpawnUpdates) {
+          sendNotification(update);
+        }
+        notificationState.pendingSpawnUpdates = [];
+
+        if (notificationState.pendingFinal) {
+          sendNotification(notificationState.pendingFinal);
+          detachedNotifications.delete(runId);
+        }
+      }
+    };
+
+    const buildSpawnNotification = (
+      event: Extract<RunEvent, { type: "node_completed" | "node_failed" }>,
+    ): RunNotificationDetails | undefined => {
+      const node = runtimeState.nodes.get(event.nodeId);
+      if (!node || node.kind !== "spawn") return undefined;
+
+      const run = runtimeState.runs.get(event.runId);
+      if (!run) return undefined;
+
+      const output =
+        typeof node.output === "object" && node.output !== null
+          ? (node.output as Record<string, unknown>)
+          : undefined;
+      const agent =
+        typeof output?.agent === "string" ? output.agent : undefined;
+      const summary =
+        typeof output?.output === "string" ? output.output : undefined;
+
+      return {
+        kind: "spawn_update",
+        runId: run.id,
+        runLabel: run.label,
+        status: event.type === "node_completed" ? "completed" : "failed",
+        nodeId: node.id,
+        nodeLabel: node.label ?? agent ?? node.id,
+        agent,
+        summary,
+        error: event.type === "node_failed" ? node.error : undefined,
+        timestamp: event.at,
+      };
+    };
+
+    const buildFinalNotification = (
+      event: Extract<RunEvent, { type: "run_completed" }>,
+    ): RunNotificationDetails | undefined => {
+      const snapshot = getRunSnapshot(runtimeState, event.runId);
+      if (!snapshot || snapshot.run.status === "running") return undefined;
+
+      return {
+        kind: "run_final",
+        runId: snapshot.run.id,
+        runLabel: snapshot.run.label,
+        status: snapshot.run.status,
+        summary: snapshot.result
+          ? summarizeWorkflowOutput(snapshot.result.output)
+          : undefined,
+        error: snapshot.run.error,
+        timestamp: event.at,
+      };
+    };
+
+    const queueDetachedNotification = (
+      runId: string,
+      details: RunNotificationDetails,
+      ctx: ExtensionContext,
+    ): void => {
+      const notificationState = detachedNotifications.get(runId);
+      if (!notificationState) return;
+
+      const deliveryCtx = currentContext ?? ctx;
+      if (canDeliverToOriginSession(notificationState, deliveryCtx)) {
+        sendNotification(details);
+        if (details.kind === "run_final") {
+          detachedNotifications.delete(runId);
+        }
+        return;
+      }
+
+      if (details.kind === "run_final") {
+        if (
+          notificationState.originSessionFile &&
+          getSessionFile(deliveryCtx) !== notificationState.originSessionFile
+        ) {
+          notificationState.pendingSpawnUpdates = [];
+        }
+        notificationState.pendingFinal = details;
+        return;
+      }
+
+      if (
+        !notificationState.originSessionFile ||
+        getSessionFile(deliveryCtx) === notificationState.originSessionFile
+      ) {
+        notificationState.pendingSpawnUpdates.push(details);
+      }
+    };
+
+    const handleDetachedRunEvent = (
+      runId: string,
+      event: RunEvent,
+      ctx: ExtensionContext,
+    ): void => {
+      if (!detachedNotifications.has(runId)) return;
+      currentContext ??= ctx;
+
+      switch (event.type) {
+        case "node_completed":
+        case "node_failed": {
+          const details = buildSpawnNotification(event);
+          if (details) queueDetachedNotification(runId, details, ctx);
+          break;
+        }
+        case "run_completed": {
+          const details = buildFinalNotification(event);
+          if (details) queueDetachedNotification(runId, details, ctx);
+          break;
+        }
+        default:
+          break;
+      }
+    };
 
     const stopFlow = (query: string): string => {
       const resolved = resolveFlowId(runtimeState, query);
@@ -232,6 +426,7 @@ export function createAgentExtension(options?: {
         | undefined,
       defaults: { model?: string; thinking?: Thinking },
     ): Promise<RunResultDetails> => {
+      currentContext = ctx;
       if (signal?.aborted) {
         return await executor.execute(
           workflowParams,
@@ -247,6 +442,7 @@ export function createAgentExtension(options?: {
         (ctx as ExtensionContext).sessionManager,
       );
       let runId: string | undefined;
+      let latestSnapshot: RunResultDetails | undefined;
       let detached = false;
       let settled = false;
       let resolveDetach: ((details: RunResultDetails) => void) | undefined;
@@ -270,11 +466,16 @@ export function createAgentExtension(options?: {
           return;
         }
         detached = true;
+        detachedNotifications.set(runId, {
+          originSessionFile: origin.sessionFile,
+          pendingSpawnUpdates: [],
+        });
         executor.markDetached(runId, ctx, {
           appendEvent: persistEvent,
         });
         const snapshot = getRunSnapshot(runtimeState, runId);
         if (snapshot) {
+          latestSnapshot = snapshot;
           resolveDetach?.(snapshot);
         } else {
           rejectDetach?.(new Error("Workflow aborted."));
@@ -300,12 +501,22 @@ export function createAgentExtension(options?: {
             appendEvent: persistEvent,
             onRunCreated: (createdRunId) => {
               runId = createdRunId;
+              latestSnapshot = getRunSnapshot(runtimeState, createdRunId);
               liveRuns.register({
                 runId: createdRunId,
                 sessionFile: origin.sessionFile,
                 stop: () => backgroundController.abort(),
-                snapshot: () => getRunSnapshot(runtimeState, createdRunId),
+                snapshot: () =>
+                  latestSnapshot ? structuredClone(latestSnapshot) : undefined,
               });
+            },
+            onEvent: (event) => {
+              if (runId) {
+                const snapshot = getRunSnapshot(runtimeState, runId);
+                if (snapshot) latestSnapshot = snapshot;
+              }
+              if (!detached || !runId) return;
+              handleDetachedRunEvent(runId, event, ctx);
             },
           },
         )
@@ -322,8 +533,10 @@ export function createAgentExtension(options?: {
     };
 
     const reloadRunState = (_event: unknown, ctx: ExtensionContext) => {
+      currentContext = ctx;
       rebuildRuntimeState(runtimeState, ctx, runEventCache, liveRuns);
       widgetManager.update(ctx);
+      flushBufferedNotifications(ctx);
     };
 
     pi.on("session_start", async (event, ctx) => {
@@ -340,9 +553,11 @@ export function createAgentExtension(options?: {
     });
     pi.on("session_shutdown", async () => {
       liveRuns.stopAll();
+      detachedNotifications.clear();
     });
 
     pi.on("before_agent_start", async (event, ctx) => {
+      currentContext = ctx;
       if (
         !shouldInjectWorkflowAgentsPrompt(event.prompt, {
           workflowUsedInPreviousTurn: workflowUsedInPreviousAgentRun,
@@ -358,18 +573,22 @@ export function createAgentExtension(options?: {
       };
     });
 
-    pi.on("agent_start", async () => {
+    pi.on("agent_start", async (_event, ctx) => {
+      currentContext = ctx;
       workflowUsedInCurrentAgentRun = false;
     });
 
-    pi.on("tool_execution_end", async (event) => {
+    pi.on("tool_execution_end", async (event, ctx) => {
+      currentContext = ctx;
       if (event.toolName === "workflow") {
         workflowUsedInCurrentAgentRun = true;
       }
     });
 
-    pi.on("agent_end", async () => {
+    pi.on("agent_end", async (_event, ctx) => {
+      currentContext = ctx;
       workflowUsedInPreviousAgentRun = workflowUsedInCurrentAgentRun;
+      flushBufferedNotifications(ctx);
     });
 
     pi.registerCommand("agents", {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -137,6 +137,71 @@ function createLongRunningSpawnProcess(inputs: string[]): SpawnProcess {
       },
     });
     return proc;
+  };
+}
+
+function createDeferredSpawnProcess(inputs: string[]): {
+  spawnProcess: SpawnProcess;
+  finish: (output: string) => void;
+} {
+  let complete: ((output: string) => void) | undefined;
+
+  return {
+    spawnProcess: (_command, _args, _options) => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      let capturedInput = "";
+      const stdin = new Writable({
+        write(chunk, _encoding, callback) {
+          capturedInput += chunk.toString();
+          callback();
+        },
+        final(callback) {
+          inputs.push(capturedInput);
+          complete = (output: string) => {
+            const event = {
+              type: "message_end",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: output }],
+                usage: {
+                  input: 1,
+                  output: 1,
+                  totalTokens: 2,
+                  cost: { total: 0 },
+                },
+              },
+            };
+            queueMicrotask(() => {
+              stdout.write(`${JSON.stringify(event)}\n`);
+              proc.emit("close", 0, null);
+            });
+          };
+          callback();
+        },
+      });
+      const proc =
+        new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+      Object.assign(proc, {
+        stdout,
+        stderr,
+        stdin,
+        exitCode: null,
+        signalCode: null,
+        kill() {
+          return true;
+        },
+      });
+      return proc;
+    },
+    finish(output: string) {
+      if (!complete) {
+        throw new Error("No deferred spawn is waiting to finish.");
+      }
+      const resolve = complete;
+      complete = undefined;
+      resolve(output);
+    },
   };
 }
 
@@ -323,6 +388,33 @@ function setupExtension(spawnProcess: SpawnProcess): {
     ui: uiHarness,
     events,
   };
+}
+
+function createSessionContext(
+  ui: ExtensionContext["ui"],
+  options?: {
+    sessionFile?: string;
+    idle?: () => boolean;
+    branch?: unknown[];
+  },
+): ExtensionContext {
+  return {
+    cwd: workspaceDir,
+    hasUI: false,
+    ui,
+    isIdle: options?.idle ?? (() => true),
+    sessionManager: {
+      getLeafId() {
+        return "leaf-1";
+      },
+      getSessionFile() {
+        return options?.sessionFile;
+      },
+      getBranch() {
+        return options?.branch ?? [];
+      },
+    },
+  } as unknown as ExtensionContext;
 }
 
 beforeEach(() => {
@@ -790,5 +882,214 @@ describe("/flow command", () => {
 
     expect(ui.customCalls).toBe(2);
     expect(messages).toHaveLength(0);
+  });
+});
+
+describe("detached workflow notifications", () => {
+  it("posts spawn and final notifications after a detached workflow completes", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const { workflowTool, messages, ui } = setupExtension(
+      createSpawnProcess(() => "done", inputs),
+    );
+    const sessionFile = path.join(workspaceDir, "origin-session.jsonl");
+    let idle = true;
+    const controller = new AbortController();
+
+    const result = await workflowTool.execute(
+      "call-detached-notify",
+      {
+        label: "Detached Notify",
+        flow: {
+          kind: "spawn",
+          id: "only",
+          label: "Only Step",
+          agent: "worker",
+          task: "do work",
+        },
+      },
+      controller.signal,
+      (update) => {
+        const details = update.details as RunResultDetails;
+        if (details.run.status === "running") {
+          controller.abort();
+        }
+      },
+      createSessionContext(ui.context, {
+        sessionFile,
+        idle: () => idle,
+      }),
+    );
+
+    expect(result.details.run.status).toBe("running");
+    await waitFor(
+      () =>
+        messages.filter(
+          (message) => message.customType === "pi-agents:notification",
+        ).length === 2,
+    );
+
+    const notifications = messages.filter(
+      (message) => message.customType === "pi-agents:notification",
+    );
+    expect(notifications[0]?.content).toContain("Only Step");
+    expect(notifications[0]?.content).toContain("completed");
+    expect(notifications[1]?.content).toContain("Detached Notify");
+    expect(notifications[1]?.content).toContain("Use /flow");
+  });
+
+  it("buffers notifications until the origin session becomes idle", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const { workflowTool, messages, ui, events } = setupExtension(
+      createSpawnProcess(() => "done", inputs),
+    );
+    const sessionFile = path.join(workspaceDir, "busy-session.jsonl");
+    let idle = false;
+    const controller = new AbortController();
+
+    const result = await workflowTool.execute(
+      "call-detached-busy",
+      {
+        label: "Buffered Notify",
+        flow: {
+          kind: "spawn",
+          id: "only",
+          label: "Buffered Step",
+          agent: "worker",
+          task: "do work",
+        },
+      },
+      controller.signal,
+      (update) => {
+        const details = update.details as RunResultDetails;
+        if (details.run.status === "running") {
+          controller.abort();
+        }
+      },
+      createSessionContext(ui.context, {
+        sessionFile,
+        idle: () => idle,
+      }),
+    );
+
+    expect(result.details.run.status).toBe("running");
+    await waitFor(() => inputs.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      messages.filter(
+        (message) => message.customType === "pi-agents:notification",
+      ),
+    ).toHaveLength(0);
+
+    const agentEnd = events.get("agent_end");
+    if (!agentEnd) throw new Error("expected agent_end handler");
+
+    idle = true;
+    await agentEnd(
+      {},
+      createSessionContext(ui.context, {
+        sessionFile,
+        idle: () => idle,
+      }),
+    );
+
+    const notifications = messages.filter(
+      (message) => message.customType === "pi-agents:notification",
+    );
+    expect(notifications).toHaveLength(2);
+    expect(notifications[0]?.content).toContain("Buffered Step");
+    expect(notifications[1]?.content).toContain("Buffered Notify");
+  });
+
+  it("keeps only the final notification when the user switches away", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const deferred = createDeferredSpawnProcess(inputs);
+    const { workflowTool, messages, ui, events } = setupExtension(
+      deferred.spawnProcess,
+    );
+    const originSessionFile = path.join(workspaceDir, "origin.jsonl");
+    const otherSessionFile = path.join(workspaceDir, "other.jsonl");
+    let idle = true;
+    const controller = new AbortController();
+
+    const result = await workflowTool.execute(
+      "call-detached-switch",
+      {
+        label: "Switch Away",
+        flow: {
+          kind: "spawn",
+          id: "only",
+          label: "Switch Step",
+          agent: "worker",
+          task: "do work",
+        },
+      },
+      controller.signal,
+      (update) => {
+        const details = update.details as RunResultDetails;
+        if (details.run.status === "running") {
+          controller.abort();
+        }
+      },
+      createSessionContext(ui.context, {
+        sessionFile: originSessionFile,
+        idle: () => idle,
+      }),
+    );
+
+    expect(result.details.run.status).toBe("running");
+    await waitFor(() => inputs.length === 1);
+
+    const sessionSwitch = events.get("session_switch");
+    if (!sessionSwitch) throw new Error("expected session_switch handler");
+
+    await sessionSwitch(
+      {},
+      createSessionContext(ui.context, {
+        sessionFile: otherSessionFile,
+        idle: () => idle,
+      }),
+    );
+
+    deferred.finish("done");
+    await waitFor(
+      () =>
+        readFileSync(originSessionFile, "utf-8").includes(
+          '"type":"run_completed"',
+        ),
+      1000,
+    );
+    expect(
+      messages.filter(
+        (message) => message.customType === "pi-agents:notification",
+      ),
+    ).toHaveLength(0);
+
+    await sessionSwitch(
+      {},
+      createSessionContext(ui.context, {
+        sessionFile: originSessionFile,
+        idle: () => idle,
+      }),
+    );
+
+    await waitFor(
+      () =>
+        messages.filter(
+          (message) => message.customType === "pi-agents:notification",
+        ).length === 1,
+      1000,
+    );
+    const notifications = messages.filter(
+      (message) => message.customType === "pi-agents:notification",
+    );
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.content).toContain("Switch Away");
+    expect(notifications[0]?.content).not.toContain("Switch Step");
   });
 });

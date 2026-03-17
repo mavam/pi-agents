@@ -1,3 +1,4 @@
+import { renderMermaidASCII } from "beautiful-mermaid";
 import type {
   FlowSpec,
   ForkFlowSpec,
@@ -263,4 +264,56 @@ export function toMermaid(flow: FlowSpec, options?: MermaidOptions): string {
   }
 
   return output.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// ASCII / Unicode rendering via beautiful-mermaid
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for rendering a FlowSpec as ASCII or Unicode box-drawing art.
+ */
+export interface AsciiRenderOptions {
+  /** Use plain ASCII characters instead of Unicode box-drawing. Default: false (Unicode). */
+  useAscii?: boolean;
+  /**
+   * Color mode for terminal output.
+   * - `'none'`  — no colors (plain text)
+   * - `'auto'`  — auto-detect terminal capabilities
+   * - `'ansi256'` — 256-color xterm
+   * - `'truecolor'` — 24-bit RGB
+   * Default: `'none'`.
+   */
+  colorMode?: "none" | "auto" | "ansi16" | "ansi256" | "truecolor";
+  /** Mermaid options forwarded to {@link toMermaid}. */
+  mermaid?: MermaidOptions;
+}
+
+/**
+ * Render a {@link FlowSpec} as ASCII or Unicode box-drawing art.
+ *
+ * Internally converts the flow to Mermaid syntax via {@link toMermaid}, then
+ * renders it through `beautiful-mermaid`'s ASCII engine.
+ *
+ * @example
+ * ```ts
+ * // Unicode output (default)
+ * console.log(renderFlowAscii(flow));
+ *
+ * // Plain ASCII for maximum compatibility
+ * console.log(renderFlowAscii(flow, { useAscii: true }));
+ *
+ * // With terminal colors
+ * console.log(renderFlowAscii(flow, { colorMode: 'auto' }));
+ * ```
+ */
+export function renderFlowAscii(
+  flow: FlowSpec,
+  options?: AsciiRenderOptions,
+): string {
+  const mermaidText = toMermaid(flow, options?.mermaid);
+  return renderMermaidASCII(mermaidText, {
+    useAscii: options?.useAscii ?? false,
+    colorMode: options?.colorMode ?? "none",
+  });
 }

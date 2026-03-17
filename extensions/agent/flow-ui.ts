@@ -21,7 +21,7 @@ import {
 import { getOrderedRuns, getRunNodes, type RunRuntimeState } from "./state.js";
 import type { FlowNodeResult } from "./types.js";
 
-export type FlowAction = "inspect" | "watch" | "mermaid" | "stop";
+export type FlowAction = "inspect" | "watch" | "mermaid" | "diagram" | "stop";
 
 export interface FlowActionSelection {
   action: FlowAction;
@@ -59,6 +59,8 @@ function pickerTitle(defaultAction: FlowAction): string {
       return "Select a running flow to watch";
     case "mermaid":
       return "Select a flow for Mermaid output";
+    case "diagram":
+      return "Select a flow for diagram";
     case "stop":
       return "Select a running flow to stop";
   }
@@ -75,10 +77,12 @@ function pickerHint(
         ? "Enter watch"
         : defaultAction === "mermaid"
           ? "Enter Mermaid"
-          : "Enter stop";
+          : defaultAction === "diagram"
+            ? "Enter diagram"
+            : "Enter stop";
   const dynamic = selection?.running
-    ? " • w watch • m mermaid • s stop"
-    : " • m mermaid";
+    ? " • w watch • d diagram • m mermaid • s stop"
+    : " • d diagram • m mermaid";
   return `${defaultLabel}${dynamic} • Esc cancel`;
 }
 
@@ -187,6 +191,10 @@ class FlowActionPickerComponent implements Component {
     }
     if (data === "w") {
       this.submit("watch");
+      return;
+    }
+    if (data === "d") {
+      this.submit("diagram");
       return;
     }
     if (data === "m") {

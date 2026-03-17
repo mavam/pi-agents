@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { toMermaid } from "../extensions/agent/mermaid.ts";
+import { renderFlowAscii, toMermaid } from "../extensions/agent/mermaid.ts";
 import type { FlowSpec } from "../extensions/agent/types.ts";
 
 describe("toMermaid", () => {
@@ -334,5 +334,128 @@ describe("toMermaid", () => {
     expect(result).toContain("n0 --> n1"); // loop → first body step
     expect(result).toContain("n1 --> n2"); // body internal chain
     expect(result).toContain('n2 -.->|"repeat"| n0'); // last body step → loop
+  });
+});
+
+describe("renderFlowAscii", () => {
+  it("renders a single spawn as Unicode box-drawing art", () => {
+    const flow: FlowSpec = {
+      kind: "spawn",
+      agent: "worker",
+      task: "do work",
+    };
+    const result = renderFlowAscii(flow);
+    expect(result).toContain("worker");
+    // Unicode box-drawing characters.
+    expect(result).toMatch(/[─│┌┐└┘┬┤├┴(]/);
+  });
+
+  it("renders a sequence with connected nodes", () => {
+    const flow: FlowSpec = {
+      kind: "sequence",
+      steps: [
+        { kind: "spawn", agent: "analyzer", task: "analyze" },
+        { kind: "spawn", agent: "reviewer", task: "review" },
+      ],
+    };
+    const result = renderFlowAscii(flow);
+    expect(result).toContain("analyzer");
+    expect(result).toContain("reviewer");
+    // Should have an arrow connecting them.
+    expect(result).toMatch(/[▼►v>]/);
+  });
+
+  it("renders a fork-join with branch labels", () => {
+    const flow: FlowSpec = {
+      kind: "sequence",
+      steps: [
+        {
+          kind: "fork",
+          id: "fanout",
+          branches: {
+            a: { kind: "spawn", agent: "worker-a", task: "task a" },
+            b: { kind: "spawn", agent: "worker-b", task: "task b" },
+          },
+        },
+        { kind: "join", from: "fanout", mode: "all" },
+      ],
+    };
+    const result = renderFlowAscii(flow);
+    expect(result).toContain("fanout");
+    expect(result).toContain("worker-a");
+    expect(result).toContain("worker-b");
+    expect(result).toContain("join: all");
+  });
+
+  it("supports ASCII mode via useAscii option", () => {
+    const flow: FlowSpec = {
+      kind: "spawn",
+      agent: "worker",
+      task: "work",
+    };
+    const unicode = renderFlowAscii(flow);
+    const ascii = renderFlowAscii(flow, { useAscii: true });
+
+    // Both contain the label.
+    expect(unicode).toContain("worker");
+    expect(ascii).toContain("worker");
+
+    // ASCII mode should not contain Unicode box-drawing characters.
+    expect(ascii).not.toMatch(/[─│┌┐└┘┬┤├┴▼►]/);
+  });
+
+  it("produces no ANSI escape codes with colorMode none", () => {
+    const flow: FlowSpec = {
+      kind: "spawn",
+      agent: "worker",
+      task: "work",
+    };
+    const result = renderFlowAscii(flow, { colorMode: "none" });
+    // ESC character should not be present.
+    expect(result).not.toContain("\x1b");
+  });
+
+  it("produces ANSI escape codes with colorMode ansi256", () => {
+    const flow: FlowSpec = {
+      kind: "spawn",
+      agent: "worker",
+      task: "work",
+    };
+    const result = renderFlowAscii(flow, { colorMode: "ansi256" });
+    // ANSI escape sequence expected.
+    expect(result).toContain("\x1b[");
+  });
+
+  it("is deterministic across multiple calls", () => {
+    const flow: FlowSpec = {
+      kind: "sequence",
+      steps: [
+        {
+          kind: "fork",
+          id: "f",
+          branches: {
+            x: { kind: "spawn", agent: "a", task: "t" },
+            y: { kind: "spawn", agent: "b", task: "t" },
+          },
+        },
+        { kind: "join", from: "f", mode: "all" },
+      ],
+    };
+    const first = renderFlowAscii(flow);
+    const second = renderFlowAscii(flow);
+    expect(first).toBe(second);
+  });
+
+  it("renders a loop with repeat edge", () => {
+    const flow: FlowSpec = {
+      kind: "loop",
+      id: "retry",
+      maxIterations: 3,
+      body: { kind: "spawn", agent: "checker", task: "check" },
+    };
+    const result = renderFlowAscii(flow);
+    expect(result).toContain("retry");
+    expect(result).toContain("checker");
+    expect(result).toContain("repeat");
   });
 });

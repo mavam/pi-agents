@@ -21,7 +21,7 @@ import {
 } from "./flow-path.js";
 import { normalizeWorkflowParams } from "./flow-spec.js";
 import type { LiveRunRegistry } from "./live-runs.js";
-import { type MermaidOptions, toMermaid } from "./mermaid.js";
+import { type MermaidOptions, renderFlowAscii, toMermaid } from "./mermaid.js";
 import { rebuildRunState } from "./persistence.js";
 import type { RunEventCache } from "./session-events.js";
 import {
@@ -651,6 +651,21 @@ export function formatFlowMermaidOutput(
   const mermaidOptions: MermaidOptions = {};
   if (run.label) mermaidOptions.title = run.label;
   return ["```mermaid", toMermaid(run.flow, mermaidOptions), "```"].join("\n");
+}
+
+export function formatFlowDiagramOutput(
+  runtimeState: RunRuntimeState,
+  runId: string,
+): string {
+  const resolved = resolveFlowId(runtimeState, runId);
+  if ("error" in resolved) {
+    return resolved.error;
+  }
+
+  const run = runtimeState.runs.get(resolved.runId);
+  if (!run) return `Unknown flow "${runId}".`;
+
+  return renderFlowAscii(run.flow);
 }
 
 // ---------------------------------------------------------------------------

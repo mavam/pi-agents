@@ -36,6 +36,7 @@ import {
   formatAgentDetails,
   formatAgentResultXml,
   formatAgentsOverview,
+  formatFlowDiagramOutput,
   formatFlowInspectText,
   formatFlowMermaidOutput,
   formatFlowOverviewText,
@@ -124,7 +125,12 @@ function parseFlowCommand(args: string): { action: FlowAction; query: string } {
   const trimmed = args.trim();
   const parts = trimmed.split(/\s+/).filter(Boolean);
   const action = parts[0]?.toLowerCase();
-  if (action === "watch" || action === "mermaid" || action === "stop") {
+  if (
+    action === "watch" ||
+    action === "mermaid" ||
+    action === "diagram" ||
+    action === "stop"
+  ) {
     return { action, query: parts.slice(1).join(" ") };
   }
   return { action: "inspect", query: trimmed };
@@ -407,6 +413,7 @@ export function createAgentExtension(options?: {
       const actions = [
         "Inspect",
         ...(liveRuns.has(run.id) ? ["Watch"] : []),
+        "Diagram",
         "Mermaid",
         ...(run.status === "running" && liveRuns.has(run.id) ? ["Stop"] : []),
         "Back",
@@ -418,6 +425,8 @@ export function createAgentExtension(options?: {
         sendFlowMessage(formatFlowInspectText(runtimeState, run.id));
       } else if (action === "Watch") {
         await watchFlow(ctx, runtimeState, liveRuns, run.id);
+      } else if (action === "Diagram") {
+        sendFlowMessage(formatFlowDiagramOutput(runtimeState, run.id));
       } else if (action === "Mermaid") {
         sendFlowMessage(formatFlowMermaidOutput(runtimeState, run.id));
       } else if (action === "Stop") {
@@ -688,11 +697,17 @@ export function createAgentExtension(options?: {
         const parts = trimmed.split(/\s+/).filter(Boolean);
         const action = parts[0]?.toLowerCase();
         const query =
-          action === "watch" || action === "mermaid" || action === "stop"
+          action === "watch" ||
+          action === "mermaid" ||
+          action === "diagram" ||
+          action === "stop"
             ? parts.slice(1).join(" ")
             : trimmed;
         const valuePrefix =
-          action === "watch" || action === "mermaid" || action === "stop"
+          action === "watch" ||
+          action === "mermaid" ||
+          action === "diagram" ||
+          action === "stop"
             ? `${action} `
             : "";
         const items = getOrderedRuns(runtimeState)
@@ -712,9 +727,14 @@ export function createAgentExtension(options?: {
           return [
             { value: "watch ", label: "watch", description: "Live watch mode" },
             {
+              value: "diagram ",
+              label: "diagram",
+              description: "Render Unicode diagram in terminal",
+            },
+            {
               value: "mermaid ",
               label: "mermaid",
-              description: "Render Mermaid output",
+              description: "Render Mermaid source",
             },
             {
               value: "stop ",
@@ -779,9 +799,11 @@ export function createAgentExtension(options?: {
         const content =
           action === "stop"
             ? stopFlow(runId)
-            : action === "mermaid"
-              ? formatFlowMermaidOutput(runtimeState, runId)
-              : formatFlowInspectText(runtimeState, runId);
+            : action === "diagram"
+              ? formatFlowDiagramOutput(runtimeState, runId)
+              : action === "mermaid"
+                ? formatFlowMermaidOutput(runtimeState, runId)
+                : formatFlowInspectText(runtimeState, runId);
         sendFlowMessage(content);
       },
     });

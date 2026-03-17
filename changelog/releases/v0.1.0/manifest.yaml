@@ -1,0 +1,6 @@
+created: 2026-03-17
+title: Agent workflow runtime
+intro: "Pi Agents debuts with the initial MVP of agent delegation and a new workflow\
+  \ tool for orchestrating multiple agents. Define flow specs as JSON trees with spawn,\
+  \ sequence, fork, join, and loop nodes\u2014complete with budgets and persistent\
+  \ session flows."

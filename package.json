@@ -27,7 +27,6 @@
   "engines": {
     "node": ">=20.0.0"
   },
-
   "scripts": {
     "format": "bunx @biomejs/biome format --write extensions tests",
     "format:check": "bunx @biomejs/biome format extensions tests",
@@ -46,6 +45,11 @@
     "typescript": "^5.9.2"
   },
   "pi": {
-    "extensions": ["./extensions/agent"]
+    "extensions": [
+      "./extensions/agent"
+    ]
+  },
+  "dependencies": {
+    "beautiful-mermaid": "^1.1.3"
   }
 }

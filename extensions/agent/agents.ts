@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import {
   getAgentDir,
   loadSkills,
@@ -9,15 +10,15 @@ import {
 
 // --- Types ---
 
-const THINKING_LEVELS = [
+const THINKING_LEVELS: ThinkingLevel[] = [
   "off",
   "minimal",
   "low",
   "medium",
   "high",
   "xhigh",
-] as const;
-export type Thinking = (typeof THINKING_LEVELS)[number];
+];
+export type Thinking = ThinkingLevel;
 
 export type Source = "user" | "project";
 export type Scope = Source | "both";
@@ -116,8 +117,7 @@ function parseAgentFile(filePath: string, source: Source): Agent | string {
     return `Invalid 'thinking' (must be one of ${THINKING_LEVELS.join("|")})`;
   if (
     fm.skills !== undefined &&
-    (!Array.isArray(fm.skills) ||
-      fm.skills.some((s) => typeof s !== "string"))
+    (!Array.isArray(fm.skills) || fm.skills.some((s) => typeof s !== "string"))
   )
     return "Invalid 'skills' (must be a YAML array of strings)";
 
@@ -220,10 +220,7 @@ const EMPTY_LOAD_RESULT = {
   diagnostics: [] as Diagnostic[],
 };
 
-export function discoverAgents(
-  cwd: string,
-  scope: Scope,
-): DiscoveryResult {
+export function discoverAgents(cwd: string, scope: Scope): DiscoveryResult {
   const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
   const user =
@@ -254,6 +251,29 @@ export function formatAgentList(agents: Agent[]): string {
   return agents
     .map((a) => `${a.name} (${a.source}): ${a.description}`)
     .join("; ");
+}
+
+export function resolveAgentByName(
+  agents: Agent[],
+  name: string,
+):
+  | { kind: "exact"; agent: Agent }
+  | { kind: "case_insensitive"; agent: Agent }
+  | { kind: "ambiguous"; matches: Agent[] }
+  | { kind: "missing" } {
+  const exact = agents.find((agent) => agent.name === name);
+  if (exact) return { kind: "exact", agent: exact };
+
+  const lowered = name.toLowerCase();
+  const matches = agents.filter(
+    (agent) => agent.name.toLowerCase() === lowered,
+  );
+  if (matches.length === 1) {
+    const [agent] = matches;
+    if (agent) return { kind: "case_insensitive", agent };
+  }
+  if (matches.length > 1) return { kind: "ambiguous", matches };
+  return { kind: "missing" };
 }
 
 // --- Skills ---

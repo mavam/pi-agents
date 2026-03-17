@@ -344,7 +344,9 @@ describe("agent tool delegated process execution", () => {
       expect(result.isError).toBeFalsy();
       const text = result.content[0];
       expect(text?.type).toBe("text");
-      expect(text?.text).toBe("ok");
+      expect(text?.text).toContain("<agent_result");
+      expect(text?.text).toContain("ok");
+      expect(text?.text).toContain("</agent_result>");
     } finally {
       rmSync(otherCwd, { recursive: true, force: true });
     }

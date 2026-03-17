@@ -25,11 +25,13 @@ import { AgentManager } from "./manager.js";
 import { RUN_EVENT_CUSTOM_TYPE } from "./persistence.js";
 import {
   formatAgentDetails,
+  formatAgentResultXml,
   formatAgentsOverview,
   formatFlowCommandOutput,
   formatOutput,
   formatRunDetailsText,
   formatRunOverviewText,
+  formatWorkflowResultXml,
   getRootSpawnResult,
   RunWidgetManager,
   rebuildRuntimeState,
@@ -385,7 +387,13 @@ export function createAgentExtension(options?: {
           }
           return {
             content: [
-              { type: "text", text: spawnResult.text || "(no output)" },
+              {
+                type: "text",
+                text: formatAgentResultXml(
+                  agent.name,
+                  spawnResult.text || "(no output)",
+                ),
+              },
             ],
             details: spawnResult.run,
           };
@@ -451,9 +459,7 @@ export function createAgentExtension(options?: {
             content: [
               {
                 type: "text",
-                text: details.result
-                  ? formatOutput(details.result.output)
-                  : `Run ${details.run.id} completed.`,
+                text: formatWorkflowResultXml(details.result, details.run.id),
               },
             ],
             details,

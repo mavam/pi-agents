@@ -24,6 +24,7 @@ import {
 } from "./state.js";
 import type {
   AgentRunDetails,
+  FlowNodeResult,
   FlowSpec,
   ForkFlowSpec,
   JoinFlowSpec,
@@ -569,6 +570,92 @@ export function formatOutput(value: unknown): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// XML envelope formatting — structured tool results for the LLM
+// ---------------------------------------------------------------------------
+
+function escapeXmlAttr(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/**
+ * Try to format a `{ branches, errors }` output object as XML `<branch>`
+ * and `<error>` elements.  Returns `undefined` when the value does not
+ * match the expected shape (so callers can fall back to `formatOutput`).
+ */
+function tryFormatBranchesXml(output: unknown): string | undefined {
+  if (typeof output !== "object" || output === null) return undefined;
+  const obj = output as Record<string, unknown>;
+  if (
+    !("branches" in obj) ||
+    typeof obj.branches !== "object" ||
+    obj.branches === null
+  ) {
+    return undefined;
+  }
+
+  const branches = obj.branches as Record<string, unknown>;
+  const errors =
+    "errors" in obj && typeof obj.errors === "object" && obj.errors !== null
+      ? (obj.errors as Record<string, string>)
+      : {};
+
+  const branchKeys = Object.keys(branches);
+  const errorKeys = Object.keys(errors);
+  if (branchKeys.length === 0 && errorKeys.length === 0) return undefined;
+
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(branches)) {
+    parts.push(
+      `<branch name="${escapeXmlAttr(key)}">\n${formatOutput(value)}\n</branch>`,
+    );
+  }
+  for (const [key, value] of Object.entries(errors)) {
+    if (value) {
+      parts.push(`<error name="${escapeXmlAttr(key)}">${value}</error>`);
+    }
+  }
+  return parts.join("\n");
+}
+
+function formatFlowResultInnerXml(result: FlowNodeResult): string {
+  const branchXml = tryFormatBranchesXml(result.output);
+  if (branchXml !== undefined) return branchXml;
+  return formatOutput(result.output);
+}
+
+/** Wrap a single-agent result in an XML envelope for the LLM. */
+export function formatAgentResultXml(agent: string, text: string): string {
+  return `<agent_result agent="${escapeXmlAttr(agent)}">\n${text}\n</agent_result>`;
+}
+
+/** Wrap a workflow result in an XML envelope for the LLM. */
+export function formatWorkflowResultXml(
+  result: FlowNodeResult | undefined,
+  runId: string,
+): string {
+  if (!result) {
+    return `<workflow_result run="${escapeXmlAttr(runId)}">completed</workflow_result>`;
+  }
+  const inner = formatFlowResultInnerXml(result);
+  return `<workflow_result>\n${inner}\n</workflow_result>`;
+}
+
+/**
+ * Strip an `<agent_result>` or `<workflow_result>` XML envelope so TUI
+ * renderers show clean text.
+ */
+export function stripResultXmlEnvelope(text: string): string {
+  const match = text.match(
+    /^<(?:agent_result|workflow_result)[^>]*>\n?([\s\S]*?)\n?<\/(?:agent_result|workflow_result)>$/,
+  );
+  return match?.[1] ?? text;
+}
+
 function firstMeaningfulLine(value: unknown): string {
   const text = typeof value === "string" ? value : formatOutput(value);
   return (
@@ -776,7 +863,8 @@ export function renderAgentResult(
     );
   }
 
-  const output = extractTextContent(result);
+  const rawOutput = extractTextContent(result);
+  const output = rawOutput ? stripResultXmlEnvelope(rawOutput) : rawOutput;
   if (output) {
     pushSection(lines, "Output", previewText(output, expanded, 10), theme);
   }
@@ -852,7 +940,7 @@ export function renderWorkflowResult(
         ? formatOutput(details.result.output)
         : (summarizeStructuredWorkflowOutput(details.result.output) ??
           formatOutput(details.result.output))
-      : extractTextContent(result);
+      : stripResultXmlEnvelope(extractTextContent(result));
   if (output) {
     pushSection(lines, "Result", previewText(output, expanded, 12), theme);
   }

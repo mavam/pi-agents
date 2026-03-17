@@ -149,6 +149,19 @@ function createSpawnProcess(
   };
 }
 
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 250,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for background work.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("workflow tool", () => {
   it("exposes a structured flow schema to tool callers", () => {
     const tool = setupWorkflowTool(createSpawnProcess(() => "ok", []));
@@ -914,7 +927,7 @@ describe("workflow tool", () => {
     expect(inputs).toEqual([]);
   });
 
-  it("does not start later sequence steps after cancellation", async () => {
+  it("detaches and lets later sequence steps continue after interruption", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "reviewer.md"),
       "reviewer",
@@ -930,49 +943,49 @@ describe("workflow tool", () => {
     const controller = new AbortController();
     let aborted = false;
 
-    const error = await tool
-      .execute(
-        "call-cancel",
-        {
-          flow: {
-            kind: "sequence",
-            steps: [
-              {
-                kind: "spawn",
-                id: "first",
-                agent: "reviewer",
-                task: "first step",
-              },
-              {
-                kind: "spawn",
-                id: "second",
-                agent: "reviewer",
-                task: "second step",
-              },
-            ],
-          },
+    const result = await tool.execute(
+      "call-cancel",
+      {
+        flow: {
+          kind: "sequence",
+          steps: [
+            {
+              kind: "spawn",
+              id: "first",
+              agent: "reviewer",
+              task: "first step",
+            },
+            {
+              kind: "spawn",
+              id: "second",
+              agent: "reviewer",
+              task: "second step",
+            },
+          ],
         },
-        controller.signal,
-        (update) => {
-          const details = update.details as RunResultDetails;
-          if (
-            !aborted &&
-            details.nodes.some(
-              (node) => node.kind === "spawn" && node.status === "completed",
-            )
-          ) {
-            aborted = true;
-            controller.abort();
-          }
-        },
-        { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
-      )
-      .then(() => null)
-      .catch((caught) => caught as Error);
+      },
+      controller.signal,
+      (update) => {
+        const details = update.details as RunResultDetails;
+        if (
+          !aborted &&
+          details.nodes.some(
+            (node) => node.kind === "spawn" && node.status === "completed",
+          )
+        ) {
+          aborted = true;
+          controller.abort();
+        }
+      },
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
 
-    expect(error).not.toBeNull();
-    expect(error?.message ?? "").toContain("Workflow aborted");
-    expect(inputs).toHaveLength(1);
+    expect(result.details.run.status).toBe("running");
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toContain("Run detached");
+    }
+    await waitFor(() => inputs.length === 2);
   });
 
   it("stops looping when continueWhen no longer matches", async () => {
@@ -1120,7 +1133,7 @@ describe("workflow tool", () => {
     expect(branchCStarts).toBe(0);
   });
 
-  it("does not spawn child agents when the workflow is aborted before budget awaits resolve", async () => {
+  it("detaches after startup even if interrupted before child agents begin", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
     let spawnCount = 0;
     const spawnProcess: SpawnProcess = (...args) => {
@@ -1132,9 +1145,40 @@ describe("workflow tool", () => {
     const controller = new AbortController();
     queueMicrotask(() => controller.abort());
 
+    const result = await tool.execute(
+      "call-pre-abort",
+      {
+        flow: {
+          kind: "spawn",
+          id: "only",
+          agent: "worker",
+          task: "do work",
+        },
+      },
+      controller.signal,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    expect(result.details.run.status).toBe("running");
+    await waitFor(() => spawnCount === 1);
+  });
+
+  it("still aborts immediately when the caller signal is already aborted", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+    let spawnCount = 0;
+    const spawnProcess: SpawnProcess = (...args) => {
+      spawnCount += 1;
+      return createSpawnProcess(() => "ok", [])(...args);
+    };
+
+    const tool = setupWorkflowTool(spawnProcess);
+    const controller = new AbortController();
+    controller.abort();
+
     const error = await tool
       .execute(
-        "call-pre-abort",
+        "call-already-aborted",
         {
           flow: {
             kind: "spawn",

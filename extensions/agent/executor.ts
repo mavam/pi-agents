@@ -23,7 +23,7 @@ import { parseJsonText } from "./flow-spec.js";
 import type { AgentManager } from "./manager.js";
 import { appendRunEvent } from "./persistence.js";
 import type { RunRuntimeState } from "./state.js";
-import { applyRunEvent, getRunNodes } from "./state.js";
+import { applyRunEvent, getRunSnapshot } from "./state.js";
 import type {
   ContinueSpec,
   FlowNodeResult,
@@ -80,6 +80,11 @@ interface ExecutorOptions {
   manager: AgentManager;
   runtimeState: RunRuntimeState;
   onStateChanged?: (ctx: ExtensionContext) => void;
+}
+
+export interface RunExecutionControls {
+  appendEvent?: (event: RunEvent) => void;
+  onRunCreated?: (runId: string) => void;
 }
 
 export class RunExecutionError extends Error {
@@ -509,10 +514,6 @@ function createLinkedAbortController(parentSignal?: AbortSignal): {
   };
 }
 
-function cloneSnapshot<T>(value: T): T {
-  return structuredClone(value);
-}
-
 function cloneMemory(memory: FlowMemory): FlowMemory {
   return {
     bySpecId: new Map(memory.bySpecId),
@@ -677,9 +678,14 @@ function assertNotAborted(signal?: AbortSignal): void {
 export class RunExecutor {
   constructor(private readonly options: ExecutorOptions) {}
 
-  private emit(event: RunEvent, ctx: ExtensionContext): void {
+  private emit(
+    event: RunEvent,
+    ctx: ExtensionContext,
+    controls?: RunExecutionControls,
+  ): void {
     applyRunEvent(this.options.runtimeState, event);
-    appendRunEvent(this.options.pi, event);
+    if (controls?.appendEvent) controls.appendEvent(event);
+    else appendRunEvent(this.options.pi, event);
 
     switch (event.type) {
       case "run_created":
@@ -736,15 +742,11 @@ export class RunExecutor {
   }
 
   private buildSnapshot(runId: string): RunResultDetails {
-    const run = this.options.runtimeState.runs.get(runId);
-    if (!run) {
+    const snapshot = getRunSnapshot(this.options.runtimeState, runId);
+    if (!snapshot) {
       throw new Error(`Unknown run ${runId}.`);
     }
-    return cloneSnapshot({
-      run,
-      nodes: getRunNodes(this.options.runtimeState, runId),
-      result: run.result,
-    });
+    return snapshot;
   }
 
   async execute(
@@ -753,6 +755,7 @@ export class RunExecutor {
     signal?: AbortSignal,
     onUpdate?: (result: AgentToolResult<RunResultDetails>) => void,
     defaults?: { model?: string; thinking?: Thinking },
+    controls?: RunExecutionControls,
   ): Promise<RunResultDetails> {
     const runId = crypto.randomUUID();
     let nodeCounter = 0;
@@ -778,6 +781,10 @@ export class RunExecutor {
       status: "running",
       startedAt: Date.now(),
       depth: 0,
+      originSessionFile:
+        typeof ctx.sessionManager?.getSessionFile === "function"
+          ? ctx.sessionManager.getSessionFile()
+          : undefined,
       flow,
       budgets: params.budgets,
       cwd: runCwd,
@@ -806,7 +813,8 @@ export class RunExecutor {
       else signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    this.emit({ type: "run_created", at: run.startedAt, run }, ctx);
+    this.emit({ type: "run_created", at: run.startedAt, run }, ctx, controls);
+    controls?.onRunCreated?.(runId);
     notifyUpdate();
 
     const initialState: EvaluationState = {
@@ -836,6 +844,7 @@ export class RunExecutor {
         },
         ctx,
         notifyUpdate,
+        controls,
         rootNodeId,
         undefined,
         undefined,
@@ -850,6 +859,7 @@ export class RunExecutor {
           result,
         },
         ctx,
+        controls,
       );
       notifyUpdate();
       return this.buildSnapshot(runId);
@@ -865,6 +875,7 @@ export class RunExecutor {
           error: message,
         },
         ctx,
+        controls,
       );
       notifyUpdate();
       throw new RunExecutionError(message, this.buildSnapshot(runId), error);
@@ -878,6 +889,7 @@ export class RunExecutor {
     state: EvaluationState,
     ctx: ExtensionContext,
     notifyUpdate: () => void,
+    controls: RunExecutionControls | undefined,
     forcedNodeId?: string,
     branchKey?: string,
     iteration?: number,
@@ -899,7 +911,7 @@ export class RunExecutor {
       iteration,
       startedAt: Date.now(),
     };
-    this.emit({ type: "node_started", at: Date.now(), node }, ctx);
+    this.emit({ type: "node_started", at: Date.now(), node }, ctx, controls);
     notifyUpdate();
 
     try {
@@ -915,6 +927,7 @@ export class RunExecutor {
             state,
             ctx,
             notifyUpdate,
+            controls,
             specPath,
           );
           break;
@@ -925,11 +938,19 @@ export class RunExecutor {
             state,
             ctx,
             notifyUpdate,
+            controls,
             specPath,
           );
           break;
         case "join":
-          result = await this.evaluateJoin(spec, nodeId, state, ctx, specPath);
+          result = await this.evaluateJoin(
+            spec,
+            nodeId,
+            state,
+            ctx,
+            controls,
+            specPath,
+          );
           break;
         case "loop":
           result = await this.evaluateLoop(
@@ -938,6 +959,7 @@ export class RunExecutor {
             state,
             ctx,
             notifyUpdate,
+            controls,
             specPath,
           );
           break;
@@ -952,6 +974,7 @@ export class RunExecutor {
           output: summarizeForContext(result),
         },
         ctx,
+        controls,
       );
       notifyUpdate();
       return result;
@@ -966,6 +989,7 @@ export class RunExecutor {
           error: message,
         },
         ctx,
+        controls,
       );
       notifyUpdate();
       throw error;
@@ -1057,6 +1081,7 @@ export class RunExecutor {
     state: EvaluationState,
     ctx: ExtensionContext,
     notifyUpdate: () => void,
+    controls: RunExecutionControls | undefined,
     specPath: string,
   ): Promise<SequenceNodeResult> {
     const steps: FlowNodeResult[] = [];
@@ -1075,6 +1100,7 @@ export class RunExecutor {
         },
         ctx,
         notifyUpdate,
+        controls,
         undefined,
         undefined,
         undefined,
@@ -1102,6 +1128,7 @@ export class RunExecutor {
     state: EvaluationState,
     ctx: ExtensionContext,
     notifyUpdate: () => void,
+    controls: RunExecutionControls | undefined,
     specPath: string,
   ): Promise<ForkNodeResult> {
     this.emit(
@@ -1113,6 +1140,7 @@ export class RunExecutor {
         status: "waiting",
       },
       ctx,
+      controls,
     );
 
     const entries = Object.entries(spec.branches) as Array<[string, FlowSpec]>;
@@ -1155,6 +1183,7 @@ export class RunExecutor {
               },
               ctx,
               notifyUpdate,
+              controls,
               undefined,
               key,
               undefined,
@@ -1230,6 +1259,7 @@ export class RunExecutor {
     nodeId: string,
     state: EvaluationState,
     ctx: ExtensionContext,
+    _controls: RunExecutionControls | undefined,
     _specPath: string,
   ): Promise<JoinNodeResult> {
     const forkResult = state.memory.bySpecId.get(spec.from);
@@ -1366,6 +1396,7 @@ export class RunExecutor {
     state: EvaluationState,
     ctx: ExtensionContext,
     notifyUpdate: () => void,
+    controls: RunExecutionControls | undefined,
     specPath: string,
   ): Promise<LoopNodeResult> {
     const iterations: FlowNodeResult[] = [];
@@ -1385,6 +1416,7 @@ export class RunExecutor {
           iteration,
         },
         ctx,
+        controls,
       );
       notifyUpdate();
 
@@ -1399,6 +1431,7 @@ export class RunExecutor {
         },
         ctx,
         notifyUpdate,
+        controls,
         undefined,
         undefined,
         iteration,
@@ -1416,6 +1449,7 @@ export class RunExecutor {
           iteration,
         },
         ctx,
+        controls,
       );
       notifyUpdate();
 
@@ -1434,5 +1468,21 @@ export class RunExecutor {
     };
     rememberResult(spec, loopResult, state.memory);
     return loopResult;
+  }
+
+  markDetached(
+    runId: string,
+    ctx: ExtensionContext,
+    controls?: RunExecutionControls,
+  ): void {
+    this.emit(
+      {
+        type: "run_detached",
+        at: Date.now(),
+        runId,
+      },
+      ctx,
+      controls,
+    );
   }
 }

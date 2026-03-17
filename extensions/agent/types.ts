@@ -128,6 +128,8 @@ export interface WorkflowRun {
   status: RunStatus;
   startedAt: number;
   completedAt?: number;
+  detachedAt?: number;
+  originSessionFile?: string;
   depth: number;
   flow: FlowSpec;
   budgets?: Budgets;
@@ -276,6 +278,11 @@ export type RunEvent =
       runId: string;
       nodeId: string;
       iteration: number;
+    }
+  | {
+      type: "run_detached";
+      at: number;
+      runId: string;
     }
   | {
       type: "run_completed";

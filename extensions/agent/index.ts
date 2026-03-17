@@ -1,6 +1,7 @@
 import type {
   AgentToolResult,
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
@@ -9,6 +10,7 @@ import {
   formatAgentList,
   resolveAgentByName,
   type Scope,
+  type Thinking,
 } from "./agents.js";
 import { toDiagnosticText } from "./diagnostics.js";
 import {
@@ -21,6 +23,7 @@ import {
 import { AgentEvents } from "./events.js";
 import { RunExecutionError, RunExecutor } from "./executor.js";
 import { normalizeWorkflowParams } from "./flow-spec.js";
+import { LiveRunRegistry } from "./live-runs.js";
 import { AgentManager } from "./manager.js";
 import { RUN_EVENT_CUSTOM_TYPE } from "./persistence.js";
 import {
@@ -39,10 +42,12 @@ import {
   renderWorkflowCall,
   renderWorkflowResult,
 } from "./presentation.js";
+import { RunEventCache } from "./session-events.js";
 import {
   countStatuses,
   createRunRuntimeState,
   getOrderedRuns,
+  getRunSnapshot,
 } from "./state.js";
 import {
   AgentParamsSchema,
@@ -52,6 +57,7 @@ import {
 } from "./tool-definitions.js";
 import type {
   AgentRunDetails,
+  RunEvent,
   RunResultDetails,
   WorkflowParams,
 } from "./types.js";
@@ -86,6 +92,20 @@ function getCurrentModelId(ctx: ExtensionContext): string | undefined {
   return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 }
 
+function formatDetachedToolText(runId: string): string {
+  return `Run detached: ${runId}\nUse /runs to inspect or stop it.`;
+}
+
+function parseRunCommand(
+  args: string,
+): { kind: "details"; query: string } | { kind: "stop"; query: string } {
+  const trimmed = args.trim();
+  if (trimmed.toLowerCase().startsWith("stop ")) {
+    return { kind: "stop", query: trimmed.slice(5).trim() };
+  }
+  return { kind: "details", query: trimmed };
+}
+
 export function createAgentExtension(options?: {
   spawnProcess?: SpawnProcess;
 }) {
@@ -96,6 +116,8 @@ export function createAgentExtension(options?: {
   return function agentExtension(pi: ExtensionAPI) {
     const runtimeState = createRunRuntimeState();
     const manager = new AgentManager(engine);
+    const liveRuns = new LiveRunRegistry();
+    const runEventCache = new RunEventCache();
     const widgetManager = new RunWidgetManager(runtimeState);
     let workflowUsedInCurrentAgentRun = false;
     let workflowUsedInPreviousAgentRun = false;
@@ -112,8 +134,188 @@ export function createAgentExtension(options?: {
       },
     });
 
+    const resolveRunId = (query: string): string | undefined => {
+      const trimmed = query.trim();
+      if (!trimmed) return undefined;
+      if (runtimeState.runs.has(trimmed)) return trimmed;
+      const matches = getOrderedRuns(runtimeState).filter((run) =>
+        run.id.startsWith(trimmed),
+      );
+      return matches.length === 1 ? matches[0]?.id : undefined;
+    };
+
+    const stopRun = (query: string): string => {
+      const runId = resolveRunId(query);
+      if (!runId) {
+        return query.trim()
+          ? `Unknown run "${query.trim()}".`
+          : "Usage: /run stop <id-or-prefix>";
+      }
+      if (!liveRuns.has(runId)) {
+        return `Run ${runId} is not currently active.`;
+      }
+      liveRuns.stop(runId);
+      return `Stopping run ${runId}.`;
+    };
+
+    const sendRunMessage = (content: string): void => {
+      pi.sendMessage({
+        customType: RUN_EVENT_CUSTOM_TYPE,
+        content,
+        display: true,
+      });
+    };
+
+    const showRunsMenu = async (
+      ctx: ExtensionCommandContext,
+    ): Promise<void> => {
+      const runs = getOrderedRuns(runtimeState);
+      if (runs.length === 0) {
+        sendRunMessage("No runs recorded in this session.");
+        return;
+      }
+
+      const options = runs.slice(0, 20).map((run) => ({
+        runId: run.id,
+        label: `${run.label} · ${run.id.slice(0, 8)} · ${run.status}${run.detachedAt ? " (detached)" : ""}`,
+      }));
+      const choice = await ctx.ui.select(
+        "Runs",
+        options.map((option) => option.label),
+      );
+      if (!choice) return;
+
+      const selected = options.find((option) => option.label === choice);
+      if (!selected) return;
+
+      const run = runtimeState.runs.get(selected.runId);
+      if (!run) return;
+
+      const actions = [
+        "Inspect",
+        "Flow",
+        "Flow (Mermaid)",
+        ...(run.status === "running" && liveRuns.has(run.id) ? ["Stop"] : []),
+        "Back",
+      ];
+      const action = await ctx.ui.select(run.label, actions);
+      if (!action || action === "Back") return;
+
+      if (action === "Inspect") {
+        sendRunMessage(formatRunDetailsText(runtimeState, run.id));
+      } else if (action === "Flow") {
+        sendRunMessage(formatFlowCommandOutput(runtimeState, run.id));
+      } else if (action === "Flow (Mermaid)") {
+        sendRunMessage(
+          formatFlowCommandOutput(runtimeState, `${run.id} mermaid`),
+        );
+      } else if (action === "Stop") {
+        sendRunMessage(stopRun(run.id));
+      }
+
+      await showRunsMenu(ctx);
+    };
+
+    const executeManagedWorkflow = async (
+      workflowParams: WorkflowParams,
+      ctx: ExtensionContext,
+      signal: AbortSignal | undefined,
+      onUpdate:
+        | ((result: AgentToolResult<RunResultDetails>) => void)
+        | undefined,
+      defaults: { model?: string; thinking?: Thinking },
+    ): Promise<RunResultDetails> => {
+      if (signal?.aborted) {
+        return await executor.execute(
+          workflowParams,
+          ctx,
+          signal,
+          onUpdate,
+          defaults,
+        );
+      }
+
+      const backgroundController = new AbortController();
+      const origin = runEventCache.createOrigin(
+        (ctx as ExtensionContext).sessionManager,
+      );
+      let runId: string | undefined;
+      let detached = false;
+      let settled = false;
+      let resolveDetach: ((details: RunResultDetails) => void) | undefined;
+      let rejectDetach: ((error: Error) => void) | undefined;
+
+      const detachPromise = new Promise<RunResultDetails>((resolve, reject) => {
+        resolveDetach = resolve;
+        rejectDetach = reject;
+      });
+      const persistEvent = (event: RunEvent) => {
+        if (!runEventCache.appendToOrigin(origin, event)) {
+          pi.appendEntry(RUN_EVENT_CUSTOM_TYPE, event);
+        }
+      };
+
+      const onAbort = () => {
+        if (settled) return;
+        if (!runId) {
+          backgroundController.abort();
+          rejectDetach?.(new Error("Workflow aborted."));
+          return;
+        }
+        detached = true;
+        executor.markDetached(runId, ctx, {
+          appendEvent: persistEvent,
+        });
+        const snapshot = getRunSnapshot(runtimeState, runId);
+        if (snapshot) {
+          resolveDetach?.(snapshot);
+        } else {
+          rejectDetach?.(new Error("Workflow aborted."));
+        }
+      };
+
+      if (signal) signal.addEventListener("abort", onAbort, { once: true });
+
+      const executionPromise = executor
+        .execute(
+          workflowParams,
+          ctx,
+          backgroundController.signal,
+          detached
+            ? undefined
+            : onUpdate
+              ? (update) => {
+                  if (!detached) onUpdate(update);
+                }
+              : undefined,
+          defaults,
+          {
+            appendEvent: persistEvent,
+            onRunCreated: (createdRunId) => {
+              runId = createdRunId;
+              liveRuns.register({
+                runId: createdRunId,
+                sessionFile: origin.sessionFile,
+                stop: () => backgroundController.abort(),
+                snapshot: () => getRunSnapshot(runtimeState, createdRunId),
+              });
+            },
+          },
+        )
+        .finally(() => {
+          settled = true;
+          if (runId) liveRuns.remove(runId);
+        });
+
+      try {
+        return await Promise.race([executionPromise, detachPromise]);
+      } finally {
+        if (signal) signal.removeEventListener("abort", onAbort);
+      }
+    };
+
     const reloadRunState = (_event: unknown, ctx: ExtensionContext) => {
-      rebuildRuntimeState(runtimeState, ctx);
+      rebuildRuntimeState(runtimeState, ctx, runEventCache, liveRuns);
       widgetManager.update(ctx);
     };
 
@@ -128,6 +330,9 @@ export function createAgentExtension(options?: {
     });
     pi.on("session_tree", async (event, ctx) => {
       reloadRunState(event, ctx);
+    });
+    pi.on("session_shutdown", async () => {
+      liveRuns.stopAll();
     });
 
     pi.on("before_agent_start", async (event, ctx) => {
@@ -227,16 +432,16 @@ export function createAgentExtension(options?: {
 
     pi.registerCommand("runs", {
       description: "List agent runs",
-      handler: async (args) => {
+      handler: async (args, ctx) => {
         const query = args.trim();
+        if (!query && ctx.hasUI) {
+          await showRunsMenu(ctx as ExtensionCommandContext);
+          return;
+        }
         const content = query
           ? `Did you mean /run ${query}? Use /run <id> for full details.`
           : formatRunOverviewText(runtimeState);
-        pi.sendMessage({
-          customType: RUN_EVENT_CUSTOM_TYPE,
-          content,
-          display: true,
-        });
+        sendRunMessage(content);
       },
     });
 
@@ -256,15 +461,14 @@ export function createAgentExtension(options?: {
         return items.length > 0 ? items : null;
       },
       handler: async (args) => {
-        const query = args.trim();
-        const content = query
-          ? formatRunDetailsText(runtimeState, query)
-          : "Usage: /run <id-or-prefix>";
-        pi.sendMessage({
-          customType: RUN_EVENT_CUSTOM_TYPE,
-          content,
-          display: true,
-        });
+        const parsed = parseRunCommand(args);
+        const content =
+          parsed.kind === "stop"
+            ? stopRun(parsed.query)
+            : parsed.query
+              ? formatRunDetailsText(runtimeState, parsed.query)
+              : "Usage: /run <id-or-prefix>\n       /run stop <id-or-prefix>";
+        sendRunMessage(content);
       },
     });
 
@@ -286,11 +490,7 @@ export function createAgentExtension(options?: {
       },
       handler: async (args) => {
         const content = formatFlowCommandOutput(runtimeState, args);
-        pi.sendMessage({
-          customType: RUN_EVENT_CUSTOM_TYPE,
-          content,
-          display: true,
-        });
+        sendRunMessage(content);
       },
     });
 
@@ -354,7 +554,7 @@ export function createAgentExtension(options?: {
         };
 
         try {
-          const details = await executor.execute(
+          const details = await executeManagedWorkflow(
             workflow,
             ctx,
             signal,
@@ -379,10 +579,37 @@ export function createAgentExtension(options?: {
             },
           );
           const spawnResult = getRootSpawnResult(details);
-          if (!spawnResult) {
-            throw new Error(
-              "Expected single-agent workflow to return a spawn result.",
-            );
+          if (!spawnResult || details.run.status === "running") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: formatDetachedToolText(details.run.id),
+                },
+              ],
+              details: {
+                agent: agent.name,
+                agentSource: agent.source,
+                model: agent.model ?? getCurrentModelId(ctx),
+                thinking: agent.thinking,
+                skills: [...agent.skills],
+                missingSkills: [],
+                exitCode: -1,
+                stderr: "",
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 0,
+                },
+                discoveryDiagnostics: diagnostics,
+                scope,
+                stopReason: "detached",
+              },
+            };
           }
           return {
             content: [
@@ -444,7 +671,7 @@ export function createAgentExtension(options?: {
         const workflowParams = normalizeWorkflowParams(params);
 
         try {
-          const details = await executor.execute(
+          const details = await executeManagedWorkflow(
             workflowParams,
             ctx,
             signal,
@@ -458,7 +685,10 @@ export function createAgentExtension(options?: {
             content: [
               {
                 type: "text",
-                text: formatWorkflowResultXml(details.result, details.run.id),
+                text:
+                  details.run.status === "running"
+                    ? formatDetachedToolText(details.run.id)
+                    : formatWorkflowResultXml(details.result, details.run.id),
               },
             ],
             details,

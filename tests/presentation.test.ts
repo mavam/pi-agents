@@ -362,6 +362,41 @@ describe("agent presentation", () => {
     expect(lines[1]).toContain("run-1");
   });
 
+  it("hides detached runs from the live widget", () => {
+    const runtimeState = createRunRuntimeState();
+    const startedAt = Date.now();
+
+    runtimeState.runs.set("run-1", {
+      id: "run-1",
+      rootNodeId: "root:1",
+      label: "workflow",
+      status: "running",
+      startedAt,
+      detachedAt: startedAt + 1,
+      depth: 0,
+      flow: {
+        kind: "fork",
+        id: "fanout",
+        branches: {
+          a: { kind: "spawn", agent: "explorer", task: "branch a" },
+          b: { kind: "spawn", agent: "explorer", task: "branch b" },
+        },
+      },
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.order.push("run-1");
+
+    const plainTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+
+    const lines = buildWidgetLines(runtimeState, "⠹", plainTheme, 120);
+
+    expect(lines).toEqual([]);
+  });
+
   it("renders a static flow tree for a complex workflow", () => {
     const flow: FlowSpec = {
       kind: "sequence",

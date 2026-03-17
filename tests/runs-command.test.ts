@@ -105,6 +105,53 @@ function createSpawnProcess(
   };
 }
 
+function createLongRunningSpawnProcess(inputs: string[]): SpawnProcess {
+  return (_command, _args, _options) => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    let capturedInput = "";
+    let proc: ChildProcessWithoutNullStreams;
+    const stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        capturedInput += chunk.toString();
+        callback();
+      },
+      final(callback) {
+        inputs.push(capturedInput);
+        callback();
+      },
+    });
+    proc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+    Object.assign(proc, {
+      stdout,
+      stderr,
+      stdin,
+      exitCode: null,
+      signalCode: null,
+      kill(signal?: NodeJS.Signals) {
+        queueMicrotask(() => {
+          proc.emit("close", null, signal ?? "SIGTERM");
+        });
+        return true;
+      },
+    });
+    return proc;
+  };
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 250,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for run state change.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 function setupExtension(spawnProcess: SpawnProcess): {
   runsCommand: RegisteredCommand;
   runCommand: RegisteredCommand;
@@ -345,6 +392,62 @@ describe("/run command", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain("explorer");
     expect(messages[0]?.content).toContain("completed");
+  });
+
+  it("stops an active detached run explicitly", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "explorer.md"),
+      "explorer",
+      "Project explorer",
+    );
+
+    const inputs: string[] = [];
+    const { runCommand, workflowTool, messages } = setupExtension(
+      createLongRunningSpawnProcess(inputs),
+    );
+    const controller = new AbortController();
+
+    const result = await workflowTool.execute(
+      "call-stop-run",
+      {
+        flow: {
+          kind: "spawn",
+          id: "first",
+          agent: "explorer",
+          task: "inspect",
+        },
+      },
+      controller.signal,
+      (update) => {
+        const details = update.details as RunResultDetails;
+        if (details.run.status === "running") {
+          controller.abort();
+        }
+      },
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    const runId = result.details.run.id as string;
+    messages.length = 0;
+    await runCommand.handler(`stop ${runId}`, { cwd: workspaceDir });
+
+    expect(messages[0]?.content).toContain(`Stopping run ${runId}`);
+
+    await waitFor(() => inputs.length === 1);
+
+    const deadline = Date.now() + 250;
+    while (true) {
+      messages.length = 0;
+      await runCommand.handler(runId, { cwd: workspaceDir });
+      if (messages[0]?.content.includes("Status: aborted")) break;
+      if (Date.now() >= deadline) {
+        throw new Error(
+          "Timed out waiting for /run details to report aborted.",
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(messages[0]?.content).toContain("Status: aborted");
   });
 });
 

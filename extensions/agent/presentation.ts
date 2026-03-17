@@ -1,6 +1,7 @@
 import type {
   AgentToolResult,
   ExtensionContext,
+  SessionEntry,
   Theme,
 } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
@@ -12,8 +13,10 @@ import {
   sequenceStepPath,
 } from "./flow-path.js";
 import { normalizeWorkflowParams } from "./flow-spec.js";
+import type { LiveRunRegistry } from "./live-runs.js";
 import { type MermaidOptions, toMermaid } from "./mermaid.js";
 import { rebuildRunState } from "./persistence.js";
+import type { RunEventCache } from "./session-events.js";
 import {
   getOrderedRuns,
   getRunNodes,
@@ -109,7 +112,7 @@ export function formatRunOverviewText(runtimeState: RunRuntimeState): string {
   for (const run of runs.slice(0, 10)) {
     const nodes = getRunNodes(runtimeState, run.id);
     lines.push(
-      `- ${iconForStatus(run.status)} ${run.label} (${run.id.slice(0, 8)}) · ${run.status} · ${nodes.length} nodes`,
+      `- ${iconForStatus(run.status)} ${run.label} (${run.id.slice(0, 8)}) · ${formatRunStatus(run)} · ${nodes.length} nodes`,
     );
   }
   return lines.join("\n");
@@ -168,7 +171,7 @@ export function formatRunDetailsText(
   const lines = [
     `Run: ${run.label}`,
     `ID: ${run.id}`,
-    `Status: ${run.status}`,
+    `Status: ${formatRunStatus(run)}`,
     `Scope: ${run.scope}`,
     `CWD: ${run.cwd}`,
     `Started: ${new Date(run.startedAt).toISOString()}`,
@@ -552,7 +555,7 @@ export function formatFlowCommandOutput(
     );
   }
 
-  const header = `Flow: ${run.label} (${run.id.slice(0, 8)}) · ${run.status}`;
+  const header = `Flow: ${run.label} (${run.id.slice(0, 8)}) · ${formatRunStatus(run)}`;
   const tree = formatFlowTree(run.flow, runtimeState, runId);
   return [header, ...tree].join("\n");
 }
@@ -923,7 +926,7 @@ export function renderWorkflowResult(
   const lines = [
     theme.fg(
       "toolTitle",
-      theme.bold(`${details.run.label} · ${details.run.status}`),
+      theme.bold(`${details.run.label} · ${formatRunStatus(details.run)}`),
     ),
   ];
 
@@ -963,8 +966,22 @@ export function getRootSpawnResult(
 export function rebuildRuntimeState(
   runtimeState: RunRuntimeState,
   ctx: ExtensionContext,
+  runEventCache?: RunEventCache,
+  liveRuns?: LiveRunRegistry,
 ): void {
-  const rebuilt = rebuildRunState(ctx.sessionManager.getBranch());
+  const sessionManager = ctx.sessionManager;
+  const branchEntries =
+    typeof sessionManager?.getBranch === "function"
+      ? sessionManager.getBranch()
+      : [];
+  const sessionFile =
+    typeof sessionManager?.getSessionFile === "function"
+      ? sessionManager.getSessionFile()
+      : undefined;
+  const mergedEntries = runEventCache
+    ? runEventCache.mergeEntries(sessionFile, branchEntries as SessionEntry[])
+    : branchEntries;
+  const rebuilt = rebuildRunState(mergedEntries);
   runtimeState.runs.clear();
   runtimeState.nodes.clear();
   runtimeState.order.length = 0;
@@ -976,6 +993,15 @@ export function rebuildRuntimeState(
   }
   runtimeState.order.push(...rebuilt.order);
   markRunningRunsAborted(runtimeState);
+  for (const snapshot of liveRuns?.listSnapshots() ?? []) {
+    runtimeState.runs.set(snapshot.run.id, structuredClone(snapshot.run));
+    for (const node of snapshot.nodes) {
+      runtimeState.nodes.set(node.id, structuredClone(node));
+    }
+    if (!runtimeState.order.includes(snapshot.run.id)) {
+      runtimeState.order.push(snapshot.run.id);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,7 +1028,7 @@ export function buildWidgetLines(
   terminalWidth: number,
 ): string[] {
   const active = getOrderedRuns(runtimeState)
-    .filter((run) => run.status === "running")
+    .filter((run) => run.status === "running" && !run.detachedAt)
     .slice(0, 5);
 
   if (active.length === 0) return [];
@@ -1020,7 +1046,7 @@ export function buildWidgetLines(
     // Header line with animated spinner.
     lines.push(
       truncate(
-        `${theme.fg("dim", connector)} ${theme.fg("accent", spinner)} ${theme.bold(run.label)} ${theme.fg("dim", run.id.slice(0, 8))}`,
+        `${theme.fg("dim", connector)} ${theme.fg("accent", spinner)} ${theme.bold(run.label)} ${theme.fg("dim", `${run.id.slice(0, 8)} · ${run.detachedAt ? "detached" : "running"}`)}`,
       ),
     );
 
@@ -1059,6 +1085,16 @@ export function buildWidgetLines(
   return lines;
 }
 
+export function formatRunStatus(run: {
+  status: string;
+  detachedAt?: number;
+}): string {
+  if (run.status === "running" && run.detachedAt) {
+    return "running (detached)";
+  }
+  return run.status;
+}
+
 /**
  * Manages the live widget timer for active runs.
  *
@@ -1079,7 +1115,7 @@ export class RunWidgetManager {
     if (!ctx.hasUI) return;
 
     const active = getOrderedRuns(this.runtimeState).filter(
-      (run) => run.status === "running",
+      (run) => run.status === "running" && !run.detachedAt,
     );
 
     if (active.length === 0) {

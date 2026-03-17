@@ -3,6 +3,7 @@ import type {
   NodeStatus,
   RunEvent,
   RunNode,
+  RunResultDetails,
   RunStatus,
   WorkflowRun,
 } from "./types.js";
@@ -88,6 +89,13 @@ export function applyRunEvent(state: RunRuntimeState, event: RunEvent): void {
       }
       return;
     }
+    case "run_detached": {
+      const run = state.runs.get(event.runId);
+      if (run) {
+        run.detachedAt = event.at;
+      }
+      return;
+    }
     case "run_completed": {
       const run = state.runs.get(event.runId);
       if (run) {
@@ -134,6 +142,19 @@ export function getOrderedRuns(state: RunRuntimeState): WorkflowRun[] {
     .map((id) => state.runs.get(id))
     .filter((run): run is WorkflowRun => run !== undefined)
     .sort((a, b) => b.startedAt - a.startedAt);
+}
+
+export function getRunSnapshot(
+  state: RunRuntimeState,
+  runId: string,
+): RunResultDetails | undefined {
+  const run = state.runs.get(runId);
+  if (!run) return undefined;
+  return structuredClone({
+    run,
+    nodes: getRunNodes(state, runId),
+    result: run.result,
+  });
 }
 
 export function countStatuses(state: RunRuntimeState): {

@@ -5,6 +5,13 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { Agent, Scope } from "./agents.js";
+import {
+  forkBranchPath,
+  loopBodyPath,
+  ROOT_FLOW_PATH,
+  sequenceStepPath,
+} from "./flow-path.js";
+import { normalizeWorkflowParams } from "./flow-spec.js";
 import { type MermaidOptions, toMermaid } from "./mermaid.js";
 import { rebuildRunState } from "./persistence.js";
 import {
@@ -193,51 +200,51 @@ export function formatRunDetailsText(
 // Flow tree — ASCII visualization of a FlowSpec
 // ---------------------------------------------------------------------------
 
-/** Indexes RunNodes for fast status lookups by specId, label, and branchKey. */
+/** Index RunNodes by canonical specPath. Multiple runtime nodes may share a
+ * path, for example loop bodies across iterations. */
 interface NodeIndex {
-  bySpecId: ReadonlyMap<string, RunNode>;
-  byLabel: ReadonlyMap<string, RunNode>;
-  byBranchKey: ReadonlyMap<string, RunNode>;
+  bySpecPath: ReadonlyMap<string, RunNode[]>;
 }
 
 function buildNodeIndex(
   runtimeState: RunRuntimeState | undefined,
   runId: string | undefined,
 ): NodeIndex {
-  const empty: NodeIndex = {
-    bySpecId: new Map(),
-    byLabel: new Map(),
-    byBranchKey: new Map(),
-  };
+  const empty: NodeIndex = { bySpecPath: new Map() };
   if (!runtimeState || !runId) return empty;
-  const nodes = getRunNodes(runtimeState, runId);
-  const bySpecId = new Map<string, RunNode>();
-  const byLabel = new Map<string, RunNode>();
-  const byBranchKey = new Map<string, RunNode>();
-  for (const node of nodes) {
-    if (node.specId) bySpecId.set(node.specId, node);
-    if (node.label) byLabel.set(node.label, node);
-    if (node.branchKey) byBranchKey.set(node.branchKey, node);
+  const bySpecPath = new Map<string, RunNode[]>();
+  for (const node of getRunNodes(runtimeState, runId)) {
+    if (!node.specPath) continue;
+    const group = bySpecPath.get(node.specPath);
+    if (group) group.push(node);
+    else bySpecPath.set(node.specPath, [node]);
   }
-  return { bySpecId, byLabel, byBranchKey };
+  return { bySpecPath };
 }
 
-function flowIcon(spec: FlowSpec, nodeIndex: NodeIndex): string {
-  // Try specId first (most reliable), then label, then kind fallback.
-  if (spec.id) {
-    const node = nodeIndex.bySpecId.get(spec.id);
-    if (node) return iconForStatus(node.status);
-  }
-  if (spec.label) {
-    const node = nodeIndex.byLabel.get(spec.label);
-    if (node) return iconForStatus(node.status);
-  }
-  // For spawns without id/label, try matching by agent name via label index.
-  if (spec.kind === "spawn") {
-    const node = nodeIndex.byLabel.get(spec.agent);
-    if (node) return iconForStatus(node.status);
-  }
-  return iconForKind(spec.kind);
+function latestNode(
+  nodes: readonly RunNode[] | undefined,
+): RunNode | undefined {
+  return nodes?.[nodes.length - 1];
+}
+
+function aggregatedStatus(
+  nodes: readonly RunNode[] | undefined,
+): RunNode["status"] | undefined {
+  if (!nodes || nodes.length === 0) return undefined;
+  if (nodes.some((node) => node.status === "running")) return "running";
+  if (nodes.some((node) => node.status === "waiting")) return "waiting";
+  const latest = latestNode(nodes);
+  return latest?.status;
+}
+
+function flowIcon(
+  spec: FlowSpec,
+  specPath: string,
+  nodeIndex: NodeIndex,
+): string {
+  const status = aggregatedStatus(nodeIndex.bySpecPath.get(specPath));
+  return status ? iconForStatus(status) : iconForKind(spec.kind);
 }
 
 function spawnLabel(spec: SpawnFlowSpec): string {
@@ -254,13 +261,15 @@ function joinLabel(spec: JoinFlowSpec): string {
   return `${base} ← ${spec.from}`;
 }
 
-function loopLabel(spec: LoopFlowSpec, nodeIndex: NodeIndex): string {
+function loopLabel(
+  spec: LoopFlowSpec,
+  specPath: string,
+  nodeIndex: NodeIndex,
+): string {
   const base = spec.label ?? spec.id;
-  if (spec.id) {
-    const node = nodeIndex.bySpecId.get(spec.id);
-    if (node?.iteration !== undefined) {
-      return `${base} (${node.iteration}/${spec.maxIterations} iterations)`;
-    }
+  const node = latestNode(nodeIndex.bySpecPath.get(specPath));
+  if (node?.iteration !== undefined) {
+    return `${base} (${node.iteration}/${spec.maxIterations} iterations)`;
   }
   return `${base} (max ${spec.maxIterations})`;
 }
@@ -272,25 +281,33 @@ interface TreeContext {
 
 /**
  * Emit lines for a list of sibling specs at the given indent prefix.
- * `prefix` is the string prepended to every line (e.g. `"│  "`).
+ * `prefix` is the string prepended to every line (for example `"│  "`).
  */
 function emitChildren(
   specs: FlowSpec[],
+  parentPath: string,
   prefix: string,
   ctx: TreeContext,
 ): void {
-  for (let i = 0; i < specs.length; i++) {
-    const spec = specs[i];
+  for (const [index, spec] of specs.entries()) {
     if (!spec) continue;
-    const isLast = i === specs.length - 1;
+    const isLast = index === specs.length - 1;
     const connector = isLast ? "└─" : "├─";
     const childPrefix = isLast ? `${prefix}   ` : `${prefix}│  `;
-    emitSpec(spec, prefix, connector, childPrefix, ctx);
+    emitSpec(
+      spec,
+      sequenceStepPath(parentPath, index),
+      prefix,
+      connector,
+      childPrefix,
+      ctx,
+    );
   }
 }
 
 function emitSpec(
   spec: FlowSpec,
+  specPath: string,
   prefix: string,
   connector: string,
   childPrefix: string,
@@ -298,27 +315,15 @@ function emitSpec(
 ): void {
   switch (spec.kind) {
     case "spawn": {
-      const icon = flowIcon(spec, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
       ctx.lines.push(`${prefix}${connector} ${icon} ${spawnLabel(spec)}`);
       return;
     }
     case "sequence": {
-      // Sequence is transparent: inline its children at the current level.
-      // We emit each step as a sibling at the *parent's* indentation so
-      // sequences don't add visual nesting.
-      for (let i = 0; i < spec.steps.length; i++) {
-        const step = spec.steps[i];
+      for (const [index, step] of spec.steps.entries()) {
         if (!step) continue;
-        // For intermediate steps, use the same prefix/connector logic as
-        // the parent would for siblings. The sequence "takes over" the
-        // connector slot of its first child and the last-child slot of
-        // its last child.
-        const isFirstStep = i === 0;
-        const isLastStep = i === spec.steps.length - 1;
-
-        // The first step inherits the connector that was given to the
-        // sequence itself. Subsequent steps use the childPrefix that
-        // the parent prepared for continuation lines.
+        const isFirstStep = index === 0;
+        const isLastStep = index === spec.steps.length - 1;
         const stepConnector = isFirstStep
           ? connector
           : isLastStep
@@ -329,40 +334,45 @@ function emitSpec(
           ? `${childPrefix}   `
           : `${childPrefix}│  `;
 
-        emitSpec(step, stepPrefix, stepConnector, stepChildPrefix, ctx);
+        emitSpec(
+          step,
+          sequenceStepPath(specPath, index),
+          stepPrefix,
+          stepConnector,
+          stepChildPrefix,
+          ctx,
+        );
       }
       return;
     }
     case "fork": {
-      const icon = flowIcon(spec, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
       ctx.lines.push(`${prefix}${connector} ${icon} ${forkLabel(spec)}`);
 
       const keys = Object.keys(spec.branches).sort();
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i] ?? "";
+      for (const [index, key] of keys.entries()) {
         const branchSpec = spec.branches[key];
         if (!branchSpec) continue;
-        const isLastBranch = i === keys.length - 1;
+        const isLastBranch = index === keys.length - 1;
         const branchConnector = isLastBranch ? "└─" : "├─";
         const branchChildPrefix = isLastBranch
           ? `${childPrefix}   `
           : `${childPrefix}│  `;
+        const branchPath = forkBranchPath(specPath, key);
 
-        // If the branch body is a single spawn, render it inline:
-        //   ├─ fast → ● fast-worker
         if (branchSpec.kind === "spawn") {
-          const spawnIcon = flowIcon(branchSpec, ctx.nodeIndex);
+          const spawnIcon = flowIcon(branchSpec, branchPath, ctx.nodeIndex);
           ctx.lines.push(
             `${childPrefix}${branchConnector} ${key} → ${spawnIcon} ${spawnLabel(branchSpec)}`,
           );
         } else {
-          // Multi-node branch: label line, then children indented.
           ctx.lines.push(`${childPrefix}${branchConnector} ${key}`);
           if (branchSpec.kind === "sequence") {
-            emitChildren(branchSpec.steps, branchChildPrefix, ctx);
+            emitChildren(branchSpec.steps, branchPath, branchChildPrefix, ctx);
           } else {
             emitSpec(
               branchSpec,
+              branchPath,
               branchChildPrefix,
               "└─",
               `${branchChildPrefix}   `,
@@ -374,21 +384,28 @@ function emitSpec(
       return;
     }
     case "join": {
-      const icon = flowIcon(spec, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
       ctx.lines.push(`${prefix}${connector} ${icon} ${joinLabel(spec)}`);
       return;
     }
     case "loop": {
-      const icon = flowIcon(spec, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
       ctx.lines.push(
-        `${prefix}${connector} ${icon} ${loopLabel(spec, ctx.nodeIndex)}`,
+        `${prefix}${connector} ${icon} ${loopLabel(spec, specPath, ctx.nodeIndex)}`,
       );
 
-      // Loop body
+      const bodyPath = loopBodyPath(specPath);
       if (spec.body.kind === "sequence") {
-        emitChildren(spec.body.steps, childPrefix, ctx);
+        emitChildren(spec.body.steps, bodyPath, childPrefix, ctx);
       } else {
-        emitSpec(spec.body, childPrefix, "└─", `${childPrefix}   `, ctx);
+        emitSpec(
+          spec.body,
+          bodyPath,
+          childPrefix,
+          "└─",
+          `${childPrefix}   `,
+          ctx,
+        );
       }
       return;
     }
@@ -400,9 +417,6 @@ function emitSpec(
  *
  * When `runtimeState` and `runId` are given, status icons from the run
  * replace the static kind icons.
- *
- * Sequences are transparent — their children are inlined at the parent
- * indentation level, so the top-level sequence never adds visual noise.
  */
 export function formatFlowTree(
   flow: FlowSpec,
@@ -415,66 +429,62 @@ export function formatFlowTree(
   };
 
   if (flow.kind === "sequence") {
-    // Top-level sequence: emit children at root (no prefix).
-    for (let i = 0; i < flow.steps.length; i++) {
-      const step = flow.steps[i];
+    for (const [index, step] of flow.steps.entries()) {
       if (!step) continue;
-      const isLast = i === flow.steps.length - 1;
-      emitRootChild(step, isLast, ctx);
+      emitRootChild(step, sequenceStepPath(ROOT_FLOW_PATH, index), ctx);
     }
   } else {
-    emitRootChild(flow, true, ctx);
+    emitRootChild(flow, ROOT_FLOW_PATH, ctx);
   }
 
   return ctx.lines;
 }
 
-/**
- * Emit a root-level child. Root children have no leading tree prefix —
- * they start at column 0 with just their icon and label.
- */
+/** Emit a root-level child with no tree prefix. */
 function emitRootChild(
   spec: FlowSpec,
-  _isLast: boolean,
+  specPath: string,
   ctx: TreeContext,
 ): void {
   switch (spec.kind) {
     case "spawn": {
-      const icon = flowIcon(spec, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
       ctx.lines.push(`${icon} ${spawnLabel(spec)}`);
       return;
     }
     case "sequence": {
-      for (const step of spec.steps) {
-        emitRootChild(step, false, ctx);
+      for (const [index, step] of spec.steps.entries()) {
+        if (!step) continue;
+        emitRootChild(step, sequenceStepPath(specPath, index), ctx);
       }
       return;
     }
     case "fork": {
-      const icon = flowIcon(spec, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
       ctx.lines.push(`${icon} ${forkLabel(spec)}`);
 
       const keys = Object.keys(spec.branches).sort();
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i] ?? "";
+      for (const [index, key] of keys.entries()) {
         const branchSpec = spec.branches[key];
         if (!branchSpec) continue;
-        const isLastBranch = i === keys.length - 1;
+        const isLastBranch = index === keys.length - 1;
         const branchConnector = isLastBranch ? "└─" : "├─";
         const branchChildPrefix = isLastBranch ? "   " : "│  ";
+        const branchPath = forkBranchPath(specPath, key);
 
         if (branchSpec.kind === "spawn") {
-          const spawnIcon = flowIcon(branchSpec, ctx.nodeIndex);
+          const spawnIcon = flowIcon(branchSpec, branchPath, ctx.nodeIndex);
           ctx.lines.push(
             `${branchConnector} ${key} → ${spawnIcon} ${spawnLabel(branchSpec)}`,
           );
         } else {
           ctx.lines.push(`${branchConnector} ${key}`);
           if (branchSpec.kind === "sequence") {
-            emitChildren(branchSpec.steps, branchChildPrefix, ctx);
+            emitChildren(branchSpec.steps, branchPath, branchChildPrefix, ctx);
           } else {
             emitSpec(
               branchSpec,
+              branchPath,
               branchChildPrefix,
               "└─",
               `${branchChildPrefix}   `,
@@ -486,18 +496,19 @@ function emitRootChild(
       return;
     }
     case "join": {
-      const icon = flowIcon(spec, ctx.nodeIndex);
+      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
       ctx.lines.push(`${icon} ${joinLabel(spec)}`);
       return;
     }
     case "loop": {
-      const icon = flowIcon(spec, ctx.nodeIndex);
-      ctx.lines.push(`${icon} ${loopLabel(spec, ctx.nodeIndex)}`);
+      const icon = flowIcon(spec, specPath, ctx.nodeIndex);
+      ctx.lines.push(`${icon} ${loopLabel(spec, specPath, ctx.nodeIndex)}`);
 
+      const bodyPath = loopBodyPath(specPath);
       if (spec.body.kind === "sequence") {
-        emitChildren(spec.body.steps, "", ctx);
+        emitChildren(spec.body.steps, bodyPath, "", ctx);
       } else {
-        emitSpec(spec.body, "", "└─", "   ", ctx);
+        emitSpec(spec.body, bodyPath, "", "└─", "   ", ctx);
       }
       return;
     }
@@ -556,6 +567,70 @@ export function formatOutput(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function firstMeaningfulLine(value: unknown): string {
+  const text = typeof value === "string" ? value : formatOutput(value);
+  return (
+    text
+      .split("\n")
+      .find((line) => line.trim())
+      ?.trim() ?? "(empty)"
+  );
+}
+
+function summarizeStructuredWorkflowOutput(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  const branches =
+    typeof record.branches === "object" && record.branches !== null
+      ? (record.branches as Record<string, unknown>)
+      : undefined;
+  const errors =
+    typeof record.errors === "object" && record.errors !== null
+      ? (record.errors as Record<string, unknown>)
+      : undefined;
+  if (!branches && !errors) return undefined;
+
+  const branchKeys = branches ? Object.keys(branches) : [];
+  const errorKeys = errors ? Object.keys(errors) : [];
+
+  if (branchKeys.length === 0 && errorKeys.length > 0) {
+    const lines = [`${errorKeys.length} branch error(s)`];
+    const uniqueMessages = [
+      ...new Set(errorKeys.map((key) => firstMeaningfulLine(errors?.[key]))),
+    ].filter(Boolean);
+    if (uniqueMessages.length === 1) {
+      const [message] = uniqueMessages;
+      if (message) lines.push(message);
+    }
+    return lines.join("\n");
+  }
+
+  if (errorKeys.length === 0 && branchKeys.length > 0) {
+    const lines = [`${branchKeys.length} branch result(s)`];
+    for (const key of branchKeys.slice(0, 2)) {
+      lines.push(`- ${key}: ${firstMeaningfulLine(branches?.[key])}`);
+    }
+    if (branchKeys.length > 2) {
+      lines.push(`... (${branchKeys.length - 2} more branch result(s))`);
+    }
+    return lines.join("\n");
+  }
+
+  const lines = [
+    `${branchKeys.length} branch result(s), ${errorKeys.length} error(s)`,
+  ];
+  for (const key of branchKeys.slice(0, 2)) {
+    lines.push(`- ${key}: ${firstMeaningfulLine(branches?.[key])}`);
+  }
+  for (const key of errorKeys.slice(0, 2)) {
+    lines.push(`- ${key} error: ${firstMeaningfulLine(errors?.[key])}`);
+  }
+  const hidden =
+    Math.max(0, branchKeys.length - 2) + Math.max(0, errorKeys.length - 2);
+  if (hidden > 0) lines.push(`... (${hidden} more item(s))`);
+  return lines.join("\n");
 }
 
 function extractTextContent(result: AgentToolResult<unknown>): string {
@@ -656,7 +731,7 @@ export function renderAgentCall(
 ) {
   const lines = [theme.fg("toolTitle", theme.bold(`agent ${args.name}`))];
   const metadata = [
-    `scope=${args.scope ?? "both"}`,
+    args.scope && args.scope !== "both" ? `scope=${args.scope}` : undefined,
     args.cwd ? `cwd=${args.cwd}` : undefined,
   ]
     .filter(Boolean)
@@ -709,24 +784,35 @@ export function renderAgentResult(
 }
 
 export function renderWorkflowCall(args: WorkflowParams, theme: Theme) {
+  const normalized = (() => {
+    try {
+      return normalizeWorkflowParams(args as unknown);
+    } catch {
+      return args;
+    }
+  })();
+
   const lines = [
     theme.fg(
       "toolTitle",
-      theme.bold(args.label ? `workflow ${args.label}` : "workflow"),
-    ),
-    theme.fg(
-      "muted",
-      [
-        `scope=${args.scope ?? "both"}`,
-        args.cwd ? `cwd=${args.cwd}` : undefined,
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      theme.bold(
+        normalized.label ? `workflow ${normalized.label}` : "workflow",
+      ),
     ),
   ];
+  const metadata = [
+    normalized.scope && normalized.scope !== "both"
+      ? `scope=${normalized.scope}`
+      : undefined,
+    normalized.cwd ? `cwd=${normalized.cwd}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  if (metadata) {
+    lines.push(theme.fg("muted", metadata));
+  }
 
-  // Flow tree preview (static — no runtime state yet).
-  const tree = formatFlowTree(args.flow);
+  const tree = formatFlowTree(normalized.flow);
   if (tree.length > 0) {
     lines.push("");
     for (const treeLine of tree) {
@@ -734,8 +820,8 @@ export function renderWorkflowCall(args: WorkflowParams, theme: Theme) {
     }
   }
 
-  if (args.budgets) {
-    pushSection(lines, "Budgets", formatOutput(args.budgets), theme);
+  if (normalized.budgets) {
+    pushSection(lines, "Budgets", formatOutput(normalized.budgets), theme);
   }
   return createRenderer(lines);
 }
@@ -751,14 +837,22 @@ export function renderWorkflowResult(
       "toolTitle",
       theme.bold(`${details.run.label} · ${details.run.status}`),
     ),
-    theme.fg(
-      "muted",
-      `run=${details.run.id.slice(0, 8)} · nodes=${details.nodes.length} · scope=${details.run.scope}`,
-    ),
   ];
-  const output = details.result
-    ? formatOutput(details.result.output)
-    : extractTextContent(result);
+
+  const metadata = expanded
+    ? `run=${details.run.id.slice(0, 8)} · nodes=${details.nodes.length} · scope=${details.run.scope}`
+    : `run=${details.run.id.slice(0, 8)}`;
+  lines.push(theme.fg("muted", metadata));
+
+  const isRunning = details.run.status === "running";
+  const output = isRunning
+    ? undefined
+    : details.result
+      ? expanded
+        ? formatOutput(details.result.output)
+        : (summarizeStructuredWorkflowOutput(details.result.output) ??
+          formatOutput(details.result.output))
+      : extractTextContent(result);
   if (output) {
     pushSection(lines, "Result", previewText(output, expanded, 12), theme);
   }

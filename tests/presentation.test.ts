@@ -104,6 +104,160 @@ describe("agent presentation", () => {
     }
   });
 
+  it("collapses structured workflow outputs by default", () => {
+    const details: RunResultDetails = {
+      run: {
+        id: "r-structured",
+        rootNodeId: "root:1",
+        label: "workflow",
+        status: "completed",
+        startedAt: Date.now(),
+        depth: 0,
+        flow: {
+          kind: "fork",
+          id: "fanout",
+          branches: {
+            a: { kind: "spawn", agent: "worker", task: "A" },
+          },
+        },
+        cwd: "/tmp",
+        scope: "both",
+      },
+      nodes: [],
+      result: {
+        nodeId: "root:1",
+        kind: "fork",
+        status: "completed",
+        branches: {
+          a: {
+            branchKey: "a",
+            result: {
+              nodeId: "a:1",
+              kind: "spawn",
+              status: "completed",
+              text: "full body",
+              output: "## Very long markdown\n\nLots of details here.",
+              agent: "worker",
+              run: {
+                agent: "worker",
+                agentSource: "project",
+                exitCode: 0,
+                stderr: "",
+                usage: {
+                  input: 1,
+                  output: 1,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: 0,
+                  contextTokens: 1,
+                  turns: 1,
+                },
+                discoveryDiagnostics: [],
+                missingSkills: [],
+                scope: "both",
+              },
+            },
+          },
+        },
+        output: {
+          branches: {
+            tests:
+              "## TESTS Lens Review\n\nA very long detailed markdown review that should not explode the collapsed renderer.",
+          },
+          errors: {
+            ux: 'Unknown agent "ux-reviewer" for scope=both.',
+          },
+        },
+      },
+    };
+
+    const renderer = renderWorkflowResult(
+      {
+        content: [{ type: "text", text: "done" }],
+        details,
+      },
+      false,
+      theme,
+    );
+
+    const text = renderer.render(120).join("\n");
+    expect(text).toContain("1 branch result(s), 1 error(s)");
+    expect(text).toContain("- tests:");
+    expect(text).toContain("- ux error:");
+    expect(text).not.toContain("A very long detailed markdown review");
+  });
+
+  it("collapses error-only workflow outputs aggressively", () => {
+    const details: RunResultDetails = {
+      run: {
+        id: "r-errors",
+        rootNodeId: "root:1",
+        label: "workflow",
+        status: "completed",
+        startedAt: Date.now(),
+        depth: 0,
+        flow: { kind: "fork", id: "fanout", branches: {} },
+        cwd: "/tmp",
+        scope: "both",
+      },
+      nodes: [],
+      result: {
+        nodeId: "root:1",
+        kind: "fork",
+        status: "completed",
+        branches: {},
+        output: {
+          branches: {},
+          errors: {
+            a: 'Unknown agent "Explorer" for scope=both. Available: explorer',
+            b: 'Unknown agent "Explorer" for scope=both. Available: explorer',
+          },
+        },
+      },
+    };
+
+    const renderer = renderWorkflowResult(
+      { content: [{ type: "text", text: "done" }], details },
+      false,
+      theme,
+    );
+
+    const text = renderer.render(120).join("\n");
+    expect(text).toContain("2 branch error(s)");
+    expect(text).toContain('Unknown agent "Explorer"');
+    expect(text).not.toContain("- a error:");
+    expect(text).not.toContain("- b error:");
+  });
+
+  it("omits the result section while a workflow is still running", () => {
+    const details: RunResultDetails = {
+      run: {
+        id: "r-running",
+        rootNodeId: "root:1",
+        label: "workflow",
+        status: "running",
+        startedAt: Date.now(),
+        depth: 0,
+        flow: { kind: "spawn", agent: "worker", task: "work" },
+        cwd: "/tmp",
+        scope: "both",
+      },
+      nodes: [],
+    };
+
+    const renderer = renderWorkflowResult(
+      { content: [{ type: "text", text: "3 nodes tracked" }], details },
+      false,
+      theme,
+    );
+
+    const text = renderer.render(120).join("\n");
+    expect(text).toContain("workflow · running");
+    expect(text).toContain("run=r-running".slice(0, 12));
+    expect(text).not.toContain("Result");
+    expect(text).not.toContain("3 nodes tracked");
+  });
+
   it("renders the runs widget with just a header for a single spawn", () => {
     const runtimeState = createRunRuntimeState();
     const startedAt = Date.now();
@@ -219,6 +373,7 @@ describe("agent presentation", () => {
       id: "n1",
       runId: "r1",
       specId: "s1",
+      specPath: "flow.steps[0]",
       kind: "spawn",
       status: "completed",
       startedAt: now,
@@ -228,6 +383,7 @@ describe("agent presentation", () => {
       id: "n2",
       runId: "r1",
       specId: "s2",
+      specPath: "flow.steps[1]",
       kind: "spawn",
       status: "running",
       startedAt: now + 1,
@@ -247,5 +403,91 @@ describe("agent presentation", () => {
     };
     const lines = formatFlowTree(flow);
     expect(lines).toEqual(["● worker"]);
+  });
+
+  it("overlays status for fork branches without explicit node ids", () => {
+    const flow: FlowSpec = {
+      kind: "fork",
+      id: "fanout",
+      label: "Three-Lens Code Review",
+      branches: {
+        code_quality_and_docs: {
+          kind: "spawn",
+          agent: "worker",
+          task: "lens 1",
+        },
+        performance_and_architecture: {
+          kind: "spawn",
+          agent: "worker",
+          task: "lens 2",
+        },
+        security_and_safety: {
+          kind: "spawn",
+          agent: "worker",
+          task: "lens 3",
+        },
+      },
+    };
+
+    const runtimeState = createRunRuntimeState();
+    const now = Date.now();
+    runtimeState.runs.set("r-branches", {
+      id: "r-branches",
+      rootNodeId: "fork:1",
+      label: "Three-Lens Code Review",
+      status: "running",
+      startedAt: now,
+      depth: 0,
+      flow,
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.nodes.set("fork:1", {
+      id: "fork:1",
+      runId: "r-branches",
+      specId: "fanout",
+      specPath: "flow",
+      kind: "fork",
+      label: "Three-Lens Code Review",
+      status: "waiting",
+      startedAt: now,
+    });
+    runtimeState.nodes.set("branch:1", {
+      id: "branch:1",
+      runId: "r-branches",
+      specPath: 'flow.branches["code_quality_and_docs"]',
+      kind: "spawn",
+      status: "running",
+      branchKey: "code_quality_and_docs",
+      startedAt: now,
+    });
+    runtimeState.nodes.set("branch:2", {
+      id: "branch:2",
+      runId: "r-branches",
+      specPath: 'flow.branches["performance_and_architecture"]',
+      kind: "spawn",
+      status: "running",
+      branchKey: "performance_and_architecture",
+      startedAt: now,
+    });
+    runtimeState.nodes.set("branch:3", {
+      id: "branch:3",
+      runId: "r-branches",
+      specPath: 'flow.branches["security_and_safety"]',
+      kind: "spawn",
+      status: "running",
+      branchKey: "security_and_safety",
+      startedAt: now,
+    });
+    runtimeState.order.push("r-branches");
+
+    const lines = formatFlowTree(flow, runtimeState, "r-branches");
+
+    expect(lines).toEqual([
+      "◌ Three-Lens Code Review",
+      "├─ code_quality_and_docs → ⠹ worker",
+      "├─ performance_and_architecture → ⠹ worker",
+      "└─ security_and_safety → ⠹ worker",
+    ]);
   });
 });

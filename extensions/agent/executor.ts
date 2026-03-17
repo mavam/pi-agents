@@ -744,7 +744,7 @@ export class RunExecutor {
   private buildSnapshot(runId: string): RunResultDetails {
     const snapshot = getRunSnapshot(this.options.runtimeState, runId);
     if (!snapshot) {
-      throw new Error(`Unknown run ${runId}.`);
+      throw new Error(`Unknown flow ${runId}.`);
     }
     return snapshot;
   }

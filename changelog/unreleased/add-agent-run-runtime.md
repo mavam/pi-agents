@@ -62,6 +62,6 @@ until the reviewer signals `done` (or three iterations pass):
 }
 ```
 
-Every workflow execution is persisted as a run in your session. Use `/runs` to
-list past runs and `/run <id>` to drill into node-level details. Runs survive
+Every workflow execution is persisted as a flow in your session. Use `/flows`
+to browse past flows and `/flow <id>` to inspect one in detail. Flows survive
 session reloads.

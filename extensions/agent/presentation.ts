@@ -99,16 +99,16 @@ export function formatAgentDetails(
 }
 
 // ---------------------------------------------------------------------------
-// Run overview / details
+// Flow overview / details
 // ---------------------------------------------------------------------------
 
-export function formatRunOverviewText(runtimeState: RunRuntimeState): string {
+export function formatFlowOverviewText(runtimeState: RunRuntimeState): string {
   const runs = getOrderedRuns(runtimeState);
   if (runs.length === 0) {
-    return "No runs recorded in this session.";
+    return "No flows recorded in this session.";
   }
 
-  const lines = ["Runs:"];
+  const lines = ["Flows:"];
   for (const run of runs.slice(0, 10)) {
     const nodes = getRunNodes(runtimeState, run.id);
     lines.push(
@@ -118,13 +118,13 @@ export function formatRunOverviewText(runtimeState: RunRuntimeState): string {
   return lines.join("\n");
 }
 
-function resolveRunId(
+export function resolveFlowId(
   runtimeState: RunRuntimeState,
   query: string,
 ): { runId: string } | { error: string } {
   const trimmed = query.trim();
   if (!trimmed) {
-    return { error: "Run ID must not be empty." };
+    return { error: "Flow ID must not be empty." };
   }
 
   if (runtimeState.runs.has(trimmed)) {
@@ -141,7 +141,7 @@ function resolveRunId(
 
   if (matches.length > 1) {
     return {
-      error: `Ambiguous run ID prefix "${trimmed}". Matches: ${matches
+      error: `Ambiguous flow ID prefix "${trimmed}". Matches: ${matches
         .map((item) => `${item.id.slice(0, 8)} → ${item.id}`)
         .join(", ")}`,
     };
@@ -150,26 +150,60 @@ function resolveRunId(
   const known = getOrderedRuns(runtimeState)
     .map((item) => `${item.id.slice(0, 8)} → ${item.id}`)
     .join(", ");
-  return { error: `Unknown run "${trimmed}". Known: ${known || "none"}` };
+  return { error: `Unknown flow "${trimmed}". Known: ${known || "none"}` };
 }
 
-export function formatRunDetailsText(
+function summarizeNodeStatus(nodes: RunNode[]): string {
+  const counts = {
+    queued: 0,
+    running: 0,
+    waiting: 0,
+    completed: 0,
+    failed: 0,
+    aborted: 0,
+  };
+  for (const node of nodes) {
+    counts[node.status] += 1;
+  }
+  return [
+    counts.running > 0 ? `${counts.running} running` : undefined,
+    counts.waiting > 0 ? `${counts.waiting} waiting` : undefined,
+    counts.completed > 0 ? `${counts.completed} completed` : undefined,
+    counts.failed > 0 ? `${counts.failed} failed` : undefined,
+    counts.aborted > 0 ? `${counts.aborted} aborted` : undefined,
+    counts.queued > 0 ? `${counts.queued} queued` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function summarizeFlowResult(
+  result: FlowNodeResult | undefined,
+): string | undefined {
+  if (!result) return undefined;
+  return (
+    summarizeStructuredWorkflowOutput(result.output) ??
+    firstMeaningfulLine(result.output)
+  );
+}
+
+export function formatFlowInspectText(
   runtimeState: RunRuntimeState,
   runId: string,
 ): string {
-  const resolved = resolveRunId(runtimeState, runId);
+  const resolved = resolveFlowId(runtimeState, runId);
   if ("error" in resolved) {
     return resolved.error;
   }
 
   const run = runtimeState.runs.get(resolved.runId);
   if (!run) {
-    return `Unknown run "${runId}".`;
+    return `Unknown flow "${runId}".`;
   }
 
   const nodes = getRunNodes(runtimeState, run.id);
   const lines = [
-    `Run: ${run.label}`,
+    `Flow: ${run.label}`,
     `ID: ${run.id}`,
     `Status: ${formatRunStatus(run)}`,
     `Scope: ${run.scope}`,
@@ -182,20 +216,35 @@ export function formatRunDetailsText(
   if (run.error) {
     lines.push(`Error: ${run.error}`);
   }
-  lines.push("", "Nodes:");
-  for (const node of nodes) {
-    const suffix: string[] = [];
-    if (node.branchKey) suffix.push(`branch=${node.branchKey}`);
-    if (node.iteration !== undefined)
-      suffix.push(`iteration=${node.iteration}`);
-    if (node.specId) suffix.push(`spec=${node.specId}`);
-    lines.push(
-      `- ${iconForStatus(node.status)} ${node.kind} ${node.id}${suffix.length > 0 ? ` (${suffix.join(", ")})` : ""}`,
-    );
-    if (node.error) lines.push(`  error: ${node.error}`);
+
+  const tree = formatFlowTree(run.flow, runtimeState, run.id);
+  if (tree.length > 0) {
+    lines.push("", "Tree:", ...tree);
   }
-  if (run.result) {
-    lines.push("", "Result:", formatOutput(run.result.output));
+
+  const nodeSummary = summarizeNodeStatus(nodes);
+  if (nodeSummary) {
+    lines.push("", `Nodes: ${nodeSummary}`);
+  }
+
+  const latestNode = nodes[nodes.length - 1];
+  if (latestNode) {
+    const suffix: string[] = [];
+    if (latestNode.branchKey) suffix.push(`branch=${latestNode.branchKey}`);
+    if (latestNode.iteration !== undefined) {
+      suffix.push(`iteration=${latestNode.iteration}`);
+    }
+    lines.push(
+      `Latest node: ${iconForStatus(latestNode.status)} ${latestNode.kind} ${latestNode.id}${suffix.length > 0 ? ` (${suffix.join(", ")})` : ""}`,
+    );
+    if (latestNode.error) {
+      lines.push(`Latest error: ${latestNode.error}`);
+    }
+  }
+
+  const resultSummary = summarizeFlowResult(run.result);
+  if (resultSummary) {
+    lines.push("", "Result:", resultSummary);
   }
   return lines.join("\n");
 }
@@ -520,44 +569,24 @@ function emitRootChild(
 }
 
 // ---------------------------------------------------------------------------
-// /flow command handler
+// /flow render helpers
 // ---------------------------------------------------------------------------
 
-export function formatFlowCommandOutput(
+export function formatFlowMermaidOutput(
   runtimeState: RunRuntimeState,
-  args: string,
+  runId: string,
 ): string {
-  const parts = args.trim().split(/\s+/);
-  const wantMermaid =
-    parts.length > 0 && parts[parts.length - 1]?.toLowerCase() === "mermaid";
-  const query = wantMermaid ? parts.slice(0, -1).join(" ") : args.trim();
-
-  // Resolve run: use latest if no query given.
-  let runId: string | undefined;
-  if (query) {
-    const resolved = resolveRunId(runtimeState, query);
-    if ("error" in resolved) return resolved.error;
-    runId = resolved.runId;
-  } else {
-    const latest = getOrderedRuns(runtimeState)[0];
-    if (!latest) return "No runs recorded in this session.";
-    runId = latest.id;
+  const resolved = resolveFlowId(runtimeState, runId);
+  if ("error" in resolved) {
+    return resolved.error;
   }
 
-  const run = runtimeState.runs.get(runId);
-  if (!run) return `Unknown run "${runId}".`;
+  const run = runtimeState.runs.get(resolved.runId);
+  if (!run) return `Unknown flow "${runId}".`;
 
-  if (wantMermaid) {
-    const mermaidOptions: MermaidOptions = {};
-    if (run.label) mermaidOptions.title = run.label;
-    return ["```mermaid", toMermaid(run.flow, mermaidOptions), "```"].join(
-      "\n",
-    );
-  }
-
-  const header = `Flow: ${run.label} (${run.id.slice(0, 8)}) · ${formatRunStatus(run)}`;
-  const tree = formatFlowTree(run.flow, runtimeState, runId);
-  return [header, ...tree].join("\n");
+  const mermaidOptions: MermaidOptions = {};
+  if (run.label) mermaidOptions.title = run.label;
+  return ["```mermaid", toMermaid(run.flow, mermaidOptions), "```"].join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -886,9 +915,7 @@ export function renderWorkflowCall(args: WorkflowParams, theme: Theme) {
   const lines = [
     theme.fg(
       "toolTitle",
-      theme.bold(
-        normalized.label ? `workflow ${normalized.label}` : "workflow",
-      ),
+      theme.bold(normalized.label ? `flow ${normalized.label}` : "flow"),
     ),
   ];
   const metadata = [
@@ -1036,7 +1063,7 @@ export function buildWidgetLines(
   const truncate = (line: string) => truncateToWidth(line, terminalWidth);
 
   const lines: string[] = [
-    `${theme.fg("accent", "●")} ${theme.fg("accent", "Runs")}`,
+    `${theme.fg("accent", "●")} ${theme.fg("accent", "Flows")}`,
   ];
   for (const [i, run] of active.entries()) {
     const isLast = i === active.length - 1;

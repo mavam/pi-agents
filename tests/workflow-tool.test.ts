@@ -983,7 +983,7 @@ describe("workflow tool", () => {
     expect(result.details.run.status).toBe("running");
     expect(result.content[0]?.type).toBe("text");
     if (result.content[0]?.type === "text") {
-      expect(result.content[0].text).toContain("Run detached");
+      expect(result.content[0].text).toContain("Flow detached");
     }
     await waitFor(() => inputs.length === 2);
   });

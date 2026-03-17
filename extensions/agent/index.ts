@@ -23,6 +23,12 @@ import {
 import { AgentEvents } from "./events.js";
 import { RunExecutionError, RunExecutor } from "./executor.js";
 import { normalizeWorkflowParams } from "./flow-spec.js";
+import {
+  type FlowAction,
+  hasRunnableFlows,
+  pickFlowAction,
+  watchFlow,
+} from "./flow-ui.js";
 import { LiveRunRegistry } from "./live-runs.js";
 import { AgentManager } from "./manager.js";
 import { RUN_EVENT_CUSTOM_TYPE } from "./persistence.js";
@@ -30,9 +36,10 @@ import {
   formatAgentDetails,
   formatAgentResultXml,
   formatAgentsOverview,
-  formatFlowCommandOutput,
-  formatRunDetailsText,
-  formatRunOverviewText,
+  formatFlowInspectText,
+  formatFlowMermaidOutput,
+  formatFlowOverviewText,
+  formatRunStatus,
   formatWorkflowResultXml,
   getRootSpawnResult,
   RunWidgetManager,
@@ -41,6 +48,7 @@ import {
   renderAgentResult,
   renderWorkflowCall,
   renderWorkflowResult,
+  resolveFlowId,
 } from "./presentation.js";
 import { RunEventCache } from "./session-events.js";
 import {
@@ -93,17 +101,30 @@ function getCurrentModelId(ctx: ExtensionContext): string | undefined {
 }
 
 function formatDetachedToolText(runId: string): string {
-  return `Run detached: ${runId}\nUse /runs to inspect or stop it.`;
+  return `Flow detached: ${runId}\nUse /flow watch ${runId} to re-enter live mode, /flow ${runId} to inspect, or /flow stop ${runId} to stop it.`;
 }
 
-function parseRunCommand(
-  args: string,
-): { kind: "details"; query: string } | { kind: "stop"; query: string } {
+function parseFlowCommand(args: string): { action: FlowAction; query: string } {
   const trimmed = args.trim();
-  if (trimmed.toLowerCase().startsWith("stop ")) {
-    return { kind: "stop", query: trimmed.slice(5).trim() };
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  const action = parts[0]?.toLowerCase();
+  if (action === "watch" || action === "mermaid" || action === "stop") {
+    return { action, query: parts.slice(1).join(" ") };
   }
-  return { kind: "details", query: trimmed };
+  return { action: "inspect", query: trimmed };
+}
+
+function formatFlowUsage(action: FlowAction): string {
+  switch (action) {
+    case "inspect":
+      return "Usage: /flow <id-or-prefix>\n       /flow\n       /flows";
+    case "watch":
+      return "Usage: /flow watch <id-or-prefix>";
+    case "mermaid":
+      return "Usage: /flow mermaid <id-or-prefix>";
+    case "stop":
+      return "Usage: /flow stop <id-or-prefix>";
+  }
 }
 
 export function createAgentExtension(options?: {
@@ -134,31 +155,19 @@ export function createAgentExtension(options?: {
       },
     });
 
-    const resolveRunId = (query: string): string | undefined => {
-      const trimmed = query.trim();
-      if (!trimmed) return undefined;
-      if (runtimeState.runs.has(trimmed)) return trimmed;
-      const matches = getOrderedRuns(runtimeState).filter((run) =>
-        run.id.startsWith(trimmed),
-      );
-      return matches.length === 1 ? matches[0]?.id : undefined;
+    const stopFlow = (query: string): string => {
+      const resolved = resolveFlowId(runtimeState, query);
+      if ("error" in resolved) {
+        return query.trim() ? resolved.error : formatFlowUsage("stop");
+      }
+      if (!liveRuns.has(resolved.runId)) {
+        return `Flow ${resolved.runId} is not currently running.`;
+      }
+      liveRuns.stop(resolved.runId);
+      return `Stopping flow ${resolved.runId}.`;
     };
 
-    const stopRun = (query: string): string => {
-      const runId = resolveRunId(query);
-      if (!runId) {
-        return query.trim()
-          ? `Unknown run "${query.trim()}".`
-          : "Usage: /run stop <id-or-prefix>";
-      }
-      if (!liveRuns.has(runId)) {
-        return `Run ${runId} is not currently active.`;
-      }
-      liveRuns.stop(runId);
-      return `Stopping run ${runId}.`;
-    };
-
-    const sendRunMessage = (content: string): void => {
+    const sendFlowMessage = (content: string): void => {
       pi.sendMessage({
         customType: RUN_EVENT_CUSTOM_TYPE,
         content,
@@ -166,12 +175,12 @@ export function createAgentExtension(options?: {
       });
     };
 
-    const showRunsMenu = async (
+    const showFlowsMenu = async (
       ctx: ExtensionCommandContext,
     ): Promise<void> => {
       const runs = getOrderedRuns(runtimeState);
       if (runs.length === 0) {
-        sendRunMessage("No runs recorded in this session.");
+        sendFlowMessage("No flows recorded in this session.");
         return;
       }
 
@@ -180,7 +189,7 @@ export function createAgentExtension(options?: {
         label: `${run.label} · ${run.id.slice(0, 8)} · ${run.status}${run.detachedAt ? " (detached)" : ""}`,
       }));
       const choice = await ctx.ui.select(
-        "Runs",
+        "Flows",
         options.map((option) => option.label),
       );
       if (!choice) return;
@@ -193,8 +202,8 @@ export function createAgentExtension(options?: {
 
       const actions = [
         "Inspect",
-        "Flow",
-        "Flow (Mermaid)",
+        ...(liveRuns.has(run.id) ? ["Watch"] : []),
+        "Mermaid",
         ...(run.status === "running" && liveRuns.has(run.id) ? ["Stop"] : []),
         "Back",
       ];
@@ -202,18 +211,16 @@ export function createAgentExtension(options?: {
       if (!action || action === "Back") return;
 
       if (action === "Inspect") {
-        sendRunMessage(formatRunDetailsText(runtimeState, run.id));
-      } else if (action === "Flow") {
-        sendRunMessage(formatFlowCommandOutput(runtimeState, run.id));
-      } else if (action === "Flow (Mermaid)") {
-        sendRunMessage(
-          formatFlowCommandOutput(runtimeState, `${run.id} mermaid`),
-        );
+        sendFlowMessage(formatFlowInspectText(runtimeState, run.id));
+      } else if (action === "Watch") {
+        await watchFlow(ctx, runtimeState, liveRuns, run.id);
+      } else if (action === "Mermaid") {
+        sendFlowMessage(formatFlowMermaidOutput(runtimeState, run.id));
       } else if (action === "Stop") {
-        sendRunMessage(stopRun(run.id));
+        sendFlowMessage(stopFlow(run.id));
       }
 
-      await showRunsMenu(ctx);
+      await showFlowsMenu(ctx);
     };
 
     const executeManagedWorkflow = async (
@@ -430,67 +437,123 @@ export function createAgentExtension(options?: {
       },
     });
 
-    pi.registerCommand("runs", {
-      description: "List agent runs",
+    pi.registerCommand("flows", {
+      description: "List recorded flows",
       handler: async (args, ctx) => {
         const query = args.trim();
         if (!query && ctx.hasUI) {
-          await showRunsMenu(ctx as ExtensionCommandContext);
+          await showFlowsMenu(ctx as ExtensionCommandContext);
           return;
         }
         const content = query
-          ? `Did you mean /run ${query}? Use /run <id> for full details.`
-          : formatRunOverviewText(runtimeState);
-        sendRunMessage(content);
-      },
-    });
-
-    pi.registerCommand("run", {
-      description: "Show details for a specific run",
-      getArgumentCompletions: (prefix) => {
-        const items = getOrderedRuns(runtimeState)
-          .map((run) => ({
-            value: run.id,
-            label: run.label,
-            description: `${run.status} · ${run.id.slice(0, 8)}`,
-          }))
-          .filter(
-            (item) =>
-              item.value.startsWith(prefix) || item.label.startsWith(prefix),
-          );
-        return items.length > 0 ? items : null;
-      },
-      handler: async (args) => {
-        const parsed = parseRunCommand(args);
-        const content =
-          parsed.kind === "stop"
-            ? stopRun(parsed.query)
-            : parsed.query
-              ? formatRunDetailsText(runtimeState, parsed.query)
-              : "Usage: /run <id-or-prefix>\n       /run stop <id-or-prefix>";
-        sendRunMessage(content);
+          ? `Did you mean /flow ${query}? Use /flow <id> to inspect a flow.`
+          : formatFlowOverviewText(runtimeState);
+        sendFlowMessage(content);
       },
     });
 
     pi.registerCommand("flow", {
-      description:
-        "Show the flow tree for a run (use 'mermaid' suffix for Mermaid output)",
+      description: "Inspect, watch, render, and stop flows",
       getArgumentCompletions: (prefix) => {
+        const trimmed = prefix.trimStart();
+        const parts = trimmed.split(/\s+/).filter(Boolean);
+        const action = parts[0]?.toLowerCase();
+        const query =
+          action === "watch" || action === "mermaid" || action === "stop"
+            ? parts.slice(1).join(" ")
+            : trimmed;
+        const valuePrefix =
+          action === "watch" || action === "mermaid" || action === "stop"
+            ? `${action} `
+            : "";
         const items = getOrderedRuns(runtimeState)
           .map((run) => ({
-            value: run.id,
+            value: `${valuePrefix}${run.id}`,
             label: run.label,
-            description: `${run.status} · ${run.id.slice(0, 8)}`,
+            description: `${formatRunStatus(run)} · ${run.id.slice(0, 8)}`,
           }))
           .filter(
             (item) =>
-              item.value.startsWith(prefix) || item.label.startsWith(prefix),
+              item.value.startsWith(trimmed) ||
+              item.value.startsWith(`${valuePrefix}${query}`) ||
+              item.label.startsWith(query),
           );
-        return items.length > 0 ? items : null;
+        if (items.length > 0) return items;
+        if (parts.length <= 1) {
+          return [
+            { value: "watch ", label: "watch", description: "Live watch mode" },
+            {
+              value: "mermaid ",
+              label: "mermaid",
+              description: "Render Mermaid output",
+            },
+            {
+              value: "stop ",
+              label: "stop",
+              description: "Stop a running flow",
+            },
+          ].filter(
+            (item) =>
+              item.value.startsWith(trimmed) || item.label.startsWith(trimmed),
+          );
+        }
+        return null;
       },
-      handler: async (args) => {
-        const content = formatFlowCommandOutput(runtimeState, args);
-        sendRunMessage(content);
+      handler: async (args, ctx) => {
+        const parsed = parseFlowCommand(args);
+        let action = parsed.action;
+        let runId = parsed.query;
+
+        if (!runId && ctx.hasUI) {
+          const hasCandidates =
+            action === "watch" || action === "stop"
+              ? hasRunnableFlows(runtimeState, liveRuns)
+              : getOrderedRuns(runtimeState).length > 0;
+          if (!hasCandidates) {
+            sendFlowMessage(
+              action === "watch" || action === "stop"
+                ? "No running flows available."
+                : "No flows recorded in this session.",
+            );
+            return;
+          }
+          const selection = await pickFlowAction(
+            ctx as ExtensionCommandContext,
+            runtimeState,
+            liveRuns,
+            action,
+          );
+          if (!selection) return;
+          action = selection.action;
+          runId = selection.runId;
+        }
+
+        if (!runId) {
+          sendFlowMessage(formatFlowUsage(action));
+          return;
+        }
+
+        if (action === "watch") {
+          if (!ctx.hasUI) {
+            sendFlowMessage("`/flow watch` requires interactive mode.");
+            return;
+          }
+          await watchFlow(
+            ctx as ExtensionCommandContext,
+            runtimeState,
+            liveRuns,
+            runId,
+          );
+          return;
+        }
+
+        const content =
+          action === "stop"
+            ? stopFlow(runId)
+            : action === "mermaid"
+              ? formatFlowMermaidOutput(runtimeState, runId)
+              : formatFlowInspectText(runtimeState, runId);
+        sendFlowMessage(content);
       },
     });
 
@@ -643,11 +706,11 @@ export function createAgentExtension(options?: {
     > &
       ToolPromptMetadata = {
       name: "workflow",
-      label: "Workflow",
+      label: "Flow",
       description:
-        "Run an explicit, JSON-defined agent workflow over isolated agent runs.",
+        "Run an explicit, JSON-defined agent flow over isolated agent executions.",
       promptSnippet:
-        "Run a structured multi-agent workflow with sequencing, forks, joins, and loops.",
+        "Run a structured multi-agent flow with sequencing, forks, joins, and loops.",
       promptGuidelines: [
         "Use workflow when you need orchestration across multiple agents or multiple execution steps.",
         "Prefer compact workflow syntax: spawn nodes may omit kind, and fork branches may use agent-name strings or spawn shorthands.",

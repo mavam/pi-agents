@@ -8,6 +8,7 @@ import { PassThrough, Writable } from "node:stream";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  Theme,
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import {
@@ -22,7 +23,7 @@ interface CapturedMessage {
 }
 
 interface RegisteredCommand {
-  handler: (args: string, ctx: { cwd: string }) => Promise<void>;
+  handler: (args: string, ctx: ExtensionContext) => Promise<void>;
 }
 
 let sandboxDir = "";
@@ -153,13 +154,18 @@ async function waitFor(
 }
 
 function setupExtension(spawnProcess: SpawnProcess): {
-  runsCommand: RegisteredCommand;
-  runCommand: RegisteredCommand;
+  flowsCommand: RegisteredCommand;
   flowCommand: RegisteredCommand;
   agentTool: ToolDefinition;
   workflowTool: ToolDefinition;
   messages: CapturedMessage[];
   appendEntries: Array<{ customType: string; data: unknown }>;
+  ui: {
+    selectChoices: string[];
+    customInputs: string[][];
+    customCalls: number;
+    context: ExtensionContext["ui"];
+  };
   events: Map<
     string,
     (event: unknown, ctx: ExtensionContext) => Promise<void> | void
@@ -174,6 +180,97 @@ function setupExtension(spawnProcess: SpawnProcess): {
   >();
   let agentTool: ToolDefinition | undefined;
   let workflowTool: ToolDefinition | undefined;
+  const theme = {
+    fg(_color: string, text: string) {
+      return text;
+    },
+    bold(text: string) {
+      return text;
+    },
+  } as unknown as Theme;
+  const uiHarness = {
+    selectChoices: [] as string[],
+    customInputs: [] as string[][],
+    customCalls: 0,
+    context: {
+      theme,
+      async select(_title: string, options: string[]) {
+        const choice = uiHarness.selectChoices.shift();
+        return choice && options.includes(choice) ? choice : undefined;
+      },
+      async custom<T>(
+        factory: (
+          tui: {
+            terminal?: { columns: number };
+            requestRender(): void;
+          },
+          innerTheme: Theme,
+          _kb: unknown,
+          done: (result: T) => void,
+        ) =>
+          | { handleInput?(data: string): void }
+          | Promise<{ handleInput?(data: string): void }>,
+      ) {
+        uiHarness.customCalls += 1;
+        return await new Promise<T | undefined>((resolve) => {
+          void Promise.resolve(
+            factory(
+              {
+                terminal: { columns: 120 },
+                requestRender() {},
+              },
+              theme,
+              {},
+              resolve,
+            ),
+          ).then((component) => {
+            const inputs = uiHarness.customInputs.shift() ?? [];
+            for (const input of inputs) {
+              component.handleInput?.(input);
+            }
+          });
+        });
+      },
+      notify() {},
+      onTerminalInput() {
+        return () => {};
+      },
+      setStatus() {},
+      setWorkingMessage() {},
+      setWidget() {},
+      setFooter() {},
+      setHeader() {},
+      setTitle() {},
+      pasteToEditor() {},
+      setEditorText() {},
+      getEditorText() {
+        return "";
+      },
+      async editor() {
+        return undefined;
+      },
+      setEditorComponent() {},
+      getAllThemes() {
+        return [];
+      },
+      getTheme() {
+        return undefined;
+      },
+      setTheme() {
+        return { success: true };
+      },
+      getToolsExpanded() {
+        return false;
+      },
+      setToolsExpanded() {},
+      async confirm() {
+        return false;
+      },
+      async input() {
+        return undefined;
+      },
+    } as unknown as ExtensionContext["ui"],
+  };
 
   createAgentExtension({ spawnProcess })({
     registerCommand(name, options) {
@@ -208,11 +305,8 @@ function setupExtension(spawnProcess: SpawnProcess): {
     },
   } as unknown as ExtensionAPI);
 
-  const runsCommand = commands.get("runs");
-  if (!runsCommand) throw new Error("/runs command was not registered");
-
-  const runCommand = commands.get("run");
-  if (!runCommand) throw new Error("/run command was not registered");
+  const flowsCommand = commands.get("flows");
+  if (!flowsCommand) throw new Error("/flows command was not registered");
 
   const flowCommand = commands.get("flow");
   if (!flowCommand) throw new Error("/flow command was not registered");
@@ -220,13 +314,13 @@ function setupExtension(spawnProcess: SpawnProcess): {
   if (!agentTool) throw new Error("agent tool was not registered");
   if (!workflowTool) throw new Error("workflow tool was not registered");
   return {
-    runsCommand,
-    runCommand,
+    flowsCommand,
     flowCommand,
     agentTool,
     workflowTool,
     messages,
     appendEntries,
+    ui: uiHarness,
     events,
   };
 }
@@ -246,8 +340,8 @@ afterEach(() => {
   rmSync(workspaceDir, { recursive: true, force: true });
 });
 
-describe("/runs command", () => {
-  it("reports an empty run list before any runs exist", async () => {
+describe("/flows command", () => {
+  it("reports an empty flow list before any flows exist", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),
       "explorer",
@@ -255,16 +349,22 @@ describe("/runs command", () => {
     );
 
     const inputs: string[] = [];
-    const { runsCommand, messages } = setupExtension(
+    const { flowsCommand, messages, ui } = setupExtension(
       createSpawnProcess(() => "ok", inputs),
     );
-    await runsCommand.handler("", { cwd: workspaceDir });
+    await flowsCommand.handler("", {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
 
     expect(messages).toHaveLength(1);
-    expect(messages[0]?.content).toContain("No runs recorded in this session.");
+    expect(messages[0]?.content).toContain(
+      "No flows recorded in this session.",
+    );
   });
 
-  it("rebuilds runs when switching sessions or tree branches", async () => {
+  it("rebuilds flows when switching sessions or tree branches", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),
       "explorer",
@@ -272,7 +372,7 @@ describe("/runs command", () => {
     );
 
     const inputs: string[] = [];
-    const { agentTool, runsCommand, messages, appendEntries, events } =
+    const { agentTool, flowsCommand, messages, appendEntries, events, ui } =
       setupExtension(createSpawnProcess(() => "ok", inputs));
 
     await agentTool.execute(
@@ -284,7 +384,11 @@ describe("/runs command", () => {
     );
 
     messages.length = 0;
-    await runsCommand.handler("", { cwd: workspaceDir });
+    await flowsCommand.handler("", {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
     expect(messages[0]?.content).toContain("explorer");
 
     const sessionSwitch = events.get("session_switch");
@@ -304,8 +408,14 @@ describe("/runs command", () => {
     } as unknown as ExtensionContext);
 
     messages.length = 0;
-    await runsCommand.handler("", { cwd: workspaceDir });
-    expect(messages[0]?.content).toContain("No runs recorded in this session.");
+    await flowsCommand.handler("", {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
+    expect(messages[0]?.content).toContain(
+      "No flows recorded in this session.",
+    );
 
     await sessionTree({}, {
       cwd: workspaceDir,
@@ -322,13 +432,17 @@ describe("/runs command", () => {
     } as unknown as ExtensionContext);
 
     messages.length = 0;
-    await runsCommand.handler("", { cwd: workspaceDir });
+    await flowsCommand.handler("", {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
     expect(messages[0]?.content).toContain("explorer");
   });
 });
 
-describe("/run command", () => {
-  it("resolves unique run ID prefixes shown in the overview", async () => {
+describe("/flow command", () => {
+  it("resolves unique flow ID prefixes shown in the overview", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),
       "explorer",
@@ -336,7 +450,7 @@ describe("/run command", () => {
     );
 
     const inputs: string[] = [];
-    const { runCommand, workflowTool, messages } = setupExtension(
+    const { flowCommand, workflowTool, messages, ui } = setupExtension(
       createSpawnProcess(() => "ok", inputs),
     );
 
@@ -359,14 +473,19 @@ describe("/run command", () => {
     const prefix = runId.slice(0, 8);
 
     messages.length = 0;
-    await runCommand.handler(prefix, { cwd: workspaceDir });
+    await flowCommand.handler(prefix, {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain(`ID: ${runId}`);
-    expect(messages[0]?.content).not.toContain("Unknown run");
+    expect(messages[0]?.content).not.toContain("Unknown flow");
+    expect(messages[0]?.content).toContain("Tree:");
   });
 
-  it("lists direct agent tool executions as runs", async () => {
+  it("lists direct agent tool executions as flows", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),
       "explorer",
@@ -374,7 +493,7 @@ describe("/run command", () => {
     );
 
     const inputs: string[] = [];
-    const { agentTool, runsCommand, messages } = setupExtension(
+    const { agentTool, flowsCommand, messages, ui } = setupExtension(
       createSpawnProcess(() => "ok", inputs),
     );
 
@@ -387,14 +506,18 @@ describe("/run command", () => {
     );
 
     messages.length = 0;
-    await runsCommand.handler("", { cwd: workspaceDir });
+    await flowsCommand.handler("", {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain("explorer");
     expect(messages[0]?.content).toContain("completed");
   });
 
-  it("stops an active detached run explicitly", async () => {
+  it("stops an active detached flow explicitly", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),
       "explorer",
@@ -402,7 +525,7 @@ describe("/run command", () => {
     );
 
     const inputs: string[] = [];
-    const { runCommand, workflowTool, messages } = setupExtension(
+    const { flowCommand, workflowTool, messages, ui } = setupExtension(
       createLongRunningSpawnProcess(inputs),
     );
     const controller = new AbortController();
@@ -429,34 +552,40 @@ describe("/run command", () => {
 
     const runId = result.details.run.id as string;
     messages.length = 0;
-    await runCommand.handler(`stop ${runId}`, { cwd: workspaceDir });
+    await flowCommand.handler(`stop ${runId}`, {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
 
-    expect(messages[0]?.content).toContain(`Stopping run ${runId}`);
+    expect(messages[0]?.content).toContain(`Stopping flow ${runId}`);
 
     await waitFor(() => inputs.length === 1);
 
     const deadline = Date.now() + 250;
     while (true) {
       messages.length = 0;
-      await runCommand.handler(runId, { cwd: workspaceDir });
+      await flowCommand.handler(runId, {
+        cwd: workspaceDir,
+        hasUI: false,
+        ui: ui.context,
+      } as unknown as ExtensionContext);
       if (messages[0]?.content.includes("Status: aborted")) break;
       if (Date.now() >= deadline) {
         throw new Error(
-          "Timed out waiting for /run details to report aborted.",
+          "Timed out waiting for /flow details to report aborted.",
         );
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(messages[0]?.content).toContain("Status: aborted");
   });
-});
 
-describe("/flow command", () => {
-  it("shows the ASCII flow tree for a completed run", async () => {
+  it("shows the combined inspect view for a completed flow", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
 
     const inputs: string[] = [];
-    const { flowCommand, workflowTool, messages } = setupExtension(
+    const { flowCommand, workflowTool, messages, ui } = setupExtension(
       createSpawnProcess((input) => {
         if (input.includes("branch A")) return "result-a";
         if (input.includes("branch B")) return "result-b";
@@ -509,58 +638,27 @@ describe("/flow command", () => {
     const prefix = runId.slice(0, 8);
 
     messages.length = 0;
-    await flowCommand.handler(prefix, { cwd: workspaceDir });
+    await flowCommand.handler(prefix, {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
 
     expect(messages).toHaveLength(1);
     const content = messages[0]?.content ?? "";
-    // Header
     expect(content).toContain("Flow: Test Pipeline");
     expect(content).toContain("completed");
-    // Kind icons replaced by status icons for completed run
+    expect(content).toContain("Tree:");
     expect(content).toContain("✔");
-    // Fork structure
     expect(content).toContain("fanout");
     expect(content).toContain("← fanout");
   });
 
-  it("falls back to the latest run when no ID is given", async () => {
+  it("outputs a Mermaid code fence with the mermaid subcommand", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
 
     const inputs: string[] = [];
-    const { flowCommand, workflowTool, messages } = setupExtension(
-      createSpawnProcess(() => "ok", inputs),
-    );
-
-    await workflowTool.execute(
-      "call-flow-latest",
-      {
-        label: "Latest Run",
-        flow: {
-          kind: "spawn",
-          id: "only",
-          agent: "worker",
-          task: "do work",
-        },
-      },
-      undefined,
-      undefined,
-      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
-    );
-
-    messages.length = 0;
-    await flowCommand.handler("", { cwd: workspaceDir });
-
-    expect(messages).toHaveLength(1);
-    const content = messages[0]?.content ?? "";
-    expect(content).toContain("Flow: Latest Run");
-    expect(content).toContain("worker");
-  });
-
-  it("outputs a Mermaid code fence with the mermaid suffix", async () => {
-    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
-
-    const inputs: string[] = [];
-    const { flowCommand, workflowTool, messages } = setupExtension(
+    const { flowCommand, workflowTool, messages, ui } = setupExtension(
       createSpawnProcess(() => "ok", inputs),
     );
 
@@ -584,7 +682,11 @@ describe("/flow command", () => {
     const prefix = runId.slice(0, 8);
 
     messages.length = 0;
-    await flowCommand.handler(`${prefix} mermaid`, { cwd: workspaceDir });
+    await flowCommand.handler(`mermaid ${prefix}`, {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
 
     expect(messages).toHaveLength(1);
     const content = messages[0]?.content ?? "";
@@ -594,18 +696,99 @@ describe("/flow command", () => {
     expect(content).toContain("```");
   });
 
-  it("reports an error when no runs exist", async () => {
+  it("reports usage when no flow ID is given in non-interactive mode", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
 
     const inputs: string[] = [];
-    const { flowCommand, messages } = setupExtension(
+    const { flowCommand, messages, ui } = setupExtension(
       createSpawnProcess(() => "ok", inputs),
     );
 
     messages.length = 0;
-    await flowCommand.handler("", { cwd: workspaceDir });
+    await flowCommand.handler("", {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
 
     expect(messages).toHaveLength(1);
-    expect(messages[0]?.content).toContain("No runs recorded");
+    expect(messages[0]?.content).toContain("Usage: /flow <id-or-prefix>");
+  });
+
+  it("opens the interactive picker for bare /flow and inspects the selected flow", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const { flowCommand, workflowTool, messages, ui } = setupExtension(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    await workflowTool.execute(
+      "call-picker-inspect",
+      {
+        label: "Pick Me",
+        flow: {
+          kind: "spawn",
+          id: "only",
+          agent: "worker",
+          task: "do work",
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    ui.customInputs.push(["\r"]);
+    messages.length = 0;
+    await flowCommand.handler("", {
+      cwd: workspaceDir,
+      hasUI: true,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
+
+    expect(ui.customCalls).toBe(1);
+    expect(messages[0]?.content).toContain("Flow: Pick Me");
+  });
+
+  it("opens watch mode from the picker when no ID is provided", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const { flowCommand, workflowTool, messages, ui } = setupExtension(
+      createLongRunningSpawnProcess(inputs),
+    );
+    const controller = new AbortController();
+
+    await workflowTool.execute(
+      "call-picker-watch",
+      {
+        flow: {
+          kind: "spawn",
+          id: "only",
+          agent: "worker",
+          task: "do work",
+        },
+      },
+      controller.signal,
+      (update) => {
+        const details = update.details as RunResultDetails;
+        if (details.run.status === "running") {
+          controller.abort();
+        }
+      },
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    ui.customInputs.push(["\r"], ["\u001b"]);
+    messages.length = 0;
+    await flowCommand.handler("watch", {
+      cwd: workspaceDir,
+      hasUI: true,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
+
+    expect(ui.customCalls).toBe(2);
+    expect(messages).toHaveLength(0);
   });
 });

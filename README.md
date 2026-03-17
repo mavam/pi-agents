@@ -48,11 +48,12 @@ Nodes nest recursively: a `sequence` can contain `fork` nodes, a `loop`
 body can be a `sequence`, and so on. You can optionally set **budgets** to
 constrain execution (max depth, max parallelism, max iterations, etc.).
 
-### Runs
+### Flows
 
-Every agent delegation and workflow execution is persisted as a **run** in the
-current pi session. Runs survive session reloads so you can inspect past
-results. The `/runs` and `/run` commands let you list and drill into them.
+Every agent delegation and workflow execution is persisted as a **flow** in the
+current pi session. Flows survive session reloads so you can inspect past
+results. Use `/flows` to browse them and `/flow <id>` to inspect one in
+detail.
 
 ## 🚀 Quick start
 
@@ -220,15 +221,17 @@ Top-level parameters:
 | ------------------------------ | ------------------------------------------ |
 | `/agents`                      | List discovered agents.                    |
 | `/agent <name>`                | Show full details for one agent.           |
-| `/runs`                        | List runs recorded in the current session. |
-| `/run <id-or-prefix>`          | Show details for one run.                  |
-| `/flow [id-or-prefix]`         | Show the ASCII flow tree for a run.        |
-| `/flow [id-or-prefix] mermaid` | Output the workflow as a Mermaid diagram.  |
+| `/flows`                       | Browse recorded flows in the current session.      |
+| `/flow`                        | Open the interactive flow picker.                  |
+| `/flow <id-or-prefix>`         | Inspect one flow.                                  |
+| `/flow watch [id-or-prefix]`   | Re-enter live watch mode for a running flow.       |
+| `/flow mermaid [id-or-prefix]` | Output the selected flow as a Mermaid diagram.     |
+| `/flow stop [id-or-prefix]`    | Stop a running flow.                               |
 
-### Flow tree
+### Flow inspect view
 
-The `/flow` command renders a workflow's structure as an ASCII tree. Each node
-kind has a distinct icon:
+`/flow <id>` shows the selected flow's metadata, current status, and an ASCII
+tree of its structure. Each node kind has a distinct icon:
 
 | Icon | Kind  |
 | ---- | ----- |
@@ -240,7 +243,7 @@ kind has a distinct icon:
 Sequences are transparent — their children appear at the parent indentation
 level without extra nesting.
 
-When you inspect a completed or running workflow, the kind icons are replaced by
+When you inspect a completed or running flow, the kind icons are replaced by
 status icons:
 
 | Icon | Status    |
@@ -252,7 +255,7 @@ status icons:
 | `■`  | aborted   |
 | `○`  | queued    |
 
-Example — static flow tree (before execution):
+Example — static flow tree:
 
 ```
 ● initializer
@@ -266,7 +269,7 @@ Example — static flow tree (before execution):
 └─ ● validator
 ```
 
-Example — with status overlay (during execution):
+Example — with status overlay:
 
 ```
 ✔ initializer
@@ -280,15 +283,24 @@ Example — with status overlay (during execution):
 └─ ○ validator
 ```
 
-When you omit the run ID, `/flow` defaults to the latest run.
+In interactive mode, omitting the flow ID opens a picker. The picker supports
+single-key actions on the selected flow:
+
+- `Enter` inspect
+- `w` watch
+- `m` mermaid
+- `s` stop
+
+The `watch` action is only available for running flows. Once watching, `Esc`
+detaches back to the normal UI and `s` stops the flow.
 
 ### Mermaid export
 
-Append `mermaid` to get a Mermaid flowchart you can paste into GitHub, docs,
+Use `mermaid` to get a Mermaid flowchart you can paste into GitHub, docs,
 or [mermaid.live](https://mermaid.live):
 
 ```
-/flow 3a8bc2f1 mermaid
+/flow mermaid 3a8bc2f1
 ```
 
 The output is deterministic — the same workflow always produces the same

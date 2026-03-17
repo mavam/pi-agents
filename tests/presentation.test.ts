@@ -357,7 +357,7 @@ describe("agent presentation", () => {
 
     // Heading + single header line, no redundant flow tree.
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain("Runs");
+    expect(lines[0]).toContain("Flows");
     expect(lines[1]).toContain("explorer");
     expect(lines[1]).toContain("run-1");
   });

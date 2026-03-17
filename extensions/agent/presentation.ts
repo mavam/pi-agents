@@ -45,6 +45,7 @@ import type {
   SpawnFlowSpec,
   SpawnNodeResult,
   WorkflowParams,
+  WorkflowRun,
 } from "./types.js";
 
 export const RUN_NOTIFICATION_CUSTOM_TYPE = "pi-agents:notification";
@@ -197,6 +198,117 @@ function summarizeFlowResult(
   );
 }
 
+function summarizeNodeRuntimeOutput(output: unknown): string | undefined {
+  if (typeof output !== "object" || output === null) {
+    return firstMeaningfulLine(output);
+  }
+
+  const record = output as Record<string, unknown>;
+  const kind = typeof record.kind === "string" ? record.kind : undefined;
+
+  if (kind === "fork") {
+    const branches =
+      typeof record.branches === "object" && record.branches !== null
+        ? (record.branches as Record<string, unknown>)
+        : undefined;
+    if (branches) {
+      const successes = Object.fromEntries(
+        Object.entries(branches)
+          .filter(
+            ([, value]) =>
+              !(typeof value === "object" && value && "error" in value),
+          )
+          .map(([key, value]) => [key, value]),
+      );
+      const errors = Object.fromEntries(
+        Object.entries(branches)
+          .filter(
+            ([, value]) =>
+              typeof value === "object" && value !== null && "error" in value,
+          )
+          .map(([key, value]) => [
+            key,
+            String((value as Record<string, unknown>).error),
+          ]),
+      );
+      return summarizeStructuredWorkflowOutput({ branches: successes, errors });
+    }
+  }
+
+  if (kind === "join") {
+    const selected = Array.isArray(record.selectedBranches)
+      ? record.selectedBranches.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : [];
+    const summary =
+      typeof record.output === "string"
+        ? firstMeaningfulLine(record.output)
+        : undefined;
+    return selected.length > 0
+      ? summary && !summary.startsWith("{")
+        ? `${selected.length} selected branch(es) · ${summary}`
+        : `${selected.length} selected branch(es): ${selected.join(", ")}`
+      : summary;
+  }
+
+  if (kind === "loop") {
+    const iterations =
+      typeof record.iterations === "number" ? record.iterations : undefined;
+    const summary =
+      typeof record.output === "string"
+        ? firstMeaningfulLine(record.output)
+        : undefined;
+    if (iterations !== undefined) {
+      return summary && !summary.startsWith("{")
+        ? `${iterations} iteration(s) · ${summary}`
+        : `${iterations} iteration(s)`;
+    }
+    return summary;
+  }
+
+  if (typeof record.output === "string") {
+    return firstMeaningfulLine(record.output);
+  }
+
+  return firstMeaningfulLine(output);
+}
+
+function formatInspectNodeLine(
+  runFlow: FlowSpec,
+  node: RunNode,
+): string | undefined {
+  const suffix: string[] = [];
+  if (node.branchKey) suffix.push(`branch=${node.branchKey}`);
+  if (node.iteration !== undefined) suffix.push(`iteration=${node.iteration}`);
+  const label = latestNodeDisplayLabel(runFlow, node);
+  const summary = node.error
+    ? firstMeaningfulLine(node.error)
+    : summarizeNodeRuntimeOutput(node.output);
+  if (!summary) return undefined;
+  return `- ${iconForStatus(node.status)} ${label}${suffix.length > 0 ? ` (${suffix.join(", ")})` : ""}: ${summary}`;
+}
+
+function formatInspectNodeResults(
+  run: WorkflowRun,
+  nodes: RunNode[],
+): string[] {
+  const interesting = nodes.filter(
+    (node) =>
+      (node.id !== run.rootNodeId || nodes.length === 1) &&
+      (node.status === "completed" ||
+        node.status === "failed" ||
+        node.status === "aborted") &&
+      (node.output !== undefined || node.error),
+  );
+
+  const lines = interesting
+    .map((node) => formatInspectNodeLine(run.flow, node))
+    .filter((line): line is string => Boolean(line));
+
+  return lines.length > 0 ? ["", "Node Results:", ...lines] : [];
+}
+
 export function formatFlowInspectText(
   runtimeState: RunRuntimeState,
   runId: string,
@@ -251,6 +363,8 @@ export function formatFlowInspectText(
       lines.push(`Latest error: ${latestNode.error}`);
     }
   }
+
+  lines.push(...formatInspectNodeResults(run, nodes));
 
   const resultSummary = summarizeFlowResult(run.result);
   if (resultSummary) {

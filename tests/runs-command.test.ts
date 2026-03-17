@@ -778,6 +778,11 @@ describe("/flow command", () => {
     expect(content).toContain("✔");
     expect(content).toContain("fanout");
     expect(content).toContain("◆ all");
+    expect(content).toContain("Node Results:");
+    expect(content).toContain("branch=a");
+    expect(content).toContain("branch=b");
+    expect(content).toContain("result-a");
+    expect(content).toContain("result-b");
   });
 
   it("uses the visible structure label for the latest node", async () => {

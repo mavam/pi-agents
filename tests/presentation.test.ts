@@ -493,15 +493,15 @@ describe("agent presentation", () => {
     const lines = formatFlowTree(flow);
 
     expect(lines).toEqual([
-      "● initializer",
-      "◇ parallel",
-      "├─ fast → ● fast-worker",
-      "└─ slow",
-      "   ├─ ● prep",
-      "   └─ ● slow-worker",
-      "◆ join: all ← parallel",
-      "◎ validate (max 3)",
-      "└─ ● validator",
+      "├─ ● initializer",
+      "├─ ◇ parallel",
+      "│  ├─ fast → ● fast-worker",
+      "│  └─ slow",
+      "│     ├─ ● prep",
+      "│     └─ ● slow-worker",
+      "├─ ◆ join: all ← parallel",
+      "└─ ◎ validate (max 3)",
+      "   └─ ● validator",
     ]);
   });
 
@@ -550,7 +550,7 @@ describe("agent presentation", () => {
 
     const lines = formatFlowTree(flow, runtimeState, "r1");
 
-    expect(lines).toEqual(["✔ analyzer", "⠹ reviewer"]);
+    expect(lines).toEqual(["├─ ✔ analyzer", "└─ ⠹ reviewer"]);
   });
 
   it("keeps inspect structure static even when runtime state has live statuses", () => {

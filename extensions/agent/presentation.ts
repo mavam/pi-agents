@@ -546,9 +546,13 @@ export function formatFlowTree(
   };
 
   if (flow.kind === "sequence") {
-    for (const [index, step] of flow.steps.entries()) {
-      if (!step) continue;
-      emitRootChild(step, sequenceStepPath(ROOT_FLOW_PATH, index), ctx);
+    if (flow.steps.length >= 2) {
+      emitChildren(flow.steps, ROOT_FLOW_PATH, "", ctx);
+    } else {
+      for (const [index, step] of flow.steps.entries()) {
+        if (!step) continue;
+        emitRootChild(step, sequenceStepPath(ROOT_FLOW_PATH, index), ctx);
+      }
     }
   } else {
     emitRootChild(flow, ROOT_FLOW_PATH, ctx);

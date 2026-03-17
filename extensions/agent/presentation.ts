@@ -319,8 +319,8 @@ function forkLabel(spec: ForkFlowSpec): string {
 }
 
 function joinLabel(spec: JoinFlowSpec): string {
-  const modeStr = spec.mode === "quorum" ? `quorum(${spec.quorum})` : spec.mode;
-  return spec.label ?? `join: ${modeStr}`;
+  if (spec.label) return spec.label;
+  return spec.mode === "quorum" ? `quorum(${spec.quorum})` : spec.mode;
 }
 
 function flowLabel(spec: FlowSpec): string {
@@ -479,7 +479,7 @@ function emitSpec(
         if (branchSpec.kind === "spawn") {
           const spawnIcon = flowIcon(branchSpec, branchPath, ctx.nodeIndex);
           ctx.lines.push(
-            `${childPrefix}${branchConnector} ${key}: ${spawnIcon} ${spawnLabel(branchSpec)}`,
+            `${childPrefix}${branchConnector} ${spawnIcon} ${spawnLabel(branchSpec)}: ${key}`,
           );
         } else {
           ctx.lines.push(`${childPrefix}${branchConnector} ${key}`);
@@ -595,7 +595,7 @@ function emitRootChild(
         if (branchSpec.kind === "spawn") {
           const spawnIcon = flowIcon(branchSpec, branchPath, ctx.nodeIndex);
           ctx.lines.push(
-            `${branchConnector} ${key}: ${spawnIcon} ${spawnLabel(branchSpec)}`,
+            `${branchConnector} ${spawnIcon} ${spawnLabel(branchSpec)}: ${key}`,
           );
         } else {
           ctx.lines.push(`${branchConnector} ${key}`);

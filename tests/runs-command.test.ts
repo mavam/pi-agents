@@ -777,7 +777,7 @@ describe("/flow command", () => {
     expect(content).toContain("Structure:");
     expect(content).toContain("✔");
     expect(content).toContain("fanout");
-    expect(content).toContain("join: all");
+    expect(content).toContain("◆ all");
   });
 
   it("uses the visible structure label for the latest node", async () => {

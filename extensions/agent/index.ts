@@ -69,8 +69,8 @@ import {
 } from "./tool-definitions.js";
 import type {
   AgentRunDetails,
-  RunNotificationDetails,
   RunEvent,
+  RunNotificationDetails,
   RunResultDetails,
   WorkflowParams,
 } from "./types.js";
@@ -138,9 +138,21 @@ function formatFlowUsage(action: FlowAction): string {
       return "Usage: /flow watch <id-or-prefix>";
     case "mermaid":
       return "Usage: /flow mermaid <id-or-prefix>";
+    case "diagram":
+      return "Usage: /flow diagram <id-or-prefix>";
     case "stop":
       return "Usage: /flow stop <id-or-prefix>";
   }
+}
+
+function summarizeFinalNotification(
+  result: RunResultDetails["result"],
+): string | undefined {
+  if (!result) return undefined;
+  if (result.kind === "sequence" && result.steps.length > 1) {
+    return undefined;
+  }
+  return summarizeWorkflowOutput(result.output);
 }
 
 export function createAgentExtension(options?: {
@@ -280,9 +292,7 @@ export function createAgentExtension(options?: {
         runId: snapshot.run.id,
         runLabel: snapshot.run.label,
         status: snapshot.run.status,
-        summary: snapshot.result
-          ? summarizeWorkflowOutput(snapshot.result.output)
-          : undefined,
+        summary: summarizeFinalNotification(snapshot.result),
         error: snapshot.run.error,
         timestamp: event.at,
       };

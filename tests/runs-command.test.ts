@@ -1015,6 +1015,77 @@ describe("detached workflow notifications", () => {
     expect(notifications[1]?.content).toContain("Use /flow");
   });
 
+  it("does not repeat the last step output in the final notification for detached sequences", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const { workflowTool, messages, ui } = setupExtension(
+      createSpawnProcess((input) => {
+        if (input.includes("first step")) return "alpha";
+        return "beta";
+      }, inputs),
+    );
+    const sessionFile = path.join(workspaceDir, "detached-sequence.jsonl");
+    const controller = new AbortController();
+
+    const result = await workflowTool.execute(
+      "call-detached-sequence-notify",
+      {
+        label: "Detached Sequence",
+        flow: {
+          kind: "sequence",
+          steps: [
+            {
+              kind: "spawn",
+              id: "first",
+              label: "First Step",
+              agent: "worker",
+              task: "first step",
+            },
+            {
+              kind: "spawn",
+              id: "second",
+              label: "Second Step",
+              agent: "worker",
+              task: "second step",
+            },
+          ],
+        },
+      },
+      controller.signal,
+      (update) => {
+        const details = update.details as RunResultDetails;
+        if (details.run.status === "running") {
+          controller.abort();
+        }
+      },
+      createSessionContext(ui.context, {
+        sessionFile,
+      }),
+    );
+
+    expect(result.details.run.status).toBe("running");
+    await waitFor(
+      () =>
+        messages.filter(
+          (message) => message.customType === "pi-agents:notification",
+        ).length === 3,
+    );
+
+    const notifications = messages.filter(
+      (message) => message.customType === "pi-agents:notification",
+    );
+    expect(notifications).toHaveLength(3);
+    expect(notifications[0]?.content).toContain("First Step");
+    expect(notifications[0]?.content).toContain("alpha");
+    expect(notifications[1]?.content).toContain("Second Step");
+    expect(notifications[1]?.content).toContain("beta");
+    expect(notifications[2]?.content).toContain("Detached Sequence");
+    expect(notifications[2]?.content).toContain("Use /flow");
+    expect(notifications[2]?.content).not.toContain("beta");
+    expect(notifications[2]?.content).not.toContain("Second Step");
+  });
+
   it("buffers notifications until the origin session becomes idle", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
 

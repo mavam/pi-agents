@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -771,7 +777,7 @@ describe("/flow command", () => {
     expect(content).toContain("Structure:");
     expect(content).toContain("✔");
     expect(content).toContain("fanout");
-    expect(content).toContain("← fanout");
+    expect(content).toContain("join: all");
   });
 
   it("uses the visible structure label for the latest node", async () => {
@@ -812,7 +818,10 @@ describe("/flow command", () => {
     );
 
     messages.length = 0;
-    await flowCommand.handler(result.details.run.id, createSessionContext(ui.context));
+    await flowCommand.handler(
+      result.details.run.id,
+      createSessionContext(ui.context),
+    );
 
     const content = messages[0]?.content ?? "";
     expect(content).toContain("Structure:");
@@ -970,7 +979,7 @@ describe("detached workflow notifications", () => {
       createSpawnProcess(() => "done", inputs),
     );
     const sessionFile = path.join(workspaceDir, "origin-session.jsonl");
-    let idle = true;
+    const idle = true;
     const controller = new AbortController();
 
     const result = await workflowTool.execute(
@@ -1161,7 +1170,7 @@ describe("detached workflow notifications", () => {
     );
     const originSessionFile = path.join(workspaceDir, "origin.jsonl");
     const otherSessionFile = path.join(workspaceDir, "other.jsonl");
-    let idle = true;
+    const idle = true;
     const controller = new AbortController();
 
     const result = await workflowTool.execute(

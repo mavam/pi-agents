@@ -495,11 +495,11 @@ describe("agent presentation", () => {
     expect(lines).toEqual([
       "├─ ● initializer",
       "├─ ◇ parallel",
-      "│  ├─ fast → ● fast-worker",
+      "│  ├─ fast: ● fast-worker",
       "│  └─ slow",
       "│     ├─ ● prep",
       "│     └─ ● slow-worker",
-      "├─ ◆ join: all ← parallel",
+      "├─ ◆ join: all",
       "└─ ◎ validate (max 3)",
       "   └─ ● validator",
     ]);
@@ -625,8 +625,8 @@ describe("agent presentation", () => {
 
     expect(text).toContain("Structure:");
     expect(text).toContain("◇ Parallel codebase exploration");
-    expect(text).toContain("├─ developer_facing → ● developer-facing");
-    expect(text).toContain("└─ user_facing → ● user-facing");
+    expect(text).toContain("├─ developer_facing: ● developer-facing");
+    expect(text).toContain("└─ user_facing: ● user-facing");
     expect(text).not.toContain("◌ Parallel codebase exploration");
     expect(text).not.toContain("✔ developer-facing");
     expect(text).not.toContain("⠹ user-facing");
@@ -723,9 +723,9 @@ describe("agent presentation", () => {
 
     expect(lines).toEqual([
       "◌ Three-Lens Code Review",
-      "├─ code_quality_and_docs → ⠹ worker",
-      "├─ performance_and_architecture → ⠹ worker",
-      "└─ security_and_safety → ⠹ worker",
+      "├─ code_quality_and_docs: ⠹ worker",
+      "├─ performance_and_architecture: ⠹ worker",
+      "└─ security_and_safety: ⠹ worker",
     ]);
   });
 });

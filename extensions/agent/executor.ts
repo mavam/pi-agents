@@ -3,11 +3,22 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import { discoverAgents, type Scope, type Thinking } from "./agents.js";
+import {
+  discoverAgents,
+  resolveAgentByName,
+  type Scope,
+  type Thinking,
+} from "./agents.js";
 import { BudgetActor } from "./budgets.js";
 import { toDiagnosticText } from "./diagnostics.js";
 import type { SpawnHandle } from "./engine/interface.js";
 import { AgentEvents } from "./events.js";
+import {
+  forkBranchPath,
+  loopBodyPath,
+  ROOT_FLOW_PATH,
+  sequenceStepPath,
+} from "./flow-path.js";
 import { parseJsonText } from "./flow-spec.js";
 import type { AgentManager } from "./manager.js";
 import { appendRunEvent } from "./persistence.js";
@@ -317,6 +328,167 @@ function collectJoinPlans(flow: FlowSpec): ReadonlyMap<string, ForkJoinPlan> {
   return plans;
 }
 
+type WorkflowAgentIssue =
+  | {
+      kind: "missing";
+      specPath: string;
+      agent: string;
+      cwd: string;
+      scope: Scope;
+      available: string[];
+    }
+  | {
+      kind: "ambiguous";
+      specPath: string;
+      agent: string;
+      cwd: string;
+      scope: Scope;
+      matches: string[];
+    };
+
+function formatWorkflowAgentIssues(issues: WorkflowAgentIssue[]): string {
+  const hasOnlyMissing = issues.every((issue) => issue.kind === "missing");
+  const lines = [
+    hasOnlyMissing
+      ? "Unknown workflow agents:"
+      : "Invalid workflow agent references:",
+  ];
+
+  for (const issue of issues) {
+    if (issue.kind === "missing") {
+      lines.push(
+        `- ${issue.specPath}: "${issue.agent}" is not valid for scope=${issue.scope} cwd=${issue.cwd}.`,
+      );
+      if (issue.available.length > 0) {
+        lines.push(`  Available: ${issue.available.join(", ")}`);
+      }
+      continue;
+    }
+
+    lines.push(
+      `- ${issue.specPath}: "${issue.agent}" is ambiguous ignoring case for scope=${issue.scope} cwd=${issue.cwd}. Matches: ${issue.matches.join(", ")}`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function preflightWorkflowAgents(
+  flow: FlowSpec,
+  defaults: { cwd: string; scope: Scope },
+): void {
+  const discoveryCache = new Map<string, ReturnType<typeof discoverAgents>>();
+  const issues: WorkflowAgentIssue[] = [];
+
+  const getDiscovery = (cwd: string, scope: Scope) => {
+    const key = `${scope}\u0000${cwd}`;
+    let discovery = discoveryCache.get(key);
+    if (!discovery) {
+      discovery = discoverAgents(cwd, scope);
+      discoveryCache.set(key, discovery);
+    }
+    return discovery;
+  };
+
+  const validateAgentReference = (
+    agent: string,
+    specPath: string,
+    cwd: string,
+    scope: Scope,
+    applyResolvedName: (name: string) => void,
+  ) => {
+    const discovery = getDiscovery(cwd, scope);
+    const resolvedAgent = resolveAgentByName(discovery.agents, agent);
+
+    switch (resolvedAgent.kind) {
+      case "exact":
+        return;
+      case "case_insensitive":
+        applyResolvedName(resolvedAgent.agent.name);
+        return;
+      case "missing":
+        issues.push({
+          kind: "missing",
+          specPath,
+          agent,
+          cwd,
+          scope,
+          available: discovery.agents
+            .map((item) => item.name)
+            .sort((left, right) => left.localeCompare(right)),
+        });
+        return;
+      case "ambiguous":
+        issues.push({
+          kind: "ambiguous",
+          specPath,
+          agent,
+          cwd,
+          scope,
+          matches: resolvedAgent.matches
+            .map((item) => item.name)
+            .sort((left, right) => left.localeCompare(right)),
+        });
+        return;
+    }
+  };
+
+  const visit = (
+    spec: FlowSpec,
+    specPath: string,
+    cwd: string,
+    scope: Scope,
+  ) => {
+    switch (spec.kind) {
+      case "spawn":
+        validateAgentReference(
+          spec.agent,
+          `${specPath}.agent`,
+          spec.cwd ?? cwd,
+          spec.scope ?? scope,
+          (name) => {
+            spec.agent = name;
+          },
+        );
+        return;
+      case "sequence":
+        for (const [index, step] of spec.steps.entries()) {
+          visit(step, sequenceStepPath(specPath, index), cwd, scope);
+        }
+        return;
+      case "fork":
+        for (const [branchKey, branchSpec] of Object.entries(spec.branches)) {
+          visit(branchSpec, forkBranchPath(specPath, branchKey), cwd, scope);
+        }
+        return;
+      case "join": {
+        const reducer = spec.reducer;
+        if (reducer?.kind === "agent") {
+          validateAgentReference(
+            reducer.agent,
+            `${specPath}.reducer.agent`,
+            cwd,
+            scope,
+            (name) => {
+              reducer.agent = name;
+            },
+          );
+        }
+        return;
+      }
+      case "loop":
+        visit(spec.body, loopBodyPath(specPath), cwd, scope);
+        return;
+    }
+  };
+
+  visit(flow, ROOT_FLOW_PATH, defaults.cwd, defaults.scope);
+
+  if (issues.length > 0) {
+    throw new Error(formatWorkflowAgentIssues(issues));
+  }
+}
+
 function createLinkedAbortController(parentSignal?: AbortSignal): {
   controller: AbortController;
   dispose: () => void;
@@ -591,6 +763,14 @@ export class RunExecutor {
     };
     const rootNodeId = createNodeId(params.flow);
     const flow = params.flow;
+    const runCwd = params.cwd ?? ctx.cwd;
+    const runScope = params.scope ?? "both";
+
+    preflightWorkflowAgents(flow, {
+      cwd: runCwd,
+      scope: runScope,
+    });
+
     const run: WorkflowRun = {
       id: runId,
       rootNodeId,
@@ -600,8 +780,8 @@ export class RunExecutor {
       depth: 0,
       flow,
       budgets: params.budgets,
-      cwd: params.cwd ?? ctx.cwd,
-      scope: params.scope ?? "both",
+      cwd: runCwd,
+      scope: runScope,
     };
 
     const handleRegistry = new HandleRegistryActor();
@@ -657,6 +837,9 @@ export class RunExecutor {
         ctx,
         notifyUpdate,
         rootNodeId,
+        undefined,
+        undefined,
+        ROOT_FLOW_PATH,
       );
       this.emit(
         {
@@ -698,6 +881,7 @@ export class RunExecutor {
     forcedNodeId?: string,
     branchKey?: string,
     iteration?: number,
+    specPath = ROOT_FLOW_PATH,
   ): Promise<FlowNodeResult> {
     assertNotAborted(state.signal);
 
@@ -707,6 +891,7 @@ export class RunExecutor {
       runId: state.runId,
       parentNodeId: state.parentNodeId,
       specId: spec.id,
+      specPath,
       kind: spec.kind,
       label: spec.label,
       status: "running",
@@ -730,6 +915,7 @@ export class RunExecutor {
             state,
             ctx,
             notifyUpdate,
+            specPath,
           );
           break;
         case "fork":
@@ -739,10 +925,11 @@ export class RunExecutor {
             state,
             ctx,
             notifyUpdate,
+            specPath,
           );
           break;
         case "join":
-          result = await this.evaluateJoin(spec, nodeId, state, ctx);
+          result = await this.evaluateJoin(spec, nodeId, state, ctx, specPath);
           break;
         case "loop":
           result = await this.evaluateLoop(
@@ -751,6 +938,7 @@ export class RunExecutor {
             state,
             ctx,
             notifyUpdate,
+            specPath,
           );
           break;
       }
@@ -798,14 +986,18 @@ export class RunExecutor {
     const cwd = spec.cwd ?? state.cwd;
     const discovery = discoverAgents(cwd, scope);
     const diagnostics = toDiagnosticText(scope, discovery.diagnostics);
-    const agent = discovery.agents.find(
-      (candidate) => candidate.name === spec.agent,
-    );
-    if (!agent) {
+    const resolvedAgent = resolveAgentByName(discovery.agents, spec.agent);
+    if (resolvedAgent.kind === "missing") {
       throw new Error(
         `Unknown agent "${spec.agent}" for scope=${scope}. Available: ${discovery.agents.map((item) => item.name).join(", ") || "none"}`,
       );
     }
+    if (resolvedAgent.kind === "ambiguous") {
+      throw new Error(
+        `Agent name "${spec.agent}" is ambiguous ignoring case for scope=${scope}. Matches: ${resolvedAgent.matches.map((item) => item.name).join(", ")}`,
+      );
+    }
+    const agent = resolvedAgent.agent;
 
     const task = buildDelegatedTask(spec.task, state.memory);
     const budgetLimits = await state.budgets.limits();
@@ -848,7 +1040,7 @@ export class RunExecutor {
         status: "completed",
         text: spawnResult.text,
         output,
-        agent: spec.agent,
+        agent: agent.name,
         run: spawnResult.details,
       };
       rememberResult(spec, result, state.memory);
@@ -865,12 +1057,13 @@ export class RunExecutor {
     state: EvaluationState,
     ctx: ExtensionContext,
     notifyUpdate: () => void,
+    specPath: string,
   ): Promise<SequenceNodeResult> {
     const steps: FlowNodeResult[] = [];
     const memory = cloneMemory(state.memory);
     let latestOutput: unknown;
 
-    for (const step of spec.steps) {
+    for (const [index, step] of spec.steps.entries()) {
       const result = await this.evaluateFlow(
         step,
         {
@@ -882,6 +1075,10 @@ export class RunExecutor {
         },
         ctx,
         notifyUpdate,
+        undefined,
+        undefined,
+        undefined,
+        sequenceStepPath(specPath, index),
       );
       steps.push(result);
       latestOutput = result.output;
@@ -905,6 +1102,7 @@ export class RunExecutor {
     state: EvaluationState,
     ctx: ExtensionContext,
     notifyUpdate: () => void,
+    specPath: string,
   ): Promise<ForkNodeResult> {
     this.emit(
       {
@@ -959,6 +1157,8 @@ export class RunExecutor {
               notifyUpdate,
               undefined,
               key,
+              undefined,
+              forkBranchPath(specPath, key),
             );
             const controllers = await coordinator.recordSuccess(key, result);
             for (const sibling of controllers) {
@@ -1030,6 +1230,7 @@ export class RunExecutor {
     nodeId: string,
     state: EvaluationState,
     ctx: ExtensionContext,
+    _specPath: string,
   ): Promise<JoinNodeResult> {
     const forkResult = state.memory.bySpecId.get(spec.from);
     if (!forkResult || forkResult.kind !== "fork") {
@@ -1165,6 +1366,7 @@ export class RunExecutor {
     state: EvaluationState,
     ctx: ExtensionContext,
     notifyUpdate: () => void,
+    specPath: string,
   ): Promise<LoopNodeResult> {
     const iterations: FlowNodeResult[] = [];
     const loopMemory = cloneMemory(state.memory);
@@ -1200,6 +1402,7 @@ export class RunExecutor {
         undefined,
         undefined,
         iteration,
+        loopBodyPath(specPath),
       );
       iterations.push(bodyResult);
       latestOutput = bodyResult.output;

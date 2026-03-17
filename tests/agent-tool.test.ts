@@ -237,6 +237,58 @@ describe("agent tool delegated process execution", () => {
     expect(capturedArgs).toContain("high");
   });
 
+  it("resolves agent names case-insensitively when unambiguous", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "explorer.md"),
+      "explorer",
+      "Project explorer",
+    );
+    const spawnProcess: SpawnProcess = () => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const stdin = new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      });
+      const proc = new EventEmitter() as ChildProcessWithoutNullStreams;
+      Object.assign(proc, {
+        stdout,
+        stderr,
+        stdin,
+        exitCode: null,
+        signalCode: null,
+        kill() {
+          return true;
+        },
+      });
+      queueMicrotask(() => {
+        const event = {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "ok" }],
+          },
+        };
+        stdout.write(`${JSON.stringify(event)}\n`);
+        proc.emit("close", 0);
+      });
+      return proc;
+    };
+
+    const tool = setupTool(createAgentExtension({ spawnProcess }));
+    const result = await tool.execute(
+      "call-case-insensitive",
+      { name: "Explorer", task: "do work" },
+      undefined,
+      undefined,
+      { cwd: workspaceDir } as unknown as ExtensionContext,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.details?.agent).toBe("explorer");
+  });
+
   it("discovers agents relative to the delegated cwd", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),

@@ -181,6 +181,161 @@ function validateLoopSpec(
   }
 }
 
+type SpawnDefaults = {
+  agent?: string;
+  taskTemplate?: string;
+  cwd?: string;
+  scope?: SpawnFlowSpec["scope"];
+  output?: SpawnFlowSpec["output"];
+  branchKey?: string;
+};
+
+function resolveBranchTask(defaults?: SpawnDefaults): string | undefined {
+  if (!defaults) return undefined;
+  if (defaults.taskTemplate) {
+    return defaults.taskTemplate.replaceAll(
+      "{branch}",
+      defaults.branchKey ?? "",
+    );
+  }
+  return defaults.branchKey;
+}
+
+function normalizeSpawnLike(
+  spec: Record<string, unknown>,
+  label: string,
+  defaults?: SpawnDefaults,
+): SpawnFlowSpec {
+  const agent = typeof spec.agent === "string" ? spec.agent : defaults?.agent;
+  if (!agent || agent.trim() === "") {
+    throw new Error(
+      `${label}.agent must be a non-empty string or inherit one from the parent fork.`,
+    );
+  }
+
+  const task =
+    typeof spec.task === "string" ? spec.task : resolveBranchTask(defaults);
+  if (!task || task.trim() === "") {
+    throw new Error(
+      `${label}.task must be a non-empty string or inherit one from fork.taskTemplate.`,
+    );
+  }
+
+  return {
+    kind: "spawn",
+    id: typeof spec.id === "string" ? spec.id : undefined,
+    label: typeof spec.label === "string" ? spec.label : undefined,
+    agent,
+    task,
+    cwd:
+      typeof spec.cwd === "string"
+        ? spec.cwd
+        : (defaults?.cwd as SpawnFlowSpec["cwd"]),
+    scope:
+      spec.scope !== undefined
+        ? (spec.scope as SpawnFlowSpec["scope"])
+        : defaults?.scope,
+    output:
+      spec.output !== undefined
+        ? (spec.output as SpawnFlowSpec["output"])
+        : defaults?.output,
+  };
+}
+
+function normalizeFlowInput(
+  spec: unknown,
+  label: string,
+  defaults?: SpawnDefaults,
+): FlowSpec {
+  if (typeof spec === "string") {
+    return normalizeSpawnLike({ agent: spec }, label, defaults);
+  }
+  if (!isRecord(spec)) {
+    throw new Error(`${label} must be an object.`);
+  }
+
+  if (spec.kind === undefined) {
+    return normalizeSpawnLike(spec, label, defaults);
+  }
+
+  switch (spec.kind) {
+    case "spawn":
+      return normalizeSpawnLike(spec, label, defaults);
+    case "sequence": {
+      if (!Array.isArray(spec.steps)) {
+        throw new Error(`${label}.steps must be an array.`);
+      }
+      return {
+        kind: "sequence",
+        id: typeof spec.id === "string" ? spec.id : undefined,
+        label: typeof spec.label === "string" ? spec.label : undefined,
+        steps: spec.steps.map((step, index) =>
+          normalizeFlowInput(step, `${label}.steps[${index}]`),
+        ),
+      };
+    }
+    case "fork": {
+      if (!isRecord(spec.branches) || Object.keys(spec.branches).length === 0) {
+        throw new Error(`${label}.branches must be a non-empty object.`);
+      }
+      const branchDefaults: SpawnDefaults = {
+        agent: typeof spec.agent === "string" ? spec.agent : undefined,
+        taskTemplate:
+          typeof spec.taskTemplate === "string" ? spec.taskTemplate : undefined,
+        cwd: typeof spec.cwd === "string" ? spec.cwd : undefined,
+        scope:
+          spec.scope !== undefined
+            ? (spec.scope as SpawnFlowSpec["scope"])
+            : undefined,
+        output:
+          spec.output !== undefined
+            ? (spec.output as SpawnFlowSpec["output"])
+            : undefined,
+      };
+      return {
+        kind: "fork",
+        id: typeof spec.id === "string" ? spec.id : "fork",
+        label: typeof spec.label === "string" ? spec.label : undefined,
+        concurrency:
+          typeof spec.concurrency === "number" ? spec.concurrency : undefined,
+        branches: Object.fromEntries(
+          Object.entries(spec.branches).map(([branchKey, branchSpec]) => [
+            branchKey,
+            normalizeFlowInput(branchSpec, `${label}.branches.${branchKey}`, {
+              ...branchDefaults,
+              branchKey,
+            }),
+          ]),
+        ),
+      };
+    }
+    case "join":
+      return {
+        kind: "join",
+        id: typeof spec.id === "string" ? spec.id : undefined,
+        label: typeof spec.label === "string" ? spec.label : undefined,
+        from: spec.from as string,
+        mode: spec.mode as JoinFlowSpec["mode"],
+        quorum: typeof spec.quorum === "number" ? spec.quorum : undefined,
+        reducer: spec.reducer as JoinFlowSpec["reducer"],
+        onFailure: spec.onFailure as JoinFlowSpec["onFailure"],
+      };
+    case "loop":
+      return {
+        kind: "loop",
+        id: typeof spec.id === "string" ? spec.id : "loop",
+        label: typeof spec.label === "string" ? spec.label : undefined,
+        body: normalizeFlowInput(spec.body, `${label}.body`),
+        maxIterations: spec.maxIterations as number,
+        continueWhen: spec.continueWhen as ContinueSpec | undefined,
+      };
+    default:
+      throw new Error(
+        `${label}.kind must be one of spawn, sequence, fork, join, loop.`,
+      );
+  }
+}
+
 function validateFlowReferences(flow: FlowSpec): void {
   const ids = new Map<string, FlowSpec["kind"]>();
   const joinedForks = new Map<string, string>();
@@ -335,6 +490,26 @@ export function validateWorkflowParams(
       if (value !== undefined) assertPositiveInteger(value, `budgets.${key}`);
     }
   }
+}
+
+export function normalizeWorkflowParams(params: unknown): WorkflowParams {
+  if (!isRecord(params)) {
+    throw new Error("workflow parameters must be an object.");
+  }
+
+  const normalized: WorkflowParams = {
+    label: typeof params.label === "string" ? params.label : undefined,
+    flow: normalizeFlowInput(params.flow, "flow"),
+    cwd: typeof params.cwd === "string" ? params.cwd : undefined,
+    scope:
+      params.scope !== undefined
+        ? (params.scope as WorkflowParams["scope"])
+        : undefined,
+    budgets: params.budgets as WorkflowParams["budgets"],
+  };
+
+  validateWorkflowParams(normalized);
+  return normalized;
 }
 
 export function parseJsonText(text: string): unknown {

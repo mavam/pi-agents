@@ -108,10 +108,12 @@ You can also call the `agent` tool directly:
 
 ### 4. Run a workflow
 
-Use the `workflow` tool to run a multi-agent workflow. The example below
-defines a review loop: a `reviewer` agent inspects the patch, then an
-`engineer` agent applies the findings, repeating until the reviewer signals
-`done` or three iterations have passed.
+Use the `workflow` tool to run a multi-agent workflow. The tool accepts both
+the full canonical JSON tree and a compact authoring form for common cases.
+The example below uses the canonical form and defines a review loop: a
+`reviewer` agent inspects the patch, then an `engineer` agent applies the
+findings, repeating until the reviewer signals `done` or three iterations have
+passed.
 
 ```json
 {
@@ -171,6 +173,37 @@ Parameters:
 ### `workflow`
 
 Runs a workflow defined by a JSON tree of nodes.
+
+The tool also accepts a compact authoring form:
+
+- A plain spawn can omit `kind: "spawn"`.
+- A `fork` can provide default `agent`, `taskTemplate`, `cwd`, `scope`, and
+  `output` values for its branches.
+- Fork branch values can be full flow specs, spawn-shorthand objects, or plain
+  agent-name strings.
+
+For example:
+
+```json
+{
+  "label": "Four-Lens Code Review",
+  "flow": {
+    "kind": "fork",
+    "id": "review-fork",
+    "agent": "reviewer",
+    "taskTemplate": "Review this codebase from the {branch} lens.",
+    "branches": {
+      "architecture": {},
+      "readability": "reviewer",
+      "tests": { "task": "Review test coverage and test quality." },
+      "ux": { "agent": "ux-reviewer" }
+    }
+  }
+}
+```
+
+The runtime normalizes this compact form into the full canonical workflow
+before validation and execution.
 
 Top-level parameters:
 

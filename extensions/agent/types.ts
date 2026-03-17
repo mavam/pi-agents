@@ -142,6 +142,7 @@ export interface RunNode {
   runId: string;
   parentNodeId?: string;
   specId?: string;
+  specPath?: string;
   kind: FlowSpec["kind"];
   label?: string;
   status: NodeStatus;

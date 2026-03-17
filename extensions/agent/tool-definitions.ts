@@ -61,6 +61,18 @@ const JoinReducerSchema = Type.Union([
   }),
 ]);
 
+const SpawnShorthandSchema = Type.Object({
+  id: Type.Optional(Type.String()),
+  label: Type.Optional(Type.String()),
+  agent: Type.Optional(Type.String({ description: "Agent name to execute" })),
+  task: Type.Optional(
+    Type.String({ description: "Task prompt passed to the agent" }),
+  ),
+  cwd: Type.Optional(Type.String()),
+  scope: Type.Optional(ScopeSchema),
+  output: Type.Optional(OutputModeSchema),
+});
+
 const FlowSpecSchema = Type.Recursive((Self) =>
   Type.Union([
     Type.Object({
@@ -73,6 +85,7 @@ const FlowSpecSchema = Type.Recursive((Self) =>
       scope: Type.Optional(ScopeSchema),
       output: Type.Optional(OutputModeSchema),
     }),
+    SpawnShorthandSchema,
     Type.Object({
       kind: Type.Literal("sequence"),
       id: Type.Optional(Type.String()),
@@ -84,13 +97,34 @@ const FlowSpecSchema = Type.Recursive((Self) =>
     }),
     Type.Object({
       kind: Type.Literal("fork"),
-      id: Type.String({
-        description: "Unique fork identifier for downstream joins",
-      }),
+      id: Type.Optional(
+        Type.String({
+          description: "Optional fork identifier for downstream joins",
+        }),
+      ),
       label: Type.Optional(Type.String()),
-      branches: Type.Record(Type.String(), Self, {
-        description: "Named branches executed concurrently",
-      }),
+      agent: Type.Optional(
+        Type.String({
+          description: "Default agent inherited by branch spawns",
+        }),
+      ),
+      taskTemplate: Type.Optional(
+        Type.String({
+          description:
+            "Default task template for branch spawns. Use {branch} as a placeholder.",
+        }),
+      ),
+      cwd: Type.Optional(Type.String()),
+      scope: Type.Optional(ScopeSchema),
+      output: Type.Optional(OutputModeSchema),
+      branches: Type.Record(
+        Type.String(),
+        Type.Union([Self, Type.String(), SpawnShorthandSchema]),
+        {
+          description:
+            "Named branches executed concurrently. Branch values may be full flow specs, spawn shorthands, or agent-name strings.",
+        },
+      ),
       concurrency: Type.Optional(PositiveIntegerSchema),
     }),
     Type.Object({

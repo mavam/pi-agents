@@ -4,7 +4,12 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
-import { discoverAgents, formatAgentList, type Scope } from "./agents.js";
+import {
+  discoverAgents,
+  formatAgentList,
+  resolveAgentByName,
+  type Scope,
+} from "./agents.js";
 import { toDiagnosticText } from "./diagnostics.js";
 import {
   createSubprocessSpawnEngine,
@@ -15,7 +20,7 @@ import {
 } from "./engine/subprocess.js";
 import { AgentEvents } from "./events.js";
 import { RunExecutionError, RunExecutor } from "./executor.js";
-import { validateWorkflowParams } from "./flow-spec.js";
+import { normalizeWorkflowParams } from "./flow-spec.js";
 import { AgentManager } from "./manager.js";
 import { RUN_EVENT_CUSTOM_TYPE } from "./persistence.js";
 import {
@@ -49,6 +54,10 @@ import type {
   RunResultDetails,
   WorkflowParams,
 } from "./types.js";
+import {
+  formatWorkflowAgentsXml,
+  shouldInjectWorkflowAgentsPrompt,
+} from "./workflow-agent-prompt.js";
 
 function initialAgentDetails(scope: Scope, agent: string): AgentRunDetails {
   return {
@@ -87,6 +96,8 @@ export function createAgentExtension(options?: {
     const runtimeState = createRunRuntimeState();
     const manager = new AgentManager(engine);
     const widgetManager = new RunWidgetManager(runtimeState);
+    let workflowUsedInCurrentAgentRun = false;
+    let workflowUsedInPreviousAgentRun = false;
     const executor = new RunExecutor({
       pi,
       manager,
@@ -116,6 +127,36 @@ export function createAgentExtension(options?: {
     });
     pi.on("session_tree", async (event, ctx) => {
       reloadRunState(event, ctx);
+    });
+
+    pi.on("before_agent_start", async (event, ctx) => {
+      if (
+        !shouldInjectWorkflowAgentsPrompt(event.prompt, {
+          workflowUsedInPreviousTurn: workflowUsedInPreviousAgentRun,
+        })
+      ) {
+        return undefined;
+      }
+
+      return {
+        systemPrompt:
+          event.systemPrompt +
+          `\n\n## Workflow agent catalog\n\n${formatWorkflowAgentsXml(ctx.cwd, "both")}`,
+      };
+    });
+
+    pi.on("agent_start", async () => {
+      workflowUsedInCurrentAgentRun = false;
+    });
+
+    pi.on("tool_execution_end", async (event) => {
+      if (event.toolName === "workflow") {
+        workflowUsedInCurrentAgentRun = true;
+      }
+    });
+
+    pi.on("agent_end", async () => {
+      workflowUsedInPreviousAgentRun = workflowUsedInCurrentAgentRun;
     });
 
     pi.registerCommand("agents", {
@@ -279,9 +320,9 @@ export function createAgentExtension(options?: {
         const effectiveCwd = params.cwd ?? ctx.cwd;
         const discovery = discoverAgents(effectiveCwd, scope);
         const diagnostics = toDiagnosticText(scope, discovery.diagnostics);
-        const agent = discovery.agents.find((a) => a.name === params.name);
+        const resolvedAgent = resolveAgentByName(discovery.agents, params.name);
 
-        if (!agent) {
+        if (resolvedAgent.kind === "missing") {
           const available = formatAgentList(discovery.agents);
           const message = `Unknown agent "${params.name}". Available: ${available}`;
           throw new UnknownAgentError(message, {
@@ -289,6 +330,14 @@ export function createAgentExtension(options?: {
             discoveryDiagnostics: diagnostics,
           });
         }
+        if (resolvedAgent.kind === "ambiguous") {
+          const message = `Agent name "${params.name}" is ambiguous ignoring case. Matches: ${formatAgentList(resolvedAgent.matches)}`;
+          throw new UnknownAgentError(message, {
+            ...initialAgentDetails(scope, params.name),
+            discoveryDiagnostics: diagnostics,
+          });
+        }
+        const agent = resolvedAgent.agent;
 
         const workflow: WorkflowParams = {
           label: agent.name,
@@ -296,9 +345,9 @@ export function createAgentExtension(options?: {
           scope,
           flow: {
             kind: "spawn",
-            id: params.name,
+            id: agent.name,
             label: agent.name,
-            agent: params.name,
+            agent: agent.name,
             task: params.task,
           },
         };
@@ -367,6 +416,10 @@ export function createAgentExtension(options?: {
         "Run a structured multi-agent workflow with sequencing, forks, joins, and loops.",
       promptGuidelines: [
         "Use workflow when you need orchestration across multiple agents or multiple execution steps.",
+        "Prefer compact workflow syntax: spawn nodes may omit kind, and fork branches may use agent-name strings or spawn shorthands.",
+        "When many branches share the same agent or task shape, use fork defaults such as agent and taskTemplate instead of repeating full spawn objects.",
+        "If a workflow agent catalog is present in the prompt, treat it as authoritative and use only those exact agent names.",
+        "Do not invent workflow agent names.",
         "Keep workflow definitions explicit and JSON-serializable.",
       ],
       parameters: WorkflowParamsSchema,
@@ -381,8 +434,7 @@ export function createAgentExtension(options?: {
         onUpdate,
         ctx,
       ): Promise<AgentToolResult<RunResultDetails>> {
-        validateWorkflowParams(params);
-        const workflowParams = params as WorkflowParams;
+        const workflowParams = normalizeWorkflowParams(params);
 
         try {
           const details = await executor.execute(

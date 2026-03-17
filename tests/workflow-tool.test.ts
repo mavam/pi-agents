@@ -162,6 +162,148 @@ describe("workflow tool", () => {
     expect(serialized).toContain('"const":"loop"');
   });
 
+  it("resolves workflow agent names case-insensitively when unambiguous", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "reviewer.md"),
+      "reviewer",
+      "Reviewer",
+    );
+    const inputs: string[] = [];
+    const tool = setupWorkflowTool(createSpawnProcess(() => "ok", inputs));
+
+    const result = await tool.execute(
+      "call-case-insensitive-workflow",
+      {
+        flow: {
+          kind: "spawn",
+          agent: "Reviewer",
+          task: "first step",
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    expect(result.content[0]?.type).toBe("text");
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toContain("first step");
+  });
+
+  it("rejects invalid workflow agents before any child runs start", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "reviewer.md"),
+      "reviewer",
+      "Reviewer",
+    );
+    const inputs: string[] = [];
+    const tool = setupWorkflowTool(createSpawnProcess(() => "alpha", inputs));
+
+    const error = (await tool
+      .execute(
+        "call-preflight-invalid-agent",
+        {
+          flow: {
+            kind: "sequence",
+            steps: [
+              {
+                kind: "spawn",
+                agent: "reviewer",
+                task: "first step",
+              },
+              {
+                kind: "spawn",
+                agent: "missing",
+                task: "second step",
+              },
+            ],
+          },
+        },
+        undefined,
+        undefined,
+        { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+      )
+      .then(() => null)
+      .catch((caught) => caught as Error)) as Error | null;
+
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toContain("Unknown workflow agents");
+    expect(error?.message ?? "").toContain('flow.steps[1].agent: "missing"');
+    expect(inputs).toEqual([]);
+  });
+
+  it("accepts top-level spawn shorthand without kind", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "reviewer.md"),
+      "reviewer",
+      "Reviewer",
+    );
+    const inputs: string[] = [];
+    const tool = setupWorkflowTool(createSpawnProcess(() => "alpha", inputs));
+
+    const result = await tool.execute(
+      "call-shorthand-spawn",
+      {
+        flow: {
+          agent: "reviewer",
+          task: "first step",
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    expect(result.content[0]?.type).toBe("text");
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toContain("first step");
+  });
+
+  it("expands fork shorthands with inherited defaults", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+    const inputs: string[] = [];
+    const tool = setupWorkflowTool(
+      createSpawnProcess((input) => {
+        if (input.includes("architecture")) return "arch";
+        if (input.includes("tests")) return "tests";
+        return "other";
+      }, inputs),
+    );
+
+    const result = await tool.execute(
+      "call-shorthand-fork",
+      {
+        label: "Two-Lens Review",
+        flow: {
+          kind: "fork",
+          id: "fanout",
+          agent: "worker",
+          taskTemplate: "Review from the {branch} lens.",
+          branches: {
+            architecture: {},
+            tests: "worker",
+          },
+        },
+      },
+      undefined,
+      undefined,
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    const details = result.details as RunResultDetails;
+    expect(details.result?.output.branches.architecture).toBe("arch");
+    expect(details.result?.output.branches.tests).toBe("tests");
+    expect(inputs).toHaveLength(2);
+    expect(
+      inputs.some((input) =>
+        input.includes("Review from the architecture lens."),
+      ),
+    ).toBe(true);
+    expect(
+      inputs.some((input) => input.includes("Review from the tests lens.")),
+    ).toBe(true);
+  });
+
   it("passes prior sequence results as workflow context", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "reviewer.md"),

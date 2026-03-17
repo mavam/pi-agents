@@ -253,6 +253,29 @@ export function formatAgentList(agents: Agent[]): string {
     .join("; ");
 }
 
+export function resolveAgentByName(
+  agents: Agent[],
+  name: string,
+):
+  | { kind: "exact"; agent: Agent }
+  | { kind: "case_insensitive"; agent: Agent }
+  | { kind: "ambiguous"; matches: Agent[] }
+  | { kind: "missing" } {
+  const exact = agents.find((agent) => agent.name === name);
+  if (exact) return { kind: "exact", agent: exact };
+
+  const lowered = name.toLowerCase();
+  const matches = agents.filter(
+    (agent) => agent.name.toLowerCase() === lowered,
+  );
+  if (matches.length === 1) {
+    const [agent] = matches;
+    if (agent) return { kind: "case_insensitive", agent };
+  }
+  if (matches.length > 1) return { kind: "ambiguous", matches };
+  return { kind: "missing" };
+}
+
 // --- Skills ---
 
 export function buildSkillsPrompt(

@@ -7,6 +7,10 @@ import {
   discoverAgents,
   formatAgentList,
 } from "../extensions/agent/agents.ts";
+import {
+  formatWorkflowAgentsXml,
+  shouldInjectWorkflowAgentsPrompt,
+} from "../extensions/agent/workflow-agent-prompt.ts";
 
 let sandboxDir = "";
 let workspaceDir = "";
@@ -267,6 +271,65 @@ describe("discoverAgents", () => {
 describe("formatAgentList", () => {
   it("returns 'none' for empty input", () => {
     expect(formatAgentList([])).toBe("none");
+  });
+});
+
+describe("formatWorkflowAgentsXml", () => {
+  it("renders a deterministic workflow agent catalog", () => {
+    const { projectAgentsDir, cwd } = setupProject();
+    writeAgentFile(
+      userAgentsDir(),
+      "zeta.md",
+      createAgentMarkdown({ name: "zeta", description: "User zeta" }),
+    );
+    writeAgentFile(
+      projectAgentsDir,
+      "worker.md",
+      createAgentMarkdown({ name: "worker", description: "Project worker" }),
+    );
+
+    const xml = formatWorkflowAgentsXml(cwd, "both");
+
+    expect(xml).toContain('<workflow-agents scope="both"');
+    expect(xml).toContain('<agent name="worker" source="project">');
+    expect(xml).toContain('<agent name="zeta" source="user">');
+    expect(xml.indexOf('name="worker"')).toBeLessThan(
+      xml.indexOf('name="zeta"'),
+    );
+    expect(xml).toContain(
+      '<valid>{"agent":"worker","task":"Map the public API."}</valid>',
+    );
+    expect(xml).toContain('reason="invented-name"');
+  });
+
+  it("reports when no agents are available", () => {
+    const xml = formatWorkflowAgentsXml(workspaceDir, "both");
+
+    expect(xml).toContain("No workflow agents were discovered");
+  });
+});
+
+describe("shouldInjectWorkflowAgentsPrompt", () => {
+  it("detects explicit orchestration intent", () => {
+    expect(
+      shouldInjectWorkflowAgentsPrompt(
+        "Use the workflow tool to fork this review into parallel branches.",
+      ),
+    ).toBe(true);
+    expect(
+      shouldInjectWorkflowAgentsPrompt("Please spawn 3 agents to audit this."),
+    ).toBe(true);
+    expect(
+      shouldInjectWorkflowAgentsPrompt("Just fix the lint error in this file."),
+    ).toBe(false);
+  });
+
+  it("stays enabled for the turn after workflow use", () => {
+    expect(
+      shouldInjectWorkflowAgentsPrompt("continue", {
+        workflowUsedInPreviousTurn: true,
+      }),
+    ).toBe(true);
   });
 });
 

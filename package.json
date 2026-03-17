@@ -18,11 +18,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tenzir/pi-agents.git"
+    "url": "git+https://github.com/mavam/pi-agents.git"
   },
-  "homepage": "https://github.com/tenzir/pi-agents#readme",
+  "homepage": "https://github.com/mavam/pi-agents#readme",
   "bugs": {
-    "url": "https://github.com/tenzir/pi-agents/issues"
+    "url": "https://github.com/mavam/pi-agents/issues"
   },
   "engines": {
     "node": ">=20.0.0"

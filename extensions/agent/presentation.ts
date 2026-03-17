@@ -116,7 +116,7 @@ export function formatFlowOverviewText(runtimeState: RunRuntimeState): string {
   for (const run of runs.slice(0, 10)) {
     const nodes = getRunNodes(runtimeState, run.id);
     lines.push(
-      `- ${iconForStatus(run.status)} ${run.label} (${run.id.slice(0, 8)}) · ${formatRunStatus(run)} · ${nodes.length} nodes`,
+      `- ${run.label} (${run.id.slice(0, 8)}) · ${formatRunStatus(run)} · ${nodes.length} nodes ${iconForStatus(run.status)}`,
     );
   }
   return lines.join("\n");
@@ -223,7 +223,7 @@ export function formatFlowInspectText(
 
   const tree = formatFlowTree(run.flow, runtimeState, run.id);
   if (tree.length > 0) {
-    lines.push("", "Tree:", ...tree);
+    lines.push("", "Structure:", ...tree);
   }
 
   const nodeSummary = summarizeNodeStatus(nodes);
@@ -239,7 +239,7 @@ export function formatFlowInspectText(
       suffix.push(`iteration=${latestNode.iteration}`);
     }
     lines.push(
-      `Latest node: ${iconForStatus(latestNode.status)} ${latestNode.kind} ${latestNode.id}${suffix.length > 0 ? ` (${suffix.join(", ")})` : ""}`,
+      `Latest node: ${iconForStatus(latestNode.status)} ${latestNodeDisplayLabel(run.flow, latestNode)}${suffix.length > 0 ? ` (${suffix.join(", ")})` : ""}`,
     );
     if (latestNode.error) {
       lines.push(`Latest error: ${latestNode.error}`);
@@ -316,6 +316,60 @@ function joinLabel(spec: JoinFlowSpec): string {
   const modeStr = spec.mode === "quorum" ? `quorum(${spec.quorum})` : spec.mode;
   const base = spec.label ?? `join: ${modeStr}`;
   return `${base} ← ${spec.from}`;
+}
+
+function flowLabel(spec: FlowSpec): string {
+  switch (spec.kind) {
+    case "spawn":
+      return spawnLabel(spec);
+    case "fork":
+      return forkLabel(spec);
+    case "join":
+      return joinLabel(spec);
+    case "loop":
+      return spec.label ?? spec.id;
+    case "sequence":
+      return spec.label ?? "sequence";
+  }
+}
+
+function resolveSpecAtPath(
+  flow: FlowSpec,
+  specPath: string | undefined,
+): FlowSpec | undefined {
+  if (!specPath) return undefined;
+  if (specPath === ROOT_FLOW_PATH) return flow;
+  if (!specPath.startsWith(`${ROOT_FLOW_PATH}.`)) return undefined;
+
+  let current: FlowSpec | undefined = flow;
+  const segments = specPath.slice(`${ROOT_FLOW_PATH}.`.length);
+  const pattern = /steps\[(\d+)\]|branches\[(.+?)\]|body/g;
+
+  for (const match of segments.matchAll(pattern)) {
+    if (!current) return undefined;
+    if (match[1] !== undefined) {
+      if (current.kind !== "sequence") return undefined;
+      current = current.steps[Number(match[1])];
+      continue;
+    }
+    if (match[2] !== undefined) {
+      if (current.kind !== "fork") return undefined;
+      current = current.branches[JSON.parse(match[2]) as string];
+      continue;
+    }
+    if (match[0] === "body") {
+      if (current.kind !== "loop") return undefined;
+      current = current.body;
+    }
+  }
+
+  return current;
+}
+
+function latestNodeDisplayLabel(runFlow: FlowSpec, node: RunNode): string {
+  if (node.label) return node.label;
+  const spec = resolveSpecAtPath(runFlow, node.specPath);
+  return spec ? flowLabel(spec) : node.id;
 }
 
 function loopLabel(

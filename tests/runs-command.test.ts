@@ -456,6 +456,34 @@ describe("/flows command", () => {
     );
   });
 
+  it("places the status icon at the end of each flow summary line", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "explorer.md"),
+      "explorer",
+      "Project explorer",
+    );
+
+    const inputs: string[] = [];
+    const { agentTool, flowsCommand, messages, ui } = setupExtension(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    await agentTool.execute(
+      "call-agent-flows-icon",
+      { name: "explorer", task: "inspect" },
+      undefined,
+      undefined,
+      createSessionContext(ui.context),
+    );
+
+    messages.length = 0;
+    await flowsCommand.handler("", createSessionContext(ui.context));
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toContain("completed");
+    expect(messages[0]?.content).toContain("nodes ✔");
+  });
+
   it("rebuilds flows when switching sessions or tree branches", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),
@@ -574,7 +602,7 @@ describe("/flow command", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain(`ID: ${runId}`);
     expect(messages[0]?.content).not.toContain("Unknown flow");
-    expect(messages[0]?.content).toContain("Tree:");
+    expect(messages[0]?.content).toContain("Structure:");
   });
 
   it("lists direct agent tool executions as flows", async () => {
@@ -740,10 +768,58 @@ describe("/flow command", () => {
     const content = messages[0]?.content ?? "";
     expect(content).toContain("Flow: Test Pipeline");
     expect(content).toContain("completed");
-    expect(content).toContain("Tree:");
+    expect(content).toContain("Structure:");
     expect(content).toContain("✔");
     expect(content).toContain("fanout");
     expect(content).toContain("← fanout");
+  });
+
+  it("uses the visible structure label for the latest node", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const inputs: string[] = [];
+    const { flowCommand, workflowTool, messages, ui } = setupExtension(
+      createSpawnProcess(() => "ok", inputs),
+    );
+
+    const result = await workflowTool.execute(
+      "call-flow-latest-label",
+      {
+        label: "Codebase Explorer",
+        flow: {
+          kind: "fork",
+          id: "explore",
+          label: "Codebase Explorer",
+          branches: {
+            developer: {
+              kind: "spawn",
+              agent: "worker",
+              label: "Developer-Facing Explorer",
+              task: "dev",
+            },
+            user: {
+              kind: "spawn",
+              agent: "worker",
+              label: "User-Facing Explorer",
+              task: "user",
+            },
+          },
+        },
+      },
+      undefined,
+      undefined,
+      createSessionContext(ui.context),
+    );
+
+    messages.length = 0;
+    await flowCommand.handler(result.details.run.id, createSessionContext(ui.context));
+
+    const content = messages[0]?.content ?? "";
+    expect(content).toContain("Structure:");
+    expect(content).toContain("✔ Codebase Explorer");
+    expect(content).toContain("Latest node: ✔ User-Facing Explorer");
+    expect(content).not.toContain("Latest node: ✔ spawn");
+    expect(content).not.toContain("Latest node: ✔ fork explore:1");
   });
 
   it("outputs a Mermaid code fence with the mermaid subcommand", async () => {

@@ -217,28 +217,29 @@ Top-level parameters:
 
 ## 🧭 Commands
 
-| Command                        | Description                                |
-| ------------------------------ | ------------------------------------------ |
-| `/agents`                      | List discovered agents.                    |
-| `/agent <name>`                | Show full details for one agent.           |
-| `/flows`                       | Browse recorded flows in the current session.      |
-| `/flow`                        | Open the interactive flow picker.                  |
-| `/flow <id-or-prefix>`         | Inspect one flow.                                  |
-| `/flow watch [id-or-prefix]`   | Re-enter live watch mode for a running flow.       |
-| `/flow mermaid [id-or-prefix]` | Output the selected flow as a Mermaid diagram.     |
-| `/flow stop [id-or-prefix]`    | Stop a running flow.                               |
+| Command                        | Description                                    |
+| ------------------------------ | ---------------------------------------------- |
+| `/agents`                      | List discovered agents.                        |
+| `/agent <name>`                | Show full details for one agent.               |
+| `/flows`                       | Browse recorded flows in the current session.  |
+| `/flow`                        | Open the interactive flow picker.              |
+| `/flow <id-or-prefix>`         | Inspect one flow.                              |
+| `/flow watch [id-or-prefix]`   | Re-enter live watch mode for a running flow.   |
+| `/flow mermaid [id-or-prefix]` | Output the selected flow as a Mermaid diagram. |
+| `/flow stop [id-or-prefix]`    | Stop a running flow.                           |
 
 ### Flow inspect view
 
 `/flow <id>` shows the selected flow's metadata, current status, and an ASCII
 tree of its structure. Each node kind has a distinct icon:
 
-| Icon | Kind  |
-| ---- | ----- |
-| `●`  | spawn |
-| `◇`  | fork  |
-| `◆`  | join  |
-| `◎`  | loop  |
+| Icon | Kind     |
+| ---- | -------- |
+| `✦`  | spawn    |
+| `⑃`  | fork     |
+| `⑂`  | join     |
+| `↺`  | loop     |
+| `≡`  | sequence |
 
 Sequences are transparent — their children appear at the parent indentation
 level without extra nesting.
@@ -248,37 +249,35 @@ status icons:
 
 | Icon | Status    |
 | ---- | --------- |
-| `✔`  | completed |
-| `✘`  | failed    |
-| `⠹`  | running   |
-| `◌`  | waiting   |
-| `■`  | aborted   |
-| `○`  | queued    |
+| `●`  | completed |
+| `◉`  | running   |
+| `○`  | waiting   |
+| `⊘`  | stopped   |
 
 Example — static flow tree:
 
 ```
-● initializer
-◇ parallel
-├─ fast → ● fast-worker
+✦ initializer
+⑃ parallel
+├─ fast → ✦ fast-worker
 └─ slow
-   ├─ ● prep
-   └─ ● slow-worker
-◆ join: all ← parallel
-◎ validate (max 3)
-└─ ● validator
+   ├─ ✦ prep
+   └─ ✦ slow-worker
+⑂ join: all ← parallel
+↺ validate (max 3)
+└─ ✦ validator
 ```
 
 Example — with status overlay:
 
 ```
-✔ initializer
-⠹ parallel
-├─ fast → ✔ fast-worker
+● initializer
+◉ parallel
+├─ fast → ● fast-worker
 └─ slow
-   ├─ ✔ prep
-   └─ ⠹ slow-worker
-◌ join: all ← parallel
+   ├─ ● prep
+   └─ ◉ slow-worker
+○ join: all ← parallel
 ○ validate (max 3)
 └─ ○ validator
 ```
@@ -427,5 +426,8 @@ Repeat a body node until a condition is met or `maxIterations` is reached.
   otherwise.
 
 ## 📄 License
+
+[MIT](LICENSE)
+cense
 
 [MIT](LICENSE)

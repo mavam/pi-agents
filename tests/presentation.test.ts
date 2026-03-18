@@ -547,15 +547,16 @@ describe("agent presentation", () => {
     const lines = formatFlowTree(flow);
 
     expect(lines).toEqual([
-      "├─ ● initializer",
-      "├─ ◇ parallel",
-      "│  ├─ ● fast-worker: fast",
+      "≡ sequence",
+      "├─ ✦ initializer",
+      "├─ ⑃ parallel",
+      "│  ├─ ✦ fast-worker: fast",
       "│  └─ slow",
-      "│     ├─ ● prep",
-      "│     └─ ● slow-worker",
-      "├─ ◆ all",
-      "└─ ◎ validate (max 3)",
-      "   └─ ● validator",
+      "│     ├─ ✦ prep",
+      "│     └─ ✦ slow-worker",
+      "├─ ⑂ all",
+      "└─ ↺ validate (max 3)",
+      "   └─ ✦ validator",
     ]);
   });
 
@@ -604,7 +605,7 @@ describe("agent presentation", () => {
 
     const lines = formatFlowTree(flow, runtimeState, "r1");
 
-    expect(lines).toEqual(["├─ ✔ analyzer", "└─ ⠹ reviewer"]);
+    expect(lines).toEqual(["≡ sequence", "├─ ● analyzer", "└─ ◉ reviewer"]);
   });
 
   it("keeps inspect structure static even when runtime state has live statuses", () => {
@@ -678,12 +679,11 @@ describe("agent presentation", () => {
     const text = formatFlowInspectText(runtimeState, "r-inspect");
 
     expect(text).toContain("Structure:");
-    expect(text).toContain("◇ Parallel codebase exploration");
-    expect(text).toContain("├─ ● developer-facing: developer_facing");
-    expect(text).toContain("└─ ● user-facing: user_facing");
-    expect(text).not.toContain("◌ Parallel codebase exploration");
-    expect(text).not.toContain("✔ developer-facing");
-    expect(text).not.toContain("⠹ user-facing");
+    expect(text).toContain("⑃ Parallel codebase exploration");
+    expect(text).toContain("├─ ✦ developer-facing: developer_facing");
+    expect(text).toContain("└─ ✦ user-facing: user_facing");
+    expect(text).not.toContain("○ Parallel codebase exploration");
+    expect(text).not.toContain("◉ user-facing");
     expect(text).toContain("Nodes: 1 running · 1 waiting · 1 completed");
   });
 
@@ -748,7 +748,7 @@ describe("agent presentation", () => {
         specId: "second",
         specPath: "flow.steps[1]",
         kind: "spawn",
-        status: "failed",
+        status: "stopped",
         error: "boom",
       },
       {
@@ -764,7 +764,7 @@ describe("agent presentation", () => {
 
     const lines = formatNodeResultLines(run, nodes, { limit: 2 });
 
-    expect(lines).toEqual(["- ✘ Second Step: boom", "- ✔ Third Step: gamma"]);
+    expect(lines).toEqual(["- ⊘ Second Step: boom", "- ● Third Step: gamma"]);
   });
 
   it("renders a single spawn without tree connectors", () => {
@@ -774,7 +774,7 @@ describe("agent presentation", () => {
       task: "work",
     };
     const lines = formatFlowTree(flow);
-    expect(lines).toEqual(["● worker"]);
+    expect(lines).toEqual(["✦ worker"]);
   });
 
   it("overlays status for fork branches without explicit node ids", () => {
@@ -856,10 +856,10 @@ describe("agent presentation", () => {
     const lines = formatFlowTree(flow, runtimeState, "r-branches");
 
     expect(lines).toEqual([
-      "◌ Three-Lens Code Review",
-      "├─ ⠹ worker: code_quality_and_docs",
-      "├─ ⠹ worker: performance_and_architecture",
-      "└─ ⠹ worker: security_and_safety",
+      "○ Three-Lens Code Review",
+      "├─ ◉ worker: code_quality_and_docs",
+      "├─ ◉ worker: performance_and_architecture",
+      "└─ ◉ worker: security_and_safety",
     ]);
   });
 });

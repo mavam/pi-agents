@@ -28,7 +28,7 @@ import {
   getRunNodes,
   iconForKind,
   iconForStatus,
-  markRunningRunsAborted,
+  markRunningRunsStopped,
   type RunRuntimeState,
 } from "./state.js";
 import type {
@@ -170,12 +170,10 @@ export function resolveFlowId(
 
 function summarizeNodeStatus(nodes: RunNode[]): string {
   const counts = {
-    queued: 0,
     running: 0,
     waiting: 0,
     completed: 0,
-    failed: 0,
-    aborted: 0,
+    stopped: 0,
   };
   for (const node of nodes) {
     counts[node.status] += 1;
@@ -184,9 +182,7 @@ function summarizeNodeStatus(nodes: RunNode[]): string {
     counts.running > 0 ? `${counts.running} running` : undefined,
     counts.waiting > 0 ? `${counts.waiting} waiting` : undefined,
     counts.completed > 0 ? `${counts.completed} completed` : undefined,
-    counts.failed > 0 ? `${counts.failed} failed` : undefined,
-    counts.aborted > 0 ? `${counts.aborted} aborted` : undefined,
-    counts.queued > 0 ? `${counts.queued} queued` : undefined,
+    counts.stopped > 0 ? `${counts.stopped} stopped` : undefined,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -301,9 +297,7 @@ export function formatNodeResultLines(
   const interesting = nodes.filter(
     (node) =>
       (node.id !== run.rootNodeId || nodes.length === 1) &&
-      (node.status === "completed" ||
-        node.status === "failed" ||
-        node.status === "aborted") &&
+      (node.status === "completed" || node.status === "stopped") &&
       (node.output !== undefined || node.error),
   );
 
@@ -433,18 +427,14 @@ function aggregatedStatus(
 
 function colorIcon(icon: string, theme: Theme): string {
   switch (icon) {
-    case "✔":
+    case "●":
       return theme.fg("success", icon);
-    case "✘":
-      return theme.fg("error", icon);
-    case "⠹":
+    case "◉":
       return theme.fg("accent", icon);
-    case "◌":
-      return theme.fg("dim", icon);
-    case "■":
-      return theme.fg("warning", icon);
     case "○":
       return theme.fg("dim", icon);
+    case "⊘":
+      return theme.fg("warning", icon);
     default:
       return theme.fg("accent", icon);
   }
@@ -701,6 +691,9 @@ export function formatFlowTree(
 
   if (flow.kind === "sequence") {
     if (flow.steps.length >= 2) {
+      const seqLabel = flow.label ?? "sequence";
+      const seqIcon = flowIcon(flow, ROOT_FLOW_PATH, ctx);
+      ctx.lines.push(`${seqIcon} ${seqLabel}`);
       emitChildren(flow.steps, ROOT_FLOW_PATH, "", ctx);
     } else {
       for (const [index, step] of flow.steps.entries()) {
@@ -1263,9 +1256,7 @@ function notificationStatusTone(
   switch (status) {
     case "completed":
       return "success";
-    case "failed":
-      return "error";
-    case "aborted":
+    case "stopped":
       return "warning";
   }
 }
@@ -1415,7 +1406,7 @@ export function rebuildRuntimeState(
     runtimeState.nodes.set(id, node);
   }
   runtimeState.order.push(...rebuilt.order);
-  markRunningRunsAborted(runtimeState);
+  markRunningRunsStopped(runtimeState);
   for (const snapshot of liveRuns?.listSnapshots() ?? []) {
     runtimeState.runs.set(snapshot.run.id, structuredClone(snapshot.run));
     for (const node of snapshot.nodes) {
@@ -1491,7 +1482,7 @@ export function buildWidgetLines(
           continue;
         }
         // Replace the static running icon with the animated spinner frame.
-        const themed = treeLine.replaceAll("⠹", spinner);
+        const themed = treeLine.replaceAll(iconForStatus("running"), spinner);
         lines.push(truncate(`${theme.fg("dim", indent)}${themed}`));
       }
     }

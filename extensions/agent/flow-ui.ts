@@ -19,7 +19,12 @@ import {
   formatRunStatus,
   resolveFlowId,
 } from "./presentation.js";
-import { getOrderedRuns, getRunNodes, type RunRuntimeState } from "./state.js";
+import {
+  getOrderedRuns,
+  getRunNodes,
+  iconForStatus,
+  type RunRuntimeState,
+} from "./state.js";
 import type { FlowNodeResult } from "./types.js";
 
 export type FlowAction = "inspect" | "watch" | "mermaid" | "diagram" | "stop";
@@ -108,12 +113,10 @@ function countNodeStatuses(
   runId: string,
 ): string {
   const counts = {
-    queued: 0,
     running: 0,
     waiting: 0,
     completed: 0,
-    failed: 0,
-    aborted: 0,
+    stopped: 0,
   };
   for (const node of getRunNodes(runtimeState, runId)) {
     counts[node.status] += 1;
@@ -122,16 +125,16 @@ function countNodeStatuses(
     counts.running > 0 ? `${counts.running} running` : undefined,
     counts.waiting > 0 ? `${counts.waiting} waiting` : undefined,
     counts.completed > 0 ? `${counts.completed} completed` : undefined,
-    counts.failed > 0 ? `${counts.failed} failed` : undefined,
-    counts.aborted > 0 ? `${counts.aborted} aborted` : undefined,
-    counts.queued > 0 ? `${counts.queued} queued` : undefined,
+    counts.stopped > 0 ? `${counts.stopped} stopped` : undefined,
   ]
     .filter(Boolean)
     .join(" · ");
 }
 
 function replaceRunningIcons(lines: string[], spinner: string): string[] {
-  return lines.map((line) => line.replaceAll("⠹", spinner));
+  return lines.map((line) =>
+    line.replaceAll(iconForStatus("running"), spinner),
+  );
 }
 
 class FlowActionPickerComponent implements Component {

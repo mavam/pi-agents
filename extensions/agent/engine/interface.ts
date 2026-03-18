@@ -24,7 +24,7 @@ export interface SpawnHandle {
   runId?: string;
   parentNodeId?: string;
   depth: number;
-  status: "queued" | "running" | "completed" | "failed" | "stopped" | "aborted";
+  status: "running" | "completed" | "stopped";
   updates: AsyncIterable<SpawnUpdate>;
   wait(): Promise<SpawnResult>;
   abort(): Promise<void>;

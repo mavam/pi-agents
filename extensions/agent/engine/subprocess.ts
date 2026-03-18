@@ -285,7 +285,7 @@ export function createSubprocessSpawnEngine(options?: {
           const spawnFailure = `Failed to spawn "pi": ${errorText}`;
           stderr = spawnFailure;
           errorMessage = spawnFailure;
-          status = wasAborted ? "aborted" : "failed";
+          status = "stopped";
           cleanup();
           reject(new DelegatedAgentRunError(spawnFailure, details(1)));
           return;
@@ -315,7 +315,7 @@ export function createSubprocessSpawnEngine(options?: {
           }
 
           if (wasAborted) {
-            status = "aborted";
+            status = "stopped";
             cleanup();
             reject(
               new DelegatedAgentRunError(
@@ -333,7 +333,7 @@ export function createSubprocessSpawnEngine(options?: {
             stopReason === "aborted" ||
             Boolean(signalCode);
           if (isError) {
-            status = "failed";
+            status = "stopped";
             const rawReason =
               errorMessage || stderr || finalText || "(no output)";
             const reason = formatFailureReason(rawReason, resolvedModel);
@@ -371,7 +371,7 @@ export function createSubprocessSpawnEngine(options?: {
           const spawnFailure = `Failed to spawn "pi": ${errorText}`;
           stderr = stderr ? `${stderr}\n${spawnFailure}` : spawnFailure;
           if (!errorMessage) errorMessage = spawnFailure;
-          status = wasAborted ? "aborted" : "failed";
+          status = "stopped";
           cleanup();
           reject(new DelegatedAgentRunError(spawnFailure, details(1)));
         });
@@ -392,7 +392,7 @@ export function createSubprocessSpawnEngine(options?: {
         abort: async () => {
           if (wasAborted) return;
           wasAborted = true;
-          status = "aborted";
+          status = "stopped";
           if (!proc) return;
           proc.kill("SIGTERM");
           forceKillTimer = setTimeout(() => {

@@ -109,15 +109,9 @@ export interface WorkflowParams {
   scope?: Scope;
 }
 
-export type NodeStatus =
-  | "queued"
-  | "running"
-  | "waiting"
-  | "completed"
-  | "failed"
-  | "aborted";
+export type NodeStatus = "running" | "waiting" | "completed" | "stopped";
 
-export type RunStatus = "running" | "completed" | "failed" | "aborted";
+export type RunStatus = "running" | "completed" | "stopped";
 
 export interface WorkflowRun {
   id: string;
@@ -231,7 +225,7 @@ export type RunNotificationDetails =
       kind: "spawn_update";
       runId: string;
       runLabel: string;
-      status: "completed" | "failed";
+      status: "completed" | "stopped";
       nodeId: string;
       nodeLabel: string;
       agent?: string;
@@ -275,14 +269,7 @@ export type RunEvent =
       output?: unknown;
     }
   | {
-      type: "node_failed";
-      at: number;
-      runId: string;
-      nodeId: string;
-      error: string;
-    }
-  | {
-      type: "node_aborted";
+      type: "node_stopped";
       at: number;
       runId: string;
       nodeId: string;

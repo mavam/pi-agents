@@ -487,7 +487,7 @@ describe("/flows command", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain("completed");
-    expect(messages[0]?.content).toContain("nodes ✔");
+    expect(messages[0]?.content).toContain("nodes ●");
   });
 
   it("rebuilds flows when switching sessions or tree branches", async () => {
@@ -696,15 +696,15 @@ describe("/flow command", () => {
         hasUI: false,
         ui: ui.context,
       } as unknown as ExtensionContext);
-      if (messages[0]?.content.includes("Status: aborted")) break;
+      if (messages[0]?.content.includes("Status: stopped")) break;
       if (Date.now() >= deadline) {
         throw new Error(
-          "Timed out waiting for /flow details to report aborted.",
+          "Timed out waiting for /flow details to report stopped.",
         );
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    expect(messages[0]?.content).toContain("Status: aborted");
+    expect(messages[0]?.content).toContain("Status: stopped");
   });
 
   it("shows the combined inspect view for a completed flow", async () => {
@@ -775,9 +775,9 @@ describe("/flow command", () => {
     expect(content).toContain("Flow: Test Pipeline");
     expect(content).toContain("completed");
     expect(content).toContain("Structure:");
-    expect(content).toContain("✔");
+    expect(content).toContain("●");
     expect(content).toContain("fanout");
-    expect(content).toContain("◆ all");
+    expect(content).toContain("⑂ all");
     expect(content).toContain("Node Results:");
     expect(content).toContain("branch=a");
     expect(content).toContain("branch=b");
@@ -830,10 +830,10 @@ describe("/flow command", () => {
 
     const content = messages[0]?.content ?? "";
     expect(content).toContain("Structure:");
-    expect(content).toContain("◇ Codebase Explorer");
-    expect(content).toContain("Latest node: ✔ User-Facing Explorer");
-    expect(content).not.toContain("Latest node: ✔ spawn");
-    expect(content).not.toContain("Latest node: ✔ fork explore:1");
+    expect(content).toContain("⑃ Codebase Explorer");
+    expect(content).toContain("Latest node: ● User-Facing Explorer");
+    expect(content).not.toContain("Latest node: ● spawn");
+    expect(content).not.toContain("Latest node: ● fork explore:1");
   });
 
   it("outputs a Mermaid code fence with the mermaid subcommand", async () => {
@@ -1024,7 +1024,7 @@ describe("detached workflow notifications", () => {
       (message) => message.customType === "pi-agents:notification",
     );
     expect(notifications[0]?.content).toContain("Only Step");
-    expect(notifications[0]?.content).toContain("✔");
+    expect(notifications[0]?.content).toContain("●");
     expect(notifications[1]?.content).toContain("Detached Notify");
     expect(notifications[1]?.content).toContain("Use /flow");
   });

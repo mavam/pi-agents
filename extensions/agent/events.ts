@@ -3,13 +3,12 @@ import type { RunStatus } from "./types.js";
 export const AgentEvents = {
   RUN_CREATED: "run:created",
   RUN_COMPLETED: "run:completed",
-  RUN_FAILED: "run:failed",
-  RUN_ABORTED: "run:aborted",
+  RUN_STOPPED: "run:stopped",
   RUN_ITERATION: "run:iteration",
   RUN_COUNTS_CHANGED: "run:counts_changed",
   AGENTS_SPAWNED: "agents:spawned",
   AGENTS_COMPLETED: "agents:completed",
-  AGENTS_FAILED: "agents:failed",
+  AGENTS_STOPPED: "agents:stopped",
   AGENTS_JOINED: "agents:joined",
 } as const;
 
@@ -40,10 +39,10 @@ export interface AgentsCompletedPayload {
   nodeId: string;
 }
 
-export interface AgentsFailedPayload {
+export interface AgentsStoppedPayload {
   runId: string;
   nodeId: string;
-  error: string;
+  error?: string;
 }
 
 export interface AgentsJoinedPayload {
@@ -56,18 +55,16 @@ export interface RunCountsPayload {
   runs: number;
   running: number;
   waiting: number;
-  queued: number;
 }
 
 export interface AgentEventPayloads {
   [AgentEvents.RUN_CREATED]: RunCreatedPayload;
   [AgentEvents.RUN_COMPLETED]: RunStatusPayload;
-  [AgentEvents.RUN_FAILED]: RunStatusPayload;
-  [AgentEvents.RUN_ABORTED]: RunStatusPayload;
+  [AgentEvents.RUN_STOPPED]: RunStatusPayload;
   [AgentEvents.RUN_ITERATION]: RunIterationPayload;
   [AgentEvents.RUN_COUNTS_CHANGED]: RunCountsPayload;
   [AgentEvents.AGENTS_SPAWNED]: AgentsSpawnedPayload;
   [AgentEvents.AGENTS_COMPLETED]: AgentsCompletedPayload;
-  [AgentEvents.AGENTS_FAILED]: AgentsFailedPayload;
+  [AgentEvents.AGENTS_STOPPED]: AgentsStoppedPayload;
   [AgentEvents.AGENTS_JOINED]: AgentsJoinedPayload;
 }

@@ -698,9 +698,7 @@ export class RunExecutor {
         this.options.pi.events.emit(
           event.status === "completed"
             ? AgentEvents.RUN_COMPLETED
-            : event.status === "failed"
-              ? AgentEvents.RUN_FAILED
-              : AgentEvents.RUN_ABORTED,
+            : AgentEvents.RUN_STOPPED,
           {
             runId: event.runId,
             status: event.status,
@@ -728,8 +726,8 @@ export class RunExecutor {
           nodeId: event.nodeId,
         });
         break;
-      case "node_failed":
-        this.options.pi.events.emit(AgentEvents.AGENTS_FAILED, {
+      case "node_stopped":
+        this.options.pi.events.emit(AgentEvents.AGENTS_STOPPED, {
           runId: event.runId,
           nodeId: event.nodeId,
           error: event.error,
@@ -867,13 +865,12 @@ export class RunExecutor {
       return this.buildSnapshot(runId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const aborted = signal?.aborted || message.includes("aborted");
       this.emit(
         {
           type: "run_completed",
           at: Date.now(),
           runId,
-          status: aborted ? "aborted" : "failed",
+          status: "stopped",
           error: message,
         },
         ctx,
@@ -984,7 +981,7 @@ export class RunExecutor {
       const message = error instanceof Error ? error.message : String(error);
       this.emit(
         {
-          type: message.includes("aborted") ? "node_aborted" : "node_failed",
+          type: "node_stopped",
           at: Date.now(),
           runId: state.runId,
           nodeId,

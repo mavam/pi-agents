@@ -28,7 +28,7 @@ function setNodeStatus(node: RunNode | undefined, status: NodeStatus): void {
   if (status === "running" && node.startedAt === undefined) {
     node.startedAt = Date.now();
   }
-  if (status === "completed" || status === "failed" || status === "aborted") {
+  if (status === "completed" || status === "stopped") {
     node.completedAt = Date.now();
   }
 }
@@ -58,19 +58,11 @@ export function applyRunEvent(state: RunRuntimeState, event: RunEvent): void {
       }
       return;
     }
-    case "node_failed": {
+    case "node_stopped": {
       const node = state.nodes.get(event.nodeId);
       if (node) {
         node.error = event.error;
-        setNodeStatus(node, "failed");
-      }
-      return;
-    }
-    case "node_aborted": {
-      const node = state.nodes.get(event.nodeId);
-      if (node) {
-        node.error = event.error;
-        setNodeStatus(node, "aborted");
+        setNodeStatus(node, "stopped");
       }
       return;
     }
@@ -109,10 +101,10 @@ export function applyRunEvent(state: RunRuntimeState, event: RunEvent): void {
   }
 }
 
-export function markRunningRunsAborted(state: RunRuntimeState): void {
+export function markRunningRunsStopped(state: RunRuntimeState): void {
   for (const run of state.runs.values()) {
     if (run.status === "running") {
-      run.status = "aborted";
+      run.status = "stopped";
       run.completedAt = Date.now();
       run.error = run.error ?? "Pi restarted before the run could resume.";
     }
@@ -120,7 +112,7 @@ export function markRunningRunsAborted(state: RunRuntimeState): void {
 
   for (const node of state.nodes.values()) {
     if (node.status === "running" || node.status === "waiting") {
-      node.status = "aborted";
+      node.status = "stopped";
       node.completedAt = Date.now();
       node.error = node.error ?? "Pi restarted before the run could resume.";
     }
@@ -161,52 +153,39 @@ export function countStatuses(state: RunRuntimeState): {
   runs: number;
   running: number;
   waiting: number;
-  queued: number;
 } {
   let running = 0;
   let waiting = 0;
-  let queued = 0;
   for (const node of state.nodes.values()) {
     if (node.status === "running") running += 1;
     if (node.status === "waiting") waiting += 1;
-    if (node.status === "queued") queued += 1;
   }
   return {
     runs: state.runs.size,
     running,
     waiting,
-    queued,
   };
 }
 
+export const STATUS_ICONS = {
+  waiting: "○",
+  running: "◉",
+  completed: "●",
+  stopped: "⊘",
+} as const satisfies Record<NodeStatus | RunStatus, string>;
+
+export const KIND_ICONS = {
+  spawn: "✦",
+  fork: "⑃",
+  join: "⑂",
+  loop: "↺",
+  sequence: "≡",
+} as const satisfies Record<FlowSpec["kind"], string>;
+
 export function iconForStatus(status: NodeStatus | RunStatus): string {
-  switch (status) {
-    case "running":
-      return "⠹";
-    case "waiting":
-      return "◌";
-    case "completed":
-      return "✔";
-    case "failed":
-      return "✘";
-    case "aborted":
-      return "■";
-    case "queued":
-      return "○";
-  }
+  return STATUS_ICONS[status];
 }
 
 export function iconForKind(kind: FlowSpec["kind"]): string {
-  switch (kind) {
-    case "spawn":
-      return "●";
-    case "fork":
-      return "◇";
-    case "join":
-      return "◆";
-    case "loop":
-      return "◎";
-    case "sequence":
-      return "";
-  }
+  return KIND_ICONS[kind];
 }

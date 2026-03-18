@@ -256,7 +256,7 @@ export function createAgentExtension(options?: {
     };
 
     const buildSpawnNotification = (
-      event: Extract<RunEvent, { type: "node_completed" | "node_failed" }>,
+      event: Extract<RunEvent, { type: "node_completed" | "node_stopped" }>,
     ): RunNotificationDetails | undefined => {
       const node = runtimeState.nodes.get(event.nodeId);
       if (!node || node.kind !== "spawn") return undefined;
@@ -277,12 +277,12 @@ export function createAgentExtension(options?: {
         kind: "spawn_update",
         runId: run.id,
         runLabel: run.label,
-        status: event.type === "node_completed" ? "completed" : "failed",
+        status: event.type === "node_completed" ? "completed" : "stopped",
         nodeId: node.id,
         nodeLabel: node.label ?? agent ?? node.id,
         agent,
         summary,
-        error: event.type === "node_failed" ? node.error : undefined,
+        error: event.type === "node_stopped" ? node.error : undefined,
         timestamp: event.at,
       };
     };
@@ -350,7 +350,7 @@ export function createAgentExtension(options?: {
 
       switch (event.type) {
         case "node_completed":
-        case "node_failed": {
+        case "node_stopped": {
           const details = buildSpawnNotification(event);
           if (details) queueDetachedNotification(runId, details, ctx);
           break;

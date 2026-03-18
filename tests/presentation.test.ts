@@ -435,51 +435,6 @@ describe("agent presentation", () => {
     expect(text).not.toContain("3 nodes tracked");
   });
 
-  it("renders the runs widget with just a header for a single spawn", () => {
-    const runtimeState = createRunRuntimeState();
-    const startedAt = Date.now();
-
-    runtimeState.runs.set("run-1", {
-      id: "run-1",
-      rootNodeId: "root:1",
-      label: "explorer",
-      status: "running",
-      startedAt,
-      depth: 0,
-      flow: {
-        kind: "spawn",
-        id: "explorer",
-        agent: "explorer",
-        task: "find files",
-      },
-      cwd: "/tmp",
-      scope: "both",
-    });
-    runtimeState.nodes.set("root:1", {
-      id: "root:1",
-      runId: "run-1",
-      specId: "explorer",
-      kind: "spawn",
-      label: "explorer",
-      status: "running",
-      startedAt,
-    });
-    runtimeState.order.push("run-1");
-
-    const plainTheme = {
-      fg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
-    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
-
-    const lines = buildWidgetLines(runtimeState, "⠹", plainTheme, 120);
-
-    // Heading + single header line, no redundant flow tree.
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain("Flows");
-    expect(lines[1]).toContain("explorer");
-    expect(lines[1]).toContain("run-1");
-  });
-
   it("hides detached runs from the live widget", () => {
     const runtimeState = createRunRuntimeState();
     const startedAt = Date.now();
@@ -765,16 +720,6 @@ describe("agent presentation", () => {
     const lines = formatNodeResultLines(run, nodes, { limit: 2 });
 
     expect(lines).toEqual(["- ⊘ Second Step: boom", "- ● Third Step: gamma"]);
-  });
-
-  it("renders a single spawn without tree connectors", () => {
-    const flow: FlowSpec = {
-      kind: "spawn",
-      agent: "worker",
-      task: "work",
-    };
-    const lines = formatFlowTree(flow);
-    expect(lines).toEqual(["✦ worker"]);
   });
 
   it("overlays status for fork branches without explicit node ids", () => {

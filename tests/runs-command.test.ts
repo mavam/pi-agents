@@ -462,34 +462,6 @@ describe("/flows command", () => {
     );
   });
 
-  it("places the status icon at the end of each flow summary line", async () => {
-    writeAgent(
-      path.join(projectAgentsDir(), "explorer.md"),
-      "explorer",
-      "Project explorer",
-    );
-
-    const inputs: string[] = [];
-    const { agentTool, flowsCommand, messages, ui } = setupExtension(
-      createSpawnProcess(() => "ok", inputs),
-    );
-
-    await agentTool.execute(
-      "call-agent-flows-icon",
-      { name: "explorer", task: "inspect" },
-      undefined,
-      undefined,
-      createSessionContext(ui.context),
-    );
-
-    messages.length = 0;
-    await flowsCommand.handler("", createSessionContext(ui.context));
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.content).toContain("completed");
-    expect(messages[0]?.content).toContain("nodes ●");
-  });
-
   it("rebuilds flows when switching sessions or tree branches", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),

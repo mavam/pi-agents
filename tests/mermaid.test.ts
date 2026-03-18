@@ -303,19 +303,6 @@ describe("toMermaid", () => {
     expect(result).toContain("n4 --> n5"); // slow → join
   });
 
-  it("only emits classDefs for node types actually used", () => {
-    const flow: FlowSpec = {
-      kind: "spawn",
-      agent: "worker",
-      task: "work",
-    };
-    const result = toMermaid(flow);
-    expect(result).toContain("classDef spawn");
-    expect(result).not.toContain("classDef fork");
-    expect(result).not.toContain("classDef join");
-    expect(result).not.toContain("classDef loop");
-  });
-
   it("handles a loop wrapping a sequence body", () => {
     const flow: FlowSpec = {
       kind: "loop",

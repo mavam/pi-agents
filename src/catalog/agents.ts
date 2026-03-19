@@ -278,6 +278,19 @@ export function resolveAgentByName(
 
 // --- Skills ---
 
+function escapeXmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function escapeXmlAttribute(value: string): string {
+  return escapeXmlText(value)
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
 export function buildSkillsPrompt(
   skillNames: string[],
   cwd: string,
@@ -326,4 +339,85 @@ export function buildSkillsPrompt(
     parts.push("", `Missing skills (not found): ${missingSkills.join(", ")}`);
 
   return { prompt: parts.join("\n").trim(), missingSkills };
+}
+
+// Model agent injection after skill injection: provide a structured XML block
+// with stable location/reference metadata plus the normalized agent metadata and
+// body.
+export function buildAgentsPrompt(
+  cwd: string,
+  scope: Scope,
+): { prompt: string; diagnostics: Diagnostic[] } {
+  const discovery = discoverAgents(cwd, scope);
+  const agents = [...discovery.agents].sort((left, right) => {
+    if (left.source !== right.source) {
+      return left.source === "project" ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name);
+  });
+
+  const lines = [
+    `<agents scope="${escapeXmlAttribute(scope)}" cwd="${escapeXmlAttribute(cwd)}">`,
+  ];
+
+  if (agents.length === 0) {
+    lines.push(
+      "  <none>No agents were discovered for this cwd and scope.</none>",
+    );
+  } else {
+    for (const agent of agents) {
+      lines.push(
+        `  <agent name="${escapeXmlAttribute(agent.name)}" source="${escapeXmlAttribute(agent.source)}" location="${escapeXmlAttribute(agent.filePath)}">`,
+        `    <references>References are relative to ${escapeXmlText(path.dirname(agent.filePath))}.</references>`,
+        "    <frontmatter>",
+        `      <description>${escapeXmlText(agent.description)}</description>`,
+      );
+
+      if (agent.model) {
+        lines.push(`      <model>${escapeXmlText(agent.model)}</model>`);
+      }
+      if (agent.thinking) {
+        lines.push(
+          `      <thinking>${escapeXmlText(agent.thinking)}</thinking>`,
+        );
+      }
+
+      lines.push("      <skills>");
+      if (agent.skills.length === 0) {
+        lines.push("        <none>(none)</none>");
+      } else {
+        for (const skill of agent.skills) {
+          lines.push(`        <skill>${escapeXmlText(skill)}</skill>`);
+        }
+      }
+      lines.push("      </skills>", "    </frontmatter>");
+
+      if (agent.systemPrompt) {
+        lines.push(
+          "    <system-prompt>",
+          escapeXmlText(agent.systemPrompt),
+          "    </system-prompt>",
+        );
+      }
+
+      lines.push("  </agent>");
+    }
+  }
+
+  if (discovery.diagnostics.length > 0) {
+    lines.push("  <diagnostics>");
+    for (const diagnostic of discovery.diagnostics) {
+      lines.push(
+        `    <diagnostic source="${escapeXmlAttribute(diagnostic.source)}" path="${escapeXmlAttribute(diagnostic.filePath)}">${escapeXmlText(diagnostic.message)}</diagnostic>`,
+      );
+    }
+    lines.push("  </diagnostics>");
+  }
+
+  lines.push("</agents>");
+
+  return {
+    prompt: lines.join("\n"),
+    diagnostics: discovery.diagnostics,
+  };
 }

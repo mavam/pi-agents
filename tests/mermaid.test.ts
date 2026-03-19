@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { renderFlowAscii, toMermaid } from "../extensions/agent/mermaid.ts";
-import type { FlowSpec } from "../extensions/agent/types.ts";
+import type { FlowSpec } from "../src/runtime/types.ts";
+import { renderFlowAscii, toMermaid } from "../src/workflow/mermaid.ts";
 
 describe("toMermaid", () => {
   it("renders a single spawn as a stadium node", () => {

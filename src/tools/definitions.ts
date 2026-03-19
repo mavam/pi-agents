@@ -1,6 +1,6 @@
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
-import type { AgentRunDetails } from "./types.js";
+import type { AgentRunDetails } from "../runtime/types.js";
 
 export type ToolPromptMetadata = {
   promptSnippet?: string;

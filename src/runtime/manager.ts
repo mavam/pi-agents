@@ -2,7 +2,7 @@ import type {
   SpawnEngine,
   SpawnHandle,
   SpawnRequest,
-} from "./engine/interface.js";
+} from "../engine/interface.js";
 
 export class AgentManager {
   private readonly running = new Map<string, SpawnHandle>();

@@ -11,7 +11,14 @@ import {
   truncateToWidth,
   wrapTextWithAnsi,
 } from "@mariozechner/pi-tui";
-import type { LiveRunRegistry } from "./live-runs.js";
+import type { LiveRunRegistry } from "../runtime/live-runs.js";
+import {
+  getOrderedRuns,
+  getRunNodes,
+  iconForStatus,
+  type RunRuntimeState,
+} from "../runtime/state.js";
+import type { FlowNodeResult } from "../runtime/types.js";
 import {
   formatFlowTree,
   formatNodeResultLines,
@@ -19,13 +26,6 @@ import {
   formatRunStatus,
   resolveFlowId,
 } from "./presentation.js";
-import {
-  getOrderedRuns,
-  getRunNodes,
-  iconForStatus,
-  type RunRuntimeState,
-} from "./state.js";
-import type { FlowNodeResult } from "./types.js";
 
 export type FlowAction = "inspect" | "watch" | "mermaid" | "diagram" | "stop";
 
@@ -228,6 +228,7 @@ class FlowActionPickerComponent implements Component {
 }
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const FLOW_WATCH_TICK_MS = 80;
 
 class FlowWatchComponent implements Component {
   private frame = 0;
@@ -245,7 +246,7 @@ class FlowWatchComponent implements Component {
     this.interval = setInterval(() => {
       this.frame += 1;
       this.tui.requestRender();
-    }, 80);
+    }, FLOW_WATCH_TICK_MS);
     this.interval.unref?.();
   }
 
@@ -298,25 +299,22 @@ class FlowWatchComponent implements Component {
       lines.push("", this.theme.fg("muted", summary));
     }
 
-    const nodeResults = formatNodeResultLines(
-      run,
-      getRunNodes(this.runtimeState, run.id),
-    );
-    if (nodeResults.length > 0) {
+    const runNodes = getRunNodes(this.runtimeState, run.id);
+    const nodeResults = formatNodeResultLines(run, runNodes);
+    const results = [...nodeResults];
+    const result = resultSummary(run.result);
+    if (result && !(nodeResults.length > 0 && runNodes.length === 1)) {
+      results.push(`- Flow: ${result}`);
+    }
+    if (results.length > 0) {
       lines.push(
         "",
         this.theme.fg(
           "muted",
-          run.status === "running" ? "Results so far:" : "Node Results:",
+          run.status === "running" ? "Results so far:" : "Results:",
         ),
-        ...nodeResults.map((line) => this.theme.fg("toolOutput", line)),
+        ...results.map((line) => this.theme.fg("toolOutput", line)),
       );
-    }
-
-    const result = resultSummary(run.result);
-    if (result && run.status !== "running") {
-      lines.push("", this.theme.fg("muted", "Result:"));
-      lines.push(this.theme.fg("toolOutput", result));
     }
     if (run.error) {
       lines.push("", this.theme.fg("error", run.error));
@@ -329,7 +327,7 @@ class FlowWatchComponent implements Component {
     lines.push(
       this.theme.fg(
         "dim",
-        run.status === "running" ? "Esc detach • s stop" : "Esc close",
+        run.status === "running" ? "Esc leave live view • s stop" : "Esc close",
       ),
     );
 

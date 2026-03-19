@@ -6,7 +6,9 @@ import type {
 import { applyRunEvent, createRunRuntimeState } from "./state.js";
 import type { RunEvent } from "./types.js";
 
-export const RUN_EVENT_CUSTOM_TYPE = "pi-agents:run-event";
+// Deliberately versioned to drop old persisted flow-event schemas instead of
+// carrying compatibility code for legacy session data.
+export const RUN_EVENT_CUSTOM_TYPE = "pi-agents:flow-event:v2";
 
 function isRunEventEntry(entry: SessionEntry): entry is CustomEntry<RunEvent> {
   return (

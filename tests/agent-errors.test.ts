@@ -1,8 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-  formatFailureReason,
-  isChildProcessRunning,
-} from "../extensions/agent/index.ts";
+import { formatFailureReason, isChildProcessRunning } from "../src/index.ts";
 
 describe("formatFailureReason", () => {
   it("converts missing API key stacktrace to a human-facing message", () => {

@@ -1,5 +1,5 @@
-import type { Agent, Scope, Thinking } from "../agents.js";
-import type { AgentRunDetails } from "../types.js";
+import type { Agent, Scope, Thinking } from "../catalog/agents.js";
+import type { AgentRunDetails } from "../runtime/types.js";
 
 export interface SpawnUpdate {
   text: string;

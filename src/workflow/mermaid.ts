@@ -6,7 +6,7 @@ import type {
   LoopFlowSpec,
   SequenceFlowSpec,
   SpawnFlowSpec,
-} from "./types.js";
+} from "../runtime/types.js";
 
 /**
  * Options for Mermaid diagram generation.

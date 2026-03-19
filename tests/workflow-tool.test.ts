@@ -10,11 +10,8 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
-import {
-  createAgentExtension,
-  type SpawnProcess,
-} from "../extensions/agent/index.ts";
-import type { RunResultDetails } from "../extensions/agent/types.ts";
+import { createAgentExtension, type SpawnProcess } from "../src/index.ts";
+import type { RunResultDetails } from "../src/runtime/types.ts";
 
 let sandboxDir = "";
 let workspaceDir = "";
@@ -927,7 +924,57 @@ describe("workflow tool", () => {
     expect(inputs).toEqual([]);
   });
 
-  it("detaches and lets later sequence steps continue after interruption", async () => {
+  it("does not emit live tool updates when UI widgets are available", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "reviewer.md"),
+      "reviewer",
+      "Reviewer",
+    );
+    const inputs: string[] = [];
+    const spawnProcess = createSpawnProcess(() => "done", inputs);
+
+    const tool = setupWorkflowTool(spawnProcess);
+    let updateCount = 0;
+
+    const result = await tool.execute(
+      "call-ui-live",
+      {
+        flow: {
+          kind: "fork",
+          id: "fanout",
+          branches: {
+            first: {
+              kind: "spawn",
+              id: "first",
+              agent: "reviewer",
+              task: "first step",
+            },
+            second: {
+              kind: "spawn",
+              id: "second",
+              agent: "reviewer",
+              task: "second step",
+            },
+          },
+        },
+      },
+      undefined,
+      () => {
+        updateCount += 1;
+      },
+      { cwd: workspaceDir, hasUI: true } as unknown as ExtensionContext,
+    );
+
+    expect(updateCount).toBe(0);
+    expect(result.details.run.status).toBe("running");
+    expect(result.details.run.backgroundedAt).toBeNumber();
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toContain("Standing by for results.");
+    }
+  });
+
+  it("backgrounds and lets later sequence steps continue after interruption", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "reviewer.md"),
       "reviewer",
@@ -983,7 +1030,10 @@ describe("workflow tool", () => {
     expect(result.details.run.status).toBe("running");
     expect(result.content[0]?.type).toBe("text");
     if (result.content[0]?.type === "text") {
-      expect(result.content[0].text).toContain("Flow detached");
+      expect(result.content[0].text).toContain("Flow is running in background");
+      expect(result.content[0].text).toContain("Standing by for results.");
+      expect(result.content[0].text).toContain("`/flow watch");
+      expect(result.content[0].text).toContain("`/flow stop");
     }
     await waitFor(() => inputs.length === 2);
   });
@@ -1133,7 +1183,7 @@ describe("workflow tool", () => {
     expect(branchCStarts).toBe(0);
   });
 
-  it("detaches after startup even if interrupted before child agents begin", async () => {
+  it("backgrounds after startup even if interrupted before child agents begin", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
     let spawnCount = 0;
     const spawnProcess: SpawnProcess = (...args) => {

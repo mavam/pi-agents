@@ -1,4 +1,4 @@
-import type { Scope, Source, Thinking } from "./agents.js";
+import type { Scope, Source, Thinking } from "../catalog/agents.js";
 
 export interface UsageStats {
   input: number;
@@ -9,6 +9,12 @@ export interface UsageStats {
   contextTokens: number;
   turns: number;
 }
+
+export type AgentExecutionStatus =
+  | "running"
+  | "completed"
+  | "stopped"
+  | "background";
 
 export interface AgentRunDetails {
   agent: string;
@@ -24,6 +30,10 @@ export interface AgentRunDetails {
   usage: UsageStats;
   discoveryDiagnostics: string[];
   scope: Scope;
+  status?: AgentExecutionStatus;
+  startedAt?: number;
+  completedAt?: number;
+  preview?: string;
 }
 
 export interface Budgets {
@@ -122,7 +132,7 @@ export interface WorkflowRun {
   status: RunStatus;
   startedAt: number;
   completedAt?: number;
-  detachedAt?: number;
+  backgroundedAt?: number;
   originSessionFile?: string;
   depth: number;
   flow: FlowSpec;
@@ -131,6 +141,13 @@ export interface WorkflowRun {
   scope: Scope;
   result?: FlowNodeResult;
   error?: string;
+}
+
+export interface RunNodeProgress {
+  text?: string;
+  preview?: string;
+  details?: AgentRunDetails;
+  updatedAt: number;
 }
 
 export interface RunNode {
@@ -149,6 +166,7 @@ export interface RunNode {
   error?: string;
   startedAt?: number;
   completedAt?: number;
+  progress?: RunNodeProgress;
 }
 
 export interface SpawnNodeResult {
@@ -290,7 +308,7 @@ export type RunEvent =
       iteration: number;
     }
   | {
-      type: "run_detached";
+      type: "run_backgrounded";
       at: number;
       runId: string;
     }

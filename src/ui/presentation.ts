@@ -11,26 +11,19 @@ import {
   truncateToWidth,
   wrapTextWithAnsi,
 } from "@mariozechner/pi-tui";
-import type { Agent, Scope } from "./agents.js";
-import {
-  forkBranchPath,
-  loopBodyPath,
-  ROOT_FLOW_PATH,
-  sequenceStepPath,
-} from "./flow-path.js";
-import { normalizeWorkflowParams } from "./flow-spec.js";
-import type { LiveRunRegistry } from "./live-runs.js";
-import { type MermaidOptions, renderFlowAscii, toMermaid } from "./mermaid.js";
-import { rebuildRunState } from "./persistence.js";
-import type { RunEventCache } from "./session-events.js";
+import type { Agent, Scope } from "../catalog/agents.js";
+import type { LiveRunRegistry } from "../runtime/live-runs.js";
+import { rebuildRunState } from "../runtime/persistence.js";
+import type { RunEventCache } from "../runtime/session-events.js";
 import {
   getOrderedRuns,
   getRunNodes,
+  getRunSnapshot,
   iconForKind,
   iconForStatus,
   markRunningRunsStopped,
   type RunRuntimeState,
-} from "./state.js";
+} from "../runtime/state.js";
 import type {
   AgentRunDetails,
   FlowNodeResult,
@@ -45,7 +38,19 @@ import type {
   SpawnNodeResult,
   WorkflowParams,
   WorkflowRun,
-} from "./types.js";
+} from "../runtime/types.js";
+import {
+  forkBranchPath,
+  loopBodyPath,
+  ROOT_FLOW_PATH,
+  sequenceStepPath,
+} from "../workflow/flow-path.js";
+import { normalizeWorkflowParams } from "../workflow/flow-spec.js";
+import {
+  type MermaidOptions,
+  renderFlowAscii,
+  toMermaid,
+} from "../workflow/mermaid.js";
 
 export const RUN_NOTIFICATION_CUSTOM_TYPE = "pi-agents:notification";
 
@@ -166,26 +171,6 @@ export function resolveFlowId(
     .map((item) => `${item.id.slice(0, 8)} → ${item.id}`)
     .join(", ");
   return { error: `Unknown flow "${trimmed}". Known: ${known || "none"}` };
-}
-
-function summarizeNodeStatus(nodes: RunNode[]): string {
-  const counts = {
-    running: 0,
-    waiting: 0,
-    completed: 0,
-    stopped: 0,
-  };
-  for (const node of nodes) {
-    counts[node.status] += 1;
-  }
-  return [
-    counts.running > 0 ? `${counts.running} running` : undefined,
-    counts.waiting > 0 ? `${counts.waiting} waiting` : undefined,
-    counts.completed > 0 ? `${counts.completed} completed` : undefined,
-    counts.stopped > 0 ? `${counts.stopped} stopped` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ");
 }
 
 function summarizeFlowResult(
@@ -311,12 +296,15 @@ export function formatNodeResultLines(
     .filter((line): line is string => Boolean(line));
 }
 
-function formatInspectNodeResults(
-  run: WorkflowRun,
-  nodes: RunNode[],
-): string[] {
+function formatInspectResults(run: WorkflowRun, nodes: RunNode[]): string[] {
   const lines = formatNodeResultLines(run, nodes);
-  return lines.length > 0 ? ["", "Node Results:", ...lines] : [];
+  const resultSummary = summarizeFlowResult(run.result);
+  const includeFlowResult =
+    resultSummary !== undefined && !(lines.length > 0 && nodes.length === 1);
+  if (includeFlowResult) {
+    lines.push(`- Flow: ${resultSummary}`);
+  }
+  return lines.length > 0 ? ["", "Results:", ...lines] : [];
 }
 
 export function formatFlowInspectText(
@@ -354,32 +342,13 @@ export function formatFlowInspectText(
     lines.push("", "Structure:", ...tree);
   }
 
-  const nodeSummary = summarizeNodeStatus(nodes);
-  if (nodeSummary) {
-    lines.push("", `Nodes: ${nodeSummary}`);
+  const statusTree = formatFlowTree(run.flow, runtimeState, run.id);
+  if (statusTree.length > 0) {
+    lines.push("", "Status:", ...statusTree);
   }
 
-  const latestNode = nodes[nodes.length - 1];
-  if (latestNode) {
-    const suffix: string[] = [];
-    if (latestNode.branchKey) suffix.push(`branch=${latestNode.branchKey}`);
-    if (latestNode.iteration !== undefined) {
-      suffix.push(`iteration=${latestNode.iteration}`);
-    }
-    lines.push(
-      `Latest node: ${iconForStatus(latestNode.status)} ${latestNodeDisplayLabel(run.flow, latestNode)}${suffix.length > 0 ? ` (${suffix.join(", ")})` : ""}`,
-    );
-    if (latestNode.error) {
-      lines.push(`Latest error: ${latestNode.error}`);
-    }
-  }
+  lines.push(...formatInspectResults(run, nodes));
 
-  lines.push(...formatInspectNodeResults(run, nodes));
-
-  const resultSummary = summarizeFlowResult(run.result);
-  if (resultSummary) {
-    lines.push("", "Result:", resultSummary);
-  }
   return lines.join("\n");
 }
 
@@ -1023,6 +992,214 @@ function isPreviewTruncated(
   return !expanded && text.split("\n").length > maxLines;
 }
 
+function formatCompactTokens(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M tokens`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k tokens`;
+  return `${count} token${count === 1 ? "" : "s"}`;
+}
+
+function formatCompactDuration(
+  startedAt: number | undefined,
+  completedAt?: number,
+): string | undefined {
+  if (startedAt === undefined) return undefined;
+  return `${(((completedAt ?? Date.now()) - startedAt) / 1000).toFixed(1)}s`;
+}
+
+function shortenModelName(model: string | undefined): string | undefined {
+  if (!model) return undefined;
+  const tail = model.includes("/") ? (model.split("/").at(-1) ?? model) : model;
+  return tail
+    .replace(/^claude[- ]/i, "")
+    .replace(/^models\//i, "")
+    .trim();
+}
+
+function truncateInline(text: string, max = 120): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+function extractPreviewLine(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const line = firstMeaningfulLine(stripResultXmlEnvelope(text));
+  if (!line || line === "(empty)") return undefined;
+  return truncateInline(line);
+}
+
+function currentSpinnerFrame(): string {
+  return (
+    SPINNER_FRAMES[
+      Math.floor(Date.now() / FLOW_SUMMARY_TICK_MS) % SPINNER_FRAMES.length
+    ] ?? "⠹"
+  );
+}
+
+function getSpawnNodes(details: RunResultDetails): RunNode[] {
+  return details.nodes.filter((node) => node.kind === "spawn");
+}
+
+function selectRepresentativeSpawnNode(
+  details: RunResultDetails,
+): RunNode | undefined {
+  const spawnNodes = getSpawnNodes(details);
+  const byRecency = (left: RunNode, right: RunNode) =>
+    (right.progress?.updatedAt ?? right.completedAt ?? right.startedAt ?? 0) -
+      (left.progress?.updatedAt ?? left.completedAt ?? left.startedAt ?? 0) ||
+    right.id.localeCompare(left.id);
+
+  const running = spawnNodes
+    .filter((node) => node.status === "running")
+    .sort(byRecency);
+  if (running[0]) return running[0];
+
+  return [...spawnNodes].sort(byRecency)[0];
+}
+
+function totalWorkflowTokens(details: RunResultDetails): number {
+  return getSpawnNodes(details).reduce(
+    (sum, node) => sum + (node.progress?.details?.usage.contextTokens ?? 0),
+    0,
+  );
+}
+
+function workflowPrimaryLabel(
+  details: RunResultDetails,
+  focus?: RunNode,
+): string {
+  if (focus) {
+    const label = latestNodeDisplayLabel(details.run.flow, focus);
+    if (label) return label;
+  }
+  return details.run.label;
+}
+
+function workflowPreviewLine(
+  details: RunResultDetails,
+  focus?: RunNode,
+): string | undefined {
+  return (
+    focus?.progress?.preview ??
+    extractPreviewLine(focus?.progress?.text) ??
+    summarizeFlowResult(details.result) ??
+    (focus?.error ? firstMeaningfulLine(focus.error) : undefined) ??
+    (details.run.error ? firstMeaningfulLine(details.run.error) : undefined)
+  );
+}
+
+function workflowBadgeParts(
+  details: RunResultDetails,
+  focus?: RunNode,
+): string[] {
+  const parts: string[] = [];
+  const runningSpawnCount = getSpawnNodes(details).filter(
+    (node) => node.status === "running",
+  ).length;
+  const model = shortenModelName(focus?.progress?.details?.model);
+  if (model) parts.push(model);
+  if (runningSpawnCount > 1) parts.push(`${runningSpawnCount} active`);
+  const tokenCount = totalWorkflowTokens(details);
+  if (tokenCount > 0) parts.push(formatCompactTokens(tokenCount));
+  const duration = formatCompactDuration(
+    details.run.startedAt,
+    details.run.completedAt,
+  );
+  if (duration) parts.push(duration);
+  return parts;
+}
+
+function renderWorkflowSummaryLines(
+  details: RunResultDetails,
+  theme: Theme,
+  spinner = currentSpinnerFrame(),
+): string[] {
+  const focus = selectRepresentativeSpawnNode(details);
+  const parts = workflowBadgeParts(details, focus);
+  const label = workflowPrimaryLabel(details, focus);
+  const status = details.run.status;
+  if (status === "stopped") {
+    parts.unshift(formatRunStatus(details.run));
+  }
+  const icon =
+    status === "running"
+      ? theme.fg("accent", spinner)
+      : status === "completed"
+        ? theme.fg("success", "✓")
+        : details.run.error
+          ? theme.fg("error", "✗")
+          : theme.fg("warning", "■");
+  const peek =
+    workflowPreviewLine(details, focus) ??
+    (status === "running"
+      ? "working…"
+      : status === "completed"
+        ? "Done"
+        : "Stopped");
+  const summaryText = [label, ...parts].filter(Boolean).join(" · ");
+  return [`${icon} ${summaryText}`, theme.fg("dim", `  ⎿  ${peek}`)];
+}
+
+function renderAgentSummaryLines(
+  details: AgentRunDetails,
+  output: string,
+  isPartial: boolean,
+  theme: Theme,
+): string[] {
+  const status =
+    details.status ??
+    (isPartial
+      ? "running"
+      : details.stopReason === "background"
+        ? "background"
+        : details.exitCode === 0
+          ? "completed"
+          : "stopped");
+  const icon =
+    status === "running"
+      ? theme.fg("accent", currentSpinnerFrame())
+      : status === "completed"
+        ? theme.fg("success", "✓")
+        : status === "background"
+          ? theme.fg("muted", "◌")
+          : details.errorMessage
+            ? theme.fg("error", "✗")
+            : theme.fg("warning", "■");
+  const parts = [
+    theme.bold(details.agent),
+    shortenModelName(details.model)
+      ? theme.fg("dim", shortenModelName(details.model) as string)
+      : undefined,
+    details.thinking
+      ? theme.fg("dim", `thinking: ${details.thinking}`)
+      : undefined,
+    details.usage.contextTokens > 0
+      ? theme.fg("dim", formatCompactTokens(details.usage.contextTokens))
+      : undefined,
+    formatCompactDuration(details.startedAt, details.completedAt)
+      ? theme.fg(
+          "dim",
+          formatCompactDuration(
+            details.startedAt,
+            details.completedAt,
+          ) as string,
+        )
+      : undefined,
+  ].filter(Boolean);
+  const peek =
+    status === "background"
+      ? "Standing by for results."
+      : (details.preview ??
+        extractPreviewLine(output) ??
+        (status === "running"
+          ? "working…"
+          : status === "completed"
+            ? "Done"
+            : (details.errorMessage ?? "Stopped")));
+  return [
+    `${icon} ${parts.join(` ${theme.fg("dim", "·")} `)}`,
+    theme.fg("dim", `  ⎿  ${peek}`),
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Line wrapping / renderer
 // ---------------------------------------------------------------------------
@@ -1135,9 +1312,48 @@ export function renderAgentCall(
 export function renderAgentResult(
   result: AgentToolResult<AgentRunDetails>,
   expanded: boolean,
-  theme: Theme,
+  isPartialOrTheme: boolean | Theme,
+  maybeTheme?: Theme,
 ) {
+  const isPartial =
+    typeof isPartialOrTheme === "boolean" ? isPartialOrTheme : false;
+  const theme = (
+    typeof isPartialOrTheme === "boolean" ? maybeTheme : isPartialOrTheme
+  ) as Theme;
   const details = result.details;
+  if (details.status === "background") {
+    return createRenderer([]);
+  }
+  const rawOutput = extractTextContent(result);
+  const output = rawOutput ? stripResultXmlEnvelope(rawOutput) : rawOutput;
+  const hasCompactSummary =
+    isPartial ||
+    Boolean(details.status || details.startedAt || details.preview);
+
+  if (hasCompactSummary) {
+    const lines = renderAgentSummaryLines(details, output, isPartial, theme);
+    if (!isPartial && output) {
+      pushPreviewSection(lines, "Output", output, expanded, 10, theme);
+    }
+    if (expanded && details.missingSkills.length > 0) {
+      pushSection(
+        lines,
+        "Missing skills",
+        details.missingSkills.join(", "),
+        theme,
+      );
+    }
+    if (expanded && details.discoveryDiagnostics.length > 0) {
+      pushSection(
+        lines,
+        "Discovery diagnostics",
+        details.discoveryDiagnostics.join("\n"),
+        theme,
+      );
+    }
+    return createRenderer(lines);
+  }
+
   const lines = [
     theme.fg(
       "toolTitle",
@@ -1165,8 +1381,6 @@ export function renderAgentResult(
     );
   }
 
-  const rawOutput = extractTextContent(result);
-  const output = rawOutput ? stripResultXmlEnvelope(rawOutput) : rawOutput;
   if (output) {
     pushPreviewSection(lines, "Output", output, expanded, 10, theme);
   }
@@ -1202,7 +1416,6 @@ export function renderWorkflowCall(args: WorkflowParams, theme: Theme) {
 
   const tree = formatFlowTree(normalized.flow, undefined, undefined, theme);
   if (tree.length > 0) {
-    lines.push("");
     for (const treeLine of tree) {
       lines.push(treeLine);
     }
@@ -1217,34 +1430,40 @@ export function renderWorkflowCall(args: WorkflowParams, theme: Theme) {
 export function renderWorkflowResult(
   result: AgentToolResult<RunResultDetails>,
   expanded: boolean,
-  theme: Theme,
+  isPartialOrTheme: boolean | Theme,
+  maybeTheme?: Theme,
 ) {
+  const isPartial =
+    typeof isPartialOrTheme === "boolean" ? isPartialOrTheme : false;
+  const theme = (
+    typeof isPartialOrTheme === "boolean" ? maybeTheme : isPartialOrTheme
+  ) as Theme;
   const details = result.details;
-  const lines = [
+  if (isPartial || details.run.status === "running") {
+    return createRenderer([]);
+  }
+  const lines = renderWorkflowSummaryLines(details, theme);
+
+  lines.push("");
+  lines.push(
     theme.fg(
-      "toolTitle",
-      theme.bold(`${details.run.label} · ${formatRunStatus(details.run)}`),
+      "muted",
+      expanded
+        ? `run=${details.run.id.slice(0, 8)} · nodes=${details.nodes.length} · scope=${details.run.scope}`
+        : `run=${details.run.id.slice(0, 8)}`,
     ),
-  ];
+  );
 
-  const metadata = expanded
-    ? `run=${details.run.id.slice(0, 8)} · nodes=${details.nodes.length} · scope=${details.run.scope}`
-    : `run=${details.run.id.slice(0, 8)}`;
-  lines.push(theme.fg("muted", metadata));
-
-  const isRunning = details.run.status === "running";
-  const output = isRunning
-    ? undefined
-    : details.result
-      ? expanded
-        ? formatOutput(details.result.output)
-        : (summarizeStructuredWorkflowOutput(details.result.output) ??
-          formatOutput(details.result.output))
-      : stripResultXmlEnvelope(extractTextContent(result));
+  const output = details.result
+    ? expanded
+      ? formatOutput(details.result.output)
+      : (summarizeStructuredWorkflowOutput(details.result.output) ??
+        formatOutput(details.result.output))
+    : stripResultXmlEnvelope(extractTextContent(result));
   if (output) {
     pushPreviewSection(lines, "Result", output, expanded, 12, theme);
   }
-  if (details.run.error) {
+  if (details.run.error && expanded) {
     pushSection(lines, "Error", details.run.error, theme);
   }
   return createRenderer(lines);
@@ -1425,15 +1644,51 @@ export function rebuildRuntimeState(
 /** Braille spinner frames (same sequence as pi's built-in Loader). */
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/** Spinner cadence for flow summaries and the widget. */
+const FLOW_SUMMARY_TICK_MS = 80;
+
 /** Maximum widget body lines before truncation. */
 const MAX_WIDGET_LINES = 10;
 
+/** Keep widget headers short because the tree below already carries detail. */
+const MAX_WIDGET_LABEL_LENGTH = 36;
+
+function compactWidgetLabel(label: string): string {
+  const trimmed = label.trim();
+  const preferred = trimmed.split(":", 1)[0]?.trim() || trimmed;
+  if (preferred.length <= MAX_WIDGET_LABEL_LENGTH) return preferred;
+  return `${preferred.slice(0, MAX_WIDGET_LABEL_LENGTH - 1).trimEnd()}…`;
+}
+
+function isTrivialWidgetFlow(run: WorkflowRun): boolean {
+  return (
+    run.flow.kind === "spawn" ||
+    (run.flow.kind === "sequence" &&
+      run.flow.steps.length === 1 &&
+      run.flow.steps[0]?.kind === "spawn")
+  );
+}
+
+function renderWidgetRunHeader(
+  details: RunResultDetails,
+  theme: Theme,
+  spinner: string,
+): string {
+  const parts = workflowBadgeParts(
+    details,
+    selectRepresentativeSpawnNode(details),
+  );
+  const summaryText = [compactWidgetLabel(details.run.label), ...parts]
+    .filter(Boolean)
+    .join(" · ");
+  return `${theme.fg("accent", spinner)} ${summaryText}`;
+}
+
 /**
- * Build themed widget lines for active runs.
+ * Build themed widget lines for live runs.
  *
- * For single-spawn runs the flow tree is redundant (it just repeats the run
- * label), so we only show the header. For multi-node workflows we show the
- * full tree with status overlay.
+ * The widget is only shown while flows are still running. Final summaries are
+ * rendered in the conversation instead of lingering above the editor.
  */
 export function buildWidgetLines(
   runtimeState: RunRuntimeState,
@@ -1441,54 +1696,46 @@ export function buildWidgetLines(
   theme: Theme,
   terminalWidth: number,
 ): string[] {
-  const active = getOrderedRuns(runtimeState)
-    .filter((run) => run.status === "running" && !run.detachedAt)
-    .slice(0, 5);
+  const orderedRuns = getOrderedRuns(runtimeState);
+  const runningRuns = orderedRuns.filter((run) => run.status === "running");
+  if (runningRuns.length === 0) return [];
 
-  if (active.length === 0) return [];
+  const runs = runningRuns.slice(0, 5);
 
   const truncate = (line: string) => truncateToWidth(line, terminalWidth);
+  const hasActive = true;
+  const headingTone = hasActive ? "accent" : "dim";
+  const headingIcon = hasActive ? "●" : "○";
 
   const lines: string[] = [
-    `${theme.fg("accent", "●")} ${theme.fg("accent", "Flows")}`,
+    `${theme.fg(headingTone, headingIcon)} ${theme.fg(headingTone, "Flows")}`,
   ];
-  for (const [i, run] of active.entries()) {
-    const isLast = i === active.length - 1;
+
+  for (const [index, run] of runs.entries()) {
+    const snapshot = getRunSnapshot(runtimeState, run.id);
+    if (!snapshot) continue;
+    const isLast = index === runs.length - 1;
     const connector = isLast ? "└─" : "├─";
     const indent = isLast ? "   " : "│  ";
 
-    // Header line with animated spinner.
     lines.push(
       truncate(
-        `${theme.fg("dim", connector)} ${theme.fg("accent", spinner)} ${theme.bold(run.label)} ${theme.fg("dim", `${run.id.slice(0, 8)} · ${run.detachedAt ? "detached" : "running"}`)}`,
+        `${theme.fg("dim", connector)} ${renderWidgetRunHeader(snapshot, theme, spinner)}`,
       ),
     );
 
-    // Flow tree — skip for trivial single-spawn runs.
-    const isTrivial =
-      run.flow.kind === "spawn" ||
-      (run.flow.kind === "sequence" &&
-        run.flow.steps.length === 1 &&
-        run.flow.steps[0]?.kind === "spawn");
+    if (isTrivialWidgetFlow(run)) {
+      continue;
+    }
 
-    if (!isTrivial) {
-      const tree = formatFlowTree(run.flow, runtimeState, run.id, theme);
-      for (const treeLine of tree) {
-        // Skip the root node line when its label duplicates the run header.
-        // Strip ANSI escapes + icon prefix for comparison.
-        const stripped = treeLine.replace(/\u001b\[[0-9;]*m/g, "");
-        const bare = stripped.replace(/^\S+\s/, "");
-        if (bare === run.label || bare === (run.flow.label ?? run.flow.id)) {
-          continue;
-        }
-        // Replace the static running icon with the animated spinner frame.
-        const themed = treeLine.replaceAll(iconForStatus("running"), spinner);
-        lines.push(truncate(`${theme.fg("dim", indent)}${themed}`));
-      }
+    const tree = formatFlowTree(run.flow, runtimeState, run.id, theme)
+      .slice(1)
+      .map((line) => line.replaceAll(iconForStatus("running"), spinner));
+    for (const treeLine of tree) {
+      lines.push(truncate(`${theme.fg("dim", indent)}${treeLine}`));
     }
   }
 
-  // Cap overflow.
   if (lines.length > MAX_WIDGET_LINES) {
     const hidden = lines.length - MAX_WIDGET_LINES + 1;
     lines.length = MAX_WIDGET_LINES - 1;
@@ -1498,23 +1745,16 @@ export function buildWidgetLines(
   return lines;
 }
 
-export function formatRunStatus(run: {
-  status: string;
-  detachedAt?: number;
-}): string {
-  if (run.status === "running" && run.detachedAt) {
-    return "running (detached)";
-  }
+export function formatRunStatus(run: { status: string }): string {
   return run.status;
 }
 
 /**
  * Manages the live widget timer for active runs.
  *
- * Follows the pi-subagents pattern: a single `setInterval` at 80 ms cycles
- * through braille spinner frames and rebuilds the string lines. The widget
- * uses the `{ render, invalidate }` factory form of `setWidget` — no TUI
- * component tree needed.
+ * Uses the same cadence as pi's public Loader component to rotate the
+ * spinner and re-render the widget through `setWidget`'s
+ * `{ render, invalidate }` callback API.
  */
 export class RunWidgetManager {
   private frame = 0;
@@ -1525,20 +1765,19 @@ export class RunWidgetManager {
 
   update(ctx: ExtensionContext): void {
     this.lastCtx = ctx;
-    if (!ctx.hasUI) return;
+    if (!ctx.hasUI || !ctx.ui) return;
 
-    const active = getOrderedRuns(this.runtimeState).filter(
-      (run) => run.status === "running" && !run.detachedAt,
+    const runs = getOrderedRuns(this.runtimeState).filter(
+      (run) => run.status === "running",
     );
 
-    if (active.length === 0) {
+    if (runs.length === 0) {
       this.stop(ctx);
       return;
     }
 
-    // Ensure timer is running.
     if (!this.interval) {
-      this.interval = setInterval(() => this.tick(), 80);
+      this.interval = setInterval(() => this.tick(), FLOW_SUMMARY_TICK_MS);
     }
 
     this.render(ctx);
@@ -1546,19 +1785,24 @@ export class RunWidgetManager {
 
   private tick(): void {
     this.frame += 1;
-    if (this.lastCtx?.hasUI) {
+    if (this.lastCtx?.hasUI && this.lastCtx.ui) {
       this.render(this.lastCtx);
     }
   }
 
   private render(ctx: ExtensionContext): void {
+    if (!ctx.ui) return;
     const spinner = SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length] ?? "⠹";
 
-    ctx.ui.setWidget("pi-agents-runs", (_tui, theme) => {
-      const w = _tui.terminal?.columns ?? 120;
-      const lines = buildWidgetLines(this.runtimeState, spinner, theme, w);
-      return { render: () => lines, invalidate: () => {} };
-    });
+    ctx.ui.setWidget(
+      "pi-agents-runs",
+      (_tui, theme) => {
+        const w = _tui.terminal?.columns ?? 120;
+        const lines = buildWidgetLines(this.runtimeState, spinner, theme, w);
+        return { render: () => lines, invalidate: () => {} };
+      },
+      { placement: "aboveEditor" },
+    );
   }
 
   private stop(ctx: ExtensionContext): void {
@@ -1566,6 +1810,6 @@ export class RunWidgetManager {
       clearInterval(this.interval);
       this.interval = undefined;
     }
-    ctx.ui.setWidget("pi-agents-runs", undefined);
+    ctx.ui?.setWidget("pi-agents-runs", undefined);
   }
 }

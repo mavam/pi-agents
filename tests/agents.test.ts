@@ -3,14 +3,15 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  buildAgentsPrompt,
   buildSkillsPrompt,
   discoverAgents,
   formatAgentList,
-} from "../extensions/agent/agents.ts";
+} from "../src/catalog/agents.ts";
 import {
   formatWorkflowAgentsXml,
   shouldInjectWorkflowAgentsPrompt,
-} from "../extensions/agent/workflow-agent-prompt.ts";
+} from "../src/catalog/workflow-agent-prompt.ts";
 
 let sandboxDir = "";
 let workspaceDir = "";
@@ -291,8 +292,8 @@ describe("formatWorkflowAgentsXml", () => {
     const xml = formatWorkflowAgentsXml(cwd, "both");
 
     expect(xml).toContain('<workflow-agents scope="both"');
-    expect(xml).toContain('<agent name="worker" source="project">');
-    expect(xml).toContain('<agent name="zeta" source="user">');
+    expect(xml).toContain('<agent name="worker" source="project"');
+    expect(xml).toContain('<agent name="zeta" source="user"');
     expect(xml.indexOf('name="worker"')).toBeLessThan(
       xml.indexOf('name="zeta"'),
     );
@@ -330,6 +331,39 @@ describe("shouldInjectWorkflowAgentsPrompt", () => {
         workflowUsedInPreviousTurn: true,
       }),
     ).toBe(true);
+  });
+});
+
+describe("buildAgentsPrompt", () => {
+  it("renders agent metadata and system prompts from discovered files", () => {
+    const { projectAgentsDir, cwd } = setupProject();
+    writeAgentFile(
+      projectAgentsDir,
+      "worker.md",
+      createAgentMarkdown({
+        name: "worker",
+        description: "Project worker",
+        thinking: "medium",
+        skills: ["code-review"],
+        prompt: "Run delegated work.",
+      }),
+    );
+
+    const { prompt, diagnostics } = buildAgentsPrompt(cwd, "both");
+
+    expect(diagnostics).toHaveLength(0);
+    expect(prompt).toContain(`<agents scope="both" cwd="${cwd}">`);
+    expect(prompt).toContain(
+      `<agent name="worker" source="project" location="${path.join(projectAgentsDir, "worker.md")}">`,
+    );
+    expect(prompt).toContain("<references>References are relative to");
+    expect(prompt).toContain("<frontmatter>");
+    expect(prompt).toContain("<description>Project worker</description>");
+    expect(prompt).toContain("<model>openai-codex/gpt-5.3-codex-spark</model>");
+    expect(prompt).toContain("<thinking>medium</thinking>");
+    expect(prompt).toContain("<skill>code-review</skill>");
+    expect(prompt).toContain("<system-prompt>");
+    expect(prompt).toContain("Run delegated work.");
   });
 });
 

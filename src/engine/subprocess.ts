@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
-import { buildSkillsPrompt } from "../agents.js";
-import type { AgentRunDetails, UsageStats } from "../types.js";
+import { buildSkillsPrompt } from "../catalog/agents.js";
+import type { AgentRunDetails, UsageStats } from "../runtime/types.js";
 import type {
   SpawnEngine,
   SpawnHandle,
@@ -266,7 +266,7 @@ export function createSubprocessSpawnEngine(options?: {
           if (msg.errorMessage) errorMessage = msg.errorMessage;
         }
         updates.push({
-          text: getFinalOutput(messages) || "(running...)",
+          text: getFinalOutput(messages) || "",
           details: details(-1),
         });
       };

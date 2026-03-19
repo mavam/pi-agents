@@ -8,18 +8,18 @@ import {
   resolveAgentByName,
   type Scope,
   type Thinking,
-} from "./agents.js";
-import { BudgetActor } from "./budgets.js";
-import { toDiagnosticText } from "./diagnostics.js";
-import type { SpawnHandle } from "./engine/interface.js";
-import { AgentEvents } from "./events.js";
+} from "../catalog/agents.js";
+import { toDiagnosticText } from "../catalog/diagnostics.js";
+import type { SpawnHandle } from "../engine/interface.js";
 import {
   forkBranchPath,
   loopBodyPath,
   ROOT_FLOW_PATH,
   sequenceStepPath,
-} from "./flow-path.js";
-import { parseJsonText } from "./flow-spec.js";
+} from "../workflow/flow-path.js";
+import { parseJsonText } from "../workflow/flow-spec.js";
+import { BudgetActor } from "./budgets.js";
+import { AgentEvents } from "./events.js";
 import type { AgentManager } from "./manager.js";
 import { appendRunEvent } from "./persistence.js";
 import type { RunRuntimeState } from "./state.js";
@@ -670,6 +670,15 @@ function formatOutputSummary(output: unknown): string {
   }
 }
 
+function summarizePreviewLine(text: string): string | undefined {
+  const line = text
+    .split("\n")
+    .map((entry) => entry.trim())
+    .find(Boolean);
+  if (!line) return undefined;
+  return line.length <= 120 ? line : `${line.slice(0, 119)}…`;
+}
+
 function assertNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error("Workflow aborted.");
@@ -917,7 +926,13 @@ export class RunExecutor {
       let result: FlowNodeResult;
       switch (spec.kind) {
         case "spawn":
-          result = await this.evaluateSpawn(spec, nodeId, state, ctx);
+          result = await this.evaluateSpawn(
+            spec,
+            nodeId,
+            state,
+            ctx,
+            notifyUpdate,
+          );
           break;
         case "sequence":
           result = await this.evaluateSequence(
@@ -947,6 +962,7 @@ export class RunExecutor {
             nodeId,
             state,
             ctx,
+            notifyUpdate,
             controls,
             specPath,
           );
@@ -999,7 +1015,8 @@ export class RunExecutor {
     spec: SpawnFlowSpec,
     nodeId: string,
     state: EvaluationState,
-    _ctx: ExtensionContext,
+    ctx: ExtensionContext,
+    notifyUpdate?: () => void,
   ): Promise<SpawnNodeResult> {
     assertNotAborted(state.signal);
     await state.budgets.acquireSpawn(state.depth);
@@ -1045,6 +1062,37 @@ export class RunExecutor {
         defaultThinking: state.defaultThinking,
       }),
     );
+    const updateNodeProgress = (
+      text: string,
+      details: SpawnNodeResult["run"],
+      status: SpawnNodeResult["run"]["status"],
+      completedAt?: number,
+    ) => {
+      const node = this.options.runtimeState.nodes.get(nodeId);
+      if (!node) return;
+      const startedAt = node.startedAt ?? Date.now();
+      const preview = summarizePreviewLine(text);
+      node.progress = {
+        text,
+        preview,
+        updatedAt: completedAt ?? Date.now(),
+        details: {
+          ...details,
+          status,
+          startedAt,
+          completedAt,
+          preview,
+        },
+      };
+      this.options.onStateChanged?.(ctx);
+      notifyUpdate?.();
+    };
+    const liveUpdates = (async () => {
+      for await (const update of handle.updates) {
+        updateNodeProgress(update.text, update.details, "running");
+      }
+    })().catch(() => undefined);
+
     const onAbort = () => {
       void handle.abort();
     };
@@ -1055,6 +1103,14 @@ export class RunExecutor {
 
     try {
       const spawnResult = await handle.wait();
+      await liveUpdates;
+      const completedAt = Date.now();
+      updateNodeProgress(
+        spawnResult.text,
+        spawnResult.details,
+        "completed",
+        completedAt,
+      );
       const output = resolveStructuredOutput(spec.output, spawnResult.text);
       const result: SpawnNodeResult = {
         nodeId,
@@ -1064,11 +1120,18 @@ export class RunExecutor {
         text: spawnResult.text,
         output,
         agent: agent.name,
-        run: spawnResult.details,
+        run: {
+          ...spawnResult.details,
+          status: "completed",
+          startedAt: this.options.runtimeState.nodes.get(nodeId)?.startedAt,
+          completedAt,
+          preview: summarizePreviewLine(spawnResult.text),
+        },
       };
       rememberResult(spec, result, state.memory);
       return result;
     } finally {
+      await liveUpdates;
       if (state.signal) state.signal.removeEventListener("abort", onAbort);
       await state.handleRegistry.release(handle.id);
     }
@@ -1258,6 +1321,7 @@ export class RunExecutor {
     nodeId: string,
     state: EvaluationState,
     ctx: ExtensionContext,
+    notifyUpdate: (() => void) | undefined,
     _controls: RunExecutionControls | undefined,
     _specPath: string,
   ): Promise<JoinNodeResult> {
@@ -1368,6 +1432,7 @@ export class RunExecutor {
           memory: reducerMemory,
         },
         ctx,
+        notifyUpdate,
       );
       output = reducerSpawn.output;
     }
@@ -1469,14 +1534,14 @@ export class RunExecutor {
     return loopResult;
   }
 
-  markDetached(
+  markBackgrounded(
     runId: string,
     ctx: ExtensionContext,
     controls?: RunExecutionControls,
   ): void {
     this.emit(
       {
-        type: "run_detached",
+        type: "run_backgrounded",
         at: Date.now(),
         runId,
       },

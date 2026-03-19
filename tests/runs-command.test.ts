@@ -17,10 +17,7 @@ import type {
   Theme,
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
-import {
-  createAgentExtension,
-  type SpawnProcess,
-} from "../extensions/agent/index.ts";
+import { createAgentExtension, type SpawnProcess } from "../src/index.ts";
 
 interface CapturedMessage {
   customType: string;
@@ -402,11 +399,12 @@ function createSessionContext(
     sessionFile?: string;
     idle?: () => boolean;
     branch?: unknown[];
+    hasUI?: boolean;
   },
 ): ExtensionContext {
   return {
     cwd: workspaceDir,
-    hasUI: false,
+    hasUI: options?.hasUI ?? false,
     ui,
     isIdle: options?.idle ?? (() => true),
     sessionManager: {
@@ -615,7 +613,7 @@ describe("/flow command", () => {
     expect(messages[0]?.content).toContain("completed");
   });
 
-  it("stops an active detached flow explicitly", async () => {
+  it("stops an active background flow explicitly", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),
       "explorer",
@@ -747,17 +745,20 @@ describe("/flow command", () => {
     expect(content).toContain("Flow: Test Pipeline");
     expect(content).toContain("completed");
     expect(content).toContain("Structure:");
+    expect(content).toContain("Status:");
     expect(content).toContain("●");
     expect(content).toContain("fanout");
     expect(content).toContain("⑂ all");
-    expect(content).toContain("Node Results:");
+    expect(content).toContain("Results:");
+    expect(content).not.toContain("Node Results:");
+    expect(content).not.toContain("\nResult:\n");
     expect(content).toContain("branch=a");
     expect(content).toContain("branch=b");
     expect(content).toContain("result-a");
     expect(content).toContain("result-b");
   });
 
-  it("uses the visible structure label for the latest node", async () => {
+  it("uses the visible structure label in the status tree", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
 
     const inputs: string[] = [];
@@ -803,9 +804,9 @@ describe("/flow command", () => {
     const content = messages[0]?.content ?? "";
     expect(content).toContain("Structure:");
     expect(content).toContain("⑃ Codebase Explorer");
-    expect(content).toContain("Latest node: ● User-Facing Explorer");
-    expect(content).not.toContain("Latest node: ● spawn");
-    expect(content).not.toContain("Latest node: ● fork explore:1");
+    expect(content).toContain("Status:");
+    expect(content).toContain("└─ ● User-Facing Explorer: user");
+    expect(content).not.toContain("Latest node:");
   });
 
   it("outputs a Mermaid code fence with the mermaid subcommand", async () => {
@@ -947,8 +948,8 @@ describe("/flow command", () => {
   });
 });
 
-describe("detached workflow notifications", () => {
-  it("posts spawn and final notifications after a detached workflow completes", async () => {
+describe("background workflow notifications", () => {
+  it("posts spawn and final notifications after a background workflow completes", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
 
     const inputs: string[] = [];
@@ -960,9 +961,9 @@ describe("detached workflow notifications", () => {
     const controller = new AbortController();
 
     const result = await workflowTool.execute(
-      "call-detached-notify",
+      "call-background-notify",
       {
-        label: "Detached Notify",
+        label: "backgrounded Notify",
         flow: {
           kind: "spawn",
           id: "only",
@@ -989,19 +990,19 @@ describe("detached workflow notifications", () => {
       () =>
         messages.filter(
           (message) => message.customType === "pi-agents:notification",
-        ).length === 2,
+        ).length === 1,
     );
 
     const notifications = messages.filter(
       (message) => message.customType === "pi-agents:notification",
     );
-    expect(notifications[0]?.content).toContain("Only Step");
-    expect(notifications[0]?.content).toContain("●");
-    expect(notifications[1]?.content).toContain("Detached Notify");
-    expect(notifications[1]?.content).toContain("Use /flow");
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.content).toContain("backgrounded Notify");
+    expect(notifications[0]?.content).toContain("Use /flow");
+    expect(notifications[0]?.content).not.toContain("Only Step");
   });
 
-  it("does not repeat the last step output in the final notification for detached sequences", async () => {
+  it("does not repeat the last step output in the final notification for background sequences", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
 
     const inputs: string[] = [];
@@ -1011,13 +1012,13 @@ describe("detached workflow notifications", () => {
         return "beta";
       }, inputs),
     );
-    const sessionFile = path.join(workspaceDir, "detached-sequence.jsonl");
+    const sessionFile = path.join(workspaceDir, "background-sequence.jsonl");
     const controller = new AbortController();
 
     const result = await workflowTool.execute(
-      "call-detached-sequence-notify",
+      "call-background-sequence-notify",
       {
-        label: "Detached Sequence",
+        label: "backgrounded Sequence",
         flow: {
           kind: "sequence",
           steps: [
@@ -1066,7 +1067,7 @@ describe("detached workflow notifications", () => {
     expect(notifications[0]?.content).toContain("alpha");
     expect(notifications[1]?.content).toContain("Second Step");
     expect(notifications[1]?.content).toContain("beta");
-    expect(notifications[2]?.content).toContain("Detached Sequence");
+    expect(notifications[2]?.content).toContain("backgrounded Sequence");
     expect(notifications[2]?.content).toContain("Use /flow");
     expect(notifications[2]?.content).not.toContain("beta");
     expect(notifications[2]?.content).not.toContain("Second Step");
@@ -1084,7 +1085,7 @@ describe("detached workflow notifications", () => {
     const controller = new AbortController();
 
     const result = await workflowTool.execute(
-      "call-detached-busy",
+      "call-background-busy",
       {
         label: "Buffered Notify",
         flow: {
@@ -1132,9 +1133,9 @@ describe("detached workflow notifications", () => {
     const notifications = messages.filter(
       (message) => message.customType === "pi-agents:notification",
     );
-    expect(notifications).toHaveLength(2);
-    expect(notifications[0]?.content).toContain("Buffered Step");
-    expect(notifications[1]?.content).toContain("Buffered Notify");
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.content).toContain("Buffered Notify");
+    expect(notifications[0]?.content).not.toContain("Buffered Step");
   });
 
   it("keeps only the final notification when the user switches away", async () => {
@@ -1151,7 +1152,7 @@ describe("detached workflow notifications", () => {
     const controller = new AbortController();
 
     const result = await workflowTool.execute(
-      "call-detached-switch",
+      "call-background-switch",
       {
         label: "Switch Away",
         flow: {

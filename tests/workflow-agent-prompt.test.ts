@@ -6,10 +6,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import {
-  createAgentExtension,
-  type SpawnProcess,
-} from "../extensions/agent/index.ts";
+import { createAgentExtension, type SpawnProcess } from "../src/index.ts";
 
 let sandboxDir = "";
 let workspaceDir = "";
@@ -105,21 +102,8 @@ afterEach(() => {
   rmSync(workspaceDir, { recursive: true, force: true });
 });
 
-describe("workflow agent prompt injection", () => {
-  it("injects the workflow catalog when orchestration is requested", async () => {
-    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
-    const { run } = setupExtension();
-
-    const [result] = (await run("before_agent_start", {
-      prompt: "Build a workflow with two parallel branches.",
-      systemPrompt: "base prompt",
-    })) as Array<{ systemPrompt?: string } | undefined>;
-
-    expect(result?.systemPrompt).toContain("## Workflow agent catalog");
-    expect(result?.systemPrompt).toContain('<agent name="worker"');
-  });
-
-  it("does not inject the workflow catalog for unrelated prompts", async () => {
+describe("agent prompt injection", () => {
+  it("always injects the discovered agent catalog as XML", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
     const { run } = setupExtension();
 
@@ -128,10 +112,29 @@ describe("workflow agent prompt injection", () => {
       systemPrompt: "base prompt",
     })) as Array<{ systemPrompt?: string } | undefined>;
 
-    expect(result).toBeUndefined();
+    expect(result?.systemPrompt).toContain('<agents scope="both"');
+    expect(result?.systemPrompt).toContain('<agent name="worker"');
+    expect(result?.systemPrompt).toContain("<frontmatter>");
+    expect(result?.systemPrompt).toContain("<system-prompt>");
+    expect(result?.systemPrompt).not.toContain("## Agent catalog");
+    expect(result?.systemPrompt).not.toContain("## Workflow agent catalog");
   });
 
-  it("keeps the workflow catalog available right after workflow execution", async () => {
+  it("injects the same agent catalog for workflow-shaped prompts", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+    const { run } = setupExtension();
+
+    const [result] = (await run("before_agent_start", {
+      prompt: "Build a workflow with two parallel branches.",
+      systemPrompt: "base prompt",
+    })) as Array<{ systemPrompt?: string } | undefined>;
+
+    expect(result?.systemPrompt).toContain('<agents scope="both"');
+    expect(result?.systemPrompt).toContain('<agent name="worker"');
+    expect(result?.systemPrompt).not.toContain("<workflow-agents");
+  });
+
+  it("still injects agents after workflow execution", async () => {
     writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
     const { run } = setupExtension();
 
@@ -148,7 +151,8 @@ describe("workflow agent prompt injection", () => {
       systemPrompt: "base prompt",
     })) as Array<{ systemPrompt?: string } | undefined>;
 
-    expect(result?.systemPrompt).toContain("## Workflow agent catalog");
+    expect(result?.systemPrompt).toContain('<agents scope="both"');
     expect(result?.systemPrompt).toContain('<agent name="worker"');
+    expect(result?.systemPrompt).not.toContain("<workflow-agents");
   });
 });

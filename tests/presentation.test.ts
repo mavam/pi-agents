@@ -1,6 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import { visibleWidth } from "@mariozechner/pi-tui";
+import { createRunRuntimeState } from "../src/runtime/state.ts";
+import type {
+  AgentRunDetails,
+  FlowSpec,
+  RunNode,
+  RunNotificationDetails,
+  RunResultDetails,
+  WorkflowRun,
+} from "../src/runtime/types.ts";
 import {
   buildWidgetLines,
   formatAgentResultXml,
@@ -11,18 +20,10 @@ import {
   renderAgentCall,
   renderAgentResult,
   renderRunNotificationMessage,
+  renderWorkflowCall,
   renderWorkflowResult,
   stripResultXmlEnvelope,
-} from "../extensions/agent/presentation.ts";
-import { createRunRuntimeState } from "../extensions/agent/state.ts";
-import type {
-  AgentRunDetails,
-  FlowSpec,
-  RunNode,
-  RunNotificationDetails,
-  RunResultDetails,
-  WorkflowRun,
-} from "../extensions/agent/types.ts";
+} from "../src/ui/presentation.ts";
 
 const theme = {
   fg(_color: string, text: string) {
@@ -159,6 +160,41 @@ describe("agent presentation", () => {
     expect(JSON.parse(stripResultXmlEnvelope(xml))).toEqual(payload);
   });
 
+  it("renders workflow calls without an extra blank line before the tree", () => {
+    const renderer = renderWorkflowCall(
+      {
+        label: "dual-explorer-follow-up",
+        cwd: "/tmp/project",
+        scope: "project",
+        flow: {
+          kind: "sequence",
+          label: "user-and-developer-exploration",
+          steps: [
+            {
+              kind: "spawn",
+              label: "user-facing explorer",
+              agent: "explorer",
+              task: "user",
+            },
+            {
+              kind: "spawn",
+              label: "developer-facing explorer",
+              agent: "worker",
+              task: "dev",
+            },
+          ],
+        },
+      },
+      theme,
+    );
+
+    const lines = renderer.render(120);
+    expect(lines[0]).toContain("flow dual-explorer-follow-up");
+    expect(lines[1]).toContain("scope=project · cwd=/tmp/project");
+    expect(lines[2]).toContain("user-and-developer-exploration");
+    expect(lines[2]).not.toBe("");
+  });
+
   it("wraps long workflow result output to the terminal width", () => {
     const details: RunResultDetails = {
       run: {
@@ -224,6 +260,40 @@ describe("agent presentation", () => {
     for (const line of lines) {
       expect(visibleWidth(line)).toBeLessThanOrEqual(32);
     }
+  });
+
+  it("hides backgrounded agent tool results in the interactive UI", () => {
+    const details: AgentRunDetails = {
+      agent: "explorer",
+      agentSource: "project",
+      exitCode: 0,
+      stderr: "",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        contextTokens: 1,
+        turns: 1,
+      },
+      discoveryDiagnostics: [],
+      missingSkills: [],
+      scope: "both",
+      skills: [],
+      status: "background",
+    };
+
+    const renderer = renderAgentResult(
+      {
+        content: [{ type: "text", text: "standing by" }],
+        details,
+      },
+      false,
+      theme,
+    );
+
+    expect(renderer.render(120)).toEqual([]);
   });
 
   it("renders run notifications collapsed with an expand hint and expanded with full output", () => {
@@ -406,7 +476,33 @@ describe("agent presentation", () => {
     expect(text).not.toContain("- b error:");
   });
 
-  it("omits the result section while a workflow is still running", () => {
+  it("hides running workflow tool results in the interactive UI", () => {
+    const details: RunResultDetails = {
+      run: {
+        id: "r-background",
+        rootNodeId: "root:1",
+        label: "workflow",
+        status: "running",
+        startedAt: Date.now(),
+        backgroundedAt: Date.now(),
+        depth: 0,
+        flow: { kind: "spawn", agent: "worker", task: "work" },
+        cwd: "/tmp",
+        scope: "both",
+      },
+      nodes: [],
+    };
+
+    const renderer = renderWorkflowResult(
+      { content: [{ type: "text", text: "standing by" }], details },
+      false,
+      theme,
+    );
+
+    expect(renderer.render(120)).toEqual([]);
+  });
+
+  it("hides active workflow tool results in the interactive UI", () => {
     const details: RunResultDetails = {
       run: {
         id: "r-running",
@@ -428,14 +524,10 @@ describe("agent presentation", () => {
       theme,
     );
 
-    const text = renderer.render(120).join("\n");
-    expect(text).toContain("workflow · running");
-    expect(text).toContain("run=r-running".slice(0, 12));
-    expect(text).not.toContain("Result");
-    expect(text).not.toContain("3 nodes tracked");
+    expect(renderer.render(120)).toEqual([]);
   });
 
-  it("hides detached runs from the live widget", () => {
+  it("keeps background runs visible in the live widget", () => {
     const runtimeState = createRunRuntimeState();
     const startedAt = Date.now();
 
@@ -445,7 +537,7 @@ describe("agent presentation", () => {
       label: "workflow",
       status: "running",
       startedAt,
-      detachedAt: startedAt + 1,
+      backgroundedAt: startedAt + 1,
       depth: 0,
       flow: {
         kind: "fork",
@@ -467,7 +559,205 @@ describe("agent presentation", () => {
 
     const lines = buildWidgetLines(runtimeState, "⠹", plainTheme, 120);
 
-    expect(lines).toEqual([]);
+    expect(lines.join("\n")).toContain("workflow");
+    expect(lines.join("\n")).toContain("explorer: a");
+    expect(lines.join("\n")).toContain("explorer: b");
+    expect(lines.join("\n")).not.toContain("background");
+    expect(lines.join("\n")).not.toContain("running (background)");
+  });
+
+  it("keeps the simple widget free of preview fallback lines", () => {
+    const runtimeState = createRunRuntimeState();
+    const startedAt = Date.now();
+
+    runtimeState.runs.set("run-1", {
+      id: "run-1",
+      rootNodeId: "root:1",
+      label: "explorer",
+      status: "running",
+      startedAt,
+      depth: 0,
+      flow: { kind: "spawn", agent: "explorer", task: "scan" },
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.order.push("run-1");
+
+    const plainTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+
+    const text = buildWidgetLines(runtimeState, "⠹", plainTheme, 120).join(
+      "\n",
+    );
+
+    expect(text).toContain("⠹ explorer");
+    expect(text).not.toContain("working…");
+  });
+
+  it("shows only running top-level flows in the live widget", () => {
+    const runtimeState = createRunRuntimeState();
+    const startedAt = Date.now() - 1000;
+
+    runtimeState.runs.set("run-1", {
+      id: "run-1",
+      rootNodeId: "root:1",
+      label: "completed workflow",
+      status: "completed",
+      startedAt,
+      completedAt: startedAt + 500,
+      depth: 0,
+      flow: { kind: "spawn", agent: "explorer", task: "done" },
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.runs.set("run-2", {
+      id: "run-2",
+      rootNodeId: "root:2",
+      label: "running workflow",
+      status: "running",
+      startedAt: startedAt + 100,
+      depth: 0,
+      flow: { kind: "spawn", agent: "explorer", task: "work" },
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.order.push("run-1", "run-2");
+
+    const plainTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+
+    const text = buildWidgetLines(runtimeState, "⠹", plainTheme, 120).join(
+      "\n",
+    );
+
+    expect(text).toContain("running workflow");
+    expect(text).not.toContain("completed workflow");
+  });
+
+  it("removes completed flows from the live widget", () => {
+    const runtimeState = createRunRuntimeState();
+    const startedAt = Date.now() - 1000;
+
+    runtimeState.runs.set("run-1", {
+      id: "run-1",
+      rootNodeId: "root:1",
+      label: "workflow",
+      status: "completed",
+      startedAt,
+      completedAt: startedAt + 500,
+      depth: 0,
+      flow: { kind: "spawn", agent: "explorer", task: "done" },
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.order.push("run-1");
+
+    const plainTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+
+    expect(buildWidgetLines(runtimeState, "⠹", plainTheme, 120)).toEqual([]);
+  });
+
+  it("shows full workflow progress in the live widget", () => {
+    const runtimeState = createRunRuntimeState();
+    const startedAt = Date.now() - 1000;
+
+    runtimeState.runs.set("run-1", {
+      id: "run-1",
+      rootNodeId: "root:1",
+      label: "review",
+      status: "running",
+      startedAt,
+      depth: 0,
+      flow: {
+        kind: "fork",
+        id: "fanout",
+        branches: {
+          dev: { kind: "spawn", agent: "explorer-dev", task: "dev" },
+          user: { kind: "spawn", agent: "explorer-user", task: "user" },
+        },
+      },
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.order.push("run-1");
+
+    runtimeState.nodes.set("dev:1", {
+      id: "dev:1",
+      runId: "run-1",
+      kind: "spawn",
+      status: "running",
+      specPath: 'flow.branches["dev"]',
+      startedAt,
+    });
+    runtimeState.nodes.set("user:1", {
+      id: "user:1",
+      runId: "run-1",
+      kind: "spawn",
+      status: "completed",
+      specPath: 'flow.branches["user"]',
+      startedAt,
+      completedAt: startedAt + 200,
+    });
+
+    const plainTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+
+    const text = buildWidgetLines(runtimeState, "⠹", plainTheme, 120).join(
+      "\n",
+    );
+    expect(text).toContain("review");
+    expect(text).toContain("⠹ explorer-dev: dev");
+    expect(text).toContain("● explorer-user: user");
+  });
+
+  it("keeps long widget headers compact when the tree already shows detail", () => {
+    const runtimeState = createRunRuntimeState();
+    const startedAt = Date.now() - 1000;
+
+    runtimeState.runs.set("run-1", {
+      id: "run-1",
+      rootNodeId: "root:1",
+      label: "Codebase exploration: user-facing and developer-facing lenses",
+      status: "running",
+      startedAt,
+      depth: 0,
+      flow: {
+        kind: "fork",
+        id: "lenses",
+        branches: {
+          worker: { kind: "spawn", agent: "worker", task: "developer-facing" },
+          explorer: { kind: "spawn", agent: "explorer", task: "user-facing" },
+        },
+      },
+      cwd: "/tmp",
+      scope: "both",
+    });
+    runtimeState.order.push("run-1");
+
+    const plainTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+
+    const text = buildWidgetLines(runtimeState, "⠹", plainTheme, 120).join(
+      "\n",
+    );
+
+    expect(text).toContain("Codebase exploration");
+    expect(text).not.toContain(
+      "Codebase exploration: user-facing and developer-facing lenses",
+    );
+    expect(text).toContain("worker: worker");
+    expect(text).toContain("explorer: explorer");
   });
 
   it("renders a static flow tree for a complex workflow", () => {
@@ -612,7 +902,7 @@ describe("agent presentation", () => {
       id: "n-dev",
       runId: "r-inspect",
       specId: "developer-facing",
-      specPath: "flow.branches.developer_facing",
+      specPath: 'flow.branches["developer_facing"]',
       kind: "spawn",
       status: "completed",
       branchKey: "developer_facing",
@@ -623,7 +913,7 @@ describe("agent presentation", () => {
       id: "n-user",
       runId: "r-inspect",
       specId: "user-facing",
-      specPath: "flow.branches.user_facing",
+      specPath: 'flow.branches["user_facing"]',
       kind: "spawn",
       status: "running",
       branchKey: "user_facing",
@@ -637,9 +927,11 @@ describe("agent presentation", () => {
     expect(text).toContain("⑃ Parallel codebase exploration");
     expect(text).toContain("├─ ✦ developer-facing: developer_facing");
     expect(text).toContain("└─ ✦ user-facing: user_facing");
-    expect(text).not.toContain("○ Parallel codebase exploration");
-    expect(text).not.toContain("◉ user-facing");
-    expect(text).toContain("Nodes: 1 running · 1 waiting · 1 completed");
+    expect(text).toContain("Status:");
+    expect(text).toContain("○ Parallel codebase exploration");
+    expect(text).toContain("├─ ● developer-facing: developer_facing");
+    expect(text).toContain("└─ ◉ user-facing: user_facing");
+    expect(text).not.toContain("Nodes: 1 running · 1 waiting · 1 completed");
   });
 
   it("formats recent node result lines for live watch mode", () => {

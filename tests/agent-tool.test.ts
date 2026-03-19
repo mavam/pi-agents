@@ -18,8 +18,8 @@ import type {
 import agentExtension, {
   createAgentExtension,
   type SpawnProcess,
-} from "../extensions/agent/index.ts";
-import type { AgentRunDetails } from "../extensions/agent/types.ts";
+} from "../src/index.ts";
+import type { AgentRunDetails } from "../src/runtime/types.ts";
 
 type ErrorWithDetails = Error & { details?: AgentRunDetails };
 
@@ -115,6 +115,157 @@ afterEach(() => {
 });
 
 describe("agent tool delegated process execution", () => {
+  it("does not surface a fake running placeholder before preview text exists", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "explorer.md"),
+      "explorer",
+      "Explorer",
+    );
+
+    const tool = setupTool(
+      createAgentExtension({
+        spawnProcess: (_command, _args, _options) => {
+          const stdout = new PassThrough();
+          const stderr = new PassThrough();
+          let capturedInput = "";
+          const stdin = new Writable({
+            write(chunk, _encoding, callback) {
+              capturedInput += chunk.toString();
+              callback();
+            },
+            final(callback) {
+              void capturedInput;
+              const event = {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "" }],
+                  model: "anthropic/claude-sonnet-4-5",
+                  usage: {
+                    input_tokens: 1,
+                    output_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                  },
+                  stop_reason: "end_turn",
+                },
+              };
+              setTimeout(() => {
+                stdout.write(`${JSON.stringify(event)}\n`);
+                stdout.end();
+                callback();
+              }, 10);
+            },
+          });
+          const child = new EventEmitter() as ChildProcessWithoutNullStreams;
+          Object.assign(child, {
+            stdout,
+            stderr,
+            stdin,
+            pid: 123,
+            exitCode: null,
+            signalCode: null,
+            kill: () => true,
+          });
+          setTimeout(() => child.emit("close", 0, null), 20);
+          return child;
+        },
+      }),
+    );
+
+    const updates: AgentRunDetails[] = [];
+    await tool.execute(
+      "call-empty-preview",
+      { name: "explorer", task: "Explore this repository" },
+      undefined,
+      (update) => {
+        updates.push(update.details as AgentRunDetails);
+      },
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    expect(
+      updates.some((details) => details.preview === "(running...)"),
+    ).toBeFalse();
+  });
+
+  it("does not emit live tool updates when UI widgets are available", async () => {
+    writeAgent(
+      path.join(projectAgentsDir(), "explorer.md"),
+      "explorer",
+      "Explorer",
+    );
+
+    const tool = setupTool(
+      createAgentExtension({
+        spawnProcess: (_command, _args, _options) => {
+          const stdout = new PassThrough();
+          const stderr = new PassThrough();
+          let capturedInput = "";
+          const stdin = new Writable({
+            write(chunk, _encoding, callback) {
+              capturedInput += chunk.toString();
+              callback();
+            },
+            final(callback) {
+              void capturedInput;
+              const event = {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  model: "anthropic/claude-sonnet-4-5",
+                  usage: {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                  },
+                  stop_reason: "end_turn",
+                },
+              };
+              setTimeout(() => {
+                stdout.write(`${JSON.stringify(event)}\n`);
+                stdout.end();
+                callback();
+              }, 10);
+            },
+          });
+          const child = new EventEmitter() as ChildProcessWithoutNullStreams;
+          Object.assign(child, {
+            stdout,
+            stderr,
+            stdin,
+            pid: 123,
+            exitCode: null,
+            signalCode: null,
+            kill: () => true,
+          });
+          setTimeout(() => child.emit("close", 0, null), 20);
+          return child;
+        },
+      }),
+    );
+
+    let updateCount = 0;
+    const result = await tool.execute(
+      "call-ui-agent",
+      { name: "explorer", task: "Explore this repository" },
+      undefined,
+      () => {
+        updateCount += 1;
+      },
+      { cwd: workspaceDir, hasUI: true } as unknown as ExtensionContext,
+    );
+
+    expect(updateCount).toBe(0);
+    expect(result.details.agent).toBe("explorer");
+    expect(result.details.status).toBe("background");
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toContain("Standing by for results.");
+    }
+  });
   it("passes task text via stdin so leading dashes are treated as prompt content", async () => {
     writeAgent(
       path.join(projectAgentsDir(), "explorer.md"),

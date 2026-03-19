@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "files": [
-    "extensions",
+    "src",
     "README.md"
   ],
   "keywords": [
@@ -27,11 +27,11 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "format": "bunx @biomejs/biome format --write extensions tests",
-    "format:check": "bunx @biomejs/biome format extensions tests",
-    "lint": "bunx @biomejs/biome lint extensions tests",
-    "lint:fix": "bunx @biomejs/biome lint --write extensions tests",
-    "biome:check": "bunx @biomejs/biome check extensions tests",
+    "format": "bunx @biomejs/biome format --write src tests",
+    "format:check": "bunx @biomejs/biome format src tests",
+    "lint": "bunx @biomejs/biome lint src tests",
+    "lint:fix": "bunx @biomejs/biome lint --write src tests",
+    "biome:check": "bunx @biomejs/biome check src tests",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "check": "bun run typecheck && bun run test && bun run biome:check"
@@ -45,7 +45,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/agent"
+      "./src"
     ]
   },
   "dependencies": {

@@ -81,10 +81,10 @@ export function applyRunEvent(state: RunRuntimeState, event: RunEvent): void {
       }
       return;
     }
-    case "run_detached": {
+    case "run_backgrounded": {
       const run = state.runs.get(event.runId);
       if (run) {
-        run.detachedAt = event.at;
+        run.backgroundedAt = event.at;
       }
       return;
     }

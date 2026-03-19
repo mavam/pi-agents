@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import agentExtension from "../extensions/agent/index.ts";
+import agentExtension from "../src/index.ts";
 
 interface CapturedMessage {
   customType: string;

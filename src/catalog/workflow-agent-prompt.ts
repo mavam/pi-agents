@@ -59,7 +59,7 @@ export function formatWorkflowAgentsXml(cwd: string, scope: Scope): string {
     "    <rule>Any other name is invalid. Do not invent agent names.</rule>",
     "    <rule>If none of these agents fit, explain the limitation instead of fabricating a new one.</rule>",
     "    <rule>Agent names are exact identifiers. Prefer them verbatim.</rule>",
-    "    <rule>This catalog reflects the current workflow authoring defaults shown in the scope and cwd attributes above.</rule>",
+    "    <rule>Agent metadata below is loaded from the discovered agent markdown files for the current cwd and scope.</rule>",
     "  </rules>",
     "  <agents>",
   ];
@@ -71,13 +71,27 @@ export function formatWorkflowAgentsXml(cwd: string, scope: Scope): string {
   } else {
     for (const agent of agents) {
       lines.push(
-        `    <agent name="${escapeXmlAttribute(agent.name)}" source="${escapeXmlAttribute(agent.source)}">`,
-        `      <description>${escapeXmlText(agent.description)}</description>`,
+        `    <agent name="${escapeXmlAttribute(agent.name)}" source="${escapeXmlAttribute(agent.source)}" location="${escapeXmlAttribute(agent.filePath)}">`,
+        "      <frontmatter>",
+        `        <description>${escapeXmlText(agent.description)}</description>`,
       );
       if (agent.model) {
-        lines.push(`      <model>${escapeXmlText(agent.model)}</model>`);
+        lines.push(`        <model>${escapeXmlText(agent.model)}</model>`);
       }
-      lines.push("    </agent>");
+      if (agent.thinking) {
+        lines.push(
+          `        <thinking>${escapeXmlText(agent.thinking)}</thinking>`,
+        );
+      }
+      lines.push("        <skills>");
+      if (agent.skills.length === 0) {
+        lines.push("          <none>(none)</none>");
+      } else {
+        for (const skill of agent.skills) {
+          lines.push(`          <skill>${escapeXmlText(skill)}</skill>`);
+        }
+      }
+      lines.push("        </skills>", "      </frontmatter>", "    </agent>");
     }
   }
 

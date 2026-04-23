@@ -1,0 +1,10 @@
+created: 2026-04-23
+title: Live workflow summaries and pi 0.69 compatibility
+intro: >-
+  This release improves agent and workflow monitoring with live summaries, simpler
+  flow statuses, and refreshed flow icons. It also restores compatibility with pi
+  0.69 and later by updating schemas, session handling, skill loading, and expand
+  hints for the current extension APIs.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.1.0

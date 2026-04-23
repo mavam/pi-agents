@@ -304,6 +304,7 @@ export function buildSkillsPrompt(
   const { skills } = loadSkills({
     cwd: skillsCwd,
     agentDir: getAgentDir(),
+    skillPaths: [],
     includeDefaults: true,
   });
   const byName = new Map(skills.map((s) => [s.name, s]));

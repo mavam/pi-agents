@@ -487,13 +487,13 @@ describe("/flows command", () => {
     } as unknown as ExtensionContext);
     expect(messages[0]?.content).toContain("explorer");
 
-    const sessionSwitch = events.get("session_switch");
+    const sessionStart = events.get("session_start");
     const sessionTree = events.get("session_tree");
-    if (!sessionSwitch || !sessionTree) {
+    if (!sessionStart || !sessionTree) {
       throw new Error("expected session lifecycle handlers to be registered");
     }
 
-    await sessionSwitch({}, {
+    await sessionStart({ reason: "resume" }, {
       cwd: workspaceDir,
       hasUI: false,
       sessionManager: {
@@ -1179,11 +1179,11 @@ describe("background workflow notifications", () => {
     expect(result.details.run.status).toBe("running");
     await waitFor(() => inputs.length === 1);
 
-    const sessionSwitch = events.get("session_switch");
-    if (!sessionSwitch) throw new Error("expected session_switch handler");
+    const sessionStart = events.get("session_start");
+    if (!sessionStart) throw new Error("expected session_start handler");
 
-    await sessionSwitch(
-      {},
+    await sessionStart(
+      { reason: "resume" },
       createSessionContext(ui.context, {
         sessionFile: otherSessionFile,
         idle: () => idle,
@@ -1204,8 +1204,8 @@ describe("background workflow notifications", () => {
       ),
     ).toHaveLength(0);
 
-    await sessionSwitch(
-      {},
+    await sessionStart(
+      { reason: "resume" },
       createSessionContext(ui.context, {
         sessionFile: originSessionFile,
         idle: () => idle,

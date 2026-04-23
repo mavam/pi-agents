@@ -1,5 +1,5 @@
 import { StringEnum } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { AgentRunDetails } from "../runtime/types.js";
 
 export type ToolPromptMetadata = {
@@ -73,79 +73,86 @@ const SpawnShorthandSchema = Type.Object({
   output: Type.Optional(OutputModeSchema),
 });
 
-const FlowSpecSchema = Type.Recursive((Self) =>
-  Type.Union([
-    Type.Object({
-      kind: Type.Literal("spawn"),
-      id: Type.Optional(Type.String()),
-      label: Type.Optional(Type.String()),
-      agent: Type.String({ description: "Agent name to execute" }),
-      task: Type.String({ description: "Task prompt passed to the agent" }),
-      cwd: Type.Optional(Type.String()),
-      scope: Type.Optional(ScopeSchema),
-      output: Type.Optional(OutputModeSchema),
-    }),
-    SpawnShorthandSchema,
-    Type.Object({
-      kind: Type.Literal("sequence"),
-      id: Type.Optional(Type.String()),
-      label: Type.Optional(Type.String()),
-      steps: Type.Array(Self, {
-        description:
-          "Nodes executed in order; the last output becomes the sequence output",
+const FlowSpecSchema = Type.Cyclic(
+  {
+    FlowSpec: Type.Union([
+      Type.Object({
+        kind: Type.Literal("spawn"),
+        id: Type.Optional(Type.String()),
+        label: Type.Optional(Type.String()),
+        agent: Type.String({ description: "Agent name to execute" }),
+        task: Type.String({ description: "Task prompt passed to the agent" }),
+        cwd: Type.Optional(Type.String()),
+        scope: Type.Optional(ScopeSchema),
+        output: Type.Optional(OutputModeSchema),
       }),
-    }),
-    Type.Object({
-      kind: Type.Literal("fork"),
-      id: Type.Optional(
-        Type.String({
-          description: "Optional fork identifier for downstream joins",
-        }),
-      ),
-      label: Type.Optional(Type.String()),
-      agent: Type.Optional(
-        Type.String({
-          description: "Default agent inherited by branch spawns",
-        }),
-      ),
-      taskTemplate: Type.Optional(
-        Type.String({
+      SpawnShorthandSchema,
+      Type.Object({
+        kind: Type.Literal("sequence"),
+        id: Type.Optional(Type.String()),
+        label: Type.Optional(Type.String()),
+        steps: Type.Array(Type.Ref("FlowSpec"), {
           description:
-            "Default task template for branch spawns. Use {branch} as a placeholder.",
+            "Nodes executed in order; the last output becomes the sequence output",
         }),
-      ),
-      cwd: Type.Optional(Type.String()),
-      scope: Type.Optional(ScopeSchema),
-      output: Type.Optional(OutputModeSchema),
-      branches: Type.Record(
-        Type.String(),
-        Type.Union([Self, Type.String(), SpawnShorthandSchema]),
-        {
-          description:
-            "Named branches executed concurrently. Branch values may be full flow specs, spawn shorthands, or agent-name strings.",
-        },
-      ),
-      concurrency: Type.Optional(PositiveIntegerSchema),
-    }),
-    Type.Object({
-      kind: Type.Literal("join"),
-      id: Type.Optional(Type.String()),
-      label: Type.Optional(Type.String()),
-      from: Type.String({ description: "Fork id to join" }),
-      mode: JoinModeSchema,
-      quorum: Type.Optional(PositiveIntegerSchema),
-      reducer: Type.Optional(JoinReducerSchema),
-      onFailure: Type.Optional(JoinFailureSchema),
-    }),
-    Type.Object({
-      kind: Type.Literal("loop"),
-      id: Type.String({ description: "Unique loop identifier" }),
-      label: Type.Optional(Type.String()),
-      body: Self,
-      maxIterations: PositiveIntegerSchema,
-      continueWhen: Type.Optional(ContinueSpecSchema),
-    }),
-  ]),
+      }),
+      Type.Object({
+        kind: Type.Literal("fork"),
+        id: Type.Optional(
+          Type.String({
+            description: "Optional fork identifier for downstream joins",
+          }),
+        ),
+        label: Type.Optional(Type.String()),
+        agent: Type.Optional(
+          Type.String({
+            description: "Default agent inherited by branch spawns",
+          }),
+        ),
+        taskTemplate: Type.Optional(
+          Type.String({
+            description:
+              "Default task template for branch spawns. Use {branch} as a placeholder.",
+          }),
+        ),
+        cwd: Type.Optional(Type.String()),
+        scope: Type.Optional(ScopeSchema),
+        output: Type.Optional(OutputModeSchema),
+        branches: Type.Record(
+          Type.String(),
+          Type.Union([
+            Type.Ref("FlowSpec"),
+            Type.String(),
+            SpawnShorthandSchema,
+          ]),
+          {
+            description:
+              "Named branches executed concurrently. Branch values may be full flow specs, spawn shorthands, or agent-name strings.",
+          },
+        ),
+        concurrency: Type.Optional(PositiveIntegerSchema),
+      }),
+      Type.Object({
+        kind: Type.Literal("join"),
+        id: Type.Optional(Type.String()),
+        label: Type.Optional(Type.String()),
+        from: Type.String({ description: "Fork id to join" }),
+        mode: JoinModeSchema,
+        quorum: Type.Optional(PositiveIntegerSchema),
+        reducer: Type.Optional(JoinReducerSchema),
+        onFailure: Type.Optional(JoinFailureSchema),
+      }),
+      Type.Object({
+        kind: Type.Literal("loop"),
+        id: Type.String({ description: "Unique loop identifier" }),
+        label: Type.Optional(Type.String()),
+        body: Type.Ref("FlowSpec"),
+        maxIterations: PositiveIntegerSchema,
+        continueWhen: Type.Optional(ContinueSpecSchema),
+      }),
+    ]),
+  },
+  "FlowSpec",
 );
 
 export const WorkflowParamsSchema = Type.Object({

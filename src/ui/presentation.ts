@@ -4,7 +4,7 @@ import type {
   SessionEntry,
   Theme,
 } from "@mariozechner/pi-coding-agent";
-import { editorKey } from "@mariozechner/pi-coding-agent";
+import { keyText } from "@mariozechner/pi-coding-agent";
 import {
   Box,
   Text,
@@ -1539,7 +1539,7 @@ function canExpandRunNotification(details: RunNotificationDetails): boolean {
 
 function notificationKeyHint(theme: Theme, description: string): string {
   return (
-    theme.fg("dim", editorKey("expandTools")) +
+    theme.fg("dim", keyText("app.tools.expand")) +
     theme.fg("muted", ` ${description}`)
   );
 }

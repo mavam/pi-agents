@@ -3,11 +3,13 @@
 A generic framework for agent orchestration in
 [pi](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent).
 
-## 📦 Install
+## 🚀 Installation
 
-```bash
+```sh
 pi install npm:pi-agents
 ```
+
+## 📍 Agent discovery
 
 Agents are loaded from:
 
@@ -427,9 +429,12 @@ Repeat a body node until a condition is met or `maxIterations` is reached.
   output. The loop continues while the field matches `equals` and stops
   otherwise.
 
-## 📄 License
+## 🧹 Uninstall
 
-[MIT](LICENSE)
-cense
+```sh
+pi remove npm:pi-agents
+```
+
+## 📄 License
 
 [MIT](LICENSE)

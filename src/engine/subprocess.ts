@@ -2,7 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message } from "@mariozechner/pi-ai";
+import type { Message } from "@earendil-works/pi-ai";
 import { buildSkillsPrompt } from "../catalog/agents.js";
 import type { AgentRunDetails, UsageStats } from "../runtime/types.js";
 import type {

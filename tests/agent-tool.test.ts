@@ -14,7 +14,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import agentExtension, {
   createAgentExtension,
   type SpawnProcess,

@@ -16,8 +16,9 @@ import type {
   ExtensionContext,
   Theme,
   ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { createAgentExtension, type SpawnProcess } from "../src/index.ts";
+import type { RunResultDetails } from "../src/runtime/types.ts";
 
 interface CapturedMessage {
   customType: string;
@@ -208,6 +209,59 @@ function createDeferredSpawnProcess(inputs: string[]): {
   };
 }
 
+function createProgressingSpawnProcess(
+  inputs: string[],
+  progress: string,
+): SpawnProcess {
+  return (_command, _args, _options) => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    let capturedInput = "";
+    let proc: ChildProcessWithoutNullStreams;
+    const stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        capturedInput += chunk.toString();
+        callback();
+      },
+      final(callback) {
+        inputs.push(capturedInput);
+        const event = {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: progress }],
+            usage: {
+              input: 1,
+              output: 1,
+              totalTokens: 2,
+              cost: { total: 0 },
+            },
+          },
+        };
+        queueMicrotask(() => {
+          stdout.write(`${JSON.stringify(event)}\n`);
+        });
+        callback();
+      },
+    });
+    proc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+    Object.assign(proc, {
+      stdout,
+      stderr,
+      stdin,
+      exitCode: null,
+      signalCode: null,
+      kill(signal?: NodeJS.Signals) {
+        queueMicrotask(() => {
+          proc.emit("close", null, signal ?? "SIGTERM");
+        });
+        return true;
+      },
+    });
+    return proc;
+  };
+}
+
 async function waitFor(
   predicate: () => boolean,
   timeoutMs = 250,
@@ -232,6 +286,7 @@ function setupExtension(spawnProcess: SpawnProcess): {
     selectChoices: string[];
     customInputs: string[][];
     customCalls: number;
+    customRenders: string[];
     context: ExtensionContext["ui"];
   };
   events: Map<
@@ -260,6 +315,7 @@ function setupExtension(spawnProcess: SpawnProcess): {
     selectChoices: [] as string[],
     customInputs: [] as string[][],
     customCalls: 0,
+    customRenders: [] as string[],
     context: {
       theme,
       async select(_title: string, options: string[]) {
@@ -276,8 +332,16 @@ function setupExtension(spawnProcess: SpawnProcess): {
           _kb: unknown,
           done: (result: T) => void,
         ) =>
-          | { handleInput?(data: string): void }
-          | Promise<{ handleInput?(data: string): void }>,
+          | {
+              render?(width: number): string[];
+              handleInput?(data: string): void;
+              dispose?(): void;
+            }
+          | Promise<{
+              render?(width: number): string[];
+              handleInput?(data: string): void;
+              dispose?(): void;
+            }>,
       ) {
         uiHarness.customCalls += 1;
         return await new Promise<T | undefined>((resolve) => {
@@ -292,10 +356,14 @@ function setupExtension(spawnProcess: SpawnProcess): {
               resolve,
             ),
           ).then((component) => {
+            if (component.render) {
+              uiHarness.customRenders.push(component.render(120).join("\n"));
+            }
             const inputs = uiHarness.customInputs.shift() ?? [];
             for (const input of inputs) {
               component.handleInput?.(input);
             }
+            component.dispose?.();
           });
         });
       },
@@ -945,6 +1013,61 @@ describe("/flow command", () => {
 
     expect(ui.customCalls).toBe(2);
     expect(messages).toHaveLength(0);
+  });
+
+  it("shows existing running output when attaching to watch mode", async () => {
+    writeAgent(path.join(projectAgentsDir(), "worker.md"), "worker", "Worker");
+
+    const progress = "partial result before watch";
+    const inputs: string[] = [];
+    const { flowCommand, workflowTool, messages, ui } = setupExtension(
+      createProgressingSpawnProcess(inputs, progress),
+    );
+    const controller = new AbortController();
+
+    const result = await workflowTool.execute(
+      "call-watch-progress",
+      {
+        label: "Zoom Flow",
+        flow: {
+          kind: "spawn",
+          agent: "worker",
+          task: "do work",
+        },
+      },
+      controller.signal,
+      (update) => {
+        const details = update.details as RunResultDetails;
+        const hasProgress = details.nodes.some((node) =>
+          node.progress?.text?.includes(progress),
+        );
+        if (hasProgress) {
+          controller.abort();
+        }
+      },
+      { cwd: workspaceDir, hasUI: false } as unknown as ExtensionContext,
+    );
+
+    const runId = result.details.run.id as string;
+    ui.customInputs.push(["\u001b"]);
+    messages.length = 0;
+    await flowCommand.handler(`watch ${runId}`, {
+      cwd: workspaceDir,
+      hasUI: true,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
+
+    const watchRender = ui.customRenders.at(-1) ?? "";
+    expect(watchRender).toContain("Watching Zoom Flow");
+    expect(watchRender).toContain("Live tail:");
+    expect(watchRender).toContain(progress);
+    expect(watchRender).toContain("worker");
+
+    await flowCommand.handler(`stop ${runId}`, {
+      cwd: workspaceDir,
+      hasUI: false,
+      ui: ui.context,
+    } as unknown as ExtensionContext);
   });
 });
 

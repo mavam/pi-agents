@@ -2,7 +2,7 @@ import type {
   CustomEntry,
   ExtensionAPI,
   SessionEntry,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { applyRunEvent, createRunRuntimeState } from "./state.js";
 import type { RunEvent } from "./types.js";
 

@@ -2,7 +2,7 @@ import type {
   AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import type { Thinking } from "../catalog/agents.js";
 import type { RunExecutor } from "../runtime/executor.js";
 import type { LiveRunRegistry } from "../runtime/live-runs.js";

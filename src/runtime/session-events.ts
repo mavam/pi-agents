@@ -1,5 +1,8 @@
 import { appendFileSync } from "node:fs";
-import type { CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
+import type {
+  CustomEntry,
+  SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 import { RUN_EVENT_CUSTOM_TYPE } from "./persistence.js";
 import type { RunEvent } from "./types.js";
 

@@ -1,7 +1,7 @@
 import type {
   ExtensionCommandContext,
   Theme,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   Key,
@@ -10,7 +10,7 @@ import {
   type TUI,
   truncateToWidth,
   wrapTextWithAnsi,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import type { LiveRunRegistry } from "../runtime/live-runs.js";
 import {
   getOrderedRuns,
@@ -18,11 +18,12 @@ import {
   iconForStatus,
   type RunRuntimeState,
 } from "../runtime/state.js";
-import type { FlowNodeResult } from "../runtime/types.js";
+import type { FlowNodeResult, RunNode, WorkflowRun } from "../runtime/types.js";
 import {
   formatFlowTree,
   formatNodeResultLines,
   formatOutput,
+  formatRunNodeLabel,
   formatRunStatus,
   resolveFlowId,
 } from "./presentation.js";
@@ -229,6 +230,43 @@ class FlowActionPickerComponent implements Component {
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const FLOW_WATCH_TICK_MS = 80;
+const FLOW_WATCH_TAIL_LIMIT = 5;
+
+function nodeActivityAt(node: RunNode): number {
+  return node.progress?.updatedAt ?? node.completedAt ?? node.startedAt ?? 0;
+}
+
+function nodeContextSuffix(node: RunNode): string {
+  const suffix: string[] = [];
+  if (node.branchKey) suffix.push(`branch=${node.branchKey}`);
+  if (node.iteration !== undefined) suffix.push(`iteration=${node.iteration}`);
+  return suffix.length > 0 ? ` (${suffix.join(", ")})` : "";
+}
+
+function firstProgressLine(node: RunNode): string | undefined {
+  const preview = node.progress?.preview?.trim();
+  if (preview) return preview;
+  return node.progress?.text
+    ?.split("\n")
+    .find((entry) => entry.trim())
+    ?.trim();
+}
+
+function formatLiveTailLines(
+  run: WorkflowRun,
+  nodes: RunNode[],
+  spinner: string,
+): string[] {
+  return nodes
+    .filter((node) => node.status === "running" && node.kind === "spawn")
+    .sort((left, right) => nodeActivityAt(left) - nodeActivityAt(right))
+    .slice(-FLOW_WATCH_TAIL_LIMIT)
+    .map((node) => {
+      const summary = firstProgressLine(node) ?? "running";
+      const label = formatRunNodeLabel(run.flow, node);
+      return `- ${spinner} ${label}${nodeContextSuffix(node)}: ${summary}`;
+    });
+}
 
 class FlowWatchComponent implements Component {
   private frame = 0;
@@ -300,6 +338,15 @@ class FlowWatchComponent implements Component {
     }
 
     const runNodes = getRunNodes(this.runtimeState, run.id);
+    const tail = formatLiveTailLines(run, runNodes, spinner);
+    if (tail.length > 0) {
+      lines.push(
+        "",
+        this.theme.fg("muted", "Live tail:"),
+        ...tail.map((line) => this.theme.fg("toolOutput", line)),
+      );
+    }
+
     const nodeResults = formatNodeResultLines(run, runNodes);
     const results = [...nodeResults];
     const result = resultSummary(run.result);

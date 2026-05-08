@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import { visibleWidth } from "@mariozechner/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { createRunRuntimeState } from "../src/runtime/state.ts";
 import type {
   AgentRunDetails,
@@ -193,6 +193,29 @@ describe("agent presentation", () => {
     expect(lines[1]).toContain("scope=project · cwd=/tmp/project");
     expect(lines[2]).toContain("user-and-developer-exploration");
     expect(lines[2]).not.toBe("");
+  });
+
+  it("renders invalid workflow calls as an error instead of a fake tree", () => {
+    const renderer = renderWorkflowCall(
+      {
+        label: "parallel-explorer-lenses",
+        cwd: "/tmp/project",
+        flow: {
+          kind: "fork",
+          branches: ["developerLens", "userLens"],
+        },
+      } as unknown as import("../src/runtime/types.ts").WorkflowParams,
+      theme,
+    );
+
+    const text = renderer.render(120).join("\n");
+    expect(text).toContain("flow parallel-explorer-lenses");
+    expect(text).toContain("cwd=/tmp/project");
+    expect(text).toContain("Invalid workflow");
+    expect(text).toContain("flow.branches must be a non-empty object.");
+    expect(text).toContain('"branches": [');
+    expect(text).not.toContain("├─ 0");
+    expect(text).not.toContain("\nundefined\n");
   });
 
   it("wraps long workflow result output to the terminal width", () => {
@@ -555,7 +578,7 @@ describe("agent presentation", () => {
     const plainTheme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+    } as unknown as import("@earendil-works/pi-coding-agent").Theme;
 
     const lines = buildWidgetLines(runtimeState, "⠹", plainTheme, 120);
 
@@ -586,7 +609,7 @@ describe("agent presentation", () => {
     const plainTheme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+    } as unknown as import("@earendil-works/pi-coding-agent").Theme;
 
     const text = buildWidgetLines(runtimeState, "⠹", plainTheme, 120).join(
       "\n",
@@ -628,7 +651,7 @@ describe("agent presentation", () => {
     const plainTheme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+    } as unknown as import("@earendil-works/pi-coding-agent").Theme;
 
     const text = buildWidgetLines(runtimeState, "⠹", plainTheme, 120).join(
       "\n",
@@ -659,7 +682,7 @@ describe("agent presentation", () => {
     const plainTheme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+    } as unknown as import("@earendil-works/pi-coding-agent").Theme;
 
     expect(buildWidgetLines(runtimeState, "⠹", plainTheme, 120)).toEqual([]);
   });
@@ -709,7 +732,7 @@ describe("agent presentation", () => {
     const plainTheme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+    } as unknown as import("@earendil-works/pi-coding-agent").Theme;
 
     const text = buildWidgetLines(runtimeState, "⠹", plainTheme, 120).join(
       "\n",
@@ -746,7 +769,7 @@ describe("agent presentation", () => {
     const plainTheme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
-    } as unknown as import("@mariozechner/pi-coding-agent").Theme;
+    } as unknown as import("@earendil-works/pi-coding-agent").Theme;
 
     const text = buildWidgetLines(runtimeState, "⠹", plainTheme, 120).join(
       "\n",

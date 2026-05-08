@@ -1,7 +1,7 @@
 # 🤖 pi-agents
 
 A generic framework for agent orchestration in
-[pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
+[pi](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent).
 
 ## 📦 Install
 
@@ -217,16 +217,16 @@ Top-level parameters:
 
 ## 🧭 Commands
 
-| Command                        | Description                                    |
-| ------------------------------ | ---------------------------------------------- |
-| `/agents`                      | List discovered agents.                        |
-| `/agent <name>`                | Show full details for one agent.               |
-| `/flows`                       | Browse recorded flows in the current session.  |
-| `/flow`                        | Open the interactive flow picker.              |
-| `/flow <id-or-prefix>`         | Inspect one flow.                              |
-| `/flow watch [id-or-prefix]`   | Re-enter live watch mode for a running flow.   |
-| `/flow mermaid [id-or-prefix]` | Output the selected flow as a Mermaid diagram. |
-| `/flow stop [id-or-prefix]`    | Stop a running flow.                           |
+| Command                        | Description                                           |
+| ------------------------------ | ----------------------------------------------------- |
+| `/agents`                      | List discovered agents.                               |
+| `/agent <name>`                | Show full details for one agent.                      |
+| `/flows`                       | Browse recorded flows in the current session.         |
+| `/flow`                        | Open the interactive flow picker.                     |
+| `/flow <id-or-prefix>`         | Inspect one flow.                                     |
+| `/flow watch [id-or-prefix]`   | Watch current state and live output.                 |
+| `/flow mermaid [id-or-prefix]` | Output the selected flow as a Mermaid diagram.        |
+| `/flow stop [id-or-prefix]`    | Stop a running flow.                                  |
 
 ### Flow inspect view
 
@@ -290,8 +290,10 @@ single-key actions on the selected flow:
 - `m` mermaid
 - `s` stop
 
-The `watch` action is only available for running flows. Once watching, `Esc`
-detaches back to the normal UI and `s` stops the flow.
+The `watch` action is only available for running flows. Watch mode starts from
+the current flow snapshot, including the status tree and completed results, then
+adds a live tail for running agent output. Once watching, `Esc` detaches back to
+the normal UI and `s` stops the flow.
 
 ### Mermaid export
 

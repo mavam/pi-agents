@@ -1,7 +1,7 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { getRunSnapshot, type RunRuntimeState } from "../runtime/state.js";
 import type { RunEvent, RunNotificationDetails } from "../runtime/types.js";
 import {

@@ -3,14 +3,14 @@ import type {
   ExtensionContext,
   SessionEntry,
   Theme,
-} from "@mariozechner/pi-coding-agent";
-import { keyText } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import { keyText } from "@earendil-works/pi-coding-agent";
 import {
   Box,
   Text,
   truncateToWidth,
   wrapTextWithAnsi,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import type { Agent, Scope } from "../catalog/agents.js";
 import type { LiveRunRegistry } from "../runtime/live-runs.js";
 import { rebuildRunState } from "../runtime/persistence.js";
@@ -480,6 +480,10 @@ function latestNodeDisplayLabel(runFlow: FlowSpec, node: RunNode): string {
   if (node.label) return node.label;
   const spec = resolveSpecAtPath(runFlow, node.specPath);
   return spec ? flowLabel(spec) : node.id;
+}
+
+export function formatRunNodeLabel(runFlow: FlowSpec, node: RunNode): string {
+  return latestNodeDisplayLabel(runFlow, node);
 }
 
 function loopLabel(
@@ -1388,25 +1392,40 @@ export function renderAgentResult(
 }
 
 export function renderWorkflowCall(args: WorkflowParams, theme: Theme) {
-  const normalized = (() => {
-    try {
-      return normalizeWorkflowParams(args as unknown);
-    } catch {
-      return args;
-    }
-  })();
+  let normalized: WorkflowParams | undefined;
+  let validationError: string | undefined;
+  try {
+    normalized = normalizeWorkflowParams(args as unknown);
+  } catch (error) {
+    validationError = error instanceof Error ? error.message : String(error);
+  }
+
+  const renderArgs = normalized ?? args;
+  const label =
+    typeof renderArgs === "object" &&
+    renderArgs !== null &&
+    typeof renderArgs.label === "string"
+      ? renderArgs.label
+      : undefined;
+  const scope =
+    typeof renderArgs === "object" &&
+    renderArgs !== null &&
+    typeof renderArgs.scope === "string"
+      ? renderArgs.scope
+      : undefined;
+  const cwd =
+    typeof renderArgs === "object" &&
+    renderArgs !== null &&
+    typeof renderArgs.cwd === "string"
+      ? renderArgs.cwd
+      : undefined;
 
   const lines = [
-    theme.fg(
-      "toolTitle",
-      theme.bold(normalized.label ? `flow ${normalized.label}` : "flow"),
-    ),
+    theme.fg("toolTitle", theme.bold(label ? `flow ${label}` : "flow")),
   ];
   const metadata = [
-    normalized.scope && normalized.scope !== "both"
-      ? `scope=${normalized.scope}`
-      : undefined,
-    normalized.cwd ? `cwd=${normalized.cwd}` : undefined,
+    scope && scope !== "both" ? `scope=${scope}` : undefined,
+    cwd ? `cwd=${cwd}` : undefined,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -1414,15 +1433,20 @@ export function renderWorkflowCall(args: WorkflowParams, theme: Theme) {
     lines.push(theme.fg("muted", metadata));
   }
 
-  const tree = formatFlowTree(normalized.flow, undefined, undefined, theme);
-  if (tree.length > 0) {
-    for (const treeLine of tree) {
-      lines.push(treeLine);
+  if (normalized) {
+    const tree = formatFlowTree(normalized.flow, undefined, undefined, theme);
+    if (tree.length > 0) {
+      for (const treeLine of tree) {
+        lines.push(treeLine);
+      }
     }
-  }
 
-  if (normalized.budgets) {
-    pushSection(lines, "Budgets", formatOutput(normalized.budgets), theme);
+    if (normalized.budgets) {
+      pushSection(lines, "Budgets", formatOutput(normalized.budgets), theme);
+    }
+  } else {
+    pushSection(lines, "Invalid workflow", validationError, theme);
+    pushPreviewSection(lines, "Input", formatOutput(args), false, 12, theme);
   }
   return createRenderer(lines);
 }

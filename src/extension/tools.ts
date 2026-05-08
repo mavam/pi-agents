@@ -1,7 +1,7 @@
 import type {
   ExtensionAPI,
   ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
   buildAgentsPrompt,
   discoverAgents,
@@ -65,6 +65,7 @@ export function createAgentTool(options: {
     promptGuidelines: [
       "Use agent for a single delegated subtask handled by one named agent.",
       "Prefer workflow instead when you need sequencing, branching, joins, or loops across multiple agents.",
+      "Do not emulate parallel or comparative multi-agent work by calling agent repeatedly; use one workflow with a fork instead.",
     ],
     parameters: AgentParamsSchema,
     renderCall: (args, theme) => renderAgentCall(args, theme),
@@ -208,6 +209,7 @@ export function createWorkflowTool(options: {
     promptGuidelines: [
       "Use workflow when you need orchestration across multiple agents or multiple execution steps.",
       "Prefer compact workflow syntax: spawn nodes may omit kind, and fork branches may use agent-name strings or spawn shorthands.",
+      "For fork nodes, branches must be a named object keyed by branch name, never an array.",
       "When many branches share the same agent or task shape, use fork defaults such as agent and taskTemplate instead of repeating full spawn objects.",
       "If a workflow agent catalog is present in the prompt, treat it as authoritative and use only those exact agent names.",
       "Do not invent workflow agent names.",

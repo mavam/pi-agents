@@ -1,0 +1,8 @@
+created: 2026-05-08
+title: Pi package scope compatibility
+intro: >-
+  This release keeps the extension compatible with current Pi releases after the upstream
+  package-scope migration and streamlines the README installation instructions.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.2.0

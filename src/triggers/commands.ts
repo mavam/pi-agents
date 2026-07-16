@@ -8,14 +8,16 @@
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
+  ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "../catalog/agents.js";
 import {
   discoverWorkflows,
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
-import type { WorkflowDef, WorkflowParamDef } from "../model/ast.js";
+import type { Scope, WorkflowDef, WorkflowParamDef } from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
+import { isProjectTrusted } from "../run/persist.js";
 import type { RunView } from "../run/state.js";
 import { toMermaid } from "../ui/mermaid.js";
 import {
@@ -40,6 +42,11 @@ export const RESERVED_COMMAND_NAMES = new Set([
 
 export type CommandDeps = TriggerDeps;
 
+/** Discovery scope for a context: untrusted projects contribute nothing. */
+function scopeFor(ctx: Pick<ExtensionContext, "isProjectTrusted">): Scope {
+  return isProjectTrusted(ctx as ExtensionContext) ? "both" : "user";
+}
+
 // ---------------------------------------------------------------------------
 // Static commands
 
@@ -47,7 +54,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   pi.registerCommand("agents", {
     description: "List discovered agents",
     handler: async (_args, ctx) => {
-      const discovery = discoverAgents(ctx.cwd, "both");
+      const discovery = discoverAgents(ctx.cwd, scopeFor(ctx));
       const lines = ["## Agents", ""];
       if (discovery.agents.length === 0) {
         lines.push(
@@ -84,7 +91,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         sendInfo(pi, "Usage: `/agent <name>`");
         return;
       }
-      const discovery = discoverAgents(ctx.cwd, "both");
+      const discovery = discoverAgents(ctx.cwd, scopeFor(ctx));
       const agent = discovery.agents.find((a) => a.name === name);
       if (!agent) {
         sendInfo(pi, `Unknown agent \`${name}\`. Try \`/agents\`.`);
@@ -118,7 +125,10 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   pi.registerCommand("workflows", {
     description: "List saved workflows",
     handler: async (_args, ctx) => {
-      const { workflows, diagnostics } = discoverWorkflows(ctx.cwd, "both");
+      const { workflows, diagnostics } = discoverWorkflows(
+        ctx.cwd,
+        scopeFor(ctx),
+      );
       const lines = ["## Workflows", ""];
       if (workflows.length === 0) {
         lines.push(
@@ -157,7 +167,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         sendInfo(pi, "Usage: `/workflow <name>`");
         return;
       }
-      const { workflows } = discoverWorkflows(ctx.cwd, "both");
+      const { workflows } = discoverWorkflows(ctx.cwd, scopeFor(ctx));
       const wf = resolveWorkflowByName(workflows, name);
       if (!wf) {
         sendInfo(pi, `Unknown workflow \`${name}\`. Try \`/workflows\`.`);
@@ -426,12 +436,11 @@ export function registerWorkflowCommands(
   pi: ExtensionAPI,
   cwd: string,
   deps: CommandDeps,
+  trusted = true,
 ): void {
-  const { workflows, diagnostics } = discoverWorkflows(cwd, "both");
-  for (const diagnostic of diagnostics) {
-    // Surfaced in /workflows too; avoid noisy startup output.
-    void diagnostic;
-  }
+  // Untrusted projects register no commands for their workflows; the
+  // invocation-time re-discovery below clamps too, in case trust changes.
+  const { workflows } = discoverWorkflows(cwd, trusted ? "both" : "user");
   for (const wf of workflows) {
     if (RESERVED_COMMAND_NAMES.has(wf.name)) continue;
     pi.registerCommand(wf.name, {
@@ -450,7 +459,7 @@ async function runWorkflowCommand(
   deps: CommandDeps,
 ): Promise<void> {
   // Re-discover at invocation time so edits to the file apply immediately.
-  const { workflows } = discoverWorkflows(ctx.cwd, "both");
+  const { workflows } = discoverWorkflows(ctx.cwd, scopeFor(ctx));
   const wf = resolveWorkflowByName(workflows, name);
   if (!wf) {
     sendInfo(

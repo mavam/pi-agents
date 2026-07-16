@@ -12,6 +12,19 @@ export type Source = "user" | "project";
 
 export type Scope = Source | "both";
 
+/**
+ * Clamp a discovery scope by project trust: untrusted projects contribute no
+ * agents or workflows, so everything degrades to user scope.
+ */
+export function effectiveScope(
+  requested: Scope | undefined,
+  trusted: boolean,
+  fallback: Scope = "both",
+): Scope {
+  const scope = requested ?? fallback;
+  return trusted ? scope : "user";
+}
+
 export type OutputMode = "text" | "json";
 
 /** Fields shared by every node kind. */

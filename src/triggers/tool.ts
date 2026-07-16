@@ -17,10 +17,11 @@ import {
   discoverWorkflows,
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
-import type { Budgets, Scope } from "../model/ast.js";
+import { type Budgets, effectiveScope, type Scope } from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
 import { MAX_PERSISTED_VALUE_CHARS, type RunStatus } from "../run/events.js";
 import type { RunOutcome } from "../run/interpreter.js";
+import { isProjectTrusted } from "../run/persist.js";
 import { formatUsage, shortId } from "../ui/render.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
@@ -151,7 +152,13 @@ export function createWorkflowTool(
         );
       }
       const cwd = params.cwd ?? ctx.cwd;
-      const scope = (params.scope ?? "both") as Scope;
+      const trusted = isProjectTrusted(ctx);
+      if (!trusted && params.scope === "project") {
+        throw new Error(
+          "scope 'project' is unavailable: this project is not trusted, so project-local agents and workflows cannot run",
+        );
+      }
+      const scope = effectiveScope(params.scope as Scope | undefined, trusted);
       const { workflows } = discoverWorkflows(cwd, scope);
       const resolveWorkflow = (name: string) =>
         resolveWorkflowByName(workflows, name);

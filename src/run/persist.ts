@@ -91,3 +91,10 @@ export function getSessionFile(
 export function isIdle(ctx: ExtensionContext | undefined): boolean {
   return typeof ctx?.isIdle === "function" ? ctx.isIdle() : true;
 }
+
+/** Project trust for this context (pi >= 0.80). Absent method means trusted. */
+export function isProjectTrusted(ctx: ExtensionContext | undefined): boolean {
+  return typeof ctx?.isProjectTrusted === "function"
+    ? ctx.isProjectTrusted()
+    : true;
+}

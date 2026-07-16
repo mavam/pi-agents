@@ -21,6 +21,7 @@ import {
 } from "../catalog/workflows.js";
 import type { WorkflowDef } from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
+import { isProjectTrusted } from "../run/persist.js";
 import { sendInfo } from "../ui/render.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
@@ -65,9 +66,6 @@ export class HookManager {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private firing = false;
   private disposed = false;
-  /** Per-file approval decisions for project-scoped hook workflows. */
-  private readonly projectApprovals = new Map<string, boolean>();
-  private warnedHeadlessProject = false;
 
   constructor(pi: ExtensionAPI, deps: TriggerDeps) {
     this.pi = pi;
@@ -88,8 +86,8 @@ export class HookManager {
   }
 
   /** Re-scan saved workflows for hooked events (session_start / reload). */
-  refresh(cwd: string): void {
-    const { workflows } = discoverWorkflows(cwd, "both");
+  refresh(cwd: string, trusted = true): void {
+    const { workflows } = discoverWorkflows(cwd, trusted ? "both" : "user");
     this.hookedEvents = new Set(workflows.flatMap((wf) => wf.on ?? []));
   }
 
@@ -99,11 +97,14 @@ export class HookManager {
     ctx: ExtensionContext,
   ): void {
     if (this.disposed || this.firing) return;
+    // Untrusted projects contribute no hook workflows: repository content
+    // must never auto-execute agents without the user's trust decision.
+    const trusted = isProjectTrusted(ctx);
     // session_start is also our discovery point; refresh before filtering so
     // `on: [session_start]` workflows see their own trigger.
-    if (eventName === "session_start") this.refresh(ctx.cwd);
+    if (eventName === "session_start") this.refresh(ctx.cwd, trusted);
     if (!this.hookedEvents.has(eventName)) return;
-    const { workflows } = discoverWorkflows(ctx.cwd, "both");
+    const { workflows } = discoverWorkflows(ctx.cwd, trusted ? "both" : "user");
     for (const wf of workflows) {
       if (!wf.on?.includes(eventName)) continue;
       this.schedule(wf, eventName, event, ctx);
@@ -120,7 +121,7 @@ export class HookManager {
     if (existing) clearTimeout(existing);
     const fire = () => {
       this.timers.delete(wf.name);
-      void this.fire(wf.name, eventName, event, ctx);
+      this.fire(wf.name, eventName, event, ctx);
     };
     const delay = wf.debounce ?? 0;
     if (delay <= 0) {
@@ -132,51 +133,23 @@ export class HookManager {
     this.timers.set(wf.name, timer);
   }
 
-  /**
-   * Project-local hook workflows come from the repository, not the user:
-   * require a one-time confirmation per file before they may auto-run.
-   * Without a UI (headless), project hooks are skipped entirely.
-   */
-  private async approveProjectHook(
-    wf: WorkflowDef,
-    ctx: ExtensionContext,
-  ): Promise<boolean> {
-    if (wf.source !== "project") return true;
-    const known = this.projectApprovals.get(wf.filePath);
-    if (known !== undefined) return known;
-    if (!ctx.hasUI) {
-      if (!this.warnedHeadlessProject) {
-        this.warnedHeadlessProject = true;
-        sendInfo(
-          this.pi,
-          `⚠ Skipping project hook workflow \`${wf.name}\`: project-local hooks require interactive confirmation.`,
-        );
-      }
-      return false;
-    }
-    const approved = await ctx.ui.confirm(
-      "Run project workflow?",
-      `The project workflow "${wf.name}" (${wf.filePath}) wants to run automatically on pi events (${(wf.on ?? []).join(", ")}). Allow it for this session?`,
-    );
-    this.projectApprovals.set(wf.filePath, approved);
-    return approved;
-  }
-
-  private async fire(
+  private fire(
     name: string,
     eventName: string,
     event: unknown,
     ctx: ExtensionContext,
-  ): Promise<void> {
+  ): void {
     if (this.disposed) return;
     this.firing = true;
     try {
-      // Re-resolve so file edits between trigger and fire apply.
-      const { workflows } = discoverWorkflows(ctx.cwd, "both");
+      // Re-resolve so file edits between trigger and fire apply; trust may
+      // also have changed between debounce scheduling and firing.
+      const { workflows } = discoverWorkflows(
+        ctx.cwd,
+        isProjectTrusted(ctx) ? "both" : "user",
+      );
       const wf = resolveWorkflowByName(workflows, name);
       if (!wf?.on?.includes(eventName)) return;
-      if (!(await this.approveProjectHook(wf, ctx))) return;
-      if (this.disposed) return;
       const flow = validateFlow(
         {
           kind: "workflow",

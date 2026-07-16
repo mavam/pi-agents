@@ -230,6 +230,78 @@ describe("workflow tool", () => {
   });
 });
 
+describe("project trust", () => {
+  const untrustedCtx = () =>
+    ({
+      cwd: projectDir,
+      isProjectTrusted: () => false,
+    }) as unknown as ExtensionContext;
+
+  test("untrusted projects hide project agents and workflows", async () => {
+    const { engine, specs } = fakeEngine(() => "ok");
+    const tool = createWorkflowTool(makeDeps(engine));
+    // The echo agent only exists in the project; without trust it is invisible.
+    await expect(
+      tool.execute(
+        "t-trust-1",
+        { flow: { kind: "agent", name: "echo", task: "hi" } },
+        undefined,
+        undefined,
+        untrustedCtx(),
+      ),
+    ).rejects.toThrow("unknown agent 'echo'");
+    expect(specs).toHaveLength(0);
+    await expect(
+      tool.execute(
+        "t-trust-2",
+        { name: "greet", params: { target: "world" } },
+        undefined,
+        undefined,
+        untrustedCtx(),
+      ),
+    ).rejects.toThrow("unknown workflow 'greet'");
+  });
+
+  test("explicit project scope is rejected when untrusted", async () => {
+    const { engine } = fakeEngine(() => "ok");
+    const tool = createWorkflowTool(makeDeps(engine));
+    await expect(
+      tool.execute(
+        "t-trust-3",
+        {
+          flow: { kind: "agent", name: "echo", task: "hi" },
+          scope: "project",
+        },
+        undefined,
+        undefined,
+        untrustedCtx(),
+      ),
+    ).rejects.toThrow("not trusted");
+  });
+
+  test("per-node project scope overrides clamp to user when untrusted", async () => {
+    const { engine, specs } = fakeEngine(() => "ok");
+    const tool = createWorkflowTool(makeDeps(engine));
+    await expect(
+      tool.execute(
+        "t-trust-4",
+        {
+          flow: {
+            kind: "agent",
+            name: "echo",
+            task: "hi",
+            scope: "project",
+          },
+        },
+        undefined,
+        undefined,
+        untrustedCtx(),
+      ),
+    ).rejects.toThrow("unknown agent 'echo'");
+    expect(specs).toHaveLength(0);
+  });
+});
+
 describe("parseCommandArgs", () => {
   const params = [{ name: "target", required: true }, { name: "depth" }];
 

@@ -11,7 +11,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Budgets, FlowNode, Scope } from "../model/ast.js";
 import type { RunSource } from "../run/events.js";
-import { createOrigin, createPersister } from "../run/persist.js";
+import {
+  createOrigin,
+  createPersister,
+  isProjectTrusted,
+} from "../run/persist.js";
 import type { SpawnDefaults } from "../run/runner.js";
 import type { RunManager, StartedRun } from "../run/runs.js";
 import type { NotificationManager } from "../ui/notify.js";
@@ -64,6 +68,7 @@ export function startTriggeredRun(
     source: opts.source,
     originSessionFile: origin.sessionFile,
     defaults: sessionDefaults(deps.pi, opts.ctx),
+    trusted: isProjectTrusted(opts.ctx),
     onEvent: createPersister(origin),
   });
   if (opts.background) {

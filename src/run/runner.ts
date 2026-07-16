@@ -13,7 +13,7 @@ import {
 } from "../catalog/agents.js";
 import { BUDGETS_ENV_VAR, DEPTH_ENV_VAR } from "../engine/subprocess.js";
 import type { SpawnEngine } from "../engine/types.js";
-import type { Budgets, Scope } from "../model/ast.js";
+import { type Budgets, effectiveScope, type Scope } from "../model/ast.js";
 import type { AgentCall, AgentRunner } from "./interpreter.js";
 
 /** Session-level fallbacks for agents without explicit frontmatter. */
@@ -28,6 +28,8 @@ export interface RunnerOptions {
   cwd: string;
   /** Default agent discovery scope. */
   scope?: Scope;
+  /** Project trust; when false, per-call scope overrides clamp to user. */
+  trusted?: boolean;
   /** Cross-process delegation depth of the current process. */
   depth?: number;
   /** Active session model/thinking, used when the agent file sets none. */
@@ -61,9 +63,10 @@ export function resolveAgentOrThrow(
 
 export function createAgentRunner(options: RunnerOptions): AgentRunner {
   const depth = options.depth ?? 0;
+  const trusted = options.trusted ?? true;
   return async (call: AgentCall) => {
     const cwd = call.cwd ?? options.cwd;
-    const scope = call.scope ?? options.scope ?? "both";
+    const scope = effectiveScope(call.scope, trusted, options.scope ?? "both");
     const agent = resolveAgentOrThrow(call.agent, cwd, scope);
 
     const { prompt: skillsPrompt } = buildSkillsPrompt(agent.skills, cwd);

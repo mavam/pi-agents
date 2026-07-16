@@ -4,6 +4,7 @@
  * whenToUse, and params only, never flow bodies.
  */
 
+import type { Scope } from "../model/ast.js";
 import { buildAgentsPrompt } from "./agents.js";
 import { discoverWorkflows } from "./workflows.js";
 
@@ -20,8 +21,11 @@ function escapeXmlAttribute(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
-export function buildWorkflowsPrompt(cwd: string): string {
-  const { workflows, diagnostics } = discoverWorkflows(cwd, "both");
+export function buildWorkflowsPrompt(
+  cwd: string,
+  scope: Scope = "both",
+): string {
+  const { workflows, diagnostics } = discoverWorkflows(cwd, scope);
   const lines = [`<workflows cwd="${escapeXmlAttribute(cwd)}">`];
   if (workflows.length === 0) {
     lines.push("  <none>No saved workflows were discovered.</none>");
@@ -71,14 +75,22 @@ export function buildWorkflowsPrompt(cwd: string): string {
 }
 
 /** The full appendix injected into the system prompt every turn. */
-export function buildSystemPromptAppendix(cwd: string): string {
-  const agents = buildAgentsPrompt(cwd, "both");
-  const workflows = buildWorkflowsPrompt(cwd);
-  return [
+export function buildSystemPromptAppendix(cwd: string, trusted = true): string {
+  const scope: Scope = trusted ? "both" : "user";
+  const agents = buildAgentsPrompt(cwd, scope);
+  const workflows = buildWorkflowsPrompt(cwd, scope);
+  const parts = [
     "The following delegated agents are available to the `workflow` tool:",
     agents.prompt,
     "",
     "The following saved workflows can be invoked with `workflow({name, params})`:",
     workflows,
-  ].join("\n");
+  ];
+  if (!trusted) {
+    parts.push(
+      "",
+      "Note: this project is not trusted, so project-local agents and workflows (.pi/agents, .pi/workflows) are hidden and cannot run.",
+    );
+  }
+  return parts.join("\n");
 }

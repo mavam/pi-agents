@@ -126,11 +126,7 @@ Workflows fire from three surfaces:
 3. **Events.** Add `on: [turn_end]` (plus optional `debounce:` milliseconds)
    to the frontmatter and the workflow fires on those pi events, always in
    the background, with the event payload bound as `{params.event}`.
-   Hooks run only in the root pi process (never inside delegated children),
-   and **project-local** hook workflows ask for a one-time confirmation per
-   session before they may auto-run — repository content cannot execute
-   agents on your machine without your consent. Headless sessions skip
-   project hooks entirely.
+   Hooks run only in the root pi process, never inside delegated children.
 
 ## 🧮 Node reference
 
@@ -249,6 +245,16 @@ pi-agents itself starts from the parent's limits rather than the defaults.
 | `/run <id> watch`     | Snapshot now, final tree when the run settles.       |
 | `/run <id> mermaid`   | Deterministic Mermaid diagram of the run's flow.     |
 | `/run <id> stop`      | Abort a live run.                                    |
+
+## 🔐 Project trust
+
+pi-agents honors pi's project-trust decision (pi ≥ 0.80). In an untrusted
+project, project-local agents and workflows (`.pi/agents`, `.pi/workflows`)
+are invisible everywhere: they are not injected into the system prompt, not
+registered as commands, never fired by event hooks, and per-node
+`scope: project` overrides inside flows clamp to user scope. Passing
+`scope: "project"` to the workflow tool in an untrusted project is an error.
+Trust the project (pi's own prompt) and everything appears.
 
 ## 🗂️ Runs, background, and history
 

@@ -28,14 +28,12 @@ async function* emptyUpdates(): AsyncGenerator<never> {
 
 interface HarnessOptions {
   debounceMs?: number;
-  /** Simulated user answer to the project-hook confirmation. */
-  confirmAnswer?: boolean;
-  hasUI?: boolean;
+  /** Simulated project-trust decision (ctx.isProjectTrusted()). */
+  trusted?: boolean;
 }
 
 function harness(options: HarnessOptions = {}) {
-  const { debounceMs, confirmAnswer = true, hasUI = true } = options;
-  const confirms: string[] = [];
+  const { debounceMs, trusted = true } = options;
   const specs: SpawnSpec[] = [];
   const engine: SpawnEngine = {
     spawn(spec) {
@@ -86,30 +84,25 @@ function harness(options: HarnessOptions = {}) {
     ".pi/workflows/on-turn.md",
     `---\nname: on-turn\ndescription: reacts to turn end\non: [turn_end]\n${debounceMs !== undefined ? `debounce: ${debounceMs}\n` : ""}---\n\`\`\`yaml\nkind: agent\nname: echo\ntask: "react to {params.event}"\n\`\`\`\n`,
   );
-  hooks.refresh(projectDir);
+  hooks.refresh(projectDir, trusted);
 
   const ctx = {
     cwd: projectDir,
-    hasUI,
+    hasUI: true,
     isIdle: () => true,
+    isProjectTrusted: () => trusted,
     sessionManager: {
       getLeafId: () => null,
       getSessionFile: () => undefined,
     },
-    ui: {
-      setWidget: () => {},
-      confirm: async (title: string) => {
-        confirms.push(title);
-        return confirmAnswer;
-      },
-    },
+    ui: { setWidget: () => {} },
   } as unknown as ExtensionContext;
 
   const emit = (name: string, event: unknown = {}) => {
     for (const handler of handlers.get(name) ?? []) handler(event, ctx);
   };
 
-  return { specs, hooks, emit, manager, sent, confirms };
+  return { specs, hooks, emit, manager, sent };
 }
 
 async function until(predicate: () => boolean, ms = 2000): Promise<void> {
@@ -186,34 +179,19 @@ describe("event hooks", () => {
     expect(manager.state.runs.size).toBe(1);
   });
 
-  test("project hooks require one confirmation per file", async () => {
-    const { specs, emit, confirms } = harness({ confirmAnswer: true });
+  test("untrusted projects contribute no hook workflows", async () => {
+    const { specs, emit } = harness({ trusted: false });
     emit("turn_end", { n: 1 });
-    await until(() => specs.length === 1);
-    emit("turn_end", { n: 2 });
-    await until(() => specs.length === 2);
-    // Approved once, remembered for the session.
-    expect(confirms).toHaveLength(1);
-  });
-
-  test("declined project hooks never run", async () => {
-    const { specs, emit, confirms } = harness({ confirmAnswer: false });
-    emit("turn_end", { n: 1 });
-    await until(() => confirms.length === 1);
+    emit("session_start", {});
     emit("turn_end", { n: 2 });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(specs).toHaveLength(0);
-    // Declined once, remembered — no repeat prompts.
-    expect(confirms).toHaveLength(1);
   });
 
-  test("headless sessions skip project hooks with a notice", async () => {
-    const { specs, emit, sent } = harness({ hasUI: false });
+  test("trusting the project enables its hooks without extra prompts", async () => {
+    const { specs, emit } = harness({ trusted: true });
     emit("turn_end", { n: 1 });
-    await until(() =>
-      sent.some((text) => text.includes("Skipping project hook")),
-    );
-    expect(specs).toHaveLength(0);
+    await until(() => specs.length === 1);
   });
 
   test("session_start refreshes before filtering, so its own hooks fire", async () => {

@@ -16,7 +16,11 @@ import {
   DEPTH_ENV_VAR,
 } from "./engine/subprocess.js";
 import type { Budgets } from "./model/ast.js";
-import { getSessionFile, readRunEvents } from "./run/persist.js";
+import {
+  getSessionFile,
+  isProjectTrusted,
+  readRunEvents,
+} from "./run/persist.js";
 import { RunManager } from "./run/runs.js";
 import {
   registerCommands,
@@ -96,14 +100,15 @@ export default function agentExtension(pi: ExtensionAPI): void {
   pi.on("before_agent_start", (event, ctx) => {
     notifications.setContext(ctx);
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPromptAppendix(ctx.cwd)}`,
+      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPromptAppendix(ctx.cwd, isProjectTrusted(ctx))}`,
     };
   });
 
   pi.on("session_start", (_event, ctx) => {
     reloadRunState(ctx);
-    registerWorkflowCommands(pi, ctx.cwd, deps);
-    hooks?.refresh(ctx.cwd);
+    const trusted = isProjectTrusted(ctx);
+    registerWorkflowCommands(pi, ctx.cwd, deps, trusted);
+    hooks?.refresh(ctx.cwd, trusted);
   });
 
   pi.on("session_tree", (_event, ctx) => {

@@ -22,12 +22,12 @@ import type { RunView } from "../run/state.js";
 import { toMermaid } from "../ui/mermaid.js";
 import {
   formatRunOverviewLine,
-  formatRunTree,
   formatUsage,
   formatValuePreview,
   sendInfo,
   shortId,
 } from "../ui/render.js";
+import { renderFlowTree, renderRunTree } from "../ui/tree.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
 /** Command names that saved workflows may not claim. */
@@ -304,9 +304,10 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
     }
   }
   if (wf.doc) lines.push("", wf.doc);
+  lines.push("", "### Flow", "", "```", renderFlowTree(wf.flow), "```");
   lines.push(
     "",
-    "### Flow",
+    "### Flow (JSON)",
     "",
     "```json",
     JSON.stringify(wf.flow, null, 2),
@@ -361,7 +362,7 @@ function formatRunDetails(run: RunView): string {
       `- usage: ${formatUsage(run.usage)}${run.agents ? `, ${run.agents} agent(s)` : ""}`,
     );
   if (run.error) lines.push(`- error: ${run.error}`);
-  lines.push("", "```", formatRunTree(run) || "(no nodes yet)", "```");
+  lines.push("", "```", renderRunTree(run) || "(no nodes yet)", "```");
   const value = formatValuePreview(run.value);
   if (value) {
     lines.push("", "### Result (preview)", "", "```", value, "```");

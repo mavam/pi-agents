@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
-import type { NodeView, RunView } from "../run/state.js";
+import type { RunView } from "../run/state.js";
 
 export const MESSAGE_TYPE = "pi-agents:message";
 
@@ -71,46 +71,6 @@ export function formatValuePreview(value: unknown, maxChars = 400): string {
       : (JSON.stringify(value, null, 2) ?? String(value));
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}…`;
-}
-
-/** Indented textual tree of a run's node instances, in first-seen order. */
-export function formatRunTree(run: RunView): string {
-  const lines: string[] = [];
-  for (const instance of run.order) {
-    const node = run.nodes.get(instance);
-    if (!node) continue;
-    lines.push(formatNodeLine(node));
-  }
-  return lines.join("\n");
-}
-
-function formatNodeLine(node: NodeView): string {
-  const depth = instanceDepth(node.instance);
-  const indent = "  ".repeat(depth);
-  const icon = STATUS_ICONS[node.status] ?? "?";
-  const what =
-    node.kind === "agent" || node.kind === "reduce"
-      ? `${node.kind === "reduce" ? "reduce → " : ""}${node.agent ?? "?"}`
-      : node.kind;
-  const suffix =
-    node.status === "failed" && node.error
-      ? ` — ${node.error.split("\n")[0]}`
-      : node.status === "cancelled" && node.cancelReason
-        ? ` — cancelled (${node.cancelReason})`
-        : "";
-  const usage = node.usage ? ` [${formatUsage(node.usage)}]` : "";
-  return `${indent}${icon} ${labelOf(node)}${what !== node.label ? ` ${what}` : ""}${usage}${suffix}`;
-}
-
-function labelOf(node: NodeView): string {
-  if (node.label) return `${node.label}:`;
-  const tail = node.instance.replace(/^\$\.?/, "");
-  return tail ? `${tail}:` : "";
-}
-
-function instanceDepth(instance: string): number {
-  if (instance === "$") return 0;
-  return instance.replace(/^\$\.?/, "").split(".").length;
 }
 
 export function formatRunOverviewLine(run: RunView): string {

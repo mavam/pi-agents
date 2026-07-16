@@ -29,14 +29,36 @@ A workflow is a tree of six node kinds. Composition is purely structural:
 `par` fuses fork and join into one expression, loops are bounded fixpoints,
 and saved workflows inline like function calls.
 
-| Node       | Meaning                                                        | Value                                     |
-| ---------- | -------------------------------------------------------------- | ----------------------------------------- |
-| `agent`    | Run one delegated agent on a task (the only leaf).              | Its final text, or parsed JSON.           |
-| `seq`      | Run steps in order.                                             | The last step's value.                    |
-| `par`      | Run named branches concurrently, optionally reduce.             | `{branch: value}`, or the reducer's value. |
-| `map`      | Fan out a body per element of a runtime array.                  | Array of body values, or the reducer's.   |
-| `loop`     | Repeat a body until a predicate holds or `max` is hit.          | The last iteration's value.               |
-| `workflow` | Invoke a saved workflow by name (inlined, cycle-checked).       | The inlined flow's value.                 |
+| Icon | Node       | Meaning                                                  | Value                                     |
+| :--: | ---------- | -------------------------------------------------------- | ----------------------------------------- |
+| `✦`  | `agent`    | Run one delegated agent on a task (the only leaf).        | Its final text, or parsed JSON.           |
+| `≡`  | `seq`      | Run steps in order.                                       | The last step's value.                    |
+| `⑃`  | `par`      | Run named branches concurrently, optionally `⑂` reduce.   | `{branch: value}`, or the reducer's value. |
+| `⇶`  | `map`      | Fan out a body per element of a runtime array.            | Array of body values, or the reducer's.   |
+| `↺`  | `loop`     | Repeat a body until a predicate holds or `max` is hit.    | The last iteration's value.               |
+| `⧉`  | `workflow` | Invoke a saved workflow by name (inlined, cycle-checked). | The inlined flow's value.                 |
+
+The JSON/YAML form is what you author; the icons are how flows are *read*.
+Every surface that shows a flow — the tool call display, `/workflow <name>`,
+`/run <id>` — renders it as an icon tree. The review workflow, for example:
+
+```
+⑃ par (all)
+├─ bugs → ✦ reviewer · Review {params.target} strictly for correctness bug…
+├─ clarity → ✦ reviewer · Review {params.target} for readability, duplicat…
+└─ ⑂ reduce → worker · Merge these code review findings into one prioriti…
+```
+
+Sequences are transparent — their steps appear at the parent level without
+extra nesting. When inspecting a run, the kind icons are replaced by live
+status icons (`○` pending, `◉` running, `●` completed, `✗` failed,
+`⊘` cancelled), with dynamic fan-out aggregated in place:
+
+```
+● scout → {files} · List files to review
+◉ reviewer · Review {item} [3/5]
+○ reduce → synthesizer · Merge {items}
+```
 
 ### Explicit data flow
 

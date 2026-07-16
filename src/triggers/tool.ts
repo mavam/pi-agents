@@ -12,17 +12,19 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import {
   discoverWorkflows,
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
 import { type Budgets, effectiveScope, type Scope } from "../model/ast.js";
-import { validateFlow } from "../model/validate.js";
+import { parseFlowNode, validateFlow } from "../model/validate.js";
 import { MAX_PERSISTED_VALUE_CHARS, type RunStatus } from "../run/events.js";
 import type { RunOutcome } from "../run/interpreter.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { formatUsage, shortId } from "../ui/render.js";
+import { KIND_ICONS, renderFlowTree } from "../ui/tree.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
@@ -89,6 +91,33 @@ export interface WorkflowToolDetails {
   error?: string;
 }
 
+/** Icon tree preview of the tool call — tolerant of partial/invalid args. */
+export function formatCallPreview(params: WorkflowToolParamsType): string {
+  const lines: string[] = [];
+  if (params.label) lines.push(`workflow · ${params.label}`);
+  try {
+    if (params.name !== undefined) {
+      const args = Object.entries(params.params ?? {})
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(", ");
+      lines.push(
+        `${KIND_ICONS.workflow} workflow ${params.name}${args ? ` (${args})` : ""}`,
+      );
+    } else if (params.flow !== undefined) {
+      const issues: { path: string; message: string }[] = [];
+      const parsed = parseFlowNode(params.flow, "$", issues);
+      if (parsed && issues.length === 0) {
+        lines.push(renderFlowTree(parsed));
+      } else {
+        lines.push(`${JSON.stringify(params.flow)?.slice(0, 200) ?? ""}…`);
+      }
+    }
+  } catch {
+    // Streaming args may be incomplete; the default renderer takes over.
+  }
+  return lines.join("\n");
+}
+
 export function formatRunResult(
   runId: string,
   label: string | undefined,
@@ -135,6 +164,10 @@ export function createWorkflowTool(
       'In flows, thread data explicitly: bind seq steps with "as" and reference {name}/{previous} in later tasks; use output:"json" when downstream steps need structured access.',
     ],
     parameters: WorkflowToolParams,
+    renderCall(args) {
+      const previewText = formatCallPreview(args);
+      return new Text(previewText || "workflow", 1, 0);
+    },
     async execute(
       _toolCallId,
       params,

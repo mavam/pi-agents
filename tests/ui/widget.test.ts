@@ -34,20 +34,19 @@ async function recordedRun(
 }
 
 describe("formatRunWidget", () => {
-  test("completed run shows a full bar and all-green segments", async () => {
+  test("completed run shows 100% and all-green segments", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
     const [line1, line2] = formatRunWidget(run, run.createdAt + 92_000, 3);
-    expect(line1).toContain("▰▰▰▰▰▰▰▰▰▰");
     expect(line1).toContain("100%");
     expect(line1).toContain("review");
     expect(line1).toContain("w1".length === 2 ? "w1" : "w1"); // shortId of "w1"
     expect(line1).toContain("1m32s");
-    expect(line2).toContain("● bugs→reviewer");
-    expect(line2).toContain("● clarity→reviewer");
-    expect(line2).toContain("● ⑂reduce→worker");
+    expect(line2).toContain("● bugs → reviewer");
+    expect(line2).toContain("● clarity → reviewer");
+    expect(line2).toContain("● ⑂reduce → worker");
   });
 
-  test("mid-run shows partial bar and a running segment", async () => {
+  test("mid-run shows partial percent and a running segment", async () => {
     // Drop the reduce completion and everything after: reduce stays running.
     const run = await recordedRun(
       REVIEW_FLOW,
@@ -62,9 +61,8 @@ describe("formatRunWidget", () => {
     expect(total).toBe(3);
     expect(done).toBe(2);
     const [line1, line2] = formatRunWidget(run, run.createdAt + 5_000, 0);
-    expect(line1).toContain("▱");
     expect(line1).toContain("67%");
-    expect(line2).toContain("◉ ⑂reduce→worker");
+    expect(line2).toContain("◉ ⑂reduce → worker");
   });
 
   test("pending skeleton leaves keep the denominator honest before start", async () => {
@@ -79,7 +77,7 @@ describe("formatRunWidget", () => {
     expect(total).toBe(3);
     const [line1, line2] = formatRunWidget(run, run.createdAt, 0);
     expect(line1).toContain("0%");
-    expect(line2).toContain("○ bugs→reviewer");
+    expect(line2).toContain("○ bugs → reviewer");
   });
 
   test("map fan-out aggregates counts into one segment", async () => {
@@ -104,7 +102,7 @@ describe("formatRunWidget", () => {
       (agent) => (agent === "scout" ? '["a","b","c"]' : "ok"),
     );
     const [line1, line2] = formatRunWidget(run, run.createdAt + 1000, 0);
-    expect(line2).toContain("● scout→{files}");
+    expect(line2).toContain("● scout → {files}");
     expect(line2).toContain("⇶map {files} [3/3]");
     // 1 scout + 3 map items = 4 agents total.
     expect(widgetProgress(run)).toEqual({ done: 4, total: 4 });
@@ -125,8 +123,8 @@ describe("formatRunWidget", () => {
       return "ok";
     });
     const [, line2] = formatRunWidget(run, run.createdAt, 0);
-    expect(line2).toContain("✗ bad→b");
-    expect(line2).toContain("● good→a");
+    expect(line2).toContain("✗ bad → b");
+    expect(line2).toContain("● good → a");
   });
 
   test("live tokens sum completed and streaming usage", async () => {
@@ -145,7 +143,27 @@ describe("formatRunWidget", () => {
       }
     }
     const [line1] = formatRunWidget(run, run.createdAt, 0);
-    expect(line1).toContain("4.5k tok");
+    expect(line1).toContain("4.5k");
+  });
+
+  test("the active agent's output excerpt joins line 1", async () => {
+    const run = await recordedRun(
+      REVIEW_FLOW,
+      () => "ok",
+      (event) => {
+        if (event.type === "run_completed") return false;
+        if (event.type !== "node_completed") return true;
+        return !event.instance.endsWith(".reduce") && event.instance !== "$";
+      },
+    );
+    for (const node of run.nodes.values()) {
+      if (node.status === "running" && node.kind === "reduce") {
+        node.progressText = "Merging findings into one prioritized list\nmore";
+      }
+    }
+    const [line1] = formatRunWidget(run, run.createdAt + 1000, 0);
+    expect(line1).toContain("· Merging findings into one prioritized list");
+    expect(line1).not.toContain("more");
   });
 
   test("segment overflow collapses into a counter", async () => {

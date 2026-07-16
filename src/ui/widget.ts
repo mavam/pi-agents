@@ -11,7 +11,7 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
 import {
   bodyPath,
@@ -28,7 +28,6 @@ import { aggregateStatuses, type PathStatus } from "./tree.js";
 const WIDGET_KEY = "pi-agents:runs";
 const MAX_RUNS = 4;
 const MAX_SEGMENTS = 5;
-const BAR_WIDTH = 10;
 const TICK_MS = 200;
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -59,6 +58,24 @@ export type Colorize = (
 ) => string;
 
 export const plainColorize: Colorize = (_color, text) => text;
+
+/** Widget lines truncated to the terminal width (ANSI-aware), never wrapped. */
+class TruncatedLines implements Component {
+  private readonly lines: string[];
+
+  constructor(lines: string[]) {
+    this.lines = lines;
+  }
+
+  invalidate(): void {
+    // Content is immutable; the widget is replaced wholesale on updates.
+  }
+
+  render(width: number): string[] {
+    const usable = Math.max(4, width - 1);
+    return this.lines.map((line) => ` ${truncateToWidth(line, usable)}`);
+  }
+}
 
 /** Aggregate a path prefix: map/loop segments cover their whole subtree. */
 function statusForPrefix(
@@ -108,7 +125,7 @@ export function widgetSegments(
     });
   };
   const agentText = (node: Extract<FlowNode, { kind: "agent" }>): string =>
-    node.as ? `${node.name}→{${node.as}}` : node.name;
+    node.as ? `${node.name} → {${node.as}}` : node.name;
   const visit = (node: FlowNode, path: string): void => {
     switch (node.kind) {
       case "agent":
@@ -122,20 +139,20 @@ export function widgetSegments(
       case "par": {
         for (const [key, branch] of Object.entries(node.branches)) {
           if (branch.kind === "agent") {
-            push(branchPath(path, key), `${key}→${branch.name}`);
+            push(branchPath(path, key), `${key} → ${branch.name}`);
           } else {
             visit(branch, branchPath(path, key));
           }
         }
         if (node.reduce) {
-          push(reducePath(path), `⑂reduce→${node.reduce.agent}`);
+          push(reducePath(path), `⑂reduce → ${node.reduce.agent}`);
         }
         return;
       }
       case "map":
         push(bodyPath(path), `⇶map ${node.over}`);
         if (node.reduce) {
-          push(reducePath(path), `⑂reduce→${node.reduce.agent}`);
+          push(reducePath(path), `⑂reduce → ${node.reduce.agent}`);
         }
         return;
       case "loop":
@@ -217,7 +234,23 @@ function segmentColor(status: SegmentStatus): Parameters<Colorize>[0] {
   }
 }
 
-/** The two widget lines for one run. Pure — testable with plainColorize. */
+/** Latest output line of the most recently started running agent. */
+function liveExcerpt(run: RunView): string | undefined {
+  let best: { startedAt: number; text: string } | undefined;
+  for (const node of run.nodes.values()) {
+    if (node.status !== "running" || !node.progressText) continue;
+    if (!best || node.startedAt > best.startedAt) {
+      best = { startedAt: node.startedAt, text: node.progressText };
+    }
+  }
+  const line = best?.text.split("\n").find((part) => part.trim());
+  return line?.trim();
+}
+
+/**
+ * The two widget lines for one run. Pure — testable with plainColorize.
+ * Lines are truncated to the terminal width at render time (ANSI-aware).
+ */
 export function formatRunWidget(
   run: RunView,
   now: number,
@@ -227,20 +260,19 @@ export function formatRunWidget(
   const spinner = SPINNER_FRAMES[frame % SPINNER_FRAMES.length] as string;
   const { done, total } = widgetProgress(run);
   const ratio = total > 0 ? done / total : 0;
-  const filled = Math.round(ratio * BAR_WIDTH);
-  const bar =
-    color("success", "▰".repeat(filled)) +
-    color("dim", "▱".repeat(BAR_WIDTH - filled));
-  const percent = `${String(Math.round(ratio * 100)).padStart(2)}%`;
+  const percent = `${Math.round(ratio * 100)}%`;
   const label = run.header.label ?? run.header.flow.kind;
   const tokens = liveTokens(run);
+  const dot = color("dim", " · ");
   const meta = [
     shortId(run.header.id),
     formatElapsed(now - run.createdAt),
-    tokens > 0 ? `${formatTokens(tokens)} tok` : undefined,
+    tokens > 0 ? formatTokens(tokens) : undefined,
   ]
-    .filter(Boolean)
-    .join(" · ");
+    .filter((part): part is string => part !== undefined)
+    .map((part) => color("dim", part))
+    .join(dot);
+  const excerpt = liveExcerpt(run);
 
   const statuses = aggregateStatuses(run);
   const segments = widgetSegments(run.header.flow, statuses);
@@ -261,8 +293,8 @@ export function formatRunWidget(
     .join("   ");
 
   return [
-    `${color("accent", spinner)} ${bar} ${percent}  ${label} ${color("dim", `· ${meta}`)}`,
-    `   ${segmentText}${overflow > 0 ? color("dim", `   …+${overflow}`) : ""}`,
+    `${color("accent", spinner)} ${percent}${dot}${label}${dot}${meta}${excerpt ? `${dot}${color("dim", excerpt)}` : ""}`,
+    `  ${segmentText}${overflow > 0 ? color("dim", `   …+${overflow}`) : ""}`,
   ];
 }
 
@@ -309,7 +341,7 @@ export class RunWidget {
           color("dim", `…+${running.length - MAX_RUNS} more (see /runs)`),
         );
       }
-      return new Text(lines.join("\n"), 1, 0);
+      return new TruncatedLines(lines);
     });
   }
 

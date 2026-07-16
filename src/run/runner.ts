@@ -86,8 +86,9 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       task: call.task,
       cwd,
       systemPrompt: systemPrompt || undefined,
-      model: agent.model ?? options.defaults?.model,
-      thinking: agent.thinking ?? options.defaults?.thinking,
+      // Precedence: flow node override > agent file > active session default.
+      model: call.model ?? agent.model ?? options.defaults?.model,
+      thinking: call.thinking ?? agent.thinking ?? options.defaults?.thinking,
       tools: agent.tools,
       env,
     });

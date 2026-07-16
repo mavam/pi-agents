@@ -242,6 +242,88 @@ describe("session defaults", () => {
   });
 });
 
+describe("default tasks and node overrides", () => {
+  test("a node without a task uses the agent-file default, interpolated", async () => {
+    fs.writeFileSync(
+      path.join(projectDir, ".pi", "agents", "bug-hunter.md"),
+      "---\nname: bug-hunter\ndescription: d\ntask: Hunt bugs relentlessly.\n---\nBody.\n",
+    );
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({ kind: "agent", name: "bug-hunter" });
+    const { done } = manager.start({
+      flow,
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+    });
+    const outcome = await done;
+    expect(outcome.status).toBe("completed");
+    expect(specs[0]?.task).toBe("Hunt bugs relentlessly.");
+  });
+
+  test("a node task overrides the agent-file default", async () => {
+    fs.writeFileSync(
+      path.join(projectDir, ".pi", "agents", "bug-hunter.md"),
+      "---\nname: bug-hunter\ndescription: d\ntask: Default task.\n---\nBody.\n",
+    );
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "agent",
+      name: "bug-hunter",
+      task: "Special mission.",
+    });
+    await manager.start({
+      flow,
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+    }).done;
+    expect(specs[0]?.task).toBe("Special mission.");
+  });
+
+  test("preflight rejects taskless nodes when the agent has no default", () => {
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({ kind: "agent", name: "echo" });
+    expect(() =>
+      manager.start({
+        flow,
+        cwd: projectDir,
+        scope: "project",
+        source: { kind: "tool" },
+      }),
+    ).toThrow("agent 'echo' needs a task");
+    expect(specs).toHaveLength(0);
+  });
+
+  test("node model/thinking overrides beat agent file and session defaults", async () => {
+    fs.writeFileSync(
+      path.join(projectDir, ".pi", "agents", "picky2.md"),
+      "---\nname: picky2\ndescription: d\nmodel: file-model\nthinking: high\n---\nBody.\n",
+    );
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "agent",
+      name: "picky2",
+      task: "t",
+      model: "node-model",
+      thinking: "minimal",
+    });
+    await manager.start({
+      flow,
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+      defaults: { model: "session-model", thinking: "low" },
+    }).done;
+    expect(specs[0]?.model).toBe("node-model");
+    expect(specs[0]?.thinking).toBe("minimal");
+  });
+});
+
 describe("empty tools allowlist", () => {
   test("tools: [] reaches the engine as an empty list, not undefined", async () => {
     fs.writeFileSync(

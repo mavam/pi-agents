@@ -69,15 +69,16 @@ describe("structural validation", () => {
   });
 
   test("unknown key names the offender and the allowed set", () => {
-    expectIssue(agent("a", "t", { model: "x" }), "unknown key 'model'");
+    expectIssue(agent("a", "t", { retries: 3 }), "unknown key 'retries'");
   });
 
-  test("agent requires name and task", () => {
+  test("agent requires a name; task is optional (agent-file default)", () => {
     expectIssue({ kind: "agent" }, "'name' must be a non-empty string");
-    expectIssue(
-      { kind: "agent", name: "a" },
-      "'task' must be a non-empty string",
-    );
+    expectValid({ kind: "agent", name: "a" });
+  });
+
+  test("agent nodes accept model and thinking overrides", () => {
+    expectValid(agent("a", "t", { model: "some-model", thinking: "low" }));
   });
 
   test("agent output and scope are enums", () => {

@@ -91,6 +91,7 @@ model: claude-sonnet-4-5   # optional; defaults to the active session model
 thinking: medium           # optional: off|minimal|low|medium|high|xhigh
 skills: []                 # optional pi skills to inject
 tools: [read, grep, find]  # optional allowlist; [] means NO tools at all
+task: "Review the given target for bugs."  # optional default task
 ---
 
 You are a review agent. Review code through exactly the lens given in your
@@ -98,13 +99,17 @@ task. Return concrete findings with file paths.
 ```
 
 Agents are discovered from `~/.pi/agents` (user) and the nearest `.pi/agents`
-walking up from the cwd (project); project wins on name conflicts.
+walking up from the cwd (project); project wins on name conflicts. An agent
+with a default `task:` is a complete, reusable unit: flow nodes can reference
+it without repeating the task.
 
 ### 2. Define a workflow
 
-`.pi/workflows/review.md`:
+`.pi/workflows/review.md` — everything machine-readable lives in the
+frontmatter (the `flow:` key holds the expression); the body is pure
+documentation:
 
-````md
+```md
 ---
 name: review
 description: Multi-lens code review with a synthesis pass
@@ -112,26 +117,39 @@ whenToUse: when the user asks for a thorough review
 params:
   - name: target
     required: true
+flow:
+  kind: par
+  branches:
+    bugs:    { kind: agent, name: reviewer, task: "Find bugs in {params.target}" }
+    clarity: { kind: agent, name: reviewer, task: "Review {params.target} for clarity" }
+  reduce:
+    agent: worker
+    task: "Merge and prioritize:\n{branches}"
 ---
 
 Reviews the target from two lenses concurrently, then merges findings.
-
-```yaml
-kind: par
-branches:
-  bugs:    { kind: agent, name: reviewer, task: "Find bugs in {params.target}" }
-  clarity: { kind: agent, name: reviewer, task: "Review {params.target} for clarity" }
-reduce:
-  agent: worker
-  task: "Merge and prioritize:\n{branches}"
 ```
-````
 
-Frontmatter + one fenced `yaml` or `json` block holding the flow; the prose
-around it is documentation. Workflows live in `~/.pi/workflows` and
-`.pi/workflows`, discovered like agents. Every definition is fully validated
-at discovery (references, cycles, binding scopes); invalid files are listed
-in `/workflows` diagnostics and never run.
+For a single-unit workflow — one agent, one task, no graph — skip `flow:`
+entirely and use the flat form, which normalizes to a bare agent leaf but
+keeps full workflow powers (params, `/name` command, `on:` hooks, and
+`{kind: workflow, name: …}` references from other flows):
+
+```md
+---
+name: bug-hunt
+description: Hunt correctness bugs in a target
+params: [{ name: target, required: true }]
+agent: reviewer
+task: "Review {params.target} strictly for bugs."
+thinking: high
+---
+```
+
+Workflows live in `~/.pi/workflows` and `.pi/workflows`, discovered like
+agents. Every definition is fully validated at discovery (references, cycles,
+binding scopes); invalid files are listed in `/workflows` diagnostics and
+never run.
 
 ### 3. Trigger it
 
@@ -157,15 +175,17 @@ Workflows fire from three surfaces:
 ```yaml
 kind: agent
 name: reviewer          # must match a discovered agent
-task: "Review {previous}"
+task: "Review {previous}"  # optional when the agent file defines a default task
 output: text            # or "json": parse the result (fences tolerated)
+model: some-model       # optional override (wins over the agent file)
+thinking: low           # optional override (wins over the agent file)
 as: findings            # binding name; only legal on direct seq steps
 cwd: /path/override     # optional
 scope: both             # agent discovery: user|project|both
 ```
 
 A bare `agent` node is a complete workflow — single delegation needs nothing
-more.
+more. Precedence for model/thinking: flow node → agent file → active session.
 
 ### `seq`
 

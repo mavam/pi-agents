@@ -43,6 +43,10 @@ export interface AgentCall {
   agent: string;
   task: string;
   output: OutputMode;
+  /** Node-level model override (wins over the agent file). */
+  model?: string;
+  /** Node-level thinking override (wins over the agent file). */
+  thinking?: string;
   cwd?: string;
   scope?: Scope;
   path: string;
@@ -158,6 +162,12 @@ export interface ExecuteOptions {
   cwd?: string;
   scope?: Scope;
   originSessionFile?: string;
+  /** Default task lookup for agent nodes that omit `task` (from the catalog). */
+  resolveDefaultTask?: (
+    name: string,
+    cwd?: string,
+    scope?: Scope,
+  ) => string | undefined;
 }
 
 export interface RunOutcome {
@@ -404,11 +414,21 @@ class Interpreter {
     env: Env,
     signal: AbortSignal,
   ): Promise<{ value: unknown; usage?: SpawnUsage }> {
-    const task = renderTemplate(node.task, envResolver(env));
+    const template =
+      node.task ??
+      this.options.resolveDefaultTask?.(node.name, node.cwd, node.scope);
+    if (template === undefined) {
+      throw new Error(
+        `agent '${node.name}' has no task: the node omits one and the agent file defines no default`,
+      );
+    }
+    const task = renderTemplate(template, envResolver(env));
     return await this.callAgent({
       agent: node.name,
       task,
       output: node.output ?? "text",
+      model: node.model,
+      thinking: node.thinking,
       cwd: node.cwd ?? this.options.cwd,
       scope: node.scope ?? this.options.scope,
       path,

@@ -43,10 +43,17 @@ export interface AgentNode extends BaseNode {
   kind: "agent";
   /** Agent name (matches a discovered agent's frontmatter `name`). */
   name: string;
-  /** Task prompt; may interpolate `{bindings}`. */
-  task: string;
+  /**
+   * Task prompt; may interpolate `{bindings}`. May be omitted when the agent
+   * file defines a default `task:` — checked in preflight.
+   */
+  task?: string;
   /** How to interpret the agent's final output. Default: "text". */
   output?: OutputMode;
+  /** Model override for this node (wins over the agent file). */
+  model?: string;
+  /** Thinking-level override for this node (wins over the agent file). */
+  thinking?: string;
   /** Working directory override for the delegated process. */
   cwd?: string;
   /** Agent discovery scope override. */

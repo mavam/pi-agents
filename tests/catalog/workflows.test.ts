@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   discoverWorkflows,
-  extractFlowBlocks,
   parseWorkflowFile,
 } from "../../src/catalog/workflows.js";
 
@@ -33,21 +32,19 @@ params:
   - name: target
     required: true
   - depth
+flow:
+  kind: par
+  branches:
+    bugs: { kind: agent, name: reviewer, task: "Find bugs in {params.target}" }
+    style: { kind: agent, name: reviewer, task: "Check style in {params.target}" }
+  reduce: { agent: synthesizer, task: "Merge {branches}" }
 ---
 
 Reviews {target} from two lenses.
-
-\`\`\`yaml
-kind: par
-branches:
-  bugs: { kind: agent, name: reviewer, task: "Find bugs in {params.target}" }
-  style: { kind: agent, name: reviewer, task: "Check style in {params.target}" }
-reduce: { agent: synthesizer, task: "Merge {branches}" }
-\`\`\`
 `;
 
 describe("parseWorkflowFile", () => {
-  test("parses a valid workflow", () => {
+  test("parses a workflow with flow: in frontmatter", () => {
     const filePath = writeWorkflow("review", REVIEW);
     const result = parseWorkflowFile(filePath, "project");
     expect(typeof result).not.toBe("string");
@@ -65,45 +62,95 @@ describe("parseWorkflowFile", () => {
       { name: "depth" },
     ]);
     expect(result.flow.kind).toBe("par");
-    expect(result.doc).toContain("Reviews {target} from two lenses.");
-    expect(result.doc).not.toContain("kind: par");
+    expect(result.doc).toBe("Reviews {target} from two lenses.");
   });
 
-  test("requires a flow block", () => {
+  test("flat agent form normalizes to a bare agent leaf", () => {
+    const filePath = writeWorkflow(
+      "bug-hunt",
+      `---
+name: bug-hunt
+description: Hunt bugs in a target
+params:
+  - { name: target, required: true }
+agent: reviewer
+task: "Review {params.target} strictly for bugs."
+model: cheap-model
+thinking: low
+---
+
+Single-unit workflow.
+`,
+    );
+    const result = parseWorkflowFile(filePath, "project");
+    if (typeof result === "string") throw new Error(result);
+    expect(result.flow).toMatchObject({
+      kind: "agent",
+      name: "reviewer",
+      task: "Review {params.target} strictly for bugs.",
+      model: "cheap-model",
+      thinking: "low",
+    });
+  });
+
+  test("flat form without a task relies on the agent-file default", () => {
+    const filePath = writeWorkflow(
+      "just-agent",
+      "---\nname: just-agent\ndescription: d\nagent: reviewer\n---\n",
+    );
+    const result = parseWorkflowFile(filePath, "project");
+    if (typeof result === "string") throw new Error(result);
+    expect(result.flow).toMatchObject({ kind: "agent", name: "reviewer" });
+    expect((result.flow as { task?: string }).task).toBeUndefined();
+  });
+
+  test("requires flow: or the flat form", () => {
     const filePath = writeWorkflow(
       "empty",
       "---\nname: empty\ndescription: d\n---\nNo flow here.\n",
     );
-    expect(parseWorkflowFile(filePath, "project")).toContain("No flow found");
+    expect(parseWorkflowFile(filePath, "project")).toContain(
+      "No flow found: add a 'flow:' key",
+    );
   });
 
-  test("rejects multiple flow blocks", () => {
+  test("rejects mixing flow: with the flat form", () => {
     const filePath = writeWorkflow(
-      "double",
-      '---\nname: double\ndescription: d\n---\n```json\n{"kind":"agent","name":"a","task":"t"}\n```\n\n```yaml\nkind: agent\nname: b\ntask: t\n```\n',
+      "mixed",
+      "---\nname: mixed\ndescription: d\nagent: reviewer\nflow: { kind: agent, name: reviewer, task: t }\n---\n",
     );
-    expect(parseWorkflowFile(filePath, "project")).toContain("exactly one");
+    expect(parseWorkflowFile(filePath, "project")).toContain("not both");
+  });
+
+  test("rejects flat-form keys next to flow:", () => {
+    const filePath = writeWorkflow(
+      "stray",
+      "---\nname: stray\ndescription: d\ntask: t\nflow: { kind: agent, name: reviewer, task: t }\n---\n",
+    );
+    expect(parseWorkflowFile(filePath, "project")).toContain(
+      "'task' belongs to the flat agent form",
+    );
   });
 
   test("rejects unknown frontmatter keys", () => {
     const filePath = writeWorkflow(
       "bad",
-      "---\nname: bad\ndescription: d\nmodel: x\n---\n```yaml\nkind: agent\nname: a\ntask: t\n```\n",
+      "---\nname: bad\ndescription: d\nmodell: x\nflow: { kind: agent, name: a, task: t }\n---\n",
     );
     expect(parseWorkflowFile(filePath, "project")).toContain(
-      "Unsupported frontmatter keys: model",
+      "Unsupported frontmatter keys: modell",
     );
   });
 
   test("rejects invalid names and debounce", () => {
     const badName = writeWorkflow(
       "badname",
-      "---\nname: 'bad name'\ndescription: d\n---\n```yaml\nkind: agent\nname: a\ntask: t\n```\n",
+      "---\nname: 'bad name'\ndescription: d\nflow: { kind: agent, name: a, task: t }\n---\n",
     );
     expect(parseWorkflowFile(badName, "project")).toContain("invalid 'name'");
     const badDebounce = writeWorkflow(
       "baddeb",
-      "---\nname: baddeb\ndescription: d\ndebounce: -5\n---\n```yaml\nkind: agent\nname: a\ntask: t\n```\n",
+      "---\nname: baddeb\ndescription: d\ndebounce: -5\nflow: { kind: agent, name: a, task: t }\n---\n",
     );
     expect(parseWorkflowFile(badDebounce, "project")).toContain(
       "Invalid 'debounce'",
@@ -113,7 +160,7 @@ describe("parseWorkflowFile", () => {
   test("structurally invalid flow is reported with node paths", () => {
     const filePath = writeWorkflow(
       "badflow",
-      "---\nname: badflow\ndescription: d\n---\n```yaml\nkind: spawn\nagent: a\n```\n",
+      "---\nname: badflow\ndescription: d\nflow: { kind: spawn, agent: a }\n---\n",
     );
     expect(parseWorkflowFile(filePath, "project")).toContain(
       "unknown kind 'spawn'",
@@ -123,23 +170,20 @@ describe("parseWorkflowFile", () => {
   test("hook workflows get the implicit event param", () => {
     const filePath = writeWorkflow(
       "hooked",
-      '---\nname: hooked\ndescription: d\non: [turn_end]\ndebounce: 60000\n---\n```yaml\nkind: agent\nname: a\ntask: "look at {params.event}"\n```\n',
+      `---
+name: hooked
+description: d
+on: [turn_end]
+debounce: 60000
+flow: { kind: agent, name: a, task: "look at {params.event}" }
+---
+`,
     );
     const result = parseWorkflowFile(filePath, "project");
     if (typeof result === "string") throw new Error(result);
     expect(result.on).toEqual(["turn_end"]);
     expect(result.debounce).toBe(60000);
     expect(result.params.map((p) => p.name)).toContain("event");
-  });
-
-  test("json flow blocks parse too", () => {
-    const filePath = writeWorkflow(
-      "jsonwf",
-      '---\nname: jsonwf\ndescription: d\n---\n```json\n{"kind":"agent","name":"a","task":"t"}\n```\n',
-    );
-    const result = parseWorkflowFile(filePath, "project");
-    if (typeof result === "string") throw new Error(result);
-    expect(result.flow).toMatchObject({ kind: "agent", name: "a" });
   });
 });
 
@@ -148,7 +192,16 @@ describe("discoverWorkflows", () => {
     writeWorkflow("review", REVIEW);
     writeWorkflow(
       "fixit",
-      '---\nname: fixit\ndescription: review then fix\n---\n```yaml\nkind: seq\nsteps:\n  - { kind: workflow, name: review, params: { target: "src/" }, as: rev }\n  - { kind: agent, name: worker, task: "Fix: {rev}" }\n```\n',
+      `---
+name: fixit
+description: review then fix
+flow:
+  kind: seq
+  steps:
+    - { kind: workflow, name: review, params: { target: "src/" }, as: rev }
+    - { kind: agent, name: worker, task: "Fix: {rev}" }
+---
+`,
     );
     const { workflows, diagnostics } = discoverWorkflows(projectDir, "project");
     expect(diagnostics).toEqual([]);
@@ -158,7 +211,12 @@ describe("discoverWorkflows", () => {
   test("excludes workflows whose flow fails validation", () => {
     writeWorkflow(
       "broken",
-      '---\nname: broken\ndescription: d\n---\n```yaml\nkind: agent\nname: a\ntask: "use {nothere}"\n```\n',
+      `---
+name: broken
+description: d
+flow: { kind: agent, name: a, task: "use {nothere}" }
+---
+`,
     );
     const { workflows, diagnostics } = discoverWorkflows(projectDir, "project");
     expect(workflows).toEqual([]);
@@ -168,11 +226,11 @@ describe("discoverWorkflows", () => {
   test("detects cycles across saved workflows", () => {
     writeWorkflow(
       "a",
-      "---\nname: a\ndescription: d\n---\n```yaml\nkind: workflow\nname: b\n```\n",
+      "---\nname: a\ndescription: d\nflow: { kind: workflow, name: b }\n---\n",
     );
     writeWorkflow(
       "b",
-      "---\nname: b\ndescription: d\n---\n```yaml\nkind: workflow\nname: a\n```\n",
+      "---\nname: b\ndescription: d\nflow: { kind: workflow, name: a }\n---\n",
     );
     const { workflows, diagnostics } = discoverWorkflows(projectDir, "project");
     expect(workflows).toEqual([]);
@@ -184,18 +242,9 @@ describe("discoverWorkflows", () => {
   test("unknown references to other workflows are diagnosed", () => {
     writeWorkflow(
       "solo",
-      "---\nname: solo\ndescription: d\n---\n```yaml\nkind: workflow\nname: ghost\n```\n",
+      "---\nname: solo\ndescription: d\nflow: { kind: workflow, name: ghost }\n---\n",
     );
     const { diagnostics } = discoverWorkflows(projectDir, "project");
     expect(diagnostics[0]?.message).toContain("unknown workflow 'ghost'");
-  });
-});
-
-describe("extractFlowBlocks", () => {
-  test("only yaml/json fences count", () => {
-    const body = "```ts\ncode\n```\n\n```yaml\nkind: agent\n```\n";
-    const blocks = extractFlowBlocks(body);
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]?.lang).toBe("yaml");
   });
 });

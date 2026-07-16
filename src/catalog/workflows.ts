@@ -1,8 +1,9 @@
 /**
- * Saved-workflow discovery: `.pi/workflows/*.md` files with YAML frontmatter
- * (name, description, whenToUse, on, debounce, params) and the flow
- * expression in a fenced ```yaml or ```json block in the body. Prose around
- * the block is documentation.
+ * Saved-workflow discovery: `.pi/workflows/*.md` files whose YAML frontmatter
+ * carries everything machine-readable — name, description, whenToUse, on,
+ * debounce, params, and the flow expression itself (either a `flow:` tree or
+ * the flat `agent:`/`task:` single-unit form). The markdown body is pure
+ * documentation.
  *
  * Discovery mirrors agents: user `~/.pi/workflows` plus the nearest project
  * `.pi/workflows` walking up from cwd; project wins on name conflicts.
@@ -11,7 +12,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import YAML from "yaml";
 import type {
   FlowNode,
   Scope,
@@ -57,6 +57,12 @@ const ALLOWED_KEYS = new Set([
   "on",
   "debounce",
   "params",
+  "flow",
+  // Flat single-unit form (sugar for flow: {kind: agent, …}):
+  "agent",
+  "task",
+  "model",
+  "thinking",
 ]);
 
 const WORKFLOW_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -90,18 +96,61 @@ function findNearestProjectWorkflowsDir(cwd: string): string | null {
   }
 }
 
-/** Extract fenced ```yaml/```json blocks from a markdown body. */
-export function extractFlowBlocks(
-  body: string,
-): Array<{ lang: string; content: string }> {
-  const blocks: Array<{ lang: string; content: string }> = [];
-  const fenceRe = /^```(yaml|yml|json)\s*\n([\s\S]*?)^```\s*$/gm;
-  let match = fenceRe.exec(body);
-  while (match !== null) {
-    blocks.push({ lang: match[1] as string, content: match[2] as string });
-    match = fenceRe.exec(body);
+/**
+ * The flow expression from frontmatter: either an explicit `flow:` tree or
+ * the flat single-unit form (`agent:` + optional task/model/thinking), which
+ * normalizes to a bare agent leaf.
+ */
+function extractRawFlow(
+  fm: Record<string, unknown>,
+): { ok: true; flow: unknown } | { ok: false; error: string } {
+  const hasFlow = fm.flow !== undefined;
+  const hasFlat = fm.agent !== undefined;
+  if (hasFlow && hasFlat) {
+    return {
+      ok: false,
+      error: "Use either 'flow:' or the flat 'agent:'/'task:' form, not both",
+    };
   }
-  return blocks;
+  if (hasFlow) {
+    for (const key of ["task", "model", "thinking"]) {
+      if (fm[key] !== undefined) {
+        return {
+          ok: false,
+          error: `'${key}' belongs to the flat agent form; with 'flow:' put it on the agent node`,
+        };
+      }
+    }
+    return { ok: true, flow: fm.flow };
+  }
+  if (hasFlat) {
+    if (typeof fm.agent !== "string" || !fm.agent.trim()) {
+      return {
+        ok: false,
+        error: "Invalid 'agent' (must be a non-empty string)",
+      };
+    }
+    for (const key of ["task", "model", "thinking"]) {
+      if (fm[key] !== undefined && typeof fm[key] !== "string") {
+        return { ok: false, error: `Invalid '${key}' (must be a string)` };
+      }
+    }
+    return {
+      ok: true,
+      flow: {
+        kind: "agent",
+        name: fm.agent.trim(),
+        ...(fm.task !== undefined ? { task: fm.task } : {}),
+        ...(fm.model !== undefined ? { model: fm.model } : {}),
+        ...(fm.thinking !== undefined ? { thinking: fm.thinking } : {}),
+      },
+    };
+  }
+  return {
+    ok: false,
+    error:
+      "No flow found: add a 'flow:' key to the frontmatter, or the flat 'agent:'/'task:' form",
+  };
 }
 
 function parseParams(raw: unknown): WorkflowParamDef[] | { error: string } {
@@ -246,20 +295,9 @@ export function parseWorkflowFile(
   const params = parseParams(fm.params);
   if ("error" in params) return params.error;
 
-  const blocks = extractFlowBlocks(body);
-  if (blocks.length === 0) {
-    return "No flow found: add a fenced ```yaml or ```json block with the flow expression";
-  }
-  if (blocks.length > 1) {
-    return `Found ${blocks.length} fenced flow blocks; a workflow file must contain exactly one`;
-  }
-  const block = blocks[0] as { lang: string; content: string };
-  let rawFlow: unknown;
-  try {
-    rawFlow = YAML.parse(block.content);
-  } catch (e) {
-    return `Could not parse the ${block.lang} flow block: ${toErrorMessage(e)}`;
-  }
+  const extracted = extractRawFlow(fm);
+  if (!extracted.ok) return extracted.error;
+  const rawFlow = extracted.flow;
 
   const on = fm.on
     ? [...new Set((fm.on as string[]).map((e) => e.trim()).filter(Boolean))]
@@ -279,9 +317,7 @@ export function parseWorkflowFile(
     return `Invalid flow: ${detail || "not a flow node"}`;
   }
 
-  const doc = body
-    .replace(/^```(yaml|yml|json)\s*\n[\s\S]*?^```\s*$/gm, "")
-    .trim();
+  const doc = body.trim();
 
   return {
     name: fm.name.trim(),

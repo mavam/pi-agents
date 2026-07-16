@@ -32,6 +32,8 @@ export interface Agent {
   skills: string[];
   /** Tool allowlist for the delegated process (passed as `--tools`). */
   tools?: string[];
+  /** Default task, used when a flow node references the agent without one. */
+  task?: string;
   systemPrompt: string;
   source: Source;
   filePath: string;
@@ -59,6 +61,7 @@ const ALLOWED_FRONTMATTER_KEYS = new Set([
   "thinking",
   "skills",
   "tools",
+  "task",
 ]);
 
 function toErrorMessage(e: unknown): string {
@@ -127,6 +130,8 @@ function parseAgentFile(filePath: string, source: Source): Agent | string {
   const tools = parseToolsField(fm.tools);
   if (typeof tools === "object" && tools !== null && "error" in tools)
     return tools.error;
+  if (fm.task !== undefined && typeof fm.task !== "string")
+    return "Invalid 'task' (must be a string)";
 
   return {
     name: (fm.name as string).trim(),
@@ -144,6 +149,10 @@ function parseAgentFile(filePath: string, source: Source): Agent | string {
         ]
       : [],
     tools,
+    task:
+      typeof fm.task === "string" && fm.task.trim()
+        ? fm.task.trim()
+        : undefined,
     systemPrompt: body.trim(),
     source,
     filePath,
@@ -415,6 +424,11 @@ export function buildAgentsPrompt(
       if (agent.tools && agent.tools.length > 0) {
         lines.push(
           `      <tools>${escapeXmlText(agent.tools.join(", "))}</tools>`,
+        );
+      }
+      if (agent.task) {
+        lines.push(
+          `      <defaultTask>${escapeXmlText(agent.task)}</defaultTask>`,
         );
       }
 

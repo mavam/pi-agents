@@ -6,23 +6,21 @@ params:
   - name: target
     description: What to review (a path, diff, or description)
     required: true
+flow:
+  kind: par
+  branches:
+    bugs:
+      kind: agent
+      name: reviewer
+      task: "Review {params.target} strictly for correctness bugs: logic errors, edge cases, races, resource leaks."
+    clarity:
+      kind: agent
+      name: reviewer
+      task: "Review {params.target} for readability, duplication, and simplification opportunities."
+  reduce:
+    agent: worker
+    task: "Merge these code review findings into one prioritized list. Deduplicate overlapping findings and rank by severity:\n\n{branches}"
 ---
 
 Reviews the target from two independent lenses concurrently, then merges the
 findings into one prioritized report.
-
-```yaml
-kind: par
-branches:
-  bugs:
-    kind: agent
-    name: reviewer
-    task: "Review {params.target} strictly for correctness bugs: logic errors, edge cases, races, resource leaks."
-  clarity:
-    kind: agent
-    name: reviewer
-    task: "Review {params.target} for readability, duplication, and simplification opportunities."
-reduce:
-  agent: worker
-  task: "Merge these code review findings into one prioritized list. Deduplicate overlapping findings and rank by severity:\n\n{branches}"
-```

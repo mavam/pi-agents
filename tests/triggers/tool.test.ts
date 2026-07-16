@@ -78,7 +78,7 @@ beforeEach(() => {
   );
   writeFile(
     ".pi/workflows/greet.md",
-    '---\nname: greet\ndescription: greets a target\nparams:\n  - name: target\n    required: true\n---\n```yaml\nkind: agent\nname: echo\ntask: "greet {params.target}"\n```\n',
+    '---\nname: greet\ndescription: greets a target\nparams:\n  - name: target\n    required: true\nflow: { kind: agent, name: echo, task: "greet {params.target}" }\n---\n',
   );
 });
 

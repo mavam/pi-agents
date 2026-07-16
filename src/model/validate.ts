@@ -272,7 +272,18 @@ function parseAgent(
 ): AgentNode {
   checkKeys(
     obj,
-    ["kind", "name", "task", "output", "cwd", "scope", "as", "label"],
+    [
+      "kind",
+      "name",
+      "task",
+      "output",
+      "model",
+      "thinking",
+      "cwd",
+      "scope",
+      "as",
+      "label",
+    ],
     path,
     issues,
   );
@@ -280,7 +291,8 @@ function parseAgent(
     kind: "agent",
     ...parseBase(obj, path, issues),
     name: requiredString(obj, "name", path, issues),
-    task: requiredString(obj, "task", path, issues),
+    // Optional: preflight verifies the agent file defines a default task.
+    task: optionalString(obj, "task", path, issues),
     output: optionalEnum(
       obj,
       "output",
@@ -288,6 +300,8 @@ function parseAgent(
       path,
       issues,
     ),
+    model: optionalString(obj, "model", path, issues),
+    thinking: optionalString(obj, "thinking", path, issues),
     cwd: optionalString(obj, "cwd", path, issues),
     scope: optionalEnum(
       obj,
@@ -866,7 +880,9 @@ function checkNode(
   }
   switch (node.kind) {
     case "agent":
-      checkTemplate(node.task, `${path}.task`, scope, undefined, issues);
+      if (node.task !== undefined) {
+        checkTemplate(node.task, `${path}.task`, scope, undefined, issues);
+      }
       return;
     case "seq": {
       const local = new Set<string>();
@@ -966,6 +982,8 @@ export interface AgentRequirement {
   name: string;
   cwd?: string;
   scope?: string;
+  /** The node omits `task`, so the agent file must define a default. */
+  needsDefaultTask?: boolean;
 }
 
 /**
@@ -977,7 +995,7 @@ export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
   const seen = new Set<string>();
   const requirements: AgentRequirement[] = [];
   const add = (requirement: AgentRequirement): void => {
-    const key = `${requirement.name} ${requirement.cwd ?? ""} ${requirement.scope ?? ""}`;
+    const key = `${requirement.name}|${requirement.cwd ?? ""}|${requirement.scope ?? ""}|${requirement.needsDefaultTask ?? false}`;
     if (seen.has(key)) return;
     seen.add(key);
     requirements.push(requirement);
@@ -985,7 +1003,12 @@ export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
   const visit = (current: FlowNode): void => {
     switch (current.kind) {
       case "agent":
-        add({ name: current.name, cwd: current.cwd, scope: current.scope });
+        add({
+          name: current.name,
+          cwd: current.cwd,
+          scope: current.scope,
+          needsDefaultTask: current.task === undefined,
+        });
         return;
       case "seq":
         for (const step of current.steps) visit(step);

@@ -28,7 +28,7 @@ import { KIND_ICONS, renderFlowTree } from "../ui/tree.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
-- {"kind":"agent","name":"<agent>","task":"...","output":"text"|"json"} — run one delegated agent (leaf). A bare agent node is a valid flow.
+- {"kind":"agent","name":"<agent>","task":"...","output":"text"|"json","model":"...","thinking":"..."} — run one delegated agent (leaf). A bare agent node is a valid flow. task may be omitted when the agent file defines a default task; model/thinking override the agent file.
 - {"kind":"seq","steps":[node,...]} — run steps in order; value = last step's value.
 - {"kind":"par","branches":{"a":node,...},"mode":"all"|"any"|{"quorum":n},"onError":"fail"|"collect","concurrency":n,"reduce":{"agent":"...","task":"merge {branches}"}} — run branches concurrently. Value: "all"/quorum → {branch: value}; "any" → the winner's value (siblings cancelled).
 - {"kind":"map","over":"{binding}","body":node,"concurrency":n,"reduce":{"agent":"...","task":"merge {items}"}} — fan out body per element of the array {binding} resolves to; the body sees {item} and {index}. Value: array of body values.

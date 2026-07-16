@@ -130,7 +130,7 @@ export class NotificationManager {
           "",
           summary,
           "",
-          `Inspect with \`/run ${shortId(event.runId)}\`.`,
+          `Inspect with \`/run ${shortId(event.runId)}\` · full result: \`/run ${shortId(event.runId)} result\`.`,
         ].join("\n"),
       };
     }

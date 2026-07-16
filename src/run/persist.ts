@@ -1,136 +1,80 @@
 /**
- * Run-event persistence into pi session files.
+ * Run-event persistence.
  *
- * Two paths: while the originating session is current, events could go
- * through pi.appendEntry; but a backgrounded run keeps emitting after the
- * tool call returned or the user switched sessions, so events are written
- * directly to the origin session file as CustomEntry JSONL lines with a
- * linked parentId chain. An in-memory cache lets a rebuild in the same
- * process see entries that pi has not re-read from disk yet.
+ * Events are written to a sidecar JSONL file next to the origin session file
+ * (`<session>.pi-agents.jsonl`), never into the session file itself. Pi
+ * treats the last line of a session file as the active leaf on reload, so a
+ * backgrounded run appending entries there would silently fork the session
+ * tree and drop conversation tail entries off the active branch. The sidecar
+ * cannot corrupt the session, survives reloads, and works identically for
+ * foreground, backgrounded, and cross-session runs.
  */
 
-import { appendFileSync } from "node:fs";
-import type {
-  CustomEntry,
-  ExtensionAPI,
-  ExtensionContext,
-  SessionEntry,
-} from "@earendil-works/pi-coding-agent";
-import {
-  RUN_EVENT_TYPE,
-  type RunEvent,
-  truncateEventForPersistence,
-} from "./events.js";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type RunEvent, truncateEventForPersistence } from "./events.js";
 
 export interface RunEventOrigin {
-  parentId: string | null;
   sessionFile?: string;
 }
 
-interface SessionLocator {
-  getLeafId(): string | null;
-  getSessionFile(): string | undefined;
+export function sidecarPath(sessionFile: string): string {
+  return `${sessionFile}.pi-agents.jsonl`;
 }
 
-function isSessionLocator(value: unknown): value is SessionLocator {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as SessionLocator).getLeafId === "function" &&
-    typeof (value as SessionLocator).getSessionFile === "function"
-  );
+export function createOrigin(
+  ctx: Pick<ExtensionContext, "sessionManager">,
+): RunEventOrigin {
+  return { sessionFile: getSessionFile(ctx as ExtensionContext) };
 }
 
-function createRunEventEntry(
+/** Append one event to the origin's sidecar. False when no session file is known. */
+export function appendRunEvent(
+  origin: RunEventOrigin,
   event: RunEvent,
-  parentId: string | null,
-): CustomEntry<RunEvent> {
-  return {
-    type: "custom",
-    id: crypto.randomUUID().slice(0, 8),
-    parentId,
-    timestamp: new Date().toISOString(),
-    customType: RUN_EVENT_TYPE,
-    data: event,
-  };
-}
-
-export function isRunEventEntry(
-  entry: SessionEntry,
-): entry is CustomEntry<RunEvent> {
-  return (
-    entry.type === "custom" &&
-    entry.customType === RUN_EVENT_TYPE &&
-    (entry as CustomEntry<RunEvent>).data !== undefined
+): boolean {
+  if (!origin.sessionFile) return false;
+  const entry = truncateEventForPersistence(event);
+  appendFileSync(
+    sidecarPath(origin.sessionFile),
+    `${JSON.stringify(entry)}\n`,
+    "utf-8",
   );
+  return true;
 }
 
-export function extractRunEvents(entries: SessionEntry[]): RunEvent[] {
+/** Read all persisted run events for a session file. */
+export function readRunEvents(sessionFile: string | undefined): RunEvent[] {
+  if (!sessionFile) return [];
+  const path = sidecarPath(sessionFile);
+  if (!existsSync(path)) return [];
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    return [];
+  }
   const events: RunEvent[] = [];
-  for (const entry of entries) {
-    if (isRunEventEntry(entry) && entry.data) events.push(entry.data);
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      events.push(JSON.parse(line) as RunEvent);
+    } catch {
+      // Skip corrupt lines; persistence is best-effort.
+    }
   }
   return events;
 }
 
-export class RunEventCache {
-  private readonly entriesBySessionFile = new Map<
-    string,
-    CustomEntry<RunEvent>[]
-  >();
-
-  createOrigin(sessionManager: unknown): RunEventOrigin {
-    if (!isSessionLocator(sessionManager)) return { parentId: null };
-    return {
-      parentId: sessionManager.getLeafId(),
-      sessionFile: sessionManager.getSessionFile(),
-    };
-  }
-
-  /** Append directly to the origin session file. False when no file is known. */
-  appendToOrigin(origin: RunEventOrigin, event: RunEvent): boolean {
-    if (!origin.sessionFile) return false;
-    const entry = createRunEventEntry(event, origin.parentId);
-    origin.parentId = entry.id;
-    const cached = this.entriesBySessionFile.get(origin.sessionFile);
-    if (cached) cached.push(entry);
-    else this.entriesBySessionFile.set(origin.sessionFile, [entry]);
-    appendFileSync(origin.sessionFile, `${JSON.stringify(entry)}\n`, "utf-8");
-    return true;
-  }
-
-  /** Merge cached entries pi has not re-read from disk into a rebuild. */
-  mergeEntries(
-    sessionFile: string | undefined,
-    entries: SessionEntry[],
-  ): SessionEntry[] {
-    if (!sessionFile) return entries;
-    const cached = this.entriesBySessionFile.get(sessionFile);
-    if (!cached || cached.length === 0) return entries;
-    const known = new Set(entries.map((entry) => entry.id));
-    const merged = [...entries];
-    for (const entry of cached) {
-      if (known.has(entry.id)) continue;
-      merged.push(entry);
-    }
-    return merged;
-  }
-}
-
-/** Build the per-run persister: origin-file append with pi.appendEntry fallback. */
+/** Build the per-run persister. Persistence errors never break a live run. */
 export function createPersister(
-  pi: ExtensionAPI,
-  cache: RunEventCache,
   origin: RunEventOrigin,
 ): (event: RunEvent) => void {
   return (event) => {
-    const truncated = truncateEventForPersistence(event);
     try {
-      if (!cache.appendToOrigin(origin, truncated)) {
-        pi.appendEntry(RUN_EVENT_TYPE, truncated);
-      }
+      appendRunEvent(origin, event);
     } catch {
-      // Persistence is best-effort; never let it break a live run.
+      // best-effort
     }
   };
 }

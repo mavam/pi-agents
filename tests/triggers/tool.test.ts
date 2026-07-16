@@ -8,7 +8,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { SpawnEngine, SpawnSpec } from "../../src/engine/types.js";
 import { emptyUsage } from "../../src/engine/types.js";
-import { RunEventCache } from "../../src/run/persist.js";
 import { RunManager } from "../../src/run/runs.js";
 import { parseCommandArgs } from "../../src/triggers/commands.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
@@ -25,7 +24,6 @@ function makeDeps(engine: SpawnEngine): TriggerDeps {
   return {
     pi,
     manager,
-    cache: new RunEventCache(),
     notifications: new NotificationManager(pi, manager),
     widget: new RunWidget(manager),
   };

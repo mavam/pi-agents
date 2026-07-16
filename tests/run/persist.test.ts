@@ -5,15 +5,15 @@ import * as path from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
-  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { SpawnEngine } from "../../src/engine/types.js";
 import { emptyUsage } from "../../src/engine/types.js";
 import type { RunEvent } from "../../src/run/events.js";
 import {
+  appendRunEvent,
   createPersister,
-  extractRunEvents,
-  RunEventCache,
+  readRunEvents,
+  sidecarPath,
 } from "../../src/run/persist.js";
 import { RunManager } from "../../src/run/runs.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
@@ -32,7 +32,7 @@ beforeEach(() => {
     "---\nname: echo\ndescription: echoes\n---\nEcho.\n",
   );
   sessionFile = path.join(projectDir, "session.jsonl");
-  fs.writeFileSync(sessionFile, "");
+  fs.writeFileSync(sessionFile, '{"type":"session","id":"s1"}\n');
 });
 
 afterEach(() => {
@@ -51,14 +51,6 @@ async function* emptyUpdates(): AsyncGenerator<never> {
   // no streamed updates
 }
 
-function readSessionEntries(): SessionEntry[] {
-  return fs
-    .readFileSync(sessionFile, "utf-8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as SessionEntry);
-}
-
 async function until(predicate: () => boolean, ms = 2000): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
@@ -67,7 +59,7 @@ async function until(predicate: () => boolean, ms = 2000): Promise<void> {
   }
 }
 
-describe("RunEventCache", () => {
+describe("sidecar persistence", () => {
   const event = (n: number): RunEvent => ({
     type: "loop_iteration",
     at: n,
@@ -77,52 +69,41 @@ describe("RunEventCache", () => {
     iteration: n,
   });
 
-  test("appends JSONL entries with a linked parentId chain", () => {
-    const cache = new RunEventCache();
-    const origin = { parentId: "leaf-0" as string | null, sessionFile };
-    expect(cache.appendToOrigin(origin, event(0))).toBe(true);
-    expect(cache.appendToOrigin(origin, event(1))).toBe(true);
-    const entries = readSessionEntries() as Array<{
-      id: string;
-      parentId: string | null;
-      customType: string;
-    }>;
-    expect(entries).toHaveLength(2);
-    expect(entries[0]?.parentId).toBe("leaf-0");
-    expect(entries[1]?.parentId).toBe(entries[0]?.id);
-    expect(entries[0]?.customType).toBe("pi-agents:run-event:v3");
+  test("events go to the sidecar, never into the session file", () => {
+    const origin = { sessionFile };
+    expect(appendRunEvent(origin, event(0))).toBe(true);
+    expect(appendRunEvent(origin, event(1))).toBe(true);
+    // The session file is untouched — pi's leaf (last line) is preserved.
+    expect(fs.readFileSync(sessionFile, "utf-8")).toBe(
+      '{"type":"session","id":"s1"}\n',
+    );
+    const events = readRunEvents(sessionFile);
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({ type: "loop_iteration", iteration: 1 });
   });
 
-  test("returns false without a session file", () => {
-    const cache = new RunEventCache();
-    expect(cache.appendToOrigin({ parentId: null }, event(0))).toBe(false);
+  test("no session file means no persistence", () => {
+    expect(appendRunEvent({}, event(0))).toBe(false);
+    expect(readRunEvents(undefined)).toEqual([]);
   });
 
-  test("mergeEntries adds cached entries missing from disk state", () => {
-    const cache = new RunEventCache();
-    const origin = { parentId: null, sessionFile };
-    cache.appendToOrigin(origin, event(0));
-    const merged = cache.mergeEntries(sessionFile, []);
-    expect(merged).toHaveLength(1);
-    const noDupes = cache.mergeEntries(sessionFile, merged);
-    expect(noDupes).toHaveLength(1);
+  test("missing sidecar reads as empty; corrupt lines are skipped", () => {
+    expect(readRunEvents(sessionFile)).toEqual([]);
+    fs.writeFileSync(
+      sidecarPath(sessionFile),
+      `${JSON.stringify(event(0))}\nnot json\n${JSON.stringify(event(1))}\n`,
+    );
+    expect(readRunEvents(sessionFile)).toHaveLength(2);
   });
 
-  test("createPersister falls back to pi.appendEntry", () => {
-    const appended: unknown[] = [];
-    const pi = {
-      appendEntry: (_type: string, data: unknown) => appended.push(data),
-    } as unknown as ExtensionAPI;
-    const persist = createPersister(pi, new RunEventCache(), {
-      parentId: null,
-    });
-    persist(event(0));
-    expect(appended).toHaveLength(1);
+  test("createPersister never throws", () => {
+    const persist = createPersister({ sessionFile: "/nonexistent/dir/x" });
+    expect(() => persist(event(0))).not.toThrow();
   });
 });
 
 describe("background tool runs", () => {
-  test("returns immediately, persists to the origin file, notifies when idle, and replays", async () => {
+  test("returns immediately, persists to the sidecar, notifies when idle, and replays", async () => {
     const gate = deferred<string>();
     const engine: SpawnEngine = {
       spawn: () => ({
@@ -150,18 +131,13 @@ describe("background tool runs", () => {
     });
     notifications = new NotificationManager(pi, manager);
     const widget = new RunWidget(manager);
-    const deps: TriggerDeps = {
-      pi,
-      manager,
-      cache: new RunEventCache(),
-      notifications,
-      widget,
-    };
+    const deps: TriggerDeps = { pi, manager, notifications, widget };
     const widgetLines: Array<string[] | undefined> = [];
     const ctx = {
       cwd: projectDir,
       hasUI: true,
       isIdle: () => true,
+      model: { provider: "test", id: "session-model" },
       sessionManager: {
         getLeafId: () => null,
         getSessionFile: () => sessionFile,
@@ -172,8 +148,6 @@ describe("background tool runs", () => {
       },
     } as unknown as ExtensionContext;
 
-    const manager2 = new RunManager({ engine });
-    void manager2;
     const tool = createWorkflowTool(deps);
     notifications.setContext(ctx);
     const result = await tool.execute(
@@ -210,8 +184,13 @@ describe("background tool runs", () => {
     // Widget rendered while running.
     expect(widgetLines.length).toBeGreaterThan(0);
 
-    // Events landed in the origin session file and replay into fresh state.
-    const events = extractRunEvents(readSessionEntries());
+    // The session file itself was never touched.
+    expect(fs.readFileSync(sessionFile, "utf-8")).toBe(
+      '{"type":"session","id":"s1"}\n',
+    );
+
+    // Events landed in the sidecar and replay into fresh state.
+    const events = readRunEvents(sessionFile);
     expect(events.some((e) => e.type === "run_created")).toBe(true);
     expect(events.some((e) => e.type === "run_backgrounded")).toBe(true);
     expect(events.some((e) => e.type === "run_completed")).toBe(true);

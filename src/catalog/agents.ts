@@ -150,7 +150,10 @@ function parseAgentFile(filePath: string, source: Source): Agent | string {
   };
 }
 
-/** `tools` accepts a YAML array of strings or a comma-separated string. */
+/**
+ * `tools` accepts a YAML array of strings or a comma-separated string. An
+ * explicitly empty list is preserved: it means "no tools", not "all tools".
+ */
 function parseToolsField(
   raw: unknown,
 ): string[] | undefined | { error: string } {
@@ -166,8 +169,7 @@ function parseToolsField(
         "Invalid 'tools' (must be a YAML array of strings or a comma-separated string)",
     };
   }
-  const cleaned = [...new Set(names.map((t) => t.trim()).filter(Boolean))];
-  return cleaned.length > 0 ? cleaned : undefined;
+  return [...new Set(names.map((t) => t.trim()).filter(Boolean))];
 }
 
 function loadAgentsFromDir(

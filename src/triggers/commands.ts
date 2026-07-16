@@ -101,7 +101,8 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       if (agent.thinking) lines.push(`- thinking: ${agent.thinking}`);
       if (agent.skills.length > 0)
         lines.push(`- skills: ${agent.skills.join(", ")}`);
-      if (agent.tools) lines.push(`- tools: ${agent.tools.join(", ")}`);
+      if (agent.tools)
+        lines.push(`- tools: ${agent.tools.join(", ") || "(none)"}`);
       lines.push(
         "",
         "### System prompt",
@@ -184,7 +185,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 
   pi.registerCommand("run", {
-    description: "Inspect a run: /run <id> [stop]",
+    description: "Inspect a run: /run <id> [result|watch|mermaid|stop]",
     getArgumentCompletions: (prefix) => {
       return [...deps.manager.state.runs.values()]
         .filter((run) => run.header.id.startsWith(prefix))
@@ -195,15 +196,12 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         }));
     },
     handler: async (args) => {
+      const actions = ["stop", "watch", "mermaid", "result"];
       const tokens = args.trim().split(/\s+/).filter(Boolean);
-      const action = tokens.find((t) =>
-        ["stop", "watch", "mermaid"].includes(t),
-      );
-      const idOrPrefix = tokens.find(
-        (t) => !["stop", "watch", "mermaid"].includes(t),
-      );
+      const action = tokens.find((t) => actions.includes(t));
+      const idOrPrefix = tokens.find((t) => !actions.includes(t));
       if (!idOrPrefix) {
-        sendInfo(pi, "Usage: `/run <id> [stop]`");
+        sendInfo(pi, "Usage: `/run <id> [result|watch|mermaid|stop]`");
         return;
       }
       const lookup = deps.manager.find(idOrPrefix);
@@ -227,6 +225,10 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
             ? `Stopping run ${shortId(run.header.id)}…`
             : "Run is not live.",
         );
+        return;
+      }
+      if (action === "result") {
+        sendInfo(pi, formatRunResultFull(run));
         return;
       }
       if (action === "watch") {
@@ -303,6 +305,39 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
   return lines.join("\n");
 }
 
+const MAX_FULL_RESULT_CHARS = 64_000;
+
+/** The complete run value (bounded only by what persistence retained). */
+function formatRunResultFull(run: RunView): string {
+  const lines = [`## Run ${shortId(run.header.id)} — result`, ""];
+  if (run.status === "running") {
+    lines.push("Still running — no result yet.");
+    return lines.join("\n");
+  }
+  if (run.error) lines.push(`⚠ ${run.error}`, "");
+  const value = run.value;
+  if (value === undefined) {
+    lines.push("(no result value)");
+    return lines.join("\n");
+  }
+  const text =
+    typeof value === "string"
+      ? value
+      : (JSON.stringify(value, null, 2) ?? String(value));
+  if (text.length > MAX_FULL_RESULT_CHARS) {
+    lines.push(
+      "```",
+      text.slice(0, MAX_FULL_RESULT_CHARS),
+      "```",
+      "",
+      `… truncated ${text.length - MAX_FULL_RESULT_CHARS} characters.`,
+    );
+  } else {
+    lines.push("```", text, "```");
+  }
+  return lines.join("\n");
+}
+
 function formatRunDetails(run: RunView): string {
   const lines = [
     `## Run ${shortId(run.header.id)} — ${run.status}`,
@@ -318,7 +353,10 @@ function formatRunDetails(run: RunView): string {
   if (run.error) lines.push(`- error: ${run.error}`);
   lines.push("", "```", formatRunTree(run) || "(no nodes yet)", "```");
   const value = formatValuePreview(run.value);
-  if (value) lines.push("", "### Result", "", "```", value, "```");
+  if (value) {
+    lines.push("", "### Result (preview)", "", "```", value, "```");
+    lines.push("", `Full result: \`/run ${shortId(run.header.id)} result\``);
+  }
   return lines.join("\n");
 }
 

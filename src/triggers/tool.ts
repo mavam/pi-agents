@@ -19,7 +19,7 @@ import {
 } from "../catalog/workflows.js";
 import type { Budgets, Scope } from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
-import type { RunStatus } from "../run/events.js";
+import { MAX_PERSISTED_VALUE_CHARS, type RunStatus } from "../run/events.js";
 import type { RunOutcome } from "../run/interpreter.js";
 import { formatUsage, shortId } from "../ui/render.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
@@ -101,10 +101,16 @@ export function formatRunResult(
     }>`,
   );
   if (outcome.status === "completed") {
-    const value =
+    const full =
       typeof outcome.value === "string"
         ? outcome.value
         : (JSON.stringify(outcome.value, null, 2) ?? "");
+    // Bound what flows back into the model's context; the full value stays
+    // retrievable via /run <id> result.
+    const value =
+      full.length > MAX_PERSISTED_VALUE_CHARS
+        ? `${full.slice(0, MAX_PERSISTED_VALUE_CHARS)}\n… [truncated ${full.length - MAX_PERSISTED_VALUE_CHARS} characters; full result: /run ${shortId(runId)} result]`
+        : full;
     lines.push("<value>", value, "</value>");
   } else {
     lines.push("<error>", outcome.error ?? "unknown error", "</error>");

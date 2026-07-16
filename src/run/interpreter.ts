@@ -32,7 +32,7 @@ import {
   templateRefs,
 } from "../model/interpolate.js";
 import { evaluatePredicate } from "../model/predicate.js";
-import { BudgetActor } from "./budgets.js";
+import { BudgetActor, Semaphore } from "./budgets.js";
 import type { CancelReason, RunEvent, RunSource, RunStatus } from "./events.js";
 import { CancelledError, type PoolOutcome, runPool } from "./scheduler.js";
 
@@ -194,12 +194,15 @@ function errorMessage(error: unknown): string {
 class Interpreter {
   private readonly options: ExecuteOptions;
   private readonly budgets: BudgetActor;
+  /** Caps simultaneously running agents globally, across nested pools. */
+  private readonly parallelism: Semaphore;
   private readonly usage: SpawnUsage = emptyUsage();
   private readonly depth: number;
 
   constructor(options: ExecuteOptions) {
     this.options = options;
     this.budgets = new BudgetActor(options.budgets);
+    this.parallelism = new Semaphore(this.budgets.limits.maxParallelism);
     this.depth = options.depth ?? 0;
   }
 
@@ -377,11 +380,21 @@ class Interpreter {
     call: Omit<AgentCall, "signal"> & { signal: AbortSignal },
   ): Promise<{ value: unknown; usage?: SpawnUsage }> {
     await this.budgets.acquireAgent(this.depth);
-    const result = await this.options.runAgent(call);
-    if (result.usage) addUsage(this.usage, result.usage);
-    const value =
-      call.output === "json" ? parseJsonOutput(result.text) : result.text;
-    return { value, usage: result.usage };
+    const release = await this.parallelism.acquire();
+    try {
+      if (call.signal.aborted) {
+        throw call.signal.reason instanceof CancelledError
+          ? call.signal.reason
+          : new CancelledError("stopped");
+      }
+      const result = await this.options.runAgent(call);
+      if (result.usage) addUsage(this.usage, result.usage);
+      const value =
+        call.output === "json" ? parseJsonOutput(result.text) : result.text;
+      return { value, usage: result.usage };
+    } finally {
+      release();
+    }
   }
 
   private async evaluateAgent(
@@ -515,7 +528,7 @@ class Interpreter {
     const onError = node.onError ?? "fail";
     const desired =
       mode === "all" ? entries.length : mode === "any" ? 1 : mode.quorum;
-    const concurrency = await this.budgets.parallelismLimit(node.concurrency);
+    const concurrency = this.budgets.parallelismLimit(node.concurrency);
 
     const outcomes = await runPool(
       entries.map(([key, branch]) => ({
@@ -638,7 +651,7 @@ class Interpreter {
       );
     }
     const items = resolved.value;
-    const concurrency = await this.budgets.parallelismLimit(node.concurrency);
+    const concurrency = this.budgets.parallelismLimit(node.concurrency);
 
     const outcomes = await runPool(
       items.map((item, index) => ({
@@ -704,7 +717,7 @@ class Interpreter {
     env: Env,
     signal: AbortSignal,
   ): Promise<unknown> {
-    const limit = await this.budgets.iterationLimit(node.max);
+    const limit = this.budgets.iterationLimit(node.max);
     let last: unknown;
     for (let iteration = 0; iteration < limit; iteration++) {
       if (signal.aborted) {

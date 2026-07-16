@@ -111,6 +111,31 @@ describe("subprocess spawn engine", () => {
     expect(handle.status).toBe("completed");
   });
 
+  test("an empty tools allowlist becomes --no-tools", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "locked",
+      task: "t",
+      cwd: "/tmp",
+      tools: [],
+    });
+    expect(procs[0]?.args).toContain("--no-tools");
+    expect(procs[0]?.args).not.toContain("--tools");
+    procs[0]?.proc.emitAssistant("ok");
+    procs[0]?.proc.close(0);
+    await handle.wait();
+  });
+
+  test("omitted tools adds no restriction flags", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "open", task: "t", cwd: "/tmp" });
+    expect(procs[0]?.args).not.toContain("--no-tools");
+    expect(procs[0]?.args).not.toContain("--tools");
+    procs[0]?.proc.emitAssistant("ok");
+    procs[0]?.proc.close(0);
+    await handle.wait();
+  });
+
   test("writes the system prompt to a temp file and cleans it up", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({

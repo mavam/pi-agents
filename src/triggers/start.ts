@@ -1,7 +1,8 @@
 /**
  * Shared run-start path for all three trigger surfaces (tool, slash command,
- * event hook): creates the persistence origin, starts the run, and handles
- * background bookkeeping (notification tracking + widget refresh).
+ * event hook): creates the sidecar persistence origin, captures session
+ * defaults (model/thinking), starts the run, and handles background
+ * bookkeeping (notification tracking + widget refresh).
  */
 
 import type {
@@ -10,7 +11,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Budgets, FlowNode, Scope } from "../model/ast.js";
 import type { RunSource } from "../run/events.js";
-import { createPersister, type RunEventCache } from "../run/persist.js";
+import { createOrigin, createPersister } from "../run/persist.js";
+import type { SpawnDefaults } from "../run/runner.js";
 import type { RunManager, StartedRun } from "../run/runs.js";
 import type { NotificationManager } from "../ui/notify.js";
 import type { RunWidget } from "../ui/widget.js";
@@ -18,7 +20,6 @@ import type { RunWidget } from "../ui/widget.js";
 export interface TriggerDeps {
   pi: ExtensionAPI;
   manager: RunManager;
-  cache: RunEventCache;
   notifications: NotificationManager;
   widget: RunWidget;
 }
@@ -35,12 +36,25 @@ export interface StartTriggeredRunOptions {
   background: boolean;
 }
 
+/** Agents without explicit frontmatter inherit the active session settings. */
+function sessionDefaults(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+): SpawnDefaults {
+  return {
+    model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+    thinking:
+      typeof pi.getThinkingLevel === "function"
+        ? pi.getThinkingLevel()
+        : undefined,
+  };
+}
+
 export function startTriggeredRun(
   deps: TriggerDeps,
   opts: StartTriggeredRunOptions,
 ): StartedRun {
-  const origin = deps.cache.createOrigin(opts.ctx.sessionManager);
-  const persist = createPersister(deps.pi, deps.cache, origin);
+  const origin = createOrigin(opts.ctx);
   const started = deps.manager.start({
     flow: opts.flow,
     cwd: opts.cwd,
@@ -49,7 +63,8 @@ export function startTriggeredRun(
     budgets: opts.budgets,
     source: opts.source,
     originSessionFile: origin.sessionFile,
-    onEvent: persist,
+    defaults: sessionDefaults(deps.pi, opts.ctx),
+    onEvent: createPersister(origin),
   });
   if (opts.background) {
     deps.notifications.track(started.runId, origin.sessionFile);

@@ -8,7 +8,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { SpawnEngine, SpawnSpec } from "../../src/engine/types.js";
 import { emptyUsage } from "../../src/engine/types.js";
-import { RunEventCache } from "../../src/run/persist.js";
 import { RunManager } from "../../src/run/runs.js";
 import { compactEventJson, HookManager } from "../../src/triggers/hooks.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
@@ -27,7 +26,16 @@ async function* emptyUpdates(): AsyncGenerator<never> {
   // no streamed updates
 }
 
-function harness(debounceMs?: number) {
+interface HarnessOptions {
+  debounceMs?: number;
+  /** Simulated user answer to the project-hook confirmation. */
+  confirmAnswer?: boolean;
+  hasUI?: boolean;
+}
+
+function harness(options: HarnessOptions = {}) {
+  const { debounceMs, confirmAnswer = true, hasUI = true } = options;
+  const confirms: string[] = [];
   const specs: SpawnSpec[] = [];
   const engine: SpawnEngine = {
     spawn(spec) {
@@ -68,7 +76,6 @@ function harness(debounceMs?: number) {
   const deps: TriggerDeps = {
     pi,
     manager,
-    cache: new RunEventCache(),
     notifications,
     widget: new RunWidget(manager),
   };
@@ -83,20 +90,26 @@ function harness(debounceMs?: number) {
 
   const ctx = {
     cwd: projectDir,
-    hasUI: false,
+    hasUI,
     isIdle: () => true,
     sessionManager: {
       getLeafId: () => null,
       getSessionFile: () => undefined,
     },
-    ui: { setWidget: () => {} },
+    ui: {
+      setWidget: () => {},
+      confirm: async (title: string) => {
+        confirms.push(title);
+        return confirmAnswer;
+      },
+    },
   } as unknown as ExtensionContext;
 
   const emit = (name: string, event: unknown = {}) => {
     for (const handler of handlers.get(name) ?? []) handler(event, ctx);
   };
 
-  return { specs, hooks, emit, manager, sent };
+  return { specs, hooks, emit, manager, sent, confirms };
 }
 
 async function until(predicate: () => boolean, ms = 2000): Promise<void> {
@@ -148,7 +161,7 @@ describe("event hooks", () => {
   });
 
   test("debounce coalesces bursts into one run (trailing edge)", async () => {
-    const { specs, emit, hooks } = harness(30);
+    const { specs, emit, hooks } = harness({ debounceMs: 30 });
     emit("turn_end", { n: 1 });
     emit("turn_end", { n: 2 });
     emit("turn_end", { n: 3 });
@@ -171,6 +184,61 @@ describe("event hooks", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(specs).toHaveLength(1);
     expect(manager.state.runs.size).toBe(1);
+  });
+
+  test("project hooks require one confirmation per file", async () => {
+    const { specs, emit, confirms } = harness({ confirmAnswer: true });
+    emit("turn_end", { n: 1 });
+    await until(() => specs.length === 1);
+    emit("turn_end", { n: 2 });
+    await until(() => specs.length === 2);
+    // Approved once, remembered for the session.
+    expect(confirms).toHaveLength(1);
+  });
+
+  test("declined project hooks never run", async () => {
+    const { specs, emit, confirms } = harness({ confirmAnswer: false });
+    emit("turn_end", { n: 1 });
+    await until(() => confirms.length === 1);
+    emit("turn_end", { n: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(specs).toHaveLength(0);
+    // Declined once, remembered — no repeat prompts.
+    expect(confirms).toHaveLength(1);
+  });
+
+  test("headless sessions skip project hooks with a notice", async () => {
+    const { specs, emit, sent } = harness({ hasUI: false });
+    emit("turn_end", { n: 1 });
+    await until(() =>
+      sent.some((text) => text.includes("Skipping project hook")),
+    );
+    expect(specs).toHaveLength(0);
+  });
+
+  test("session_start refreshes before filtering, so its own hooks fire", async () => {
+    const { specs, emit, hooks } = harness();
+    writeFile(
+      ".pi/workflows/on-start.md",
+      '---\nname: on-start\ndescription: d\non: [session_start]\n---\n```yaml\nkind: agent\nname: echo\ntask: "startup {params.event}"\n```\n',
+    );
+    // Simulate a fresh factory: no refresh has happened yet.
+    hooks.refresh("/nonexistent");
+    emit("session_start", {});
+    await until(() => specs.some((spec) => spec.task.startsWith("startup")));
+  });
+
+  test("dispose clears pending debounce timers and stops firing", async () => {
+    const { specs, emit, hooks } = harness({ debounceMs: 30 });
+    emit("turn_end", { n: 1 });
+    expect(hooks.pendingDebounces()).toEqual(["on-turn"]);
+    hooks.dispose();
+    expect(hooks.pendingDebounces()).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(specs).toHaveLength(0);
+    emit("turn_end", { n: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(specs).toHaveLength(0);
   });
 
   test("catalog rejects unknown event names in on:", () => {

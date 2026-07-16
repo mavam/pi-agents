@@ -1,7 +1,8 @@
 /**
  * pi-agents extension entry point: constructs the engine, run manager, and
  * UI managers; registers the workflow tool, slash commands, event hooks, and
- * the system-prompt catalogs; and rebuilds run history from session entries.
+ * the system-prompt catalogs; and rebuilds run history from the sidecar
+ * store next to the session file.
  */
 
 import type {
@@ -10,10 +11,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { buildSystemPromptAppendix } from "./catalog/prompt.js";
 import {
+  BUDGETS_ENV_VAR,
   createSubprocessSpawnEngine,
   DEPTH_ENV_VAR,
 } from "./engine/subprocess.js";
-import { extractRunEvents, RunEventCache } from "./run/persist.js";
+import type { Budgets } from "./model/ast.js";
+import { getSessionFile, readRunEvents } from "./run/persist.js";
 import { RunManager } from "./run/runs.js";
 import {
   registerCommands,
@@ -36,9 +39,21 @@ function currentDepth(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+/** Budget limits inherited from a parent pi-agents process, if any. */
+function inheritedBudgets(): Budgets | undefined {
+  const raw = process.env[BUDGETS_ENV_VAR];
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Budgets;
+    return typeof parsed === "object" && parsed !== null ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export default function agentExtension(pi: ExtensionAPI): void {
   const engine = createSubprocessSpawnEngine();
-  const cache = new RunEventCache();
+  const depth = currentDepth();
 
   // Assigned right below; the manager's callbacks fire only once runs exist.
   let notifications: NotificationManager;
@@ -46,21 +61,24 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   const manager = new RunManager({
     engine,
-    depth: currentDepth(),
+    depth,
+    defaultBudgets: inheritedBudgets(),
     onEvent: (event) => notifications.handleRunEvent(event),
     onStateChanged: () => widget.update(),
   });
   notifications = new NotificationManager(pi, manager);
   widget = new RunWidget(manager);
 
-  const deps: TriggerDeps = { pi, manager, cache, notifications, widget };
+  const deps: TriggerDeps = { pi, manager, notifications, widget };
 
   registerRenderers(pi);
   pi.registerTool(createWorkflowTool(deps));
   registerCommands(pi, deps);
 
-  const hooks = new HookManager(pi, deps);
-  hooks.install();
+  // Event hooks only run in the root process: delegated children would
+  // otherwise re-trigger the same workflows from their own lifecycle events.
+  const hooks = depth === 0 ? new HookManager(pi, deps) : undefined;
+  hooks?.install();
 
   const refreshUi = (ctx: ExtensionContext): void => {
     notifications.setContext(ctx);
@@ -70,18 +88,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   const reloadRunState = (ctx: ExtensionContext): void => {
     notifications.setContext(ctx);
-    const sessionManager = ctx.sessionManager;
-    const entries =
-      typeof sessionManager?.getBranch === "function"
-        ? sessionManager.getBranch()
-        : [];
-    const sessionFile =
-      typeof sessionManager?.getSessionFile === "function"
-        ? sessionManager.getSessionFile()
-        : undefined;
-    manager.absorbHistory(
-      extractRunEvents(cache.mergeEntries(sessionFile, entries)),
-    );
+    manager.absorbHistory(readRunEvents(getSessionFile(ctx)));
     widget.update(ctx);
     notifications.flush(ctx);
   };
@@ -96,7 +103,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     reloadRunState(ctx);
     registerWorkflowCommands(pi, ctx.cwd, deps);
-    hooks.refresh(ctx.cwd);
+    hooks?.refresh(ctx.cwd);
   });
 
   pi.on("session_tree", (_event, ctx) => {
@@ -116,6 +123,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
+    hooks?.dispose();
     manager.stopAll();
     notifications.clear();
   });

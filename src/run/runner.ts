@@ -11,10 +11,16 @@ import {
   formatAgentList,
   resolveAgentByName,
 } from "../catalog/agents.js";
-import { DEPTH_ENV_VAR } from "../engine/subprocess.js";
+import { BUDGETS_ENV_VAR, DEPTH_ENV_VAR } from "../engine/subprocess.js";
 import type { SpawnEngine } from "../engine/types.js";
-import type { Scope } from "../model/ast.js";
+import type { Budgets, Scope } from "../model/ast.js";
 import type { AgentCall, AgentRunner } from "./interpreter.js";
+
+/** Session-level fallbacks for agents without explicit frontmatter. */
+export interface SpawnDefaults {
+  model?: string;
+  thinking?: string;
+}
 
 export interface RunnerOptions {
   engine: SpawnEngine;
@@ -24,6 +30,10 @@ export interface RunnerOptions {
   scope?: Scope;
   /** Cross-process delegation depth of the current process. */
   depth?: number;
+  /** Active session model/thinking, used when the agent file sets none. */
+  defaults?: SpawnDefaults;
+  /** Effective budget limits, inherited by delegated processes. */
+  budgetLimits?: Required<Budgets>;
 }
 
 /** Resolve one agent by name or throw with an actionable message. */
@@ -61,15 +71,22 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       .filter(Boolean)
       .join("\n\n");
 
+    const env: Record<string, string> = {
+      [DEPTH_ENV_VAR]: String(depth + 1),
+    };
+    if (options.budgetLimits) {
+      env[BUDGETS_ENV_VAR] = JSON.stringify(options.budgetLimits);
+    }
+
     const handle = options.engine.spawn({
       agent: agent.name,
       task: call.task,
       cwd,
       systemPrompt: systemPrompt || undefined,
-      model: agent.model,
-      thinking: agent.thinking,
+      model: agent.model ?? options.defaults?.model,
+      thinking: agent.thinking ?? options.defaults?.thinking,
       tools: agent.tools,
-      env: { [DEPTH_ENV_VAR]: String(depth + 1) },
+      env,
     });
 
     const onAbort = () => handle.abort();

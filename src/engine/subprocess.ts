@@ -27,6 +27,9 @@ export type SpawnProcess = typeof spawn;
 /** Environment variable carrying delegation depth across process boundaries. */
 export const DEPTH_ENV_VAR = "PI_AGENTS_DEPTH";
 
+/** Environment variable carrying inherited budget limits (JSON) to children. */
+export const BUDGETS_ENV_VAR = "PI_AGENTS_BUDGETS";
+
 const FORCE_KILL_AFTER_MS = 5000;
 
 class AsyncQueue<T> implements AsyncIterable<T> {
@@ -179,8 +182,11 @@ export function createSubprocessSpawnEngine(options?: {
       const args: string[] = ["--mode", "json", "-p", "--no-session"];
       if (spec.model) args.push("--model", spec.model);
       if (spec.thinking) args.push("--thinking", spec.thinking);
-      if (spec.tools && spec.tools.length > 0)
-        args.push("--tools", spec.tools.join(","));
+      // An explicit empty allowlist means "no tools", not "all tools".
+      if (spec.tools) {
+        if (spec.tools.length === 0) args.push("--no-tools");
+        else args.push("--tools", spec.tools.join(","));
+      }
       if (spec.systemPrompt?.trim()) {
         const tmp = writePromptToTempFile(spec.agent, spec.systemPrompt.trim());
         tempDir = tmp.dir;

@@ -961,6 +961,55 @@ function checkNode(
 // ---------------------------------------------------------------------------
 // Utilities over expanded trees
 
+/** One agent an expanded flow can spawn, with its effective discovery overrides. */
+export interface AgentRequirement {
+  name: string;
+  cwd?: string;
+  scope?: string;
+}
+
+/**
+ * All agents an expanded flow can spawn (reduce agents included), each with
+ * the node-level cwd/scope overrides that will apply at spawn time — so
+ * preflight resolves every agent exactly the way the runner will.
+ */
+export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
+  const seen = new Set<string>();
+  const requirements: AgentRequirement[] = [];
+  const add = (requirement: AgentRequirement): void => {
+    const key = `${requirement.name} ${requirement.cwd ?? ""} ${requirement.scope ?? ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    requirements.push(requirement);
+  };
+  const visit = (current: FlowNode): void => {
+    switch (current.kind) {
+      case "agent":
+        add({ name: current.name, cwd: current.cwd, scope: current.scope });
+        return;
+      case "seq":
+        for (const step of current.steps) visit(step);
+        return;
+      case "par":
+        for (const branch of Object.values(current.branches)) visit(branch);
+        if (current.reduce) add({ name: current.reduce.agent });
+        return;
+      case "map":
+        visit(current.body);
+        if (current.reduce) add({ name: current.reduce.agent });
+        return;
+      case "loop":
+        visit(current.body);
+        return;
+      case "workflow":
+        if (current.body) visit(current.body);
+        return;
+    }
+  };
+  visit(node);
+  return requirements;
+}
+
 /** All agent names an expanded flow can spawn (reduce agents included), for preflight resolution. */
 export function collectAgentNames(node: FlowNode): Set<string> {
   const names = new Set<string>();

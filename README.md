@@ -65,10 +65,10 @@ steps need dot-path access or predicates. Escape literal braces as `{{`/`}}`.
 ---
 name: reviewer
 description: Focused code review from a single lens
-model: claude-sonnet-4-5   # optional
+model: claude-sonnet-4-5   # optional; defaults to the active session model
 thinking: medium           # optional: off|minimal|low|medium|high|xhigh
 skills: []                 # optional pi skills to inject
-tools: [read, grep, find]  # optional tool allowlist for the subprocess
+tools: [read, grep, find]  # optional allowlist; [] means NO tools at all
 ---
 
 You are a review agent. Review code through exactly the lens given in your
@@ -126,7 +126,11 @@ Workflows fire from three surfaces:
 3. **Events.** Add `on: [turn_end]` (plus optional `debounce:` milliseconds)
    to the frontmatter and the workflow fires on those pi events, always in
    the background, with the event payload bound as `{params.event}`.
-   Hook-triggered runs never trigger further hooks.
+   Hooks run only in the root pi process (never inside delegated children),
+   and **project-local** hook workflows ask for a one-time confirmation per
+   session before they may auto-run — repository content cannot execute
+   agents on your machine without your consent. Headless sessions skip
+   project hooks entirely.
 
 ## 🧮 Node reference
 
@@ -219,12 +223,16 @@ expanded tree.
 
 Every run enforces limits (tool parameter `budgets`, all optional):
 
-| Budget           | Default | Meaning                                        |
-| ---------------- | ------- | ---------------------------------------------- |
-| `maxAgents`      | 50      | Total agent spawns (reducers included).        |
-| `maxParallelism` | 4       | Simultaneous agents per par/map.               |
-| `maxIterations`  | 10      | Cap applied to every loop.                     |
-| `maxDepth`       | 3       | Cross-process delegation depth.                |
+| Budget           | Default | Meaning                                                  |
+| ---------------- | ------- | -------------------------------------------------------- |
+| `maxAgents`      | 50      | Total agent spawns (reducers included).                   |
+| `maxParallelism` | 4       | Simultaneously running agents, global across nested pools. |
+| `maxIterations`  | 10      | Cap applied to every loop.                                |
+| `maxDepth`       | 3       | Cross-process delegation depth.                           |
+
+Values must be positive integers. The effective limits are inherited by
+delegated pi processes (via `PI_AGENTS_BUDGETS`), so a child that runs
+pi-agents itself starts from the parent's limits rather than the defaults.
 
 ## 🧭 Commands
 
@@ -237,18 +245,20 @@ Every run enforces limits (tool parameter `budgets`, all optional):
 | `/<name> [args]`      | Run saved workflow `<name>` directly.                |
 | `/runs`               | Browse runs.                                         |
 | `/run <id>`           | Inspect a run (unique id prefixes work).             |
+| `/run <id> result`    | The complete result value of a finished run.         |
 | `/run <id> watch`     | Snapshot now, final tree when the run settles.       |
 | `/run <id> mermaid`   | Deterministic Mermaid diagram of the run's flow.     |
 | `/run <id> stop`      | Abort a live run.                                    |
 
 ## 🗂️ Runs, background, and history
 
-Runs are event-sourced into the pi session, so history survives reloads.
-Background runs (tool runs in interactive sessions, all command and hook
-runs) keep writing to their origin session; results are delivered as
-notifications when that session is idle. After a pi restart, in-flight runs
-are marked stopped — they cannot resume — but their history remains
-inspectable.
+Runs are event-sourced into a sidecar file next to the session
+(`<session>.pi-agents.jsonl`), so history survives reloads without ever
+touching pi's session tree. Background runs (tool runs in interactive
+sessions, all command and hook runs) keep writing to their origin session's
+sidecar; results are delivered as notifications when that session is idle.
+After a pi restart, in-flight runs are marked stopped — they cannot resume —
+but their history remains inspectable.
 
 ## 🧹 Uninstall
 

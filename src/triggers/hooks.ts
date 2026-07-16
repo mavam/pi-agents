@@ -64,6 +64,10 @@ export class HookManager {
   private hookedEvents = new Set<string>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private firing = false;
+  private disposed = false;
+  /** Per-file approval decisions for project-scoped hook workflows. */
+  private readonly projectApprovals = new Map<string, boolean>();
+  private warnedHeadlessProject = false;
 
   constructor(pi: ExtensionAPI, deps: TriggerDeps) {
     this.pi = pi;
@@ -94,7 +98,10 @@ export class HookManager {
     event: unknown,
     ctx: ExtensionContext,
   ): void {
-    if (this.firing) return;
+    if (this.disposed || this.firing) return;
+    // session_start is also our discovery point; refresh before filtering so
+    // `on: [session_start]` workflows see their own trigger.
+    if (eventName === "session_start") this.refresh(ctx.cwd);
     if (!this.hookedEvents.has(eventName)) return;
     const { workflows } = discoverWorkflows(ctx.cwd, "both");
     for (const wf of workflows) {
@@ -113,7 +120,7 @@ export class HookManager {
     if (existing) clearTimeout(existing);
     const fire = () => {
       this.timers.delete(wf.name);
-      this.fire(wf.name, eventName, event, ctx);
+      void this.fire(wf.name, eventName, event, ctx);
     };
     const delay = wf.debounce ?? 0;
     if (delay <= 0) {
@@ -125,18 +132,51 @@ export class HookManager {
     this.timers.set(wf.name, timer);
   }
 
-  private fire(
+  /**
+   * Project-local hook workflows come from the repository, not the user:
+   * require a one-time confirmation per file before they may auto-run.
+   * Without a UI (headless), project hooks are skipped entirely.
+   */
+  private async approveProjectHook(
+    wf: WorkflowDef,
+    ctx: ExtensionContext,
+  ): Promise<boolean> {
+    if (wf.source !== "project") return true;
+    const known = this.projectApprovals.get(wf.filePath);
+    if (known !== undefined) return known;
+    if (!ctx.hasUI) {
+      if (!this.warnedHeadlessProject) {
+        this.warnedHeadlessProject = true;
+        sendInfo(
+          this.pi,
+          `⚠ Skipping project hook workflow \`${wf.name}\`: project-local hooks require interactive confirmation.`,
+        );
+      }
+      return false;
+    }
+    const approved = await ctx.ui.confirm(
+      "Run project workflow?",
+      `The project workflow "${wf.name}" (${wf.filePath}) wants to run automatically on pi events (${(wf.on ?? []).join(", ")}). Allow it for this session?`,
+    );
+    this.projectApprovals.set(wf.filePath, approved);
+    return approved;
+  }
+
+  private async fire(
     name: string,
     eventName: string,
     event: unknown,
     ctx: ExtensionContext,
-  ): void {
+  ): Promise<void> {
+    if (this.disposed) return;
     this.firing = true;
     try {
       // Re-resolve so file edits between trigger and fire apply.
       const { workflows } = discoverWorkflows(ctx.cwd, "both");
       const wf = resolveWorkflowByName(workflows, name);
       if (!wf?.on?.includes(eventName)) return;
+      if (!(await this.approveProjectHook(wf, ctx))) return;
+      if (this.disposed) return;
       const flow = validateFlow(
         {
           kind: "workflow",
@@ -178,5 +218,12 @@ export class HookManager {
   /** For tests and diagnostics. */
   pendingDebounces(): string[] {
     return [...this.timers.keys()];
+  }
+
+  /** Stop firing and clear pending debounce timers (session_shutdown). */
+  dispose(): void {
+    this.disposed = true;
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
   }
 }

@@ -48,7 +48,7 @@ export interface AgentCall {
   path: string;
   instance: string;
   signal: AbortSignal;
-  onProgress?: (text: string) => void;
+  onProgress?: (text: string, usage?: SpawnUsage) => void;
 }
 
 export interface AgentResult {

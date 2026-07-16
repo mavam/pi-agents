@@ -27,6 +27,8 @@ export interface NodeView {
   usage?: SpawnUsage;
   /** Latest streamed output preview. In-memory only; never persisted. */
   progressText?: string;
+  /** Latest streamed usage of a running agent. In-memory only. */
+  progressUsage?: SpawnUsage;
   startedAt: number;
   endedAt?: number;
 }

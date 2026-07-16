@@ -163,9 +163,12 @@ function build(node: FlowNode, path: string): DisplayNode[] {
   }
 }
 
-/** Per-path status aggregation for the /run overlay. */
+/** Per-path status aggregation for the /run overlay and the live widget. */
 export interface PathStatus {
   icon: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  completed: number;
+  total: number;
   /** e.g. "3/5" for map items, "#2" for loop iterations. */
   detail?: string;
   error?: string;
@@ -182,18 +185,25 @@ export function aggregateStatuses(run: RunView): Map<string, PathStatus> {
   for (const [path, nodes] of byPath) {
     const counts = { running: 0, completed: 0, failed: 0, cancelled: 0 };
     for (const node of nodes) counts[node.status] += 1;
-    const icon =
+    const status =
       counts.running > 0
-        ? STATUS_TREE_ICONS.running
+        ? "running"
         : counts.failed > 0
-          ? STATUS_TREE_ICONS.failed
+          ? "failed"
           : counts.cancelled > 0
-            ? STATUS_TREE_ICONS.cancelled
-            : STATUS_TREE_ICONS.completed;
+            ? "cancelled"
+            : "completed";
     const detail =
       nodes.length > 1 ? `${counts.completed}/${nodes.length}` : undefined;
     const error = nodes.find((node) => node.error)?.error;
-    result.set(path, { icon, detail, error });
+    result.set(path, {
+      icon: STATUS_TREE_ICONS[status],
+      status,
+      completed: counts.completed,
+      total: nodes.length,
+      detail,
+      error,
+    });
   }
   return result;
 }

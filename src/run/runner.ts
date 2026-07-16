@@ -98,7 +98,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
 
     const progressPump = (async () => {
       for await (const update of handle.updates) {
-        call.onProgress?.(update.text);
+        call.onProgress?.(update.text, update.usage);
       }
     })();
 

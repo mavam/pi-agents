@@ -129,6 +129,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", () => {
     hooks?.dispose();
+    widget.dispose();
     manager.stopAll();
     notifications.clear();
   });

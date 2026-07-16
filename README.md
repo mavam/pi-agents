@@ -1,7 +1,11 @@
 # 🤖 pi-agents
 
-A generic framework for agent orchestration in
-[pi](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent).
+Multi-agent workflows for
+[pi](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent),
+built on an explicit algebra: every workflow is an expression tree in which
+every node yields a value, and data flows only through references you write
+down. No hidden context injection, no id-based cross-wiring — any subtree is
+itself a valid workflow.
 
 ## 🚀 Installation
 
@@ -9,425 +13,242 @@ A generic framework for agent orchestration in
 pi install npm:pi-agents
 ```
 
-## 📍 Agent discovery
-
-Agents are loaded from:
-
-- **User agents:** `~/.pi/agents/*.md`
-- **Project agents:** the nearest `.pi/agents/*.md`, searched upward from your
-  current working directory
-
-The tools default to **both** project and user agents.
-
 ## 📖 Concepts
 
-The following concepts form the building blocks of the framework: **agents**,
-**workflows**, and **runs**.
+Three nouns carry the whole framework:
 
-### Agent
+| Concept      | What it is                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------ |
+| **agent**    | A markdown file defining a delegated pi subprocess (`.pi/agents/*.md`).                           |
+| **workflow** | A saved, named composition of agents (`.pi/workflows/*.md`) — or an inline expression.            |
+| **run**      | One persisted execution of a workflow. Browse with `/runs`, inspect with `/run <id>`.             |
 
-An **agent** is a markdown file that defines a delegated pi subprocess. Each
-file has YAML frontmatter (name, model, thinking level, skills) and a body that
-becomes the agent's system prompt. At runtime the framework launches the agent
-as an isolated pi process, waits for it to finish, and returns the result.
+### The algebra
 
-### Workflow
+A workflow is a tree of six node kinds. Composition is purely structural:
+`par` fuses fork and join into one expression, loops are bounded fixpoints,
+and saved workflows inline like function calls.
 
-A **workflow** is a JSON-defined graph that orchestrates multiple agents. You
-pass the graph to the `workflow` tool, and the runtime walks it node by node.
-A workflow is defined as a tree of **nodes**, where each node has a `kind` that
-determines its behavior:
+| Node       | Meaning                                                        | Value                                     |
+| ---------- | -------------------------------------------------------------- | ----------------------------------------- |
+| `agent`    | Run one delegated agent on a task (the only leaf).              | Its final text, or parsed JSON.           |
+| `seq`      | Run steps in order.                                             | The last step's value.                    |
+| `par`      | Run named branches concurrently, optionally reduce.             | `{branch: value}`, or the reducer's value. |
+| `map`      | Fan out a body per element of a runtime array.                  | Array of body values, or the reducer's.   |
+| `loop`     | Repeat a body until a predicate holds or `max` is hit.          | The last iteration's value.               |
+| `workflow` | Invoke a saved workflow by name (inlined, cycle-checked).       | The inlined flow's value.                 |
 
-| Node       | Purpose                                                         |
-| ---------- | --------------------------------------------------------------- |
-| `spawn`    | Run a single agent as a subprocess and return its output.       |
-| `sequence` | Run a list of nodes one after another, threading results.       |
-| `fork`     | Run named branches concurrently (up to a concurrency limit).    |
-| `join`     | Wait for the branches of a previous `fork` and combine results. |
-| `loop`     | Repeat a body node until a condition is met or a cap is hit.    |
+### Explicit data flow
 
-Nodes nest recursively: a `sequence` can contain `fork` nodes, a `loop`
-body can be a `sequence`, and so on. You can optionally set **budgets** to
-constrain execution (max depth, max parallelism, max iterations, etc.).
+Nothing flows between nodes implicitly. To pass data:
 
-### Flows
+- Mark a `seq` step with `as: name`, then reference `{name}` (or a dot path
+  like `{name.files.0}`) in any later step of that seq.
+- `{previous}` is the immediately preceding step's value.
+- A `map` body sees `{item}` and `{index}`; a `loop` body sees `{iteration}`
+  and `{last}` (empty on the first iteration).
+- Reduce tasks see `{branches}` (par) or `{items}` (map).
+- Saved workflows see only their declared `{params.*}` — caller bindings are
+  invisible, and param values are interpolated in the caller's scope.
 
-Every agent delegation and workflow execution is persisted as a **flow** in the
-current pi session. Flows survive session reloads so you can inspect past
-results. Use `/flows` to browse them and `/flow <id>` to inspect one in
-detail.
+Unknown references are validation errors with node paths, caught before
+anything spawns. Use `output: json` on an upstream agent when downstream
+steps need dot-path access or predicates. Escape literal braces as `{{`/`}}`.
 
-## 🚀 Quick start
+## ⚡ Quick start
 
-### 1. Create an agent file
+### 1. Define an agent
 
-For example, create `.pi/agents/explorer.md` in your project:
+`.pi/agents/reviewer.md`:
 
 ```md
 ---
-# Name used when you delegate: "Use agent explorer ..."
-name: explorer
-# Short description shown in agent lists
-description: Fast codebase exploration
-# Use provider/model from /model for deterministic routing
-model: openai-codex/gpt-5.3-codex-spark
-# Thinking level: off|minimal|low|medium|high|xhigh
-thinking: low
-# Optional skills to inject into the delegated run
-skills:
-  - search
+name: reviewer
+description: Focused code review from a single lens
+model: claude-sonnet-4-5   # optional
+thinking: medium           # optional: off|minimal|low|medium|high|xhigh
+skills: []                 # optional pi skills to inject
+tools: [read, grep, find]  # optional tool allowlist for the subprocess
 ---
 
-Find the relevant files and APIs quickly.
-Return a compact handoff with concrete file paths.
+You are a review agent. Review code through exactly the lens given in your
+task. Return concrete findings with file paths.
 ```
 
-Everything below the frontmatter is the agent's system prompt.
+Agents are discovered from `~/.pi/agents` (user) and the nearest `.pi/agents`
+walking up from the cwd (project); project wins on name conflicts.
 
-### 2. Start pi
+### 2. Define a workflow
 
-```sh
-pi
+`.pi/workflows/review.md`:
+
+````md
+---
+name: review
+description: Multi-lens code review with a synthesis pass
+whenToUse: when the user asks for a thorough review
+params:
+  - name: target
+    required: true
+---
+
+Reviews the target from two lenses concurrently, then merges findings.
+
+```yaml
+kind: par
+branches:
+  bugs:    { kind: agent, name: reviewer, task: "Find bugs in {params.target}" }
+  clarity: { kind: agent, name: reviewer, task: "Review {params.target} for clarity" }
+reduce:
+  agent: worker
+  task: "Merge and prioritize:\n{branches}"
 ```
+````
 
-This repo already includes project-local examples in `.pi/agents/`
-(`explorer`, `worker`).
+Frontmatter + one fenced `yaml` or `json` block holding the flow; the prose
+around it is documentation. Workflows live in `~/.pi/workflows` and
+`.pi/workflows`, discovered like agents. Every definition is fully validated
+at discovery (references, cycles, binding scopes); invalid files are listed
+in `/workflows` diagnostics and never run.
 
-### 3. Delegate a single agent
+### 3. Trigger it
 
-Ask naturally:
+Workflows fire from three surfaces:
 
-- `Use the explorer agent to find where auth is implemented.`
+1. **The model.** Saved workflows (name, description, `whenToUse`, params)
+   are advertised in the system prompt; the model runs them — or composes
+   ad-hoc flows — through the single `workflow` tool. In interactive
+   sessions runs go to the background: the widget shows progress and the
+   result arrives as a notification.
+2. **You.** Every saved workflow registers a slash command:
+   `/review src/core` runs the graph directly, with args bound to params —
+   no model round-trip. Positional args and `key=value` pairs both work.
+3. **Events.** Add `on: [turn_end]` (plus optional `debounce:` milliseconds)
+   to the frontmatter and the workflow fires on those pi events, always in
+   the background, with the event payload bound as `{params.event}`.
+   Hook-triggered runs never trigger further hooks.
 
-You can also call the `agent` tool directly:
-
-```json
-{
-  "name": "explorer",
-  "task": "Find where auth is implemented.",
-  "scope": "both"
-}
-```
-
-### 4. Run a workflow
-
-Use the `workflow` tool to run a multi-agent workflow. The tool accepts both
-the full canonical JSON tree and a compact authoring form for common cases.
-The example below uses the canonical form and defines a review loop: a
-`reviewer` agent inspects the patch, then an `engineer` agent applies the
-findings, repeating until the reviewer signals `done` or three iterations have
-passed.
-
-```json
-{
-  "label": "review loop",
-  "flow": {
-    "kind": "loop",
-    "id": "review-loop",
-    "maxIterations": 3,
-    "continueWhen": {
-      "kind": "result_field",
-      "path": "done",
-      "equals": false
-    },
-    "body": {
-      "kind": "sequence",
-      "steps": [
-        {
-          "kind": "spawn",
-          "id": "review",
-          "agent": "reviewer",
-          "task": "Review the current patch. Return JSON with done:boolean, findings:string[], and summary:string.",
-          "output": "json"
-        },
-        {
-          "kind": "spawn",
-          "id": "implement",
-          "agent": "engineer",
-          "task": "Implement the latest review findings.",
-          "output": "text"
-        }
-      ]
-    }
-  },
-  "budgets": {
-    "maxIterations": 3,
-    "maxParallelism": 2
-  }
-}
-```
-
-The runtime launches each `spawn` as a subprocess and persists lifecycle events
-into the session so pi can reconstruct state after a reload.
-
-## 🔧 Available tools
+## 🧮 Node reference
 
 ### `agent`
 
-Runs one isolated delegated agent as a subprocess.
-
-Parameters:
-
-- `name`: Agent name from markdown frontmatter.
-- `task`: The delegated task.
-- `scope`: Optional. One of `user`, `project`, or `both`.
-- `cwd`: Optional working directory for the delegated process.
-
-### `workflow`
-
-Runs a workflow defined by a JSON tree of nodes.
-
-The tool also accepts a compact authoring form:
-
-- A plain spawn can omit `kind: "spawn"`.
-- A `fork` can provide default `agent`, `taskTemplate`, `cwd`, `scope`, and
-  `output` values for its branches.
-- Fork branch values can be full flow specs, spawn-shorthand objects, or plain
-  agent-name strings.
-
-For example:
-
-```json
-{
-  "label": "Four-Lens Code Review",
-  "flow": {
-    "kind": "fork",
-    "id": "review-fork",
-    "agent": "reviewer",
-    "taskTemplate": "Review this codebase from the {branch} lens.",
-    "branches": {
-      "architecture": {},
-      "readability": "reviewer",
-      "tests": { "task": "Review test coverage and test quality." },
-      "ux": { "agent": "ux-reviewer" }
-    }
-  }
-}
+```yaml
+kind: agent
+name: reviewer          # must match a discovered agent
+task: "Review {previous}"
+output: text            # or "json": parse the result (fences tolerated)
+as: findings            # binding name; only legal on direct seq steps
+cwd: /path/override     # optional
+scope: both             # agent discovery: user|project|both
 ```
 
-The runtime normalizes this compact form into the full canonical workflow
-before validation and execution.
+A bare `agent` node is a complete workflow — single delegation needs nothing
+more.
 
-Top-level parameters:
+### `seq`
 
-- `label`: Optional human-readable label for this workflow run.
-- `flow`: The workflow definition (a JSON tree of nodes).
-- `budgets`: Optional limits—`maxDepth`, `maxChildren`, `maxParallelism`,
-  `maxIterations`.
-- `scope`: Optional default agent scope for all `spawn` nodes.
-- `cwd`: Optional default working directory for all `spawn` nodes.
-
-## 🧭 Commands
-
-| Command                        | Description                                           |
-| ------------------------------ | ----------------------------------------------------- |
-| `/agents`                      | List discovered agents.                               |
-| `/agent <name>`                | Show full details for one agent.                      |
-| `/flows`                       | Browse recorded flows in the current session.         |
-| `/flow`                        | Open the interactive flow picker.                     |
-| `/flow <id-or-prefix>`         | Inspect one flow.                                     |
-| `/flow watch [id-or-prefix]`   | Watch current state and live output.                 |
-| `/flow mermaid [id-or-prefix]` | Output the selected flow as a Mermaid diagram.        |
-| `/flow stop [id-or-prefix]`    | Stop a running flow.                                  |
-
-### Flow inspect view
-
-`/flow <id>` shows the selected flow's metadata, current status, and an ASCII
-tree of its structure. Each node kind has a distinct icon:
-
-| Icon | Kind     |
-| ---- | -------- |
-| `✦`  | spawn    |
-| `⑃`  | fork     |
-| `⑂`  | join     |
-| `↺`  | loop     |
-| `≡`  | sequence |
-
-Sequences are transparent — their children appear at the parent indentation
-level without extra nesting.
-
-When you inspect a completed or running flow, the kind icons are replaced by
-status icons:
-
-| Icon | Status    |
-| ---- | --------- |
-| `●`  | completed |
-| `◉`  | running   |
-| `○`  | waiting   |
-| `⊘`  | stopped   |
-
-Example — static flow tree:
-
-```
-✦ initializer
-⑃ parallel
-├─ fast → ✦ fast-worker
-└─ slow
-   ├─ ✦ prep
-   └─ ✦ slow-worker
-⑂ join: all ← parallel
-↺ validate (max 3)
-└─ ✦ validator
+```yaml
+kind: seq
+steps:
+  - { kind: agent, name: scout, task: "Map the code", as: map }
+  - { kind: agent, name: planner, task: "Plan using {map}" }
+  - { kind: agent, name: worker, task: "Implement {previous}" }
 ```
 
-Example — with status overlay:
+### `par`
 
-```
-● initializer
-◉ parallel
-├─ fast → ● fast-worker
-└─ slow
-   ├─ ● prep
-   └─ ◉ slow-worker
-○ join: all ← parallel
-○ validate (max 3)
-└─ ○ validator
-```
-
-In interactive mode, omitting the flow ID opens a picker. The picker supports
-single-key actions on the selected flow:
-
-- `Enter` inspect
-- `w` watch
-- `m` mermaid
-- `s` stop
-
-The `watch` action is only available for running flows. Watch mode starts from
-the current flow snapshot, including the status tree and completed results, then
-adds a live tail for running agent output. Once watching, `Esc` detaches back to
-the normal UI and `s` stops the flow.
-
-### Mermaid export
-
-Use `mermaid` to get a Mermaid flowchart you can paste into GitHub, docs,
-or [mermaid.live](https://mermaid.live):
-
-```
-/flow mermaid 3a8bc2f1
+```yaml
+kind: par
+branches:
+  a: { kind: agent, name: x, task: "..." }
+  b: { kind: agent, name: y, task: "..." }
+mode: all               # "all" (default) | "any" | { quorum: n }
+onError: fail           # "fail" (default, cancels siblings) | "collect"
+concurrency: 4          # cap on simultaneous branches
+reduce:                 # optional fold over the collected value
+  agent: synthesizer
+  task: "Merge {branches}"
 ```
 
-The output is deterministic — the same workflow always produces the same
-diagram. Node IDs are counter-based (`n0`, `n1`, …), fork branches are visited
-in sorted key order, and there are no random elements.
+Value: `all`/`quorum` yield `{branch: value}`; `any` yields the winner's
+value and cancels the rest. With `onError: collect`, failed branches appear
+as `{error: "..."}` entries and the node fails only when every branch fails.
 
-The flow tree also appears inline when the `workflow` tool is invoked, giving
-you a structural preview of what is about to run. The live widget in the status
-bar overlays status icons so you can track progress at a glance.
+### `map`
 
-## 🗂️ Node reference
-
-### `spawn`
-
-Run a single agent as a subprocess. This is the leaf node of every workflow—the
-only node kind that actually executes work.
-
-```json
-{
-  "kind": "spawn",
-  "id": "review",
-  "agent": "reviewer",
-  "task": "Review the current patch.",
-  "scope": "both",
-  "cwd": "/path/to/project",
-  "output": "json"
-}
+```yaml
+kind: map
+over: "{scout.files}"   # must resolve to a JSON array at runtime
+body:
+  kind: agent
+  name: reviewer
+  task: "Review {item} (#{index})"
+concurrency: 4
+reduce: { agent: synthesizer, task: "Combine {items}" }
 ```
 
-- `id`: Optional identifier, used to reference this node's result elsewhere.
-- `agent`: Name of the agent (must match a discovered agent's frontmatter).
-- `task`: The task prompt sent to the agent.
-- `output`: `"text"` (default) or `"json"` (the agent's output is parsed as
-  JSON, useful for downstream `continueWhen` checks).
-
-### `sequence`
-
-Run a list of nodes one after another. The output of the sequence is the output
-of its last step.
-
-```json
-{
-  "kind": "sequence",
-  "steps": [
-    { "kind": "spawn", "agent": "reviewer", "task": "Review." },
-    { "kind": "spawn", "agent": "engineer", "task": "Implement." }
-  ]
-}
-```
-
-- `id`: Optional. When set, downstream nodes can reference this sequence's
-  result by name.
-
-### `fork`
-
-Run named branches concurrently. Each branch is an arbitrary node tree. Use
-`concurrency` to cap how many branches run in parallel.
-
-```json
-{
-  "kind": "fork",
-  "id": "fanout",
-  "branches": {
-    "a": { "kind": "spawn", "agent": "reviewer", "task": "Review for bugs." },
-    "b": { "kind": "spawn", "agent": "reviewer", "task": "Review for style." }
-  },
-  "concurrency": 2
-}
-```
-
-- `id`: Required. Referenced by a downstream `join` node.
-- `branches`: A map of branch keys to node trees.
-- `concurrency`: Optional cap on simultaneous branches.
-
-### `join`
-
-Wait for the branches of a previous `fork` and combine their results.
-
-```json
-{
-  "kind": "join",
-  "from": "fanout",
-  "mode": "all",
-  "reducer": { "kind": "collect" },
-  "onFailure": "collectErrors"
-}
-```
-
-- `id`: Optional. When set, downstream nodes can reference this join's result.
-- `from`: The `id` of the `fork` node to join.
-- `mode`: When to proceed—`"all"` (every branch must finish), `"any"` (first
-  success wins), or `"quorum"` (a minimum number of successes, set by the
-  `quorum` field).
-- `reducer`: How to combine branch results. `"collect"` gathers them into an
-  object keyed by branch name. `"agent"` delegates summarization to another
-  agent.
-- `onFailure`: `"failFast"` (default, abort on first branch error) or
-  `"collectErrors"` (continue and gather errors alongside successes).
+Dynamic fan-out: the body runs once per array element, results return in
+input order, and any item failure cancels the rest and fails the node.
 
 ### `loop`
 
-Repeat a body node until a condition is met or `maxIterations` is reached.
-
-```json
-{
-  "kind": "loop",
-  "id": "review-loop",
-  "body": { "kind": "spawn", "agent": "reviewer", "task": "Review." },
-  "maxIterations": 3,
-  "continueWhen": {
-    "kind": "result_field",
-    "path": "done",
-    "equals": false
-  }
-}
+```yaml
+kind: loop
+body: { kind: agent, name: fixer, task: "Iteration {iteration}; prior: {last}", output: json }
+max: 3
+until: { eq: ["done", true] }
 ```
 
-- `id`: Required.
-- `body`: Any node tree to execute each iteration.
-- `maxIterations`: Hard cap on repetitions.
-- `continueWhen`: Optional predicate evaluated after each iteration. Currently
-  supports `result_field`, which checks a single field in the body's JSON
-  output. The loop continues while the field matches `equals` and stops
-  otherwise.
+Predicates address the body's JSON value by dot path (`""` is the whole
+value): `eq`, `ne`, `gt`, `lt`, `exists`, `empty`, composed with `and`,
+`or`, `not`.
+
+### `workflow`
+
+```yaml
+kind: workflow
+name: review
+params: { target: "{previous}" }   # values interpolate in the caller's scope
+as: rev
+```
+
+Inlined at validation time with cycle detection; budgets apply to the whole
+expanded tree.
+
+## 🎛️ Budgets
+
+Every run enforces limits (tool parameter `budgets`, all optional):
+
+| Budget           | Default | Meaning                                        |
+| ---------------- | ------- | ---------------------------------------------- |
+| `maxAgents`      | 50      | Total agent spawns (reducers included).        |
+| `maxParallelism` | 4       | Simultaneous agents per par/map.               |
+| `maxIterations`  | 10      | Cap applied to every loop.                     |
+| `maxDepth`       | 3       | Cross-process delegation depth.                |
+
+## 🧭 Commands
+
+| Command               | Description                                          |
+| --------------------- | ---------------------------------------------------- |
+| `/agents`             | List discovered agents.                              |
+| `/agent <name>`       | Show one agent in full.                              |
+| `/workflows`          | List saved workflows (with validation diagnostics).  |
+| `/workflow <name>`    | Show one workflow: params, triggers, docs, flow.     |
+| `/<name> [args]`      | Run saved workflow `<name>` directly.                |
+| `/runs`               | Browse runs.                                         |
+| `/run <id>`           | Inspect a run (unique id prefixes work).             |
+| `/run <id> watch`     | Snapshot now, final tree when the run settles.       |
+| `/run <id> mermaid`   | Deterministic Mermaid diagram of the run's flow.     |
+| `/run <id> stop`      | Abort a live run.                                    |
+
+## 🗂️ Runs, background, and history
+
+Runs are event-sourced into the pi session, so history survives reloads.
+Background runs (tool runs in interactive sessions, all command and hook
+runs) keep writing to their origin session; results are delivered as
+notifications when that session is idle. After a pi restart, in-flight runs
+are marked stopped — they cannot resume — but their history remains
+inspectable.
 
 ## 🧹 Uninstall
 
@@ -437,4 +258,4 @@ pi remove npm:pi-agents
 
 ## 📄 License
 
-[MIT](LICENSE)
+Apache-2.0

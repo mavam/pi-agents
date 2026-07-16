@@ -1,7 +1,7 @@
 {
   "name": "pi-agents",
   "description": "A generic framework for agent orchestration in pi.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "files": [
     "src",
@@ -58,6 +58,7 @@
     ]
   },
   "dependencies": {
-    "beautiful-mermaid": "^1.1.3"
+    "beautiful-mermaid": "^1.1.3",
+    "yaml": "^2.6.0"
   }
 }

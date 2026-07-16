@@ -1,29 +1,33 @@
+/**
+ * Subprocess spawn engine: each spawn runs a fresh `pi` process in JSON
+ * print mode and parses `message_end` events off stdout.
+ *
+ *   pi --mode json -p --no-session [--model M] [--thinking T] [--tools a,b]
+ *      [--append-system-prompt <tmpfile>]        # task arrives on stdin
+ */
+
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message } from "@earendil-works/pi-ai";
-import { buildSkillsPrompt } from "../catalog/agents.js";
-import type { AgentRunDetails, UsageStats } from "../runtime/types.js";
-import type {
-  SpawnEngine,
-  SpawnHandle,
-  SpawnRequest,
-  SpawnResult,
-  SpawnUpdate,
-} from "./interface.js";
+import {
+  emptyUsage,
+  SpawnAborted,
+  type SpawnEngine,
+  SpawnFailure,
+  type SpawnHandle,
+  type SpawnOutcome,
+  type SpawnProgress,
+  type SpawnSpec,
+  type SpawnUsage,
+} from "./types.js";
 
 export type SpawnProcess = typeof spawn;
 
-export class DelegatedAgentRunError extends Error {
-  readonly details: AgentRunDetails;
+/** Environment variable carrying delegation depth across process boundaries. */
+export const DEPTH_ENV_VAR = "PI_AGENTS_DEPTH";
 
-  constructor(message: string, details: AgentRunDetails) {
-    super(message);
-    this.name = "DelegatedAgentRunError";
-    this.details = details;
-  }
-}
+const FORCE_KILL_AFTER_MS = 5000;
 
 class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -60,55 +64,54 @@ class AsyncQueue<T> implements AsyncIterable<T> {
   }
 }
 
-function getFinalOutput(messages: Message[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "assistant") continue;
-    const chunks: string[] = [];
-    for (const part of msg.content) {
-      if (part.type === "text") chunks.push(part.text);
-    }
-    if (chunks.length > 0) return chunks.join("\n").trim();
+interface AssistantMessage {
+  role: string;
+  content?: Array<{ type?: string; text?: string }>;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    totalTokens?: number;
+    cost?: { total?: number };
+  };
+  model?: string;
+  stopReason?: string;
+  errorMessage?: string;
+}
+
+function parseMessageEndEvent(line: string): AssistantMessage | undefined {
+  try {
+    const parsed: unknown = JSON.parse(line);
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const event = parsed as { type?: unknown; message?: unknown };
+    if (event.type !== "message_end") return undefined;
+    if (typeof event.message !== "object" || event.message === null)
+      return undefined;
+    return event.message as AssistantMessage;
+  } catch {
+    return undefined;
   }
-  return "";
+}
+
+function messageText(message: AssistantMessage): string {
+  const chunks: string[] = [];
+  for (const part of message.content ?? []) {
+    if (part.type === "text" && typeof part.text === "string")
+      chunks.push(part.text);
+  }
+  return chunks.join("\n").trim();
 }
 
 function writePromptToTempFile(
   agentName: string,
   prompt: string,
 ): { dir: string; filePath: string } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-run-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agents-"));
   const safeName = agentName.replace(/[^\w.-]+/g, "_") || "agent";
   const filePath = path.join(dir, `append-system-${safeName}.md`);
   fs.writeFileSync(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
   return { dir, filePath };
-}
-
-function initialUsage(): UsageStats {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    cost: 0,
-    contextTokens: 0,
-    turns: 0,
-  };
-}
-
-function parseMessageEndEvent(line: string): Message | null {
-  try {
-    const parsed: unknown = JSON.parse(line);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const event = parsed as { type?: unknown; message?: unknown };
-    if (event.type !== "message_end") return null;
-    if (typeof event.message !== "object" || event.message === null) {
-      return null;
-    }
-    return event.message as Message;
-  } catch {
-    return null;
-  }
 }
 
 export function isChildProcessRunning(
@@ -120,13 +123,11 @@ export function isChildProcessRunning(
 function stripStackTrace(text: string): string {
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd());
   const cleaned: string[] = [];
-
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) {
-      if (cleaned.length > 0 && cleaned[cleaned.length - 1] !== "") {
+      if (cleaned.length > 0 && cleaned[cleaned.length - 1] !== "")
         cleaned.push("");
-      }
       continue;
     }
     if (trimmed.startsWith("at ")) continue;
@@ -134,7 +135,6 @@ function stripStackTrace(text: string): string {
     if (/^Node\.js v\d+/i.test(trimmed)) continue;
     cleaned.push(trimmed);
   }
-
   return cleaned.join("\n").trim();
 }
 
@@ -150,7 +150,6 @@ export function formatFailureReason(
     const model = modelHint ? ` Model: ${modelHint}.` : "";
     return `No credentials configured for provider "${provider}".${model} Run /login or configure the provider API key, then retry.`;
   }
-
   return compact || "(no output)";
 }
 
@@ -160,79 +159,38 @@ export function createSubprocessSpawnEngine(options?: {
   const spawnProcess = options?.spawnProcess ?? spawn;
 
   return {
-    spawn(spec: SpawnRequest): SpawnHandle {
-      const updates = new AsyncQueue<SpawnUpdate>();
-      const id = crypto.randomUUID();
-      const depth = spec.depth ?? 0;
+    spawn(spec: SpawnSpec): SpawnHandle {
+      const updates = new AsyncQueue<SpawnProgress>();
       let status: SpawnHandle["status"] = "running";
       let proc: ChildProcessWithoutNullStreams | undefined;
       let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
       let tempDir: string | undefined;
-      let tempPromptPath: string | undefined;
       let settled = false;
       let wasAborted = false;
 
-      const messages: Message[] = [];
-      const usage = initialUsage();
+      const usage: SpawnUsage = emptyUsage();
+      let latestText = "";
       let stopReason: string | undefined;
       let errorMessage: string | undefined;
-      const effectiveModel = spec.agent.model ?? spec.defaultModel;
-      const effectiveThinking = spec.agent.thinking ?? spec.defaultThinking;
-      let resolvedModel = effectiveModel;
+      let resolvedModel = spec.model;
       let stderr = "";
-
-      const details = (exitCode: number): AgentRunDetails => ({
-        agent: spec.agent.name,
-        agentSource: spec.agent.source,
-        model: resolvedModel,
-        thinking: effectiveThinking,
-        skills: [...spec.agent.skills],
-        missingSkills,
-        exitCode,
-        stopReason,
-        errorMessage,
-        stderr,
-        usage: { ...usage },
-        discoveryDiagnostics: spec.discoveryDiagnostics,
-        scope: spec.scope,
-      });
-
-      const { prompt: skillsPrompt, missingSkills } = buildSkillsPrompt(
-        spec.agent.skills,
-        spec.cwd,
-      );
-      const appendParts = [
-        spec.agent.systemPrompt.trim(),
-        skillsPrompt.trim(),
-      ].filter(Boolean);
+      let buffered = "";
 
       const args: string[] = ["--mode", "json", "-p", "--no-session"];
-      if (effectiveModel) args.push("--model", effectiveModel);
-      if (effectiveThinking) args.push("--thinking", effectiveThinking);
-      if (appendParts.length > 0) {
-        const tmp = writePromptToTempFile(
-          spec.agent.name,
-          appendParts.join("\n\n"),
-        );
+      if (spec.model) args.push("--model", spec.model);
+      if (spec.thinking) args.push("--thinking", spec.thinking);
+      if (spec.tools && spec.tools.length > 0)
+        args.push("--tools", spec.tools.join(","));
+      if (spec.systemPrompt?.trim()) {
+        const tmp = writePromptToTempFile(spec.agent, spec.systemPrompt.trim());
         tempDir = tmp.dir;
-        tempPromptPath = tmp.filePath;
-        args.push("--append-system-prompt", tempPromptPath);
+        args.push("--append-system-prompt", tmp.filePath);
       }
-
-      let buffered = "";
 
       const cleanup = () => {
         if (forceKillTimer) {
           clearTimeout(forceKillTimer);
           forceKillTimer = undefined;
-        }
-        if (tempPromptPath) {
-          try {
-            fs.unlinkSync(tempPromptPath);
-          } catch {
-            // ignore cleanup errors
-          }
-          tempPromptPath = undefined;
         }
         if (tempDir) {
           try {
@@ -247,31 +205,29 @@ export function createSubprocessSpawnEngine(options?: {
 
       const parseLine = (line: string) => {
         if (!line.trim()) return;
-        const msg = parseMessageEndEvent(line);
-        if (!msg) return;
-
-        messages.push(msg);
-        if (msg.role === "assistant") {
+        const message = parseMessageEndEvent(line);
+        if (!message) return;
+        if (message.role === "assistant") {
           usage.turns += 1;
-          if (msg.usage) {
-            usage.input += msg.usage.input || 0;
-            usage.output += msg.usage.output || 0;
-            usage.cacheRead += msg.usage.cacheRead || 0;
-            usage.cacheWrite += msg.usage.cacheWrite || 0;
-            usage.cost += msg.usage.cost?.total || 0;
-            usage.contextTokens = msg.usage.totalTokens || usage.contextTokens;
+          if (message.usage) {
+            usage.input += message.usage.input || 0;
+            usage.output += message.usage.output || 0;
+            usage.cacheRead += message.usage.cacheRead || 0;
+            usage.cacheWrite += message.usage.cacheWrite || 0;
+            usage.cost += message.usage.cost?.total || 0;
+            usage.contextTokens =
+              message.usage.totalTokens || usage.contextTokens;
           }
-          if (msg.model) resolvedModel = msg.model;
-          if (msg.stopReason) stopReason = msg.stopReason;
-          if (msg.errorMessage) errorMessage = msg.errorMessage;
+          if (message.model) resolvedModel = message.model;
+          if (message.stopReason) stopReason = message.stopReason;
+          if (message.errorMessage) errorMessage = message.errorMessage;
+          const text = messageText(message);
+          if (text) latestText = text;
         }
-        updates.push({
-          text: getFinalOutput(messages) || "",
-          details: details(-1),
-        });
+        updates.push({ text: latestText, usage: { ...usage } });
       };
 
-      const waitPromise = new Promise<SpawnResult>((resolve, reject) => {
+      const waitPromise = new Promise<SpawnOutcome>((resolve, reject) => {
         try {
           proc = spawnProcess("pi", args, {
             cwd: spec.cwd,
@@ -282,12 +238,15 @@ export function createSubprocessSpawnEngine(options?: {
         } catch (error) {
           const errorText =
             error instanceof Error ? error.message : String(error);
-          const spawnFailure = `Failed to spawn "pi": ${errorText}`;
-          stderr = spawnFailure;
-          errorMessage = spawnFailure;
-          status = "stopped";
+          status = "failed";
           cleanup();
-          reject(new DelegatedAgentRunError(spawnFailure, details(1)));
+          reject(
+            new SpawnFailure(
+              `Failed to spawn "pi": ${errorText}`,
+              spec.agent,
+              1,
+            ),
+          );
           return;
         }
 
@@ -307,41 +266,38 @@ export function createSubprocessSpawnEngine(options?: {
           settled = true;
           if (buffered.trim()) parseLine(buffered);
 
-          const exitCode = signalCode ? 1 : (code ?? 0);
-          if (signalCode) {
-            const signalFailure = `Delegated "pi" process terminated by signal ${signalCode}.`;
-            stderr = stderr ? `${stderr}\n${signalFailure}` : signalFailure;
-            if (!errorMessage) errorMessage = signalFailure;
-          }
-
           if (wasAborted) {
-            status = "stopped";
+            status = "aborted";
             cleanup();
-            reject(
-              new DelegatedAgentRunError(
-                `Agent ${spec.agent.name} aborted.`,
-                details(exitCode || 1),
-              ),
-            );
+            reject(new SpawnAborted(spec.agent));
             return;
           }
 
-          const finalText = getFinalOutput(messages);
+          const exitCode = signalCode ? 1 : (code ?? 0);
           const isError =
             exitCode !== 0 ||
             stopReason === "error" ||
             stopReason === "aborted" ||
             Boolean(signalCode);
           if (isError) {
-            status = "stopped";
+            status = "failed";
+            const signalNote = signalCode
+              ? `Delegated "pi" process terminated by signal ${signalCode}.`
+              : "";
             const rawReason =
-              errorMessage || stderr || finalText || "(no output)";
+              errorMessage ||
+              stderr ||
+              signalNote ||
+              latestText ||
+              "(no output)";
             const reason = formatFailureReason(rawReason, resolvedModel);
             cleanup();
             reject(
-              new DelegatedAgentRunError(
-                `Agent ${spec.agent.name} failed: ${reason}`,
-                details(exitCode),
+              new SpawnFailure(
+                `Agent ${spec.agent} failed: ${reason}`,
+                spec.agent,
+                exitCode,
+                stderr,
               ),
             );
             return;
@@ -350,16 +306,10 @@ export function createSubprocessSpawnEngine(options?: {
           status = "completed";
           cleanup();
           resolve({
-            id,
-            runId: spec.runId,
-            parentNodeId: spec.parentNodeId,
-            depth,
-            agent: spec.agent.name,
-            text: finalText || "(no output)",
+            text: latestText || "(no output)",
             exitCode,
             usage: { ...usage },
             model: resolvedModel,
-            details: details(exitCode),
           });
         });
 
@@ -368,41 +318,37 @@ export function createSubprocessSpawnEngine(options?: {
           settled = true;
           const errorText =
             error instanceof Error ? error.message : String(error);
-          const spawnFailure = `Failed to spawn "pi": ${errorText}`;
-          stderr = stderr ? `${stderr}\n${spawnFailure}` : spawnFailure;
-          if (!errorMessage) errorMessage = spawnFailure;
-          status = "stopped";
+          status = "failed";
           cleanup();
-          reject(new DelegatedAgentRunError(spawnFailure, details(1)));
+          reject(
+            new SpawnFailure(
+              `Failed to spawn "pi": ${errorText}`,
+              spec.agent,
+              1,
+              stderr,
+            ),
+          );
         });
 
         proc.stdin.end(spec.task);
       });
+      // Prevent unhandled-rejection noise when abort() races wait().
+      waitPromise.catch(() => {});
 
       return {
-        id,
-        runId: spec.runId,
-        parentNodeId: spec.parentNodeId,
-        depth,
         get status() {
           return status;
         },
         updates,
         wait: () => waitPromise,
-        abort: async () => {
+        abort: () => {
           if (wasAborted) return;
           wasAborted = true;
-          status = "stopped";
           if (!proc) return;
           proc.kill("SIGTERM");
           forceKillTimer = setTimeout(() => {
             if (proc && isChildProcessRunning(proc)) proc.kill("SIGKILL");
-          }, 5000);
-        },
-        capabilities: {
-          steer: false,
-          resume: false,
-          transcript: false,
+          }, FORCE_KILL_AFTER_MS);
         },
       };
     },

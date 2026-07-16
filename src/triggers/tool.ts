@@ -91,19 +91,41 @@ export interface WorkflowToolDetails {
   error?: string;
 }
 
-/** Icon tree preview of the tool call — tolerant of partial/invalid args. */
-export function formatCallPreview(params: WorkflowToolParamsType): string {
+/** Minimal color hook so the pure formatters are testable without a theme. */
+export type ToolColorize = (
+  color: "dim" | "accent" | "success" | "error",
+  text: string,
+) => string;
+
+const plain: ToolColorize = (_color, text) => text;
+
+const PARAM_PREVIEW_CHARS = 72;
+
+function oneLine(value: string, max: number): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
+}
+
+/**
+ * Icon tree preview of the tool call — tolerant of partial/invalid args.
+ * One header line (icon, name, dim label); params each on their own dim line.
+ */
+export function formatCallPreview(
+  params: WorkflowToolParamsType,
+  color: ToolColorize = plain,
+): string {
   const lines: string[] = [];
-  if (params.label) lines.push(`workflow · ${params.label}`);
+  const label = params.label ? color("dim", ` · ${params.label}`) : "";
   try {
     if (params.name !== undefined) {
-      const args = Object.entries(params.params ?? {})
-        .map(([key, value]) => `${key}: ${value}`)
-        .join(", ");
-      lines.push(
-        `${KIND_ICONS.workflow} workflow ${params.name}${args ? ` (${args})` : ""}`,
-      );
+      lines.push(`${KIND_ICONS.workflow} ${params.name}${label}`);
+      for (const [key, value] of Object.entries(params.params ?? {})) {
+        lines.push(
+          color("dim", `   ${key}: ${oneLine(value, PARAM_PREVIEW_CHARS)}`),
+        );
+      }
     } else if (params.flow !== undefined) {
+      if (params.label) lines.push(color("dim", params.label));
       const issues: { path: string; message: string }[] = [];
       const parsed = parseFlowNode(params.flow, "$", issues);
       if (parsed && issues.length === 0) {
@@ -116,6 +138,29 @@ export function formatCallPreview(params: WorkflowToolParamsType): string {
     // Streaming args may be incomplete; the default renderer takes over.
   }
   return lines.join("\n");
+}
+
+/**
+ * The user-facing result line. The tool's content string stays model-facing
+ * (it carries the continuation instruction); this is what the human sees.
+ */
+export function formatResultPreview(
+  result: { details: WorkflowToolDetails; text: string },
+  expanded: boolean,
+  color: ToolColorize = plain,
+): string {
+  const { runId, status, label, error } = result.details;
+  const id = shortId(runId);
+  const name = label ? ` ${label}` : "";
+  if (status === "running") {
+    return `${color("accent", "◉")} ${id}${name} running in background ${color("dim", `· result arrives as notification · /run ${id}`)}`;
+  }
+  if (status === "completed") {
+    const head = `${color("success", "●")} ${id}${name} completed ${color("dim", `· /run ${id} result`)}`;
+    return expanded ? `${head}\n${result.text}` : head;
+  }
+  const head = `${color("error", "✗")} ${id}${name} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""}`;
+  return expanded ? `${head}\n${result.text}` : head;
 }
 
 export function formatRunResult(
@@ -164,9 +209,24 @@ export function createWorkflowTool(
       'In flows, thread data explicitly: bind seq steps with "as" and reference {name}/{previous} in later tasks; use output:"json" when downstream steps need structured access.',
     ],
     parameters: WorkflowToolParams,
-    renderCall(args) {
-      const previewText = formatCallPreview(args);
+    renderCall(args, theme) {
+      const color: ToolColorize = (name, text) => theme.fg(name, text);
+      const previewText = formatCallPreview(args, color);
       return new Text(previewText || "workflow", 1, 0);
+    },
+    renderResult(result, options, theme) {
+      const color: ToolColorize = (name, text) => theme.fg(name, text);
+      const first = result.content[0];
+      const text = first?.type === "text" ? first.text : "";
+      return new Text(
+        formatResultPreview(
+          { details: result.details, text },
+          options.expanded,
+          color,
+        ),
+        1,
+        0,
+      );
     },
     async execute(
       _toolCallId,

@@ -104,7 +104,7 @@ describe("renderFlowTree", () => {
     expect(tree).toContain("├─ quick → ✦ a · t");
     expect(tree).toContain("└─ slow:");
     expect(tree).toContain("   ├─ ✦ prep · prepare");
-    expect(tree).toContain("   └─ ⧉ workflow inner (x: 42)");
+    expect(tree).toContain("   └─ ❖ inner (x: 42)");
     // The inlined body nests under the ref.
     expect(tree).toContain("      └─ ✦ a · use {params.x}");
   });

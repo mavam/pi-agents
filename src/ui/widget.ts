@@ -160,7 +160,7 @@ export function widgetSegments(
         return;
       case "workflow":
         if (node.body) visit(node.body, bodyPath(path));
-        else push(path, `⧉${node.name}`);
+        else push(path, `❖${node.name}`);
         return;
     }
   };

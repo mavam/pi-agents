@@ -5,7 +5,7 @@
  * kind icons are replaced by live status icons).
  *
  *   ✦ agent   ≡ seq (transparent)   ⑃ par   ⑂ reduce   ⇶ map   ↺ loop
- *   ⧉ workflow
+ *   ❖ workflow
  */
 
 import {
@@ -26,7 +26,7 @@ export const KIND_ICONS = {
   reduce: "⑂",
   map: "⇶",
   loop: "↺",
-  workflow: "⧉",
+  workflow: "❖",
 } as const;
 
 export const STATUS_TREE_ICONS = {
@@ -154,7 +154,7 @@ function build(node: FlowNode, path: string): DisplayNode[] {
       return [
         {
           icon: KIND_ICONS.workflow,
-          text: `workflow ${node.name}${params ? ` (${params})` : ""}${binding(node)}`,
+          text: `${node.name}${params ? ` (${params})` : ""}${binding(node)}`,
           path,
           children: node.body ? build(node.body, bodyPath(path)) : [],
         },

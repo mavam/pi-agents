@@ -230,6 +230,60 @@ describe("workflow tool", () => {
   });
 });
 
+describe("call and result previews", () => {
+  test("saved workflow calls show icon, name, dim label, and params", async () => {
+    const { formatCallPreview } = await import("../../src/triggers/tool.js");
+    const preview = formatCallPreview({
+      name: "review",
+      label: "Review current changes (retry)",
+      params: {
+        target:
+          "current working tree changes (git diff); inspect repository state and review all local changes",
+      },
+    });
+    const lines = preview.split("\n");
+    expect(lines[0]).toBe("❖ review · Review current changes (retry)");
+    expect(lines[1]).toContain("   target: current working tree changes");
+    expect(lines[1]).toContain("…");
+    expect(preview).not.toContain("workflow ·");
+  });
+
+  test("inline flows render as the icon tree", async () => {
+    const { formatCallPreview } = await import("../../src/triggers/tool.js");
+    const preview = formatCallPreview({
+      flow: { kind: "agent", name: "echo", task: "hello" },
+    });
+    expect(preview).toBe("✦ echo · hello");
+  });
+
+  test("result preview replaces the model-facing continuation text", async () => {
+    const { formatResultPreview } = await import("../../src/triggers/tool.js");
+    const running = formatResultPreview(
+      {
+        details: { runId: "b3ca589a-0000", status: "running", label: "review" },
+        text: "Started workflow run … End your turn now — do not wait for it.",
+      },
+      false,
+    );
+    expect(running).toContain("◉ b3ca589a review running in background");
+    expect(running).toContain("/run b3ca589a");
+    expect(running).not.toContain("End your turn");
+
+    const failed = formatResultPreview(
+      {
+        details: {
+          runId: "b3ca589a-0000",
+          status: "failed",
+          error: "agent exploded\nstack",
+        },
+        text: "<workflow-run …>",
+      },
+      false,
+    );
+    expect(failed).toContain("✗ b3ca589a failed — agent exploded stack");
+  });
+});
+
 describe("project trust", () => {
   const untrustedCtx = () =>
     ({

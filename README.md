@@ -36,7 +36,7 @@ and saved workflows inline like function calls.
 | `⑃`  | `par`      | Run named branches concurrently, optionally `⑂` reduce.   | `{branch: value}`, or the reducer's value. |
 | `⇶`  | `map`      | Fan out a body per element of a runtime array.            | Array of body values, or the reducer's.   |
 | `↺`  | `loop`     | Repeat a body until a predicate holds or `max` is hit.    | The last iteration's value.               |
-| `⧉`  | `workflow` | Invoke a saved workflow by name (inlined, cycle-checked). | The inlined flow's value.                 |
+| `❖`  | `workflow` | Invoke a saved workflow by name (inlined, cycle-checked). | The inlined flow's value.                 |
 
 The JSON/YAML form is what you author; the icons are how flows are *read*.
 Every surface that shows a flow — the tool call display, `/workflow <name>`,

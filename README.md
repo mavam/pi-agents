@@ -113,7 +113,7 @@ documentation:
 ---
 name: review
 description: Multi-lens code review with a synthesis pass
-whenToUse: when the user asks for a thorough review
+trigger: when the user asks for a thorough review
 params:
   - name: target
     required: true
@@ -155,7 +155,7 @@ never run.
 
 Workflows fire from three surfaces:
 
-1. **The model.** Saved workflows (name, description, `whenToUse`, params)
+1. **The model.** Saved workflows (name, description, `trigger`, params)
    are advertised in the system prompt; the model runs them — or composes
    ad-hoc flows — through the single `workflow` tool. In interactive
    sessions runs go to the background: the widget shows progress and the

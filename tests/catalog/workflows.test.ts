@@ -27,7 +27,7 @@ function writeWorkflow(name: string, content: string): string {
 const REVIEW = `---
 name: review
 description: Multi-lens code review
-whenToUse: when the user asks for a thorough review
+trigger: when the user asks for a thorough review
 params:
   - name: target
     required: true
@@ -51,7 +51,7 @@ describe("parseWorkflowFile", () => {
     if (typeof result === "string") return;
     expect(result.name).toBe("review");
     expect(result.description).toBe("Multi-lens code review");
-    expect(result.whenToUse).toContain("thorough review");
+    expect(result.trigger).toContain("thorough review");
     expect(result.params).toEqual([
       {
         name: "target",

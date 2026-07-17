@@ -286,7 +286,7 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
     "",
     `- file: ${wf.filePath}`,
   ];
-  if (wf.whenToUse) lines.push(`- when to use: ${wf.whenToUse}`);
+  if (wf.trigger) lines.push(`- trigger: `);
   if (wf.on && wf.on.length > 0) lines.push(`- triggers: ${wf.on.join(", ")}`);
   if (wf.debounce !== undefined) lines.push(`- debounce: ${wf.debounce}ms`);
   if (wf.params.length > 0) {

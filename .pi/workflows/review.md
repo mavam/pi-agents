@@ -1,7 +1,7 @@
 ---
 name: review
 description: Multi-lens code review with a synthesis pass
-whenToUse: when the user asks for a thorough review of a directory, change, or subsystem
+trigger: when the user asks for a thorough review of a directory, change, or subsystem
 params:
   - name: target
     description: What to review (a path, diff, or description)

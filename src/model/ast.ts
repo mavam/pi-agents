@@ -194,7 +194,7 @@ export interface WorkflowLike {
 /** A saved workflow definition discovered from a .pi/workflows/*.md file. */
 export interface WorkflowDef extends WorkflowLike {
   description: string;
-  whenToUse?: string;
+  trigger?: string;
   /** pi event names that trigger this workflow (background runs). */
   on?: string[];
   /** Trailing-edge debounce for event triggers, in milliseconds. */

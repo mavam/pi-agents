@@ -1,7 +1,7 @@
 /**
  * System-prompt catalogs injected via before_agent_start: the agent catalog
  * (from agents.ts) plus a compact workflow catalog — name, description,
- * whenToUse, and params only, never flow bodies.
+ * trigger, and params only, never flow bodies.
  */
 
 import type { Scope } from "../model/ast.js";
@@ -37,8 +37,8 @@ export function buildWorkflowsPrompt(
       lines.push(
         `    <description>${escapeXmlText(wf.description)}</description>`,
       );
-      if (wf.whenToUse) {
-        lines.push(`    <whenToUse>${escapeXmlText(wf.whenToUse)}</whenToUse>`);
+      if (wf.trigger) {
+        lines.push(`    <trigger>${escapeXmlText(wf.trigger)}</trigger>`);
       }
       if (wf.params.length > 0) {
         lines.push("    <params>");

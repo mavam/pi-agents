@@ -1,7 +1,7 @@
 ---
 name: bug-hunt
 description: Hunt correctness bugs in a target
-whenToUse: when the user wants a focused bug pass without a full multi-lens review
+trigger: when the user wants a focused bug pass without a full multi-lens review
 params:
   - name: target
     description: What to hunt in (a path, diff, or description)

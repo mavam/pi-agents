@@ -1,6 +1,6 @@
 /**
  * Saved-workflow discovery: `.pi/workflows/*.md` files whose YAML frontmatter
- * carries everything machine-readable — name, description, whenToUse, on,
+ * carries everything machine-readable — name, description, trigger, on,
  * debounce, params, and the flow expression itself (either a `flow:` tree or
  * the flat `agent:`/`task:` single-unit form). The markdown body is pure
  * documentation.
@@ -53,7 +53,7 @@ const HOOKABLE_EVENT_SET: ReadonlySet<string> = new Set(HOOKABLE_EVENTS);
 const ALLOWED_KEYS = new Set([
   "name",
   "description",
-  "whenToUse",
+  "trigger",
   "on",
   "debounce",
   "params",
@@ -269,8 +269,8 @@ export function parseWorkflowFile(
   if (typeof fm.description !== "string" || !fm.description.trim()) {
     return "Missing or invalid 'description' (must be a non-empty string)";
   }
-  if (fm.whenToUse !== undefined && typeof fm.whenToUse !== "string") {
-    return "Invalid 'whenToUse' (must be a string)";
+  if (fm.trigger !== undefined && typeof fm.trigger !== "string") {
+    return "Invalid 'trigger' (must be a string)";
   }
   if (
     fm.on !== undefined &&
@@ -322,8 +322,8 @@ export function parseWorkflowFile(
   return {
     name: fm.name.trim(),
     description: fm.description.trim(),
-    whenToUse:
-      typeof fm.whenToUse === "string" ? fm.whenToUse.trim() : undefined,
+    trigger:
+      typeof fm.trigger === "string" ? fm.trigger.trim() : undefined,
     on,
     debounce: fm.debounce as number | undefined,
     params: allParams,

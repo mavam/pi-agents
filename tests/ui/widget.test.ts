@@ -205,7 +205,7 @@ describe("formatRunWidget", () => {
           },
         ],
       },
-      (agent, task) => (task === "map" ? '{"hotspots":["a","b"]}' : "ok"),
+      (_agent, task) => (task === "map" ? '{"hotspots":["a","b"]}' : "ok"),
     );
     const [, line2] = formatRunWidget(run, run.createdAt, 0);
     // Four top-level steps, not one segment per structural agent.

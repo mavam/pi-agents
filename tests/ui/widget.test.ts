@@ -43,7 +43,7 @@ describe("formatRunWidget", () => {
     expect(line1).toContain("1m32s");
     expect(line2).toContain("● bugs → reviewer");
     expect(line2).toContain("● clarity → reviewer");
-    expect(line2).toContain("● ⑂reduce → worker");
+    expect(line2).toContain("● ⑂ reduce → worker");
   });
 
   test("mid-run shows partial percent and a running segment", async () => {
@@ -62,7 +62,7 @@ describe("formatRunWidget", () => {
     expect(done).toBe(2);
     const [line1, line2] = formatRunWidget(run, run.createdAt + 5_000, 0);
     expect(line1).toContain("67%");
-    expect(line2).toContain("◉ ⑂reduce → worker");
+    expect(line2).toContain("◉ ⑂ reduce → worker");
   });
 
   test("pending skeleton leaves keep the denominator honest before start", async () => {
@@ -103,7 +103,7 @@ describe("formatRunWidget", () => {
     );
     const [line1, line2] = formatRunWidget(run, run.createdAt + 1000, 0);
     expect(line2).toContain("● scout → {files}");
-    expect(line2).toContain("⇶map {files} [3/3]");
+    expect(line2).toContain("⇶ map {files} [3/3]");
     // 1 scout + 3 map items = 4 agents total.
     expect(widgetProgress(run)).toEqual({ done: 4, total: 4 });
     expect(line1).toContain("100%");
@@ -164,6 +164,57 @@ describe("formatRunWidget", () => {
     const [line1] = formatRunWidget(run, run.createdAt + 1000, 0);
     expect(line1).toContain("· Merging findings into one prioritized list");
     expect(line1).not.toContain("more");
+  });
+
+  test("deep flows collapse to one segment per top-level step", async () => {
+    const run = await recordedRun(
+      {
+        kind: "seq",
+        steps: [
+          {
+            kind: "agent",
+            name: "explorer",
+            task: "map",
+            output: "json",
+            as: "map",
+          },
+          {
+            kind: "par",
+            branches: {
+              bugs: { kind: "agent", name: "reviewer", task: "b {map}" },
+              clarity: { kind: "agent", name: "reviewer", task: "c {map}" },
+              security: {
+                kind: "seq",
+                steps: [
+                  { kind: "agent", name: "explorer", task: "s {map}" },
+                  { kind: "agent", name: "reviewer", task: "a {previous}" },
+                ],
+              },
+            },
+            reduce: { agent: "worker", task: "merge {branches}" },
+          },
+          {
+            kind: "map",
+            over: "{map.hotspots}",
+            body: { kind: "agent", name: "worker", task: "fix {item}" },
+          },
+          {
+            kind: "loop",
+            max: 2,
+            body: { kind: "agent", name: "reviewer", task: "verify" },
+          },
+        ],
+      },
+      (agent, task) => (task === "map" ? '{"hotspots":["a","b"]}' : "ok"),
+    );
+    const [, line2] = formatRunWidget(run, run.createdAt, 0);
+    // Four top-level steps, not one segment per structural agent.
+    expect(line2).toContain("● explorer → {map}");
+    expect(line2).toContain("● ⑃ par [5/5]");
+    expect(line2).toContain("● ⇶ map {map.hotspots} [2/2]");
+    expect(line2).toContain("● ↺ loop [2/2]");
+    expect(line2).not.toContain("…+");
+    expect(line2).not.toContain("bugs");
   });
 
   test("segment overflow collapses into a counter", async () => {

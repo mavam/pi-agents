@@ -322,8 +322,7 @@ export function parseWorkflowFile(
   return {
     name: fm.name.trim(),
     description: fm.description.trim(),
-    trigger:
-      typeof fm.trigger === "string" ? fm.trigger.trim() : undefined,
+    trigger: typeof fm.trigger === "string" ? fm.trigger.trim() : undefined,
     on,
     debounce: fm.debounce as number | undefined,
     params: allParams,

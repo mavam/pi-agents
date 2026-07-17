@@ -149,17 +149,18 @@ export function formatResultPreview(
   expanded: boolean,
   color: ToolColorize = plain,
 ): string {
-  const { runId, status, label, error } = result.details;
+  const { runId, status, error } = result.details;
   const id = shortId(runId);
-  const name = label ? ` ${label}` : "";
+  // The call render above already shows the label and structure; this line
+  // carries only status and the one actionable reference.
   if (status === "running") {
-    return `${color("accent", "◉")} ${id}${name} running in background ${color("dim", `· result arrives as notification · /run ${id}`)}`;
+    return `${color("accent", "◉")} running in background ${color("dim", `· /run ${id}`)}`;
   }
   if (status === "completed") {
-    const head = `${color("success", "●")} ${id}${name} completed ${color("dim", `· /run ${id} result`)}`;
+    const head = `${color("success", "●")} completed ${color("dim", `· /run ${id} result`)}`;
     return expanded ? `${head}\n${result.text}` : head;
   }
-  const head = `${color("error", "✗")} ${id}${name} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""}`;
+  const head = `${color("error", "✗")} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""} ${color("dim", `· /run ${id}`)}`;
   return expanded ? `${head}\n${result.text}` : head;
 }
 

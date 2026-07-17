@@ -265,7 +265,7 @@ describe("call and result previews", () => {
       },
       false,
     );
-    expect(running).toContain("◉ b3ca589a review running in background");
+    expect(running).toContain("◉ running in background");
     expect(running).toContain("/run b3ca589a");
     expect(running).not.toContain("End your turn");
 
@@ -280,7 +280,8 @@ describe("call and result previews", () => {
       },
       false,
     );
-    expect(failed).toContain("✗ b3ca589a failed — agent exploded stack");
+    expect(failed).toContain("✗ failed — agent exploded stack");
+    expect(failed).toContain("/run b3ca589a");
   });
 });
 

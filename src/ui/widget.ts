@@ -77,94 +77,113 @@ class TruncatedLines implements Component {
   }
 }
 
-/** Aggregate a path prefix: map/loop segments cover their whole subtree. */
-function statusForPrefix(
+/**
+ * Status for one depth-1 unit: liveness from the unit's own node (when it
+ * has started), work counts aggregated over the agent/reduce paths in its
+ * subtree — so `⑃ par [2/4]` counts agents, not structural nodes.
+ */
+function unitStatus(
   statuses: Map<string, PathStatus>,
   path: string,
-): PathStatus | undefined {
-  const exact = statuses.get(path);
-  if (exact) return exact;
-  let combined: PathStatus | undefined;
+): { status: SegmentStatus; detail?: string } {
+  const own = statuses.get(path);
+  let completed = 0;
+  let total = 0;
+  let running = 0;
+  let failed = 0;
   for (const [key, status] of statuses) {
-    if (!key.startsWith(`${path}.`)) continue;
-    if (!combined) {
-      combined = { ...status };
-      continue;
-    }
-    combined.completed += status.completed;
-    combined.total += status.total;
-    combined.status =
-      status.status === "running" || combined.status === "running"
+    if (key !== path && !key.startsWith(`${path}.`)) continue;
+    if (status.kind !== "agent" && status.kind !== "reduce") continue;
+    completed += status.completed;
+    total += status.total;
+    if (status.status === "running") running += 1;
+    if (status.status === "failed") failed += 1;
+  }
+  const derived: SegmentStatus | undefined =
+    total > 0
+      ? running > 0
         ? "running"
-        : status.status === "failed" || combined.status === "failed"
+        : failed > 0
           ? "failed"
-          : combined.status;
-    combined.error ??= status.error;
-  }
-  if (combined) {
-    combined.detail =
-      combined.total > 1
-        ? `${combined.completed}/${combined.total}`
-        : undefined;
-  }
-  return combined;
+          : "completed"
+      : undefined;
+  return {
+    status: own?.status ?? derived ?? "pending",
+    detail: total > 1 ? `${completed}/${total}` : undefined,
+  };
 }
 
-/** One segment per structural agent position, in flow order. */
+/**
+ * One segment per depth-1 unit. The tool-call box carries the full vertical
+ * structure; the widget summarizes horizontally: a seq root yields one
+ * segment per top-level step, a par root one per branch (plus reduce), and
+ * composite units collapse to their kind glyph with aggregate counts.
+ */
 export function widgetSegments(
   flow: FlowNode,
   statuses: Map<string, PathStatus>,
 ): WidgetSegment[] {
   const segments: WidgetSegment[] = [];
-  const push = (path: string, text: string, extra?: string): void => {
-    const status = statusForPrefix(statuses, path);
-    const detail = status?.detail ? ` [${status.detail}]` : "";
+  const push = (path: string, text: string): void => {
+    const { status, detail } = unitStatus(statuses, path);
     segments.push({
-      text: `${text}${extra ?? ""}${detail}`,
-      status: status?.status ?? "pending",
+      text: `${text}${detail ? ` [${detail}]` : ""}`,
+      status,
     });
   };
   const agentText = (node: Extract<FlowNode, { kind: "agent" }>): string =>
     node.as ? `${node.name} → {${node.as}}` : node.name;
-  const visit = (node: FlowNode, path: string): void => {
+
+  /** Summarize any node as one collapsed segment. */
+  const unit = (node: FlowNode, path: string, prefix = ""): void => {
     switch (node.kind) {
       case "agent":
-        push(path, agentText(node));
+        push(path, `${prefix}${prefix ? node.name : agentText(node)}`);
         return;
       case "seq":
-        node.steps.forEach((step, index) => {
-          visit(step, stepPath(path, index));
-        });
+        push(path, `${prefix}≡ ${node.label ?? "seq"}`);
         return;
-      case "par": {
-        for (const [key, branch] of Object.entries(node.branches)) {
-          if (branch.kind === "agent") {
-            push(branchPath(path, key), `${key} → ${branch.name}`);
-          } else {
-            visit(branch, branchPath(path, key));
-          }
-        }
-        if (node.reduce) {
-          push(reducePath(path), `⑂reduce → ${node.reduce.agent}`);
-        }
+      case "par":
+        push(path, `${prefix}⑃ ${node.label ?? "par"}`);
         return;
-      }
       case "map":
-        push(bodyPath(path), `⇶map ${node.over}`);
-        if (node.reduce) {
-          push(reducePath(path), `⑂reduce → ${node.reduce.agent}`);
-        }
+        push(path, `${prefix}⇶ map ${node.over}`);
         return;
       case "loop":
-        push(bodyPath(path), `↺loop`);
+        push(path, `${prefix}↺ loop`);
         return;
       case "workflow":
-        if (node.body) visit(node.body, bodyPath(path));
-        else push(path, `❖${node.name}`);
+        push(path, `${prefix}❖ ${node.name}`);
         return;
     }
   };
-  visit(flow, "$");
+
+  // Unwrap workflow refs so the inlined body's shape drives the summary.
+  let root = flow;
+  let rootPath = "$";
+  while (root.kind === "workflow" && root.body) {
+    root = root.body;
+    rootPath = bodyPath(rootPath);
+  }
+
+  if (root.kind === "seq") {
+    root.steps.forEach((step, index) => {
+      unit(step, stepPath(rootPath, index));
+    });
+  } else if (root.kind === "par") {
+    for (const [key, branch] of Object.entries(root.branches)) {
+      if (branch.kind === "agent") {
+        push(branchPath(rootPath, key), `${key} → ${branch.name}`);
+      } else {
+        unit(branch, branchPath(rootPath, key), `${key} `);
+      }
+    }
+    if (root.reduce) {
+      push(reducePath(rootPath), `⑂ reduce → ${root.reduce.agent}`);
+    }
+  } else {
+    unit(root, rootPath);
+  }
   return segments;
 }
 

@@ -167,6 +167,8 @@ function build(node: FlowNode, path: string): DisplayNode[] {
 export interface PathStatus {
   icon: string;
   status: "running" | "completed" | "failed" | "cancelled";
+  /** Node kind at this path (agent/reduce paths carry the work). */
+  kind: NodeView["kind"];
   completed: number;
   total: number;
   /** e.g. "3/5" for map items, "#2" for loop iterations. */
@@ -199,6 +201,7 @@ export function aggregateStatuses(run: RunView): Map<string, PathStatus> {
     result.set(path, {
       icon: STATUS_TREE_ICONS[status],
       status,
+      kind: (nodes[0] as NodeView).kind,
       completed: counts.completed,
       total: nodes.length,
       detail,

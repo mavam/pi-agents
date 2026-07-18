@@ -1,7 +1,7 @@
 ---
 name: worker
 description: General-purpose worker for delegated coding tasks
-model: claude-sonnet-4-5
+model: openai-codex/gpt-5.6-terra
 thinking: medium
 skills:
   - code-review

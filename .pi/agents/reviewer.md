@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Focused code review from a single lens
-model: claude-sonnet-4-5
+model: openai-codex/gpt-5.6-terra
 thinking: medium
 tools:
   - read

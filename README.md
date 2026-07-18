@@ -87,7 +87,7 @@ steps need dot-path access or predicates. Escape literal braces as `{{`/`}}`.
 ---
 name: reviewer
 description: Focused code review from a single lens
-model: claude-sonnet-4-5   # optional; defaults to the active session model
+model: openai-codex/gpt-5.6-terra  # optional; defaults to the active session model
 thinking: medium           # optional: off|minimal|low|medium|high|xhigh
 skills: []                 # optional pi skills to inject
 tools: [read, grep, find]  # optional allowlist; [] means NO tools at all

@@ -284,8 +284,10 @@ describe("call and result previews", () => {
       },
       false,
     );
-    expect(running).toContain("◉ running in background");
-    expect(running).toContain("/run b3ca589a");
+    // Blank-line separated from the tree, icon-less and dim while live.
+    expect(running.startsWith("\n")).toBe(true);
+    expect(running).toContain("running in background · /run b3ca589a");
+    expect(running).not.toContain("◉");
     expect(running).not.toContain("End your turn");
 
     const failed = formatResultPreview(
@@ -301,6 +303,55 @@ describe("call and result previews", () => {
     );
     expect(failed).toContain("✗ failed — agent exploded stack");
     expect(failed).toContain("/run b3ca589a");
+  });
+});
+
+describe("live result rendering", () => {
+  test("renderResult reflects the run's current status, not the frozen result", async () => {
+    const { engine } = fakeEngine(() => "all done");
+    const deps = makeDeps(engine);
+    const tool = createWorkflowTool(deps);
+    const uiCtx = {
+      cwd: projectDir,
+      hasUI: true,
+      isIdle: () => true,
+      sessionManager: {
+        getLeafId: () => null,
+        getSessionFile: () => undefined,
+      },
+      ui: { setWidget: () => {} },
+    } as unknown as ExtensionContext;
+    const result = await tool.execute(
+      "t-live",
+      { flow: { kind: "agent", name: "echo", task: "hi" }, scope: "project" },
+      undefined,
+      undefined,
+      uiCtx,
+    );
+    // Backgrounded: the stored result says running.
+    expect(result.details.status).toBe("running");
+    // Wait for the run to finish, then render with a marker theme.
+    const start = Date.now();
+    while (
+      deps.manager.state.runs.get(result.details.runId)?.status === "running"
+    ) {
+      if (Date.now() - start > 2000) throw new Error("timeout");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const theme = {
+      fg: (_c: string, t: string) => t,
+    } as unknown as Parameters<NonNullable<typeof tool.renderResult>>[2];
+    const component = tool.renderResult?.(
+      result,
+      { expanded: false, isPartial: false },
+      theme,
+      {} as never,
+    );
+    const rendered = (component as { render: (w: number) => string[] })
+      .render(120)
+      .join("\n");
+    expect(rendered).toContain("● completed");
+    expect(rendered).not.toContain("running in background");
   });
 });
 

@@ -175,8 +175,12 @@ export function formatCallPreview(
 }
 
 /**
- * The user-facing result line. The tool's content string stays model-facing
- * (it carries the continuation instruction); this is what the human sees.
+ * The user-facing result line — blank-line separated from the tree so it
+ * reads as run metadata, not another node of the algebra. While the run is
+ * live the widget below carries all liveness, so this line is icon-less and
+ * fully dim; once the run settles (and the widget disappears) it gains its
+ * outcome glyph as the scrollback record. The tool's content string stays
+ * model-facing (it carries the continuation instruction).
  */
 export function formatResultPreview(
   result: { details: WorkflowToolDetails; text: string },
@@ -185,16 +189,14 @@ export function formatResultPreview(
 ): string {
   const { runId, status, error } = result.details;
   const id = shortId(runId);
-  // The call render above already shows the label and structure; this line
-  // carries only status and the one actionable reference.
   if (status === "running") {
-    return `${color("accent", "◉")} running in background ${color("dim", `· /run ${id}`)}`;
+    return `\n${color("dim", `running in background · /run ${id}`)}`;
   }
   if (status === "completed") {
-    const head = `${color("success", "●")} completed ${color("dim", `· /run ${id} result`)}`;
+    const head = `\n${color("success", "●")} completed ${color("dim", `· /run ${id} result`)}`;
     return expanded ? `${head}\n${result.text}` : head;
   }
-  const head = `${color("error", "✗")} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""} ${color("dim", `· /run ${id}`)}`;
+  const head = `\n${color("error", "✗")} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""} ${color("dim", `· /run ${id}`)}`;
   return expanded ? `${head}\n${result.text}` : head;
 }
 
@@ -268,12 +270,19 @@ export function createWorkflowTool(
       const color: ToolColorize = (name, text) => theme.fg(name, text);
       const first = result.content[0];
       const text = first?.type === "text" ? first.text : "";
+      // The stored tool result freezes at "running" for backgrounded runs;
+      // consult the live run state so scrollback shows the actual outcome.
+      const live = deps.manager.state.runs.get(result.details.runId);
+      const details: WorkflowToolDetails =
+        live && live.status !== "running"
+          ? {
+              ...result.details,
+              status: live.status,
+              error: live.error ?? result.details.error,
+            }
+          : result.details;
       return new Text(
-        formatResultPreview(
-          { details: result.details, text },
-          options.expanded,
-          color,
-        ),
+        formatResultPreview({ details, text }, options.expanded, color),
         1,
         0,
       );

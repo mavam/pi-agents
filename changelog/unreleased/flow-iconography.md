@@ -7,7 +7,7 @@ created: 2026-07-16T00:00:00.000000Z
 ---
 
 Flows render as compact icon trees everywhere they are displayed: `✦` agent,
-`⑃` par with `⑂` reduce, `⇶` map, `↺` loop, `⧉` workflow, with sequences
+`⑃` parallel with `⑂` reduce, `⇶` map, `↺` loop, `❖` workflow, with sequences
 transparent and task previews inline. The tool call display shows the tree
 instead of raw JSON arguments, `/workflow <name>` shows the tree above the
 JSON definition, and `/run <id>` overlays live status icons (`○ ◉ ● ✗ ⊘`)

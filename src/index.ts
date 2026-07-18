@@ -1,130 +1,138 @@
+/**
+ * pi-agents extension entry point: constructs the engine, run manager, and
+ * UI managers; registers the workflow tool, slash commands, event hooks, and
+ * the system-prompt catalogs; and rebuilds run history from the sidecar
+ * store next to the session file.
+ */
+
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { buildSystemPromptAppendix } from "./catalog/prompt.js";
 import {
+  BUDGETS_ENV_VAR,
   createSubprocessSpawnEngine,
-  formatFailureReason,
-  isChildProcessRunning,
-  type SpawnProcess,
+  DEPTH_ENV_VAR,
 } from "./engine/subprocess.js";
-import { createBackgroundNotificationManager } from "./extension/background-notifications.js";
+import type { Budgets } from "./model/ast.js";
 import {
-  registerAgentCommands,
-  registerFlowCommands,
-} from "./extension/commands.js";
-import { createManagedWorkflowExecutor } from "./extension/managed-workflow.js";
+  getSessionFile,
+  isProjectTrusted,
+  readRunEvents,
+} from "./run/persist.js";
+import { RunManager } from "./run/runs.js";
 import {
-  buildAgentSystemPrompt,
-  createAgentTool,
-  createWorkflowTool,
-} from "./extension/tools.js";
-import { AgentEvents } from "./runtime/events.js";
-import { RunExecutor } from "./runtime/executor.js";
-import { LiveRunRegistry } from "./runtime/live-runs.js";
-import { AgentManager } from "./runtime/manager.js";
-import { RunEventCache } from "./runtime/session-events.js";
-import { countStatuses, createRunRuntimeState } from "./runtime/state.js";
+  registerCommands,
+  registerWorkflowCommands,
+} from "./triggers/commands.js";
+import { HookManager } from "./triggers/hooks.js";
+import type { TriggerDeps } from "./triggers/start.js";
+import { createWorkflowTool } from "./triggers/tool.js";
+import { NotificationManager } from "./ui/notify.js";
 import {
-  RUN_NOTIFICATION_CUSTOM_TYPE,
-  RunWidgetManager,
-  rebuildRuntimeState,
-  renderRunNotificationMessage,
-} from "./ui/presentation.js";
+  MESSAGE_TYPE,
+  NOTIFICATION_TYPE,
+  registerRenderers,
+} from "./ui/render.js";
+import { RunWidget } from "./ui/widget.js";
 
-export function createAgentExtension(options?: {
-  spawnProcess?: SpawnProcess;
-}) {
-  const engine = createSubprocessSpawnEngine({
-    spawnProcess: options?.spawnProcess,
-  });
-
-  return function agentExtension(pi: ExtensionAPI) {
-    const runtimeState = createRunRuntimeState();
-    const manager = new AgentManager(engine);
-    const liveRuns = new LiveRunRegistry();
-    const runEventCache = new RunEventCache();
-    const widgetManager = new RunWidgetManager(runtimeState);
-    const notifications = createBackgroundNotificationManager(pi, runtimeState);
-    const executor = new RunExecutor({
-      pi,
-      manager,
-      runtimeState,
-      onStateChanged: (ctx) => {
-        widgetManager.update(ctx);
-        pi.events.emit(
-          AgentEvents.RUN_COUNTS_CHANGED,
-          countStatuses(runtimeState),
-        );
-      },
-    });
-    const executeManagedWorkflow = createManagedWorkflowExecutor({
-      pi,
-      executor,
-      runtimeState,
-      liveRuns,
-      runEventCache,
-      notifications,
-    });
-
-    const refreshUi = (ctx: ExtensionContext): void => {
-      notifications.setContext(ctx);
-      widgetManager.update(ctx);
-      notifications.flush(ctx);
-    };
-
-    const reloadRunState = (ctx: ExtensionContext): void => {
-      notifications.setContext(ctx);
-      rebuildRuntimeState(runtimeState, ctx, runEventCache, liveRuns);
-      widgetManager.update(ctx);
-      notifications.flush(ctx);
-    };
-
-    if (typeof pi.registerMessageRenderer === "function") {
-      pi.registerMessageRenderer(
-        RUN_NOTIFICATION_CUSTOM_TYPE,
-        renderRunNotificationMessage,
-      );
-    }
-
-    registerAgentCommands(pi);
-    registerFlowCommands(pi, runtimeState, liveRuns);
-    pi.registerTool(createAgentTool({ pi, executeManagedWorkflow }));
-    pi.registerTool(createWorkflowTool({ pi, executeManagedWorkflow }));
-
-    pi.on("session_start", async (_event, ctx) => {
-      reloadRunState(ctx);
-    });
-    pi.on("session_tree", async (_event, ctx) => {
-      reloadRunState(ctx);
-    });
-    pi.on("session_shutdown", async () => {
-      liveRuns.stopAll();
-      notifications.clear();
-    });
-
-    pi.on("before_agent_start", async (event, ctx) => {
-      notifications.setContext(ctx);
-      const agentsPrompt = buildAgentSystemPrompt(ctx.cwd);
-      return {
-        systemPrompt: `${event.systemPrompt}\n\n${agentsPrompt}`,
-      };
-    });
-
-    pi.on("agent_start", async (_event, ctx) => {
-      notifications.setContext(ctx);
-    });
-
-    pi.on("tool_execution_end", async (_event, ctx) => {
-      refreshUi(ctx);
-    });
-
-    pi.on("agent_end", async (_event, ctx) => {
-      refreshUi(ctx);
-    });
-  };
+function currentDepth(): number {
+  const raw = process.env[DEPTH_ENV_VAR];
+  const parsed = raw ? Number.parseInt(raw, 10) : 0;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-export default createAgentExtension();
-export * from "./runtime/events.js";
-export { formatFailureReason, isChildProcessRunning, type SpawnProcess };
+/** Budget limits inherited from a parent pi-agents process, if any. */
+function inheritedBudgets(): Budgets | undefined {
+  const raw = process.env[BUDGETS_ENV_VAR];
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Budgets;
+    return typeof parsed === "object" && parsed !== null ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export default function agentExtension(pi: ExtensionAPI): void {
+  const engine = createSubprocessSpawnEngine();
+  const depth = currentDepth();
+
+  // Assigned right below; the manager's callbacks fire only once runs exist.
+  let notifications: NotificationManager;
+  let widget: RunWidget;
+
+  const manager = new RunManager({
+    engine,
+    depth,
+    defaultBudgets: inheritedBudgets(),
+    onEvent: (event) => notifications.handleRunEvent(event),
+    onStateChanged: () => widget.update(),
+  });
+  notifications = new NotificationManager(pi, manager);
+  widget = new RunWidget(manager);
+
+  const deps: TriggerDeps = { pi, manager, notifications, widget };
+
+  registerRenderers(pi);
+  pi.registerTool(createWorkflowTool(deps));
+  registerCommands(pi, deps);
+
+  // Event hooks only run in the root process: delegated children would
+  // otherwise re-trigger the same workflows from their own lifecycle events.
+  const hooks = depth === 0 ? new HookManager(pi, deps) : undefined;
+  hooks?.install();
+
+  const refreshUi = (ctx: ExtensionContext): void => {
+    notifications.setContext(ctx);
+    widget.update(ctx);
+    notifications.flush(ctx);
+  };
+
+  const reloadRunState = (ctx: ExtensionContext): void => {
+    notifications.setContext(ctx);
+    manager.absorbHistory(readRunEvents(getSessionFile(ctx)));
+    widget.update(ctx);
+    notifications.flush(ctx);
+  };
+
+  pi.on("before_agent_start", (event, ctx) => {
+    notifications.setContext(ctx);
+    return {
+      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPromptAppendix(ctx.cwd, isProjectTrusted(ctx))}`,
+    };
+  });
+
+  pi.on("session_start", (_event, ctx) => {
+    reloadRunState(ctx);
+    const trusted = isProjectTrusted(ctx);
+    registerWorkflowCommands(pi, ctx.cwd, deps, trusted);
+    hooks?.refresh(ctx.cwd, trusted);
+  });
+
+  pi.on("session_tree", (_event, ctx) => {
+    reloadRunState(ctx);
+  });
+
+  pi.on("agent_start", (_event, ctx) => {
+    notifications.setContext(ctx);
+  });
+
+  pi.on("tool_execution_end", (_event, ctx) => {
+    refreshUi(ctx);
+  });
+
+  pi.on("agent_end", (_event, ctx) => {
+    refreshUi(ctx);
+  });
+
+  pi.on("session_shutdown", () => {
+    hooks?.dispose();
+    widget.dispose();
+    manager.stopAll();
+    notifications.clear();
+  });
+}
+
+export { MESSAGE_TYPE, NOTIFICATION_TYPE };

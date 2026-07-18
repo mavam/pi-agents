@@ -10,6 +10,10 @@ import {
 
 // --- Types ---
 
+import type { Scope, Source } from "../model/ast.js";
+
+export type { Scope, Source };
+
 const THINKING_LEVELS: ThinkingLevel[] = [
   "off",
   "minimal",
@@ -20,15 +24,14 @@ const THINKING_LEVELS: ThinkingLevel[] = [
 ];
 export type Thinking = ThinkingLevel;
 
-export type Source = "user" | "project";
-export type Scope = Source | "both";
-
 export interface Agent {
   name: string;
   description: string;
   model?: string;
   thinking?: Thinking;
   skills: string[];
+  /** Tool allowlist for the delegated process (passed as `--tools`). */
+  tools?: string[];
   systemPrompt: string;
   source: Source;
   filePath: string;
@@ -55,18 +58,22 @@ const ALLOWED_FRONTMATTER_KEYS = new Set([
   "model",
   "thinking",
   "skills",
+  "tools",
 ]);
 
 function toErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+// User-scope resources live inside pi's agent dir (~/.pi/agent), matching
+// pi's own conventions for skills, prompts, and tools — and inheriting the
+// PI_CODING_AGENT_DIR override wholesale.
 function getUserAgentsDir(): string {
-  return path.join(path.dirname(getAgentDir()), "agents");
+  return path.join(getAgentDir(), "agents");
 }
 
 function getUserSkillsDir(): string {
-  return path.join(path.dirname(getAgentDir()), "skills");
+  return path.join(getAgentDir(), "skills");
 }
 
 function isDirectory(p: string): boolean {
@@ -120,6 +127,9 @@ function parseAgentFile(filePath: string, source: Source): Agent | string {
     (!Array.isArray(fm.skills) || fm.skills.some((s) => typeof s !== "string"))
   )
     return "Invalid 'skills' (must be a YAML array of strings)";
+  const tools = parseToolsField(fm.tools);
+  if (typeof tools === "object" && tools !== null && "error" in tools)
+    return tools.error;
 
   return {
     name: (fm.name as string).trim(),
@@ -136,10 +146,33 @@ function parseAgentFile(filePath: string, source: Source): Agent | string {
           ),
         ]
       : [],
+    tools,
     systemPrompt: body.trim(),
     source,
     filePath,
   };
+}
+
+/**
+ * `tools` accepts a YAML array of strings or a comma-separated string. An
+ * explicitly empty list is preserved: it means "no tools", not "all tools".
+ */
+function parseToolsField(
+  raw: unknown,
+): string[] | undefined | { error: string } {
+  if (raw === undefined) return undefined;
+  let names: string[];
+  if (typeof raw === "string") {
+    names = raw.split(",");
+  } else if (Array.isArray(raw) && raw.every((t) => typeof t === "string")) {
+    names = raw as string[];
+  } else {
+    return {
+      error:
+        "Invalid 'tools' (must be a YAML array of strings or a comma-separated string)",
+    };
+  }
+  return [...new Set(names.map((t) => t.trim()).filter(Boolean))];
 }
 
 function loadAgentsFromDir(
@@ -380,6 +413,11 @@ export function buildAgentsPrompt(
       if (agent.thinking) {
         lines.push(
           `      <thinking>${escapeXmlText(agent.thinking)}</thinking>`,
+        );
+      }
+      if (agent.tools && agent.tools.length > 0) {
+        lines.push(
+          `      <tools>${escapeXmlText(agent.tools.join(", "))}</tools>`,
         );
       }
 

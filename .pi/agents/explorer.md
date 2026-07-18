@@ -1,7 +1,7 @@
 ---
 name: explorer
 description: Fast codebase exploration and file-level reconnaissance
-model: openai-codex/gpt-5.3-codex-spark
+model: openai-codex/gpt-5.6-terra
 thinking: low
 skills:
   - search

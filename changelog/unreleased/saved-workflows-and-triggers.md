@@ -6,8 +6,8 @@ authors:
 created: 2026-07-16T00:00:00.000000Z
 ---
 
-Workflows can be saved as `.pi/workflows/*.md` files (frontmatter plus a
-fenced flow block) and fire from three surfaces: the model invokes them via
+Workflows can be saved as pure YAML/JSON files (`.pi/workflows/*.yaml`, the
+extension decides the parser) and fire from three surfaces: the model invokes them via
 the single `workflow` tool guided by `trigger` descriptions in the system
 prompt; each saved workflow auto-registers a slash command that runs the
 graph directly with args bound to params; and `on: [event]` frontmatter

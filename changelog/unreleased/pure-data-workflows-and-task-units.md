@@ -1,14 +1,14 @@
 ---
-title: Frontmatter flows and reusable task units
+title: Pure-data workflows and reusable task units
 type: feature
 authors:
   - mavam
 created: 2026-07-17T00:00:00.000000Z
 ---
 
-Workflow files no longer carry YAML twice: the flow expression moves into the
-frontmatter under a `flow:` key and the markdown body becomes pure
-documentation (the fenced-block form is gone). Single-unit workflows can skip
+Workflow files are pure data now: one YAML or JSON object per file, with
+the extension deciding the parser (.yaml, .yml, .json) and prose living in
+an optional doc: key. The earlier markdown/frontmatter form is gone. Single-unit workflows can skip
 the graph entirely with the flat form — `agent:` plus optional `task:`,
 `model:`, `thinking:` — which normalizes to a bare agent leaf while keeping
 full workflow powers (params, slash command, hooks, cross-workflow

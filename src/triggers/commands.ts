@@ -132,7 +132,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       const lines = ["## Workflows", ""];
       if (workflows.length === 0) {
         lines.push(
-          "No workflows found. Create `.pi/workflows/<name>.md` or `~/.pi/agent/workflows/<name>.md`.",
+          "No workflows found. Create `.pi/workflows/<name>.yaml` or `~/.pi/agent/workflows/<name>.yaml`.",
         );
       }
       for (const wf of workflows) {

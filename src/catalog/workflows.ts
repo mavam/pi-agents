@@ -1,9 +1,9 @@
 /**
- * Saved-workflow discovery: `.pi/workflows/*.md` files whose YAML frontmatter
- * carries everything machine-readable — name, description, trigger, on,
- * debounce, params, and the flow expression itself (either a `flow:` tree or
- * the flat `agent:`/`task:` single-unit form). The markdown body is pure
- * documentation.
+ * Saved-workflow discovery: pure YAML or JSON files (`.pi/workflows/*.yaml`,
+ * `.yml`, `.json` — the extension decides the parser). One object per file:
+ * name, description, trigger, on, debounce, params, optional doc prose, and
+ * the flow expression (either a `flow:` tree or the flat `agent:`/`task:`
+ * single-unit form).
  *
  * Discovery mirrors agents: user `~/.pi/agent/workflows` plus the nearest project
  * `.pi/workflows` walking up from cwd; project wins on name conflicts.
@@ -11,7 +11,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import YAML from "yaml";
 import type {
   FlowNode,
   Scope,
@@ -57,6 +58,7 @@ const ALLOWED_KEYS = new Set([
   "on",
   "debounce",
   "params",
+  "doc",
   "flow",
   // Flat single-unit form (sugar for flow: {kind: agent, …}):
   "agent",
@@ -64,6 +66,9 @@ const ALLOWED_KEYS = new Set([
   "model",
   "thinking",
 ]);
+
+/** The file extension decides the parser. */
+const WORKFLOW_EXTENSIONS = [".yaml", ".yml", ".json"];
 
 const WORKFLOW_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
@@ -97,7 +102,7 @@ function findNearestProjectWorkflowsDir(cwd: string): string | null {
 }
 
 /**
- * The flow expression from frontmatter: either an explicit `flow:` tree or
+ * The flow expression: either an explicit `flow:` tree or
  * the flat single-unit form (`agent:` + optional task/model/thinking), which
  * normalizes to a bare agent leaf.
  */
@@ -149,7 +154,7 @@ function extractRawFlow(
   return {
     ok: false,
     error:
-      "No flow found: add a 'flow:' key to the frontmatter, or the flat 'agent:'/'task:' form",
+      "No flow found: add a 'flow:' key, or the flat 'agent:'/'task:' form",
   };
 }
 
@@ -250,18 +255,28 @@ export function parseWorkflowFile(
   }
 
   let fm: Record<string, unknown>;
-  let body: string;
   try {
-    const parsed = parseFrontmatter<Record<string, unknown>>(raw);
-    fm = parsed.frontmatter;
-    body = parsed.body;
+    const parsed: unknown = filePath.endsWith(".json")
+      ? JSON.parse(raw)
+      : YAML.parse(raw);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return "A workflow file must contain a single YAML/JSON object";
+    }
+    fm = parsed as Record<string, unknown>;
   } catch (e) {
-    return `Could not parse frontmatter: ${toErrorMessage(e)}`;
+    return `Could not parse ${path.extname(filePath).slice(1)}: ${toErrorMessage(e)}`;
   }
 
   const unknownKeys = Object.keys(fm).filter((k) => !ALLOWED_KEYS.has(k));
   if (unknownKeys.length > 0) {
-    return `Unsupported frontmatter keys: ${unknownKeys.join(", ")}. Allowed keys: ${[...ALLOWED_KEYS].join(", ")}.`;
+    return `Unsupported keys: ${unknownKeys.join(", ")}. Allowed keys: ${[...ALLOWED_KEYS].join(", ")}.`;
+  }
+  if (fm.doc !== undefined && typeof fm.doc !== "string") {
+    return "Invalid 'doc' (must be a string)";
   }
   if (typeof fm.name !== "string" || !WORKFLOW_NAME_RE.test(fm.name.trim())) {
     return `Missing or invalid 'name' (must match ${WORKFLOW_NAME_RE})`;
@@ -317,7 +332,7 @@ export function parseWorkflowFile(
     return `Invalid flow: ${detail || "not a flow node"}`;
   }
 
-  const doc = body.trim();
+  const doc = typeof fm.doc === "string" ? fm.doc.trim() : "";
 
   return {
     name: fm.name.trim(),
@@ -353,12 +368,18 @@ function loadWorkflowsFromDir(
     return { workflows, diagnostics };
   }
   for (const entry of entries) {
-    if (
-      !entry.name.endsWith(".md") ||
-      (!entry.isFile() && !entry.isSymbolicLink())
-    )
-      continue;
+    if (!entry.isFile() && !entry.isSymbolicLink()) continue;
     const filePath = path.join(dir, entry.name);
+    if (entry.name.endsWith(".md")) {
+      diagnostics.push({
+        source,
+        filePath,
+        message:
+          "Workflows are pure YAML/JSON files now; rename to .yaml (frontmatter keys become top-level keys, prose moves to 'doc:').",
+      });
+      continue;
+    }
+    if (!WORKFLOW_EXTENSIONS.includes(path.extname(entry.name))) continue;
     const result = parseWorkflowFile(filePath, source);
     if (typeof result === "string")
       diagnostics.push({ source, filePath, message: result });

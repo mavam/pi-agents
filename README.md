@@ -21,7 +21,7 @@ Three nouns carry the whole framework:
 | Concept      | What it is                                                                                       |
 | ------------ | ------------------------------------------------------------------------------------------------ |
 | **agent**    | A markdown file defining a delegated pi subprocess (`.pi/agents/*.md`).                          |
-| **workflow** | A saved, named composition of agents (`.pi/workflows/*.md`) — or an inline expression.           |
+| **workflow** | A saved, named composition of agents (`.pi/workflows/*.yaml`) — or an inline expression.           |
 | **run**      | One persisted execution of a workflow. Browse with `/runs`, inspect with `/run <id>`.            |
 
 ### The algebra
@@ -106,15 +106,15 @@ it without repeating the task.
 
 ### 2. Define a workflow
 
-`.pi/workflows/review.md` — everything machine-readable lives in the
-frontmatter (the `flow:` key holds the expression); the body is pure
-documentation:
+Workflows are pure data: one YAML or JSON object per file, the extension
+decides the parser (`.yaml`, `.yml`, `.json`). `.pi/workflows/review.yaml`:
 
-```md
----
+```yaml
 name: review
 description: Multi-lens code review with a synthesis pass
 trigger: when the user asks for a thorough review
+doc: >-
+  Optional prose documentation lives here.
 params:
   - name: target
     required: true
@@ -126,9 +126,6 @@ flow:
   reduce:
     agent: worker
     task: "Merge and prioritize:\n{branches}"
----
-
-Reviews the target from two lenses concurrently, then merges findings.
 ```
 
 For a single-unit workflow — one agent, one task, no graph — skip `flow:`
@@ -136,15 +133,13 @@ entirely and use the flat form, which normalizes to a bare agent leaf but
 keeps full workflow powers (params, `/name` command, `on:` hooks, and
 `{kind: workflow, name: …}` references from other flows):
 
-```md
----
+```yaml
 name: bug-hunt
 description: Hunt correctness bugs in a target
 params: [{ name: target, required: true }]
 agent: reviewer
 task: "Review {params.target} strictly for bugs."
 thinking: high
----
 ```
 
 Workflows live in `~/.pi/agent/workflows` and `.pi/workflows`, discovered like
@@ -165,9 +160,48 @@ Workflows fire from three surfaces:
    `/review src/core` runs the graph directly, with args bound to params —
    no model round-trip. Positional args and `key=value` pairs both work.
 3. **Events.** Add `on: [turn_end]` (plus optional `debounce:` milliseconds)
-   to the frontmatter and the workflow fires on those pi events, always in
-   the background, with the event payload bound as `{params.event}`.
-   Hooks run only in the root pi process, never inside delegated children.
+   and the workflow fires on those pi events, always in the background,
+   with the event payload bound as `{params.event}`. Hooks run only in the
+   root pi process, never inside delegated children.
+
+## 🛠️ The `workflow` tool: ad-hoc flows from the model
+
+The model is a first-class workflow author, not just an invoker. The single
+`workflow` tool takes either a saved workflow by name or a **complete inline
+flow expression**, and its tool description embeds the full algebra — node
+kinds, value semantics, binding rules, predicates — so the model can
+translate a request like *"review these three modules in parallel, then fix
+whatever the reviews agree on"* directly into a validated flow:
+
+```json
+{
+  "flow": {
+    "kind": "seq",
+    "steps": [
+      { "kind": "par",
+        "as": "reviews",
+        "branches": {
+          "core":  { "kind": "agent", "name": "reviewer", "task": "Review src/core" },
+          "run":   { "kind": "agent", "name": "reviewer", "task": "Review src/run" },
+          "ui":    { "kind": "agent", "name": "reviewer", "task": "Review src/ui" }
+        },
+        "reduce": { "agent": "worker", "task": "List findings all reviews agree on:\n{branches}", "output": "json" } },
+      { "kind": "agent", "name": "worker", "task": "Fix these agreed findings: {previous}" }
+    ]
+  },
+  "label": "review three modules, fix consensus",
+  "budgets": { "maxAgents": 8 }
+}
+```
+
+Everything the model needs is in context: the tool description carries the
+algebra reference, and every turn's system prompt carries the discovered
+agent catalog (names, descriptions, tools, default tasks) and workflow
+catalog (names, `trigger` guidance, params). Inline flows go through exactly
+the same validation as saved ones — unknown agents, bad references, and
+scope violations come back as node-path errors the model can correct — and
+a bare agent leaf is a valid flow, so single delegation is just
+`workflow({flow: {kind: "agent", name: "explorer", task: "…"}})`.
 
 ## 🧮 Node reference
 

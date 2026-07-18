@@ -2,7 +2,7 @@
 name: worker
 description: General-purpose worker for delegated coding tasks
 model: openai-codex/gpt-5.6-terra
-thinking: medium
+thinking: high
 skills:
   - code-review
 ---

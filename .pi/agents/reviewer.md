@@ -2,7 +2,7 @@
 name: reviewer
 description: Focused code review from a single lens
 model: openai-codex/gpt-5.6-terra
-thinking: medium
+thinking: high
 tools:
   - read
   - grep

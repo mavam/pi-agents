@@ -1,8 +1,9 @@
 # 🤖 pi-agents
 
 Multi-agent workflows for
-[pi](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent),
-built on an explicit algebra: every workflow is an expression tree in which
+[pi](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent).
+
+Built on an explicit algebra: every workflow is an expression tree in which
 every node yields a value, and data flows only through references you write
 down. No hidden context injection, no id-based cross-wiring — any subtree is
 itself a valid workflow.
@@ -19,9 +20,9 @@ Three nouns carry the whole framework:
 
 | Concept      | What it is                                                                                       |
 | ------------ | ------------------------------------------------------------------------------------------------ |
-| **agent**    | A markdown file defining a delegated pi subprocess (`.pi/agents/*.md`).                           |
-| **workflow** | A saved, named composition of agents (`.pi/workflows/*.md`) — or an inline expression.            |
-| **run**      | One persisted execution of a workflow. Browse with `/runs`, inspect with `/run <id>`.             |
+| **agent**    | A markdown file defining a delegated pi subprocess (`.pi/agents/*.md`).                          |
+| **workflow** | A saved, named composition of agents (`.pi/workflows/*.md`) — or an inline expression.           |
+| **run**      | One persisted execution of a workflow. Browse with `/runs`, inspect with `/run <id>`.            |
 
 ### The algebra
 
@@ -29,14 +30,14 @@ A workflow is a tree of six node kinds. Composition is purely structural:
 `par` fuses fork and join into one expression, loops are bounded fixpoints,
 and saved workflows inline like function calls.
 
-| Icon | Node       | Meaning                                                  | Value                                     |
-| :--: | ---------- | -------------------------------------------------------- | ----------------------------------------- |
-| `✦`  | `agent`    | Run one delegated agent on a task (the only leaf).        | Its final text, or parsed JSON.           |
-| `≡`  | `seq`      | Run steps in order.                                       | The last step's value.                    |
+| Icon | Node       | Meaning                                                   | Value                                      |
+| :--: | ---------- | --------------------------------------------------------- | ------------------------------------------ |
+| `✦`  | `agent`    | Run one delegated agent on a task (the only leaf).        | Its final text, or parsed JSON.            |
+| `≡`  | `seq`      | Run steps in order.                                       | The last step's value.                     |
 | `⑃`  | `par`      | Run named branches concurrently, optionally `⑂` reduce.   | `{branch: value}`, or the reducer's value. |
-| `⇶`  | `map`      | Fan out a body per element of a runtime array.            | Array of body values, or the reducer's.   |
-| `↺`  | `loop`     | Repeat a body until a predicate holds or `max` is hit.    | The last iteration's value.               |
-| `❖`  | `workflow` | Invoke a saved workflow by name (inlined, cycle-checked). | The inlined flow's value.                 |
+| `⇶`  | `map`      | Fan out a body per element of a runtime array.            | Array of body values, or the reducer's.    |
+| `↺`  | `loop`     | Repeat a body until a predicate holds or `max` is hit.    | The last iteration's value.                |
+| `❖`  | `workflow` | Invoke a saved workflow by name (inlined, cycle-checked). | The inlined flow's value.                  |
 
 The JSON/YAML form is what you author; the icons are how flows are *read*.
 Every surface that shows a flow — the tool call display, `/workflow <name>`,
@@ -307,12 +308,6 @@ sessions, all command and hook runs) keep writing to their origin session's
 sidecar; results are delivered as notifications when that session is idle.
 After a pi restart, in-flight runs are marked stopped — they cannot resume —
 but their history remains inspectable.
-
-## 🧹 Uninstall
-
-```sh
-pi remove npm:pi-agents
-```
 
 ## 📄 License
 

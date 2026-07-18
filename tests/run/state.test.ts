@@ -10,11 +10,11 @@ import {
 
 async function recordedEvents(): Promise<RunEvent[]> {
   const flow = validateFlow({
-    kind: "seq",
+    kind: "sequence",
     steps: [
       { kind: "agent", name: "scout", task: "look" },
       {
-        kind: "par",
+        kind: "parallel",
         branches: {
           a: { kind: "agent", name: "x", task: "ta" },
           b: { kind: "agent", name: "x", task: "tb" },

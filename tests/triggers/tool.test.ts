@@ -176,7 +176,7 @@ describe("workflow tool", () => {
         "t6",
         {
           flow: {
-            kind: "seq",
+            kind: "sequence",
             steps: [{ kind: "agent", name: "echo", task: "use {ghost}" }],
           },
           scope: "project",

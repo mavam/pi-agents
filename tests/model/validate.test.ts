@@ -16,7 +16,7 @@ const agent = (
   task,
   ...extra,
 });
-const seq = (...steps: unknown[]) => ({ kind: "seq", steps });
+const seq = (...steps: unknown[]) => ({ kind: "sequence", steps });
 
 /** Validate and return all issue strings, or [] when valid. */
 function issuesOf(
@@ -97,7 +97,7 @@ describe("structural validation", () => {
 
   test("seq requires non-empty steps", () => {
     expectIssue(
-      { kind: "seq", steps: [] },
+      { kind: "sequence", steps: [] },
       "'steps' must be a non-empty array",
     );
   });
@@ -107,30 +107,30 @@ describe("structural validation", () => {
   });
 
   test("par requires branches", () => {
-    expectIssue({ kind: "par", branches: {} }, "at least one branch");
+    expectIssue({ kind: "parallel", branches: {} }, "at least one branch");
   });
 
   test("par branch keys are restricted", () => {
     expectIssue(
-      { kind: "par", branches: { "bad key!": agent("a", "t") } },
+      { kind: "parallel", branches: { "bad key!": agent("a", "t") } },
       "branch key 'bad key!'",
     );
   });
 
   test("par mode validation", () => {
     const branches = { a: agent("x", "t"), b: agent("y", "t") };
-    expectValid({ kind: "par", branches, mode: "any" });
-    expectValid({ kind: "par", branches, mode: { quorum: 2 } });
+    expectValid({ kind: "parallel", branches, mode: "any" });
+    expectValid({ kind: "parallel", branches, mode: { quorum: 2 } });
     expectIssue(
-      { kind: "par", branches, mode: "race" },
+      { kind: "parallel", branches, mode: "race" },
       `'mode' must be "all", "any", or {quorum: n}`,
     );
     expectIssue(
-      { kind: "par", branches, mode: { quorum: 3 } },
+      { kind: "parallel", branches, mode: { quorum: 3 } },
       "exceeds the number of branches",
     );
     expectIssue(
-      { kind: "par", branches, mode: { quorum: 0 } },
+      { kind: "parallel", branches, mode: { quorum: 0 } },
       "'mode.quorum' must be an integer >= 1",
     );
   });
@@ -138,18 +138,22 @@ describe("structural validation", () => {
   test("par onError and concurrency", () => {
     const branches = { a: agent("x", "t") };
     expectIssue(
-      { kind: "par", branches, onError: "ignore" },
+      { kind: "parallel", branches, onError: "ignore" },
       "'onError' must be one of: fail, collect",
     );
     expectIssue(
-      { kind: "par", branches, concurrency: 0 },
+      { kind: "parallel", branches, concurrency: 0 },
       "'concurrency' must be an integer >= 1",
     );
   });
 
   test("reduce requires agent and task", () => {
     expectIssue(
-      { kind: "par", branches: { a: agent("x", "t") }, reduce: { agent: "r" } },
+      {
+        kind: "parallel",
+        branches: { a: agent("x", "t") },
+        reduce: { agent: "r" },
+      },
       "$.reduce: 'task' must be a non-empty string",
     );
   });
@@ -234,7 +238,7 @@ describe("binding scope", () => {
   test("as binds for later steps, arbitrarily deep", () => {
     expectValid(
       seq(agent("scout", "map the code", { as: "map" }), {
-        kind: "par",
+        kind: "parallel",
         branches: {
           bugs: agent("reviewer", "find bugs in {map}"),
           style: seq(agent("reviewer", "style of {map.summary}")),
@@ -263,7 +267,7 @@ describe("binding scope", () => {
       "$: 'as' is only legal on direct steps of a seq",
     );
     expectIssue(
-      { kind: "par", branches: { a: agent("x", "t", { as: "y" }) } },
+      { kind: "parallel", branches: { a: agent("x", "t", { as: "y" }) } },
       "$.branches.a: 'as' is only legal",
     );
     expectIssue(
@@ -320,7 +324,7 @@ describe("binding scope", () => {
   test("previous propagates into par branches of a later step", () => {
     expectValid(
       seq(agent("a", "t"), {
-        kind: "par",
+        kind: "parallel",
         branches: { x: agent("b", "work on {previous}") },
       }),
     );
@@ -369,20 +373,20 @@ describe("binding scope", () => {
   test("branches and items are reduce-only", () => {
     expectIssue(
       agent("a", "use {branches}"),
-      "{branches} is only available in a par reduce task",
+      "{branches} is only available in a parallel reduce task",
     );
     expectIssue(
       agent("a", "use {items}"),
       "{items} is only available in a map reduce task",
     );
     expectValid({
-      kind: "par",
+      kind: "parallel",
       branches: { a: agent("x", "t") },
       reduce: { agent: "syn", task: "merge {branches}" },
     });
     expectIssue(
       {
-        kind: "par",
+        kind: "parallel",
         branches: { a: agent("x", "t") },
         reduce: { agent: "syn", task: "merge {items}" },
       },
@@ -439,7 +443,7 @@ describe("workflow expansion", () => {
     name: "review",
     params: [{ name: "target", required: true }],
     flow: {
-      kind: "par",
+      kind: "parallel",
       branches: {
         bugs: {
           kind: "agent",
@@ -474,7 +478,9 @@ describe("workflow expansion", () => {
     );
     const ref = (flow as { steps: FlowNode[] }).steps[0];
     expect(ref).toMatchObject({ kind: "workflow", name: "review" });
-    expect((ref as { body?: FlowNode }).body).toMatchObject({ kind: "par" });
+    expect((ref as { body?: FlowNode }).body).toMatchObject({
+      kind: "parallel",
+    });
   });
 
   test("refs require a resolver", () => {

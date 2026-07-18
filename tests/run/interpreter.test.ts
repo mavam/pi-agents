@@ -21,7 +21,7 @@ const agent = (
   task,
   ...extra,
 });
-const seq = (...steps: unknown[]) => ({ kind: "seq", steps });
+const seq = (...steps: unknown[]) => ({ kind: "sequence", steps });
 
 type Handler = (call: AgentCall) => string | Promise<string>;
 
@@ -129,11 +129,11 @@ describe("seq and bindings", () => {
   });
 });
 
-describe("par", () => {
+describe("parallel", () => {
   test("mode all collects branch values by name", async () => {
     const { outcome } = await run(
       {
-        kind: "par",
+        kind: "parallel",
         branches: {
           bugs: agent("r", "find bugs"),
           style: agent("r", "check style"),
@@ -150,7 +150,7 @@ describe("par", () => {
   test("mode any yields the winner and cancels the loser", async () => {
     const { outcome, events } = await run(
       {
-        kind: "par",
+        kind: "parallel",
         mode: "any",
         branches: {
           fast: agent("f", "quick"),
@@ -173,7 +173,7 @@ describe("par", () => {
   test("quorum collects the first n successes", async () => {
     const { outcome } = await run(
       {
-        kind: "par",
+        kind: "parallel",
         mode: { quorum: 2 },
         branches: {
           a: agent("x", "ta"),
@@ -192,7 +192,7 @@ describe("par", () => {
   test("fail-fast cancels siblings and fails the par", async () => {
     const { outcome, events } = await run(
       {
-        kind: "par",
+        kind: "parallel",
         branches: {
           bad: agent("b", "explode"),
           slow: agent("s", "slow"),
@@ -214,7 +214,7 @@ describe("par", () => {
   test("collect mode gathers errors alongside successes", async () => {
     const { outcome } = await run(
       {
-        kind: "par",
+        kind: "parallel",
         onError: "collect",
         branches: { good: agent("g", "ok"), bad: agent("b", "explode") },
       },
@@ -230,7 +230,7 @@ describe("par", () => {
   test("collect mode fails when every branch fails", async () => {
     const { outcome } = await run(
       {
-        kind: "par",
+        kind: "parallel",
         onError: "collect",
         branches: { a: agent("x", "ta"), b: agent("x", "tb") },
       },
@@ -245,7 +245,7 @@ describe("par", () => {
   test("reduce folds branches through a reducer agent", async () => {
     const { outcome, calls, events } = await run(
       {
-        kind: "par",
+        kind: "parallel",
         branches: { a: agent("x", "ta"), b: agent("x", "tb") },
         reduce: { agent: "syn", task: "merge {branches}" },
       },
@@ -516,7 +516,7 @@ describe("event stream shape", () => {
       run: { flow: FlowNode; id: string };
     };
     expect(created.type).toBe("run_created");
-    expect(created.run.flow.kind).toBe("seq");
+    expect(created.run.flow.kind).toBe("sequence");
     const started = eventTypes(events, "node_started").map(
       (e) => (e as { path: string }).path,
     );

@@ -27,14 +27,14 @@ Three nouns carry the whole framework:
 ### The algebra
 
 A workflow is a tree of six node kinds. Composition is purely structural:
-`par` fuses fork and join into one expression, loops are bounded fixpoints,
+`parallel` fuses fork and join into one expression, loops are bounded fixpoints,
 and saved workflows inline like function calls.
 
 | Icon | Node       | Meaning                                                   | Value                                      |
 | :--: | ---------- | --------------------------------------------------------- | ------------------------------------------ |
 | `✦`  | `agent`    | Run one delegated agent on a task (the only leaf).        | Its final text, or parsed JSON.            |
-| `≡`  | `seq`      | Run steps in order.                                       | The last step's value.                     |
-| `⑃`  | `par`      | Run named branches concurrently, optionally `⑂` reduce.   | `{branch: value}`, or the reducer's value. |
+| `≡`  | `sequence` | Run steps in order.                                       | The last step's value.                     |
+| `⑃`  | `parallel` | Run named branches concurrently, optionally `⑂` reduce.   | `{branch: value}`, or the reducer's value. |
 | `⇶`  | `map`      | Fan out a body per element of a runtime array.            | Array of body values, or the reducer's.    |
 | `↺`  | `loop`     | Repeat a body until a predicate holds or `max` is hit.    | The last iteration's value.                |
 | `❖`  | `workflow` | Invoke a saved workflow by name (inlined, cycle-checked). | The inlined flow's value.                  |
@@ -44,7 +44,7 @@ Every surface that shows a flow — the tool call display, `/workflow <name>`,
 `/run <id>` — renders it as an icon tree. The review workflow, for example:
 
 ```
-⑃ par (all)
+⑃ parallel (all)
 ├─ bugs → ✦ reviewer · Review {params.target} strictly for correctness bug…
 ├─ clarity → ✦ reviewer · Review {params.target} for readability, duplicat…
 └─ ⑂ reduce → worker · Merge these code review findings into one prioriti…
@@ -65,12 +65,12 @@ status icons (`○` pending, `◉` running, `●` completed, `✗` failed,
 
 Nothing flows between nodes implicitly. To pass data:
 
-- Mark a `seq` step with `as: name`, then reference `{name}` (or a dot path
-  like `{name.files.0}`) in any later step of that seq.
+- Mark a `sequence` step with `as: name`, then reference `{name}` (or a dot path
+  like `{name.files.0}`) in any later step of that sequence.
 - `{previous}` is the immediately preceding step's value.
 - A `map` body sees `{item}` and `{index}`; a `loop` body sees `{iteration}`
   and `{last}` (empty on the first iteration).
-- Reduce tasks see `{branches}` (par) or `{items}` (map).
+- Reduce tasks see `{branches}` (parallel) or `{items}` (map).
 - Saved workflows see only their declared `{params.*}` — caller bindings are
   invisible, and param values are interpolated in the caller's scope.
 
@@ -119,7 +119,7 @@ params:
   - name: target
     required: true
 flow:
-  kind: par
+  kind: parallel
   branches:
     bugs:    { kind: agent, name: reviewer, task: "Find bugs in {params.target}" }
     clarity: { kind: agent, name: reviewer, task: "Review {params.target} for clarity" }
@@ -176,9 +176,9 @@ whatever the reviews agree on"* directly into a validated flow:
 ```json
 {
   "flow": {
-    "kind": "seq",
+    "kind": "sequence",
     "steps": [
-      { "kind": "par",
+      { "kind": "parallel",
         "as": "reviews",
         "branches": {
           "core":  { "kind": "agent", "name": "reviewer", "task": "Review src/core" },
@@ -214,7 +214,7 @@ task: "Review {previous}"
 output: text            # or "json": parse the result (fences tolerated)
 model: some-model       # optional override (wins over the agent file)
 thinking: low           # optional override (wins over the agent file)
-as: findings            # binding name; only legal on direct seq steps
+as: findings            # binding name; only legal on direct sequence steps
 cwd: /path/override     # optional
 scope: both             # agent discovery: user|project|both
 ```
@@ -222,20 +222,20 @@ scope: both             # agent discovery: user|project|both
 A bare `agent` node is a complete workflow — single delegation needs nothing
 more. Precedence for model/thinking: flow node → agent file → active session.
 
-### `seq`
+### `sequence`
 
 ```yaml
-kind: seq
+kind: sequence
 steps:
   - { kind: agent, name: scout, task: "Map the code", as: map }
   - { kind: agent, name: planner, task: "Plan using {map}" }
   - { kind: agent, name: worker, task: "Implement {previous}" }
 ```
 
-### `par`
+### `parallel`
 
 ```yaml
-kind: par
+kind: parallel
 branches:
   a: { kind: agent, name: x, task: "..." }
   b: { kind: agent, name: y, task: "..." }

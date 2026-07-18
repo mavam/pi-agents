@@ -6,7 +6,7 @@ import { type RunView, rebuildRunState } from "../../src/run/state.js";
 import { formatRunWidget, widgetProgress } from "../../src/ui/widget.js";
 
 const REVIEW_FLOW = {
-  kind: "par",
+  kind: "parallel",
   branches: {
     bugs: { kind: "agent", name: "reviewer", task: "bugs" },
     clarity: { kind: "agent", name: "reviewer", task: "clarity" },
@@ -83,7 +83,7 @@ describe("formatRunWidget", () => {
   test("map fan-out aggregates counts into one segment", async () => {
     const run = await recordedRun(
       {
-        kind: "seq",
+        kind: "sequence",
         steps: [
           {
             kind: "agent",
@@ -111,7 +111,7 @@ describe("formatRunWidget", () => {
 
   test("failures color the segment with ✗", async () => {
     const flow = {
-      kind: "par",
+      kind: "parallel",
       onError: "collect",
       branches: {
         good: { kind: "agent", name: "a", task: "t" },
@@ -169,7 +169,7 @@ describe("formatRunWidget", () => {
   test("deep flows collapse to one segment per top-level step", async () => {
     const run = await recordedRun(
       {
-        kind: "seq",
+        kind: "sequence",
         steps: [
           {
             kind: "agent",
@@ -179,12 +179,12 @@ describe("formatRunWidget", () => {
             as: "map",
           },
           {
-            kind: "par",
+            kind: "parallel",
             branches: {
               bugs: { kind: "agent", name: "reviewer", task: "b {map}" },
               clarity: { kind: "agent", name: "reviewer", task: "c {map}" },
               security: {
-                kind: "seq",
+                kind: "sequence",
                 steps: [
                   { kind: "agent", name: "explorer", task: "s {map}" },
                   { kind: "agent", name: "reviewer", task: "a {previous}" },
@@ -210,7 +210,7 @@ describe("formatRunWidget", () => {
     const [, line2] = formatRunWidget(run, run.createdAt, 0);
     // Four top-level steps, not one segment per structural agent.
     expect(line2).toContain("● explorer → {map}");
-    expect(line2).toContain("● ⑃ par [5/5]");
+    expect(line2).toContain("● ⑃ parallel [5/5]");
     expect(line2).toContain("● ⇶ map {map.hotspots} [2/2]");
     expect(line2).toContain("● ↺ loop [2/2]");
     expect(line2).not.toContain("…+");
@@ -220,7 +220,7 @@ describe("formatRunWidget", () => {
   test("segment overflow collapses into a counter", async () => {
     const run = await recordedRun(
       {
-        kind: "seq",
+        kind: "sequence",
         steps: Array.from({ length: 8 }, (_, i) => ({
           kind: "agent",
           name: `a${i}`,

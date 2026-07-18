@@ -33,7 +33,7 @@ params:
     required: true
   - depth
 flow:
-  kind: par
+  kind: parallel
   branches:
     bugs: { kind: agent, name: reviewer, task: "Find bugs in {params.target}" }
     style: { kind: agent, name: reviewer, task: "Check style in {params.target}" }
@@ -58,7 +58,7 @@ describe("parseWorkflowFile", () => {
       },
       { name: "depth" },
     ]);
-    expect(result.flow.kind).toBe("par");
+    expect(result.flow.kind).toBe("parallel");
     expect(result.doc).toBe("Reviews the target from two lenses.");
   });
 
@@ -209,7 +209,7 @@ describe("discoverWorkflows", () => {
       `name: fixit
 description: review then fix
 flow:
-  kind: seq
+  kind: sequence
   steps:
     - { kind: workflow, name: review, params: { target: "src/" }, as: rev }
     - { kind: agent, name: worker, task: "Fix: {rev}" }

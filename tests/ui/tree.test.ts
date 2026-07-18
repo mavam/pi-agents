@@ -10,7 +10,7 @@ describe("renderFlowTree", () => {
   test("the review par reads as a compact icon tree", () => {
     const flow = validateFlow(
       {
-        kind: "par",
+        kind: "parallel",
         branches: {
           bugs: {
             kind: "agent",
@@ -33,7 +33,7 @@ describe("renderFlowTree", () => {
     const tree = renderFlowTree(flow);
     expect(tree).toBe(
       [
-        "⑃ par (all)",
+        "⑃ parallel (all)",
         "├─ bugs → ✦ reviewer · Review {params.target} strictly for correctness bugs: lo…",
         "├─ clarity → ✦ reviewer · Review {params.target} for readability, duplication, and…",
         "└─ ⑂ reduce → worker · Merge these code review findings into one prioritized li…",
@@ -43,7 +43,7 @@ describe("renderFlowTree", () => {
 
   test("seq is transparent; bindings, map, and loop show their shape", () => {
     const flow = validateFlow({
-      kind: "seq",
+      kind: "sequence",
       steps: [
         {
           kind: "agent",
@@ -86,11 +86,11 @@ describe("renderFlowTree", () => {
     };
     const flow = validateFlow(
       {
-        kind: "par",
+        kind: "parallel",
         branches: {
           quick: { kind: "agent", name: "a", task: "t" },
           slow: {
-            kind: "seq",
+            kind: "sequence",
             steps: [
               { kind: "agent", name: "prep", task: "prepare" },
               { kind: "workflow", name: "inner", params: { x: "42" } },
@@ -113,7 +113,7 @@ describe("renderFlowTree", () => {
 describe("renderRunTree", () => {
   test("overlays status icons and aggregates map items", async () => {
     const flow = validateFlow({
-      kind: "seq",
+      kind: "sequence",
       steps: [
         {
           kind: "agent",

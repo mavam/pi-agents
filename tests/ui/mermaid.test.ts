@@ -5,7 +5,7 @@ import { toMermaid } from "../../src/ui/mermaid.js";
 describe("toMermaid", () => {
   test("renders the full algebra deterministically", () => {
     const flow = validateFlow({
-      kind: "seq",
+      kind: "sequence",
       steps: [
         {
           kind: "agent",
@@ -15,7 +15,7 @@ describe("toMermaid", () => {
           as: "files",
         },
         {
-          kind: "par",
+          kind: "parallel",
           branches: {
             b: { kind: "agent", name: "y", task: "tb" },
             a: { kind: "agent", name: "x", task: "ta" },

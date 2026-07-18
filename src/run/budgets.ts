@@ -1,7 +1,7 @@
 /**
  * Budget enforcement. Limits are immutable per run; the mutable agent
  * counter is serialized through a FIFO promise-chain mailbox so concurrent
- * par/map branches never race on it. The parallelism semaphore caps
+ * parallel/map branches never race on it. The parallelism semaphore caps
  * simultaneously running agents globally across nested pools.
  */
 
@@ -108,7 +108,7 @@ export class BudgetActor {
     });
   }
 
-  /** Per-node concurrency for a par/map pool (globally capped by the semaphore). */
+  /** Per-node concurrency for a parallel/map pool (globally capped by the semaphore). */
   parallelismLimit(requested?: number): number {
     const cap = Math.max(1, this.limits.maxParallelism);
     return requested === undefined

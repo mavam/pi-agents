@@ -31,7 +31,7 @@ export type OutputMode = "text" | "json";
 export interface BaseNode {
   /**
    * Binding name for this node's value. Legal only on direct steps of a
-   * `seq`; later steps of the same seq reference it as `{name}`.
+   * `sequence`; later steps of the same sequence reference it as `{name}`.
    */
   as?: string;
   /** Optional human-readable label used in rendering. */
@@ -57,9 +57,9 @@ export interface AgentNode extends BaseNode {
   scope?: Scope;
 }
 
-/** Run steps in order; the seq's value is the last step's value. */
-export interface SeqNode extends BaseNode {
-  kind: "seq";
+/** Run steps in order; the sequence's value is the last step's value. */
+export interface SequenceNode extends BaseNode {
+  kind: "sequence";
   steps: FlowNode[];
 }
 
@@ -68,7 +68,7 @@ export type ParMode = "all" | "any" | { quorum: number };
 /** Reducer: a synthetic agent call that folds collected results into one value. */
 export interface Reduce {
   agent: string;
-  /** Task prompt; interpolates `{branches}` (par) or `{items}` (map). */
+  /** Task prompt; interpolates `{branches}` (parallel) or `{items}` (map). */
   task: string;
   output?: OutputMode;
 }
@@ -80,8 +80,8 @@ export interface Reduce {
  * winning branch's value directly. With `reduce`, the reducer's value
  * replaces the collected form.
  */
-export interface ParNode extends BaseNode {
-  kind: "par";
+export interface ParallelNode extends BaseNode {
+  kind: "parallel";
   branches: Record<string, FlowNode>;
   /** Completion mode. Default: "all". */
   mode?: ParMode;
@@ -136,8 +136,8 @@ export interface WorkflowRefNode extends BaseNode {
 
 export type FlowNode =
   | AgentNode
-  | SeqNode
-  | ParNode
+  | SequenceNode
+  | ParallelNode
   | MapNode
   | LoopNode
   | WorkflowRefNode;
@@ -217,7 +217,7 @@ export const RESERVED_ROOTS = new Set([
 /** Valid `as` binding and param names. */
 export const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
-/** Valid par branch keys (they appear in node paths and result objects). */
+/** Valid parallel branch keys (they appear in node paths and result objects). */
 export const BRANCH_KEY_RE = /^[A-Za-z0-9_-]+$/;
 
 // Node paths identify static positions in a flow tree, e.g.

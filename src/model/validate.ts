@@ -4,11 +4,11 @@
  * every template reference against the binding scope rules.
  *
  * Scope rules:
- * - `as` is legal only on direct steps of a `seq`; the binding is visible to
- *   strictly later steps of the same seq, arbitrarily deep inside them.
+ * - `as` is legal only on direct steps of a `sequence`; the binding is visible to
+ *   strictly later steps of the same sequence, arbitrarily deep inside them.
  *   Duplicates and shadowing are errors.
- * - `{previous}` resolves against the nearest enclosing seq; use in a first
- *   step (or with no enclosing seq) is an error.
+ * - `{previous}` resolves against the nearest enclosing sequence; use in a first
+ *   step (or with no enclosing sequence) is an error.
  * - `{item}`/`{index}` exist only inside a map body; `{iteration}`/`{last}`
  *   only inside a loop body; `{branches}`/`{items}` only in reduce tasks.
  * - Workflow references are opaque: inside the inlined body only `{params.*}`
@@ -24,12 +24,12 @@ import {
   IDENTIFIER_RE,
   type LoopNode,
   type MapNode,
-  type ParNode,
+  type ParallelNode,
   type Predicate,
   RESERVED_ROOTS,
   type Reduce,
   reducePath,
-  type SeqNode,
+  type SequenceNode,
   stepPath,
   type WorkflowLike,
   type WorkflowParamDef,
@@ -225,7 +225,14 @@ function parseBase(
   return { as, label };
 }
 
-const NODE_KINDS = ["agent", "seq", "par", "map", "loop", "workflow"] as const;
+const NODE_KINDS = [
+  "agent",
+  "sequence",
+  "parallel",
+  "map",
+  "loop",
+  "workflow",
+] as const;
 
 /** Parse a raw value into a flow node, collecting issues instead of throwing. */
 export function parseFlowNode(
@@ -246,10 +253,10 @@ export function parseFlowNode(
   switch (kind) {
     case "agent":
       return parseAgent(obj, path, issues);
-    case "seq":
-      return parseSeq(obj, path, issues);
-    case "par":
-      return parsePar(obj, path, issues);
+    case "sequence":
+      return parseSequence(obj, path, issues);
+    case "parallel":
+      return parseParallel(obj, path, issues);
     case "map":
       return parseMap(obj, path, issues);
     case "loop":
@@ -312,11 +319,11 @@ function parseAgent(
   };
 }
 
-function parseSeq(
+function parseSequence(
   obj: Record<string, unknown>,
   path: string,
   issues: Issues,
-): SeqNode {
+): SequenceNode {
   checkKeys(obj, ["kind", "steps", "as", "label"], path, issues);
   const steps: FlowNode[] = [];
   if (!Array.isArray(obj.steps) || obj.steps.length === 0) {
@@ -330,7 +337,7 @@ function parseSeq(
       if (parsed) steps.push(parsed);
     });
   }
-  return { kind: "seq", ...parseBase(obj, path, issues), steps };
+  return { kind: "sequence", ...parseBase(obj, path, issues), steps };
 }
 
 function parseReduce(
@@ -354,11 +361,11 @@ function parseReduce(
   };
 }
 
-function parsePar(
+function parseParallel(
   obj: Record<string, unknown>,
   path: string,
   issues: Issues,
-): ParNode {
+): ParallelNode {
   checkKeys(
     obj,
     [
@@ -405,7 +412,7 @@ function parsePar(
       if (parsed) branches[key] = parsed;
     }
   }
-  let mode: ParNode["mode"];
+  let mode: ParallelNode["mode"];
   if (obj.mode !== undefined) {
     if (obj.mode === "all" || obj.mode === "any") {
       mode = obj.mode;
@@ -437,7 +444,7 @@ function parsePar(
     }
   }
   return {
-    kind: "par",
+    kind: "parallel",
     ...parseBase(obj, path, issues),
     branches,
     mode,
@@ -479,7 +486,7 @@ function parseMap(
     kind: "map",
     ...parseBase(obj, path, issues),
     over,
-    body: body ?? { kind: "seq", steps: [] },
+    body: body ?? { kind: "sequence", steps: [] },
     concurrency: optionalPositiveInt(obj, "concurrency", path, issues),
     reduce:
       obj.reduce === undefined
@@ -502,7 +509,7 @@ function parseLoop(
   return {
     kind: "loop",
     ...parseBase(obj, path, issues),
-    body: body ?? { kind: "seq", steps: [] },
+    body: body ?? { kind: "sequence", steps: [] },
     max: max ?? 1,
     until:
       obj.until === undefined
@@ -693,12 +700,12 @@ function expandNode(
   switch (node.kind) {
     case "agent":
       return;
-    case "seq":
+    case "sequence":
       node.steps.forEach((step, index) => {
         expandNode(step, stepPath(path, index), stack, resolve, issues);
       });
       return;
-    case "par":
+    case "parallel":
       for (const [key, branch] of Object.entries(node.branches)) {
         expandNode(branch, branchPath(path, key), stack, resolve, issues);
       }
@@ -801,7 +808,7 @@ function checkTemplate(
         if (!scope.hasPrevious) {
           issues.push({
             path,
-            message: `{previous} is not available here (no preceding step in the nearest enclosing seq)`,
+            message: `{previous} is not available here (no preceding step in the nearest enclosing sequence)`,
           });
         }
         break;
@@ -845,7 +852,7 @@ function checkTemplate(
         if (ref.root !== reduceRoot) {
           issues.push({
             path,
-            message: `{${ref.root}} is only available in a ${ref.root === "branches" ? "par" : "map"} reduce task`,
+            message: `{${ref.root}} is only available in a ${ref.root === "branches" ? "parallel" : "map"} reduce task`,
           });
         }
         break;
@@ -874,14 +881,14 @@ function checkNode(
   if (!isSeqStep && node.as !== undefined) {
     issues.push({
       path,
-      message: "'as' is only legal on direct steps of a seq",
+      message: "'as' is only legal on direct steps of a sequence",
     });
   }
   switch (node.kind) {
     case "agent":
       checkTemplate(node.task, `${path}.task`, scope, undefined, issues);
       return;
-    case "seq": {
+    case "sequence": {
       const local = new Set<string>();
       node.steps.forEach((step, index) => {
         const childScope: ScopeState = {
@@ -894,7 +901,7 @@ function checkNode(
           if (local.has(step.as)) {
             issues.push({
               path: stepPath(path, index),
-              message: `duplicate binding '${step.as}' in this seq`,
+              message: `duplicate binding '${step.as}' in this sequence`,
             });
           } else if (scope.visible.has(step.as)) {
             issues.push({
@@ -908,7 +915,7 @@ function checkNode(
       });
       return;
     }
-    case "par": {
+    case "parallel": {
       for (const [key, branch] of Object.entries(node.branches)) {
         checkNode(branch, branchPath(path, key), scope, issues, false);
       }
@@ -1000,10 +1007,10 @@ export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
       case "agent":
         add({ name: current.name, cwd: current.cwd, scope: current.scope });
         return;
-      case "seq":
+      case "sequence":
         for (const step of current.steps) visit(step);
         return;
-      case "par":
+      case "parallel":
         for (const branch of Object.values(current.branches)) visit(branch);
         if (current.reduce) add({ name: current.reduce.agent });
         return;
@@ -1031,10 +1038,10 @@ export function collectAgentNames(node: FlowNode): Set<string> {
       case "agent":
         names.add(current.name);
         return;
-      case "seq":
+      case "sequence":
         for (const step of current.steps) visit(step);
         return;
-      case "par":
+      case "parallel":
         for (const branch of Object.values(current.branches)) visit(branch);
         if (current.reduce) names.add(current.reduce.agent);
         return;

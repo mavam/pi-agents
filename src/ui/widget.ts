@@ -80,7 +80,7 @@ class TruncatedLines implements Component {
 /**
  * Status for one depth-1 unit: liveness from the unit's own node (when it
  * has started), work counts aggregated over the agent/reduce paths in its
- * subtree — so `⑃ par [2/4]` counts agents, not structural nodes.
+ * subtree — so `⑃ parallel [2/4]` counts agents, not structural nodes.
  */
 function unitStatus(
   statuses: Map<string, PathStatus>,
@@ -115,8 +115,8 @@ function unitStatus(
 
 /**
  * One segment per depth-1 unit. The tool-call box carries the full vertical
- * structure; the widget summarizes horizontally: a seq root yields one
- * segment per top-level step, a par root one per branch (plus reduce), and
+ * structure; the widget summarizes horizontally: a sequence root yields one
+ * segment per top-level step, a parallel root one per branch (plus reduce), and
  * composite units collapse to their kind glyph with aggregate counts.
  */
 export function widgetSegments(
@@ -140,11 +140,11 @@ export function widgetSegments(
       case "agent":
         push(path, `${prefix}${prefix ? node.name : agentText(node)}`);
         return;
-      case "seq":
-        push(path, `${prefix}≡ ${node.label ?? "seq"}`);
+      case "sequence":
+        push(path, `${prefix}≡ ${node.label ?? "sequence"}`);
         return;
-      case "par":
-        push(path, `${prefix}⑃ ${node.label ?? "par"}`);
+      case "parallel":
+        push(path, `${prefix}⑃ ${node.label ?? "parallel"}`);
         return;
       case "map":
         push(path, `${prefix}⇶ map ${node.over}`);
@@ -166,11 +166,11 @@ export function widgetSegments(
     rootPath = bodyPath(rootPath);
   }
 
-  if (root.kind === "seq") {
+  if (root.kind === "sequence") {
     root.steps.forEach((step, index) => {
       unit(step, stepPath(rootPath, index));
     });
-  } else if (root.kind === "par") {
+  } else if (root.kind === "parallel") {
     for (const [key, branch] of Object.entries(root.branches)) {
       if (branch.kind === "agent") {
         push(branchPath(rootPath, key), `${key} → ${branch.name}`);
@@ -192,9 +192,9 @@ function countStaticLeaves(node: FlowNode): number {
   switch (node.kind) {
     case "agent":
       return 1;
-    case "seq":
+    case "sequence":
       return node.steps.reduce((sum, step) => sum + countStaticLeaves(step), 0);
-    case "par":
+    case "parallel":
       return (
         Object.values(node.branches).reduce(
           (sum, branch) => sum + countStaticLeaves(branch),

@@ -30,7 +30,7 @@ export function toMermaid(flow: FlowNode): string {
         lines.push(`  ${id}["${escapeLabel(node.label ?? node.name)}"]`);
         return { entry: id, exit: id };
       }
-      case "seq": {
+      case "sequence": {
         let entry: string | undefined;
         let previous: string | undefined;
         for (const step of node.steps) {
@@ -42,9 +42,9 @@ export function toMermaid(flow: FlowNode): string {
         const id = entry ?? nextId();
         return { entry: id, exit: previous ?? id };
       }
-      case "par": {
+      case "parallel": {
         const fork = nextId();
-        lines.push(`  ${fork}(("par"))`);
+        lines.push(`  ${fork}(("parallel"))`);
         const join = nextId();
         lines.push(`  ${join}(("${modeLabel(node.mode)}"))`);
         for (const key of Object.keys(node.branches).sort()) {

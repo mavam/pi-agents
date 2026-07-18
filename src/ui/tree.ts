@@ -4,7 +4,7 @@
  * in the tool call display, /workflow details, and /run inspection (where
  * kind icons are replaced by live status icons).
  *
- *   ✦ agent   ≡ seq (transparent)   ⑃ par   ⑂ reduce   ⇶ map   ↺ loop
+ *   ✦ agent   ≡ sequence (transparent)   ⑃ parallel   ⑂ reduce   ⇶ map   ↺ loop
  *   ❖ workflow
  */
 
@@ -21,8 +21,8 @@ import type { NodeView, RunView } from "../run/state.js";
 
 export const KIND_ICONS = {
   agent: "✦",
-  seq: "≡",
-  par: "⑃",
+  sequence: "≡",
+  parallel: "⑃",
   reduce: "⑂",
   map: "⇶",
   loop: "↺",
@@ -42,9 +42,9 @@ const TASK_PREVIEW_CHARS = 56;
 interface DisplayNode {
   /** Line text, without the leading kind/status icon. */
   text: string;
-  /** Kind icon; absent for pure grouping lines (multi-node par branches). */
+  /** Kind icon; absent for pure grouping lines (multi-node parallel branches). */
   icon?: string;
-  /** Rendered before the icon (e.g. a par branch key: "bugs → "). */
+  /** Rendered before the icon (e.g. a parallel branch key: "bugs → "). */
   prefixText?: string;
   /** Static node path, for status overlay lookup. */
   path?: string;
@@ -80,12 +80,12 @@ function build(node: FlowNode, path: string): DisplayNode[] {
           children: [],
         },
       ];
-    case "seq": {
+    case "sequence": {
       return node.steps.flatMap((step, index) =>
         build(step, stepPath(path, index)),
       );
     }
-    case "par": {
+    case "parallel": {
       const extras = [
         node.onError === "collect" ? "collect errors" : undefined,
         node.concurrency !== undefined ? `×${node.concurrency}` : undefined,
@@ -110,8 +110,8 @@ function build(node: FlowNode, path: string): DisplayNode[] {
       }
       return [
         {
-          icon: KIND_ICONS.par,
-          text: `par (${[modeText(node.mode), ...extras].join(", ")})${binding(node)}`,
+          icon: KIND_ICONS.parallel,
+          text: `parallel (${[modeText(node.mode), ...extras].join(", ")})${binding(node)}`,
           path,
           children,
         },

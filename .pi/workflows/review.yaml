@@ -9,7 +9,7 @@ params:
     description: What to review (a path, diff, or description)
     required: true
 flow:
-  kind: par
+  kind: parallel
   branches:
     bugs:
       kind: agent

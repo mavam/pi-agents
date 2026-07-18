@@ -17,11 +17,11 @@ import {
   type LoopNode,
   type MapNode,
   type OutputMode,
-  type ParNode,
+  type ParallelNode,
   type Reduce,
   reducePath,
   type Scope,
-  type SeqNode,
+  type SequenceNode,
   stepPath,
   type WorkflowRefNode,
 } from "../model/ast.js";
@@ -357,13 +357,13 @@ class Interpreter {
     switch (node.kind) {
       case "agent":
         return await this.evaluateAgent(node, path, instance, env, signal);
-      case "seq":
+      case "sequence":
         return {
-          value: await this.evaluateSeq(node, path, instance, env, signal),
+          value: await this.evaluateSequence(node, path, instance, env, signal),
         };
-      case "par":
+      case "parallel":
         return {
-          value: await this.evaluatePar(node, path, instance, env, signal),
+          value: await this.evaluateParallel(node, path, instance, env, signal),
         };
       case "map":
         return {
@@ -423,8 +423,8 @@ class Interpreter {
     });
   }
 
-  private async evaluateSeq(
-    node: SeqNode,
+  private async evaluateSequence(
+    node: SequenceNode,
     path: string,
     instance: string,
     env: Env,
@@ -522,8 +522,8 @@ class Interpreter {
     }
   }
 
-  private async evaluatePar(
-    node: ParNode,
+  private async evaluateParallel(
+    node: ParallelNode,
     path: string,
     instance: string,
     env: Env,
@@ -600,7 +600,7 @@ class Interpreter {
         .map((f) => `'${f.key}': ${errorMessage(f.error)}`)
         .join("; ");
       throw new Error(
-        `par needed ${mode === "all" ? "at least 1 success" : `${desired} success(es)`} but got ${successes.length}${
+        `parallel needed ${mode === "all" ? "at least 1 success" : `${desired} success(es)`} but got ${successes.length}${
           details ? ` — ${details}` : ""
         }`,
       );

@@ -85,7 +85,7 @@ describe("preflight with node overrides", () => {
     const { engine, specs } = fakeEngine();
     const manager = new RunManager({ engine });
     const flow = validateFlow({
-      kind: "seq",
+      kind: "sequence",
       steps: [
         { kind: "agent", name: "echo", task: "first" },
         {
@@ -143,14 +143,14 @@ describe("budgets", () => {
     });
     const manager = new RunManager({ engine });
     const branch = (key: string) => ({
-      kind: "par",
+      kind: "parallel",
       branches: {
         [`${key}1`]: { kind: "agent", name: "echo", task: "t" },
         [`${key}2`]: { kind: "agent", name: "echo", task: "t" },
       },
     });
     const flow = validateFlow({
-      kind: "par",
+      kind: "parallel",
       branches: { a: branch("a"), b: branch("b") },
     });
     const { done } = manager.start({

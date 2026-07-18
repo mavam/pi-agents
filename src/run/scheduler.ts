@@ -1,5 +1,5 @@
 /**
- * Worker pool for par branches and map items: bounded concurrency, early stop
+ * Worker pool for parallel branches and map items: bounded concurrency, early stop
  * once enough successes arrive (any/quorum), fail-fast or collect failure
  * policies, and sibling cancellation via per-task AbortControllers.
  */

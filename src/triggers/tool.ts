@@ -93,7 +93,7 @@ export interface WorkflowToolDetails {
 
 /** Minimal color hook so the pure formatters are testable without a theme. */
 export type ToolColorize = (
-  color: "dim" | "accent" | "success" | "error",
+  color: "dim" | "accent" | "success" | "error" | "muted",
   text: string,
 ) => string;
 
@@ -116,6 +116,7 @@ function oneLine(value: string, max: number): string {
 export function resolveSavedFlowTree(
   name: string,
   cwd: string,
+  color?: ToolColorize,
 ): string | undefined {
   try {
     const { workflows } = discoverWorkflows(cwd, "both");
@@ -127,7 +128,7 @@ export function resolveSavedFlowTree(
       selfName: def.name,
       params: def.params,
     });
-    return renderFlowTree(expanded);
+    return renderFlowTree(expanded, color);
   } catch {
     return undefined;
   }
@@ -148,7 +149,9 @@ export function formatCallPreview(
   const label = params.label ? color("dim", ` · ${params.label}`) : "";
   try {
     if (params.name !== undefined) {
-      lines.push(`${KIND_ICONS.workflow} ${params.name}${label}`);
+      lines.push(
+        `${color("muted", KIND_ICONS.workflow)} ${params.name}${label}`,
+      );
       for (const [key, value] of Object.entries(params.params ?? {})) {
         lines.push(
           color("dim", `   ${key}: ${oneLine(value, PARAM_PREVIEW_CHARS)}`),
@@ -160,7 +163,7 @@ export function formatCallPreview(
       const issues: { path: string; message: string }[] = [];
       const parsed = parseFlowNode(params.flow, "$", issues);
       if (parsed && issues.length === 0) {
-        lines.push(renderFlowTree(parsed));
+        lines.push(renderFlowTree(parsed, color));
       } else {
         lines.push(`${JSON.stringify(params.flow)?.slice(0, 200) ?? ""}…`);
       }
@@ -253,7 +256,7 @@ export function createWorkflowTool(
         let cached = savedFlowTreeCache.get(key);
         if (cached === undefined) {
           if (savedFlowTreeCache.size > 200) savedFlowTreeCache.clear();
-          cached = resolveSavedFlowTree(args.name, context.cwd) ?? null;
+          cached = resolveSavedFlowTree(args.name, context.cwd, color) ?? null;
           savedFlowTreeCache.set(key, cached);
         }
         savedFlowTree = cached ?? undefined;

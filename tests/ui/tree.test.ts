@@ -110,6 +110,42 @@ describe("renderFlowTree", () => {
   });
 });
 
+describe("renderFlowTree coloring", () => {
+  test("dataflow-first: refs accent, prose/skeleton dim, glyphs muted", () => {
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        {
+          kind: "agent",
+          name: "scout",
+          task: "List files",
+          output: "json",
+          as: "files",
+        },
+        {
+          kind: "map",
+          over: "{files}",
+          body: { kind: "agent", name: "reviewer", task: "Review {item}" },
+        },
+      ],
+    });
+    const mark = (color: string, text: string) =>
+      `<${color}>${text}</${color}>`;
+    const tree = renderFlowTree(flow, mark);
+    // Bindings and references light up in accent.
+    expect(tree).toContain("<accent>{files}</accent>");
+    expect(tree).toContain("<accent>{item}</accent>");
+    expect(tree).toContain("scout<dim> → </dim><accent>{files}</accent>");
+    // Prose and connectors are dim; glyphs muted; names plain.
+    expect(tree).toContain("<dim>List files</dim>");
+    expect(tree).toContain("<dim>└─ </dim>");
+    expect(tree).toContain("<muted>✦</muted>");
+    expect(tree).toContain("<muted>⇶</muted> map <accent>{files}</accent>");
+    // Default rendering stays byte-identical (no color markers).
+    expect(renderFlowTree(flow)).not.toContain("<");
+  });
+});
+
 describe("renderRunTree", () => {
   test("overlays status icons and aggregates map items", async () => {
     const flow = validateFlow({

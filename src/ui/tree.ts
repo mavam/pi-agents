@@ -16,6 +16,7 @@ import {
   reducePath,
   stepPath,
 } from "../model/ast.js";
+import { parseTemplate } from "../model/interpolate.js";
 import { formatPredicate } from "../model/predicate.js";
 import type { NodeView, RunView } from "../run/state.js";
 
@@ -39,6 +40,27 @@ export const STATUS_TREE_ICONS = {
 
 const TASK_PREVIEW_CHARS = 56;
 
+/**
+ * Dataflow-first coloring: `{references}` in accent, prose and connectors
+ * dim, kind glyphs muted. The identity default keeps plain contexts
+ * (markdown code fences, tests) byte-identical.
+ */
+export type TreeColorize = (
+  color: "accent" | "dim" | "muted",
+  text: string,
+) => string;
+
+const plainTree: TreeColorize = (_color, text) => text;
+
+/** Dim prose with every {reference} highlighted in accent. */
+function colorizeRefs(text: string, color: TreeColorize): string {
+  return parseTemplate(text)
+    .map((part) =>
+      part.kind === "ref" ? color("accent", part.raw) : color("dim", part.text),
+    )
+    .join("");
+}
+
 interface DisplayNode {
   /** Line text, without the leading kind/status icon. */
   text: string;
@@ -58,8 +80,10 @@ function preview(task: string): string {
     : `${flat.slice(0, TASK_PREVIEW_CHARS)}…`;
 }
 
-function binding(node: FlowNode): string {
-  return node.as ? ` → {${node.as}}` : "";
+function binding(node: FlowNode, color: TreeColorize): string {
+  return node.as
+    ? `${color("dim", " → ")}${color("accent", `{${node.as}}`)}`
+    : "";
 }
 
 function modeText(mode: ParMode | undefined): string {
@@ -68,21 +92,34 @@ function modeText(mode: ParMode | undefined): string {
   return `quorum ${mode.quorum}`;
 }
 
-/** Build display nodes. Seq is transparent: it yields one node per step. */
-function build(node: FlowNode, path: string): DisplayNode[] {
+/** Build display nodes. Sequence is transparent: one node per step. */
+function build(
+  node: FlowNode,
+  path: string,
+  color: TreeColorize,
+): DisplayNode[] {
+  const reduceNode = (
+    reduce: { agent: string; task: string },
+    parentPath: string,
+  ): DisplayNode => ({
+    icon: KIND_ICONS.reduce,
+    text: `reduce${color("dim", " → ")}${reduce.agent}${color("dim", " · ")}${colorizeRefs(preview(reduce.task), color)}`,
+    path: reducePath(parentPath),
+    children: [],
+  });
   switch (node.kind) {
     case "agent":
       return [
         {
           icon: KIND_ICONS.agent,
-          text: `${node.name}${binding(node)} · ${preview(node.task)}`,
+          text: `${node.name}${binding(node, color)}${color("dim", " · ")}${colorizeRefs(preview(node.task), color)}`,
           path,
           children: [],
         },
       ];
     case "sequence": {
       return node.steps.flatMap((step, index) =>
-        build(step, stepPath(path, index)),
+        build(step, stepPath(path, index), color),
       );
     }
     case "parallel": {
@@ -92,45 +129,31 @@ function build(node: FlowNode, path: string): DisplayNode[] {
       ].filter(Boolean);
       const children: DisplayNode[] = Object.entries(node.branches).map(
         ([key, branch]) => {
-          const subs = build(branch, branchPath(path, key));
+          const subs = build(branch, branchPath(path, key), color);
           if (subs.length === 1) {
             const only = subs[0] as DisplayNode;
-            return { ...only, prefixText: `${key} → ` };
+            return { ...only, prefixText: `${key}${color("dim", " → ")}` };
           }
           return { text: `${key}:`, children: subs };
         },
       );
-      if (node.reduce) {
-        children.push({
-          icon: KIND_ICONS.reduce,
-          text: `reduce → ${node.reduce.agent} · ${preview(node.reduce.task)}`,
-          path: reducePath(path),
-          children: [],
-        });
-      }
+      if (node.reduce) children.push(reduceNode(node.reduce, path));
       return [
         {
           icon: KIND_ICONS.parallel,
-          text: `parallel (${[modeText(node.mode), ...extras].join(", ")})${binding(node)}`,
+          text: `parallel (${[modeText(node.mode), ...extras].join(", ")})${binding(node, color)}`,
           path,
           children,
         },
       ];
     }
     case "map": {
-      const children = build(node.body, bodyPath(path));
-      if (node.reduce) {
-        children.push({
-          icon: KIND_ICONS.reduce,
-          text: `reduce → ${node.reduce.agent} · ${preview(node.reduce.task)}`,
-          path: reducePath(path),
-          children: [],
-        });
-      }
+      const children = build(node.body, bodyPath(path), color);
+      if (node.reduce) children.push(reduceNode(node.reduce, path));
       return [
         {
           icon: KIND_ICONS.map,
-          text: `map ${node.over}${node.concurrency !== undefined ? ` (×${node.concurrency})` : ""}${binding(node)}`,
+          text: `map ${color("accent", node.over)}${node.concurrency !== undefined ? ` (×${node.concurrency})` : ""}${binding(node, color)}`,
           path,
           children,
         },
@@ -141,22 +164,22 @@ function build(node: FlowNode, path: string): DisplayNode[] {
       return [
         {
           icon: KIND_ICONS.loop,
-          text: `loop ≤${node.max}${until}${binding(node)}`,
+          text: `loop ≤${node.max}${until}${binding(node, color)}`,
           path,
-          children: build(node.body, bodyPath(path)),
+          children: build(node.body, bodyPath(path), color),
         },
       ];
     }
     case "workflow": {
       const params = Object.entries(node.params ?? {})
-        .map(([key, value]) => `${key}: ${preview(value)}`)
+        .map(([key, value]) => `${key}: ${colorizeRefs(preview(value), color)}`)
         .join(", ");
       return [
         {
           icon: KIND_ICONS.workflow,
-          text: `${node.name}${params ? ` (${params})` : ""}${binding(node)}`,
+          text: `${node.name}${params ? ` (${params})` : ""}${binding(node, color)}`,
           path,
-          children: node.body ? build(node.body, bodyPath(path)) : [],
+          children: node.body ? build(node.body, bodyPath(path), color) : [],
         },
       ];
     }
@@ -216,6 +239,7 @@ function renderLines(
   statuses: Map<string, PathStatus> | undefined,
   prefix: string,
   top: boolean,
+  color: TreeColorize,
 ): string[] {
   const lines: string[] = [];
   nodes.forEach((node, index) => {
@@ -223,28 +247,44 @@ function renderLines(
     const connector = top ? "" : last ? "└─ " : "├─ ";
     const childPrefix = top ? "" : prefix + (last ? "   " : "│  ");
     const status = node.path ? statuses?.get(node.path) : undefined;
+    // Static trees mute the kind glyphs; status overlays keep their icons
+    // plain (they carry the signal).
     const icon = statuses
       ? (status?.icon ?? STATUS_TREE_ICONS.pending)
-      : node.icon;
+      : node.icon !== undefined
+        ? color("muted", node.icon)
+        : undefined;
     const detail = status?.detail ? ` [${status.detail}]` : "";
     const error = status?.error ? ` — ${preview(status.error)}` : "";
+    const skeleton = `${prefix}${connector}`;
     lines.push(
-      `${prefix}${connector}${node.prefixText ?? ""}${icon ? `${icon} ` : ""}${node.text}${detail}${error}`,
+      `${skeleton ? color("dim", skeleton) : ""}${node.prefixText ?? ""}${icon ? `${icon} ` : ""}${node.text}${detail}${error}`,
     );
-    lines.push(...renderLines(node.children, statuses, childPrefix, false));
+    lines.push(
+      ...renderLines(node.children, statuses, childPrefix, false, color),
+    );
   });
   return lines;
 }
 
 /** Static flow tree with kind icons (definitions, tool-call previews). */
-export function renderFlowTree(flow: FlowNode): string {
-  return renderLines(build(flow, "$"), undefined, "", true).join("\n");
+export function renderFlowTree(
+  flow: FlowNode,
+  color: TreeColorize = plainTree,
+): string {
+  return renderLines(build(flow, "$", color), undefined, "", true, color).join(
+    "\n",
+  );
 }
 
 /** Flow tree with kind icons replaced by live status icons. */
 export function renderRunTree(run: RunView): string {
   const statuses = aggregateStatuses(run);
-  return renderLines(build(run.header.flow, "$"), statuses, "", true).join(
-    "\n",
-  );
+  return renderLines(
+    build(run.header.flow, "$", plainTree),
+    statuses,
+    "",
+    true,
+    plainTree,
+  ).join("\n");
 }

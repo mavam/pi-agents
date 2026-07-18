@@ -242,62 +242,7 @@ describe("session defaults", () => {
   });
 });
 
-describe("default tasks and node overrides", () => {
-  test("a node without a task uses the agent-file default, interpolated", async () => {
-    fs.writeFileSync(
-      path.join(projectDir, ".pi", "agents", "bug-hunter.md"),
-      "---\nname: bug-hunter\ndescription: d\ntask: Hunt bugs relentlessly.\n---\nBody.\n",
-    );
-    const { engine, specs } = fakeEngine();
-    const manager = new RunManager({ engine });
-    const flow = validateFlow({ kind: "agent", name: "bug-hunter" });
-    const { done } = manager.start({
-      flow,
-      cwd: projectDir,
-      scope: "project",
-      source: { kind: "tool" },
-    });
-    const outcome = await done;
-    expect(outcome.status).toBe("completed");
-    expect(specs[0]?.task).toBe("Hunt bugs relentlessly.");
-  });
-
-  test("a node task overrides the agent-file default", async () => {
-    fs.writeFileSync(
-      path.join(projectDir, ".pi", "agents", "bug-hunter.md"),
-      "---\nname: bug-hunter\ndescription: d\ntask: Default task.\n---\nBody.\n",
-    );
-    const { engine, specs } = fakeEngine();
-    const manager = new RunManager({ engine });
-    const flow = validateFlow({
-      kind: "agent",
-      name: "bug-hunter",
-      task: "Special mission.",
-    });
-    await manager.start({
-      flow,
-      cwd: projectDir,
-      scope: "project",
-      source: { kind: "tool" },
-    }).done;
-    expect(specs[0]?.task).toBe("Special mission.");
-  });
-
-  test("preflight rejects taskless nodes when the agent has no default", () => {
-    const { engine, specs } = fakeEngine();
-    const manager = new RunManager({ engine });
-    const flow = validateFlow({ kind: "agent", name: "echo" });
-    expect(() =>
-      manager.start({
-        flow,
-        cwd: projectDir,
-        scope: "project",
-        source: { kind: "tool" },
-      }),
-    ).toThrow("agent 'echo' needs a task");
-    expect(specs).toHaveLength(0);
-  });
-
+describe("node overrides", () => {
   test("node model/thinking overrides beat agent file and session defaults", async () => {
     fs.writeFileSync(
       path.join(projectDir, ".pi", "agents", "picky2.md"),

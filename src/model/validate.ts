@@ -291,8 +291,7 @@ function parseAgent(
     kind: "agent",
     ...parseBase(obj, path, issues),
     name: requiredString(obj, "name", path, issues),
-    // Optional: preflight verifies the agent file defines a default task.
-    task: optionalString(obj, "task", path, issues),
+    task: requiredString(obj, "task", path, issues),
     output: optionalEnum(
       obj,
       "output",
@@ -880,9 +879,7 @@ function checkNode(
   }
   switch (node.kind) {
     case "agent":
-      if (node.task !== undefined) {
-        checkTemplate(node.task, `${path}.task`, scope, undefined, issues);
-      }
+      checkTemplate(node.task, `${path}.task`, scope, undefined, issues);
       return;
     case "seq": {
       const local = new Set<string>();
@@ -982,8 +979,6 @@ export interface AgentRequirement {
   name: string;
   cwd?: string;
   scope?: string;
-  /** The node omits `task`, so the agent file must define a default. */
-  needsDefaultTask?: boolean;
 }
 
 /**
@@ -995,7 +990,7 @@ export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
   const seen = new Set<string>();
   const requirements: AgentRequirement[] = [];
   const add = (requirement: AgentRequirement): void => {
-    const key = `${requirement.name}|${requirement.cwd ?? ""}|${requirement.scope ?? ""}|${requirement.needsDefaultTask ?? false}`;
+    const key = `${requirement.name}|${requirement.cwd ?? ""}|${requirement.scope ?? ""}`;
     if (seen.has(key)) return;
     seen.add(key);
     requirements.push(requirement);
@@ -1003,12 +998,7 @@ export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
   const visit = (current: FlowNode): void => {
     switch (current.kind) {
       case "agent":
-        add({
-          name: current.name,
-          cwd: current.cwd,
-          scope: current.scope,
-          needsDefaultTask: current.task === undefined,
-        });
+        add({ name: current.name, cwd: current.cwd, scope: current.scope });
         return;
       case "seq":
         for (const step of current.steps) visit(step);

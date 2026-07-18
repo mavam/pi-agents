@@ -119,10 +119,6 @@ export class RunManager {
         problems.push(
           `ambiguous agent '${requirement.name}'${where} (${resolution.matches.map((a) => a.name).join(", ")})`,
         );
-      else if (requirement.needsDefaultTask && !resolution.agent.task)
-        problems.push(
-          `agent '${requirement.name}' needs a task: the flow node omits one and ${resolution.agent.filePath} defines no default 'task:'`,
-        );
     }
     if (problems.length > 0) {
       throw new Error(`cannot start run: ${problems.join("; ")}`);
@@ -174,32 +170,6 @@ export class RunManager {
         },
       });
 
-    // Default-task lookup for agent nodes that omit `task`, honoring the
-    // same effective cwd/scope the runner will use.
-    const taskDiscoveries = new Map<
-      string,
-      ReturnType<typeof discoverAgents>
-    >();
-    const resolveDefaultTask = (
-      name: string,
-      cwd?: string,
-      nodeScope?: Scope,
-    ): string | undefined => {
-      const effectiveCwd = cwd ?? opts.cwd;
-      const effective = effectiveScopeFor(nodeScope, trusted, scope);
-      const key = `${effectiveCwd}|${effective}`;
-      let discovery = taskDiscoveries.get(key);
-      if (!discovery) {
-        discovery = discoverAgents(effectiveCwd, effective);
-        taskDiscoveries.set(key, discovery);
-      }
-      const resolution = resolveAgentByName(discovery.agents, name);
-      return resolution.kind === "exact" ||
-        resolution.kind === "case_insensitive"
-        ? resolution.agent.task
-        : undefined;
-    };
-
     const done = executeFlow({
       runId,
       flow: opts.flow,
@@ -214,7 +184,6 @@ export class RunManager {
       cwd: opts.cwd,
       scope,
       originSessionFile: opts.originSessionFile,
-      resolveDefaultTask,
     }).finally(() => {
       this.controllers.delete(runId);
       this.persisters.delete(runId);

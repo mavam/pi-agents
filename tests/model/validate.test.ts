@@ -72,9 +72,12 @@ describe("structural validation", () => {
     expectIssue(agent("a", "t", { retries: 3 }), "unknown key 'retries'");
   });
 
-  test("agent requires a name; task is optional (agent-file default)", () => {
+  test("agent requires name and task", () => {
     expectIssue({ kind: "agent" }, "'name' must be a non-empty string");
-    expectValid({ kind: "agent", name: "a" });
+    expectIssue(
+      { kind: "agent", name: "a" },
+      "'task' must be a non-empty string",
+    );
   });
 
   test("agent nodes accept model and thinking overrides", () => {

@@ -92,7 +92,6 @@ model: openai-codex/gpt-5.6-terra  # optional; defaults to the active session mo
 thinking: medium           # optional: off|minimal|low|medium|high|xhigh
 skills: []                 # optional pi skills to inject
 tools: [read, grep, find]  # optional allowlist; [] means NO tools at all
-task: "Review the given target for bugs."  # optional default task
 ---
 
 You are a review agent. Review code through exactly the lens given in your
@@ -101,8 +100,9 @@ task. Return concrete findings with file paths.
 
 Agents are discovered from `~/.pi/agent/agents` (user) and the nearest `.pi/agents`
 walking up from the cwd (project); project wins on name conflicts. An agent
-with a default `task:` is a complete, reusable unit: flow nodes can reference
-it without repeating the task.
+is purely a persona — the *who*. The *what* (a task) always comes from the
+flow that references it; for a named, reusable agent+task unit, use a flat
+workflow (below).
 
 ### 2. Define a workflow
 
@@ -210,7 +210,7 @@ a bare agent leaf is a valid flow, so single delegation is just
 ```yaml
 kind: agent
 name: reviewer          # must match a discovered agent
-task: "Review {previous}"  # optional when the agent file defines a default task
+task: "Review {previous}"
 output: text            # or "json": parse the result (fences tolerated)
 model: some-model       # optional override (wins over the agent file)
 thinking: low           # optional override (wins over the agent file)

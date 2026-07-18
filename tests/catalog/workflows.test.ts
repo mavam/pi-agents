@@ -101,15 +101,14 @@ thinking: low
     });
   });
 
-  test("flat form without a task relies on the agent-file default", () => {
+  test("flat form requires a task", () => {
     const filePath = writeWorkflow(
       "just-agent.yaml",
       "name: just-agent\ndescription: d\nagent: reviewer\n",
     );
-    const result = parseWorkflowFile(filePath, "project");
-    if (typeof result === "string") throw new Error(result);
-    expect(result.flow).toMatchObject({ kind: "agent", name: "reviewer" });
-    expect((result.flow as { task?: string }).task).toBeUndefined();
+    expect(parseWorkflowFile(filePath, "project")).toContain(
+      "The flat agent form requires 'task:'",
+    );
   });
 
   test("requires flow: or the flat form", () => {

@@ -162,12 +162,6 @@ export interface ExecuteOptions {
   cwd?: string;
   scope?: Scope;
   originSessionFile?: string;
-  /** Default task lookup for agent nodes that omit `task` (from the catalog). */
-  resolveDefaultTask?: (
-    name: string,
-    cwd?: string,
-    scope?: Scope,
-  ) => string | undefined;
 }
 
 export interface RunOutcome {
@@ -414,15 +408,7 @@ class Interpreter {
     env: Env,
     signal: AbortSignal,
   ): Promise<{ value: unknown; usage?: SpawnUsage }> {
-    const template =
-      node.task ??
-      this.options.resolveDefaultTask?.(node.name, node.cwd, node.scope);
-    if (template === undefined) {
-      throw new Error(
-        `agent '${node.name}' has no task: the node omits one and the agent file defines no default`,
-      );
-    }
-    const task = renderTemplate(template, envResolver(env));
+    const task = renderTemplate(node.task, envResolver(env));
     return await this.callAgent({
       agent: node.name,
       task,

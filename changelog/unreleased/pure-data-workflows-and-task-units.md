@@ -12,8 +12,7 @@ an optional doc: key. The earlier markdown/frontmatter form is gone. Single-unit
 the graph entirely with the flat form — `agent:` plus optional `task:`,
 `model:`, `thinking:` — which normalizes to a bare agent leaf while keeping
 full workflow powers (params, slash command, hooks, cross-workflow
-references). Agents themselves become reusable task units: agent files may
-define a default `task:` so flow nodes can reference them by name alone, and
-agent nodes accept `model:`/`thinking:` overrides with the precedence flow
-node → agent file → active session. Preflight verifies that every taskless
-node references an agent with a default task before anything spawns.
+references) — the flat workflow is the one named, reusable agent+task unit,
+while agent files stay purely personas (who: system prompt, model, thinking,
+tools, skills). Agent nodes accept `model:`/`thinking:` overrides with the
+precedence flow node → agent file → active session.

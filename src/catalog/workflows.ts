@@ -135,6 +135,9 @@ function extractRawFlow(
         error: "Invalid 'agent' (must be a non-empty string)",
       };
     }
+    if (fm.task === undefined) {
+      return { ok: false, error: "The flat agent form requires 'task:'" };
+    }
     for (const key of ["task", "model", "thinking"]) {
       if (fm[key] !== undefined && typeof fm[key] !== "string") {
         return { ok: false, error: `Invalid '${key}' (must be a string)` };

@@ -75,7 +75,7 @@ function build(node: FlowNode, path: string): DisplayNode[] {
       return [
         {
           icon: KIND_ICONS.agent,
-          text: `${node.name}${binding(node)} · ${node.task !== undefined ? preview(node.task) : "(default task)"}`,
+          text: `${node.name}${binding(node)} · ${preview(node.task)}`,
           path,
           children: [],
         },

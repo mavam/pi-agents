@@ -1,7 +1,8 @@
 /**
- * Idle notifications for backgrounded runs: node completions and final
- * results are delivered as custom messages, but only when the originating
- * session is current and idle — otherwise they queue and flush later.
+ * Idle notifications for backgrounded runs: one final-result message per
+ * run, delivered when the originating session is current and idle —
+ * otherwise queued and flushed later. Per-node progress never notifies;
+ * the live widget carries it.
  */
 
 import type {
@@ -19,7 +20,7 @@ import {
 } from "./render.js";
 
 export interface RunNotification {
-  kind: "node_update" | "run_final";
+  kind: "run_final";
   runId: string;
   label?: string;
   status: string;
@@ -29,9 +30,6 @@ export interface RunNotification {
 
 interface TrackedRun {
   originSessionFile?: string;
-  /** Bare agent-leaf runs get only the final notification. */
-  suppressNodeUpdates: boolean;
-  pendingNodeUpdates: RunNotification[];
   pendingFinal?: RunNotification;
 }
 
@@ -50,14 +48,9 @@ export class NotificationManager {
     this.currentContext = ctx;
   }
 
-  /** Start delivering notifications for a backgrounded run. */
+  /** Start delivering the final notification for a backgrounded run. */
   track(runId: string, originSessionFile: string | undefined): void {
-    const run = this.manager.state.runs.get(runId);
-    this.tracked.set(runId, {
-      originSessionFile,
-      suppressNodeUpdates: run?.header.flow.kind === "agent",
-      pendingNodeUpdates: [],
-    });
+    this.tracked.set(runId, { originSessionFile });
   }
 
   clear(): void {
@@ -71,8 +64,6 @@ export class NotificationManager {
     if (!tracked) return;
     const notification = this.buildNotification(event);
     if (!notification) return;
-    if (notification.kind === "node_update" && tracked.suppressNodeUpdates)
-      return;
     this.deliverOrQueue(event.runId, tracked, notification);
   }
 
@@ -81,10 +72,6 @@ export class NotificationManager {
     const context = ctx ?? this.currentContext;
     for (const [runId, tracked] of [...this.tracked.entries()]) {
       if (!this.canDeliver(tracked, context)) continue;
-      for (const pending of tracked.pendingNodeUpdates) {
-        this.send(pending);
-      }
-      tracked.pendingNodeUpdates = [];
       if (tracked.pendingFinal) {
         this.send(tracked.pendingFinal);
         this.tracked.delete(runId);
@@ -93,25 +80,6 @@ export class NotificationManager {
   }
 
   private buildNotification(event: RunEvent): RunNotification | undefined {
-    if (event.type === "node_completed" || event.type === "node_failed") {
-      const run = this.manager.state.runs.get(event.runId);
-      const node = run?.nodes.get(event.instance);
-      if (!run || !node) return undefined;
-      if (node.kind !== "agent" && node.kind !== "reduce") return undefined;
-      const status = event.type === "node_completed" ? "completed" : "failed";
-      const detail =
-        event.type === "node_failed"
-          ? event.error
-          : formatValuePreview(event.value, 200);
-      return {
-        kind: "node_update",
-        runId: event.runId,
-        label: run.header.label,
-        status,
-        at: event.at,
-        text: `◦ run ${shortId(event.runId)}${run.header.label ? ` (${run.header.label})` : ""}: ${node.agent ?? node.instance} ${status}${detail ? ` — ${firstLine(detail)}` : ""}`,
-      };
-    }
     if (event.type === "run_completed") {
       const run = this.manager.state.runs.get(event.runId);
       const summary =
@@ -144,11 +112,10 @@ export class NotificationManager {
   ): void {
     if (this.canDeliver(tracked, this.currentContext)) {
       this.send(notification);
-      if (notification.kind === "run_final") this.tracked.delete(runId);
+      this.tracked.delete(runId);
       return;
     }
-    if (notification.kind === "run_final") tracked.pendingFinal = notification;
-    else tracked.pendingNodeUpdates.push(notification);
+    tracked.pendingFinal = notification;
   }
 
   private canDeliver(
@@ -168,8 +135,4 @@ export class NotificationManager {
       details: notification,
     });
   }
-}
-
-function firstLine(text: string): string {
-  return text.split("\n")[0] ?? "";
 }

@@ -101,18 +101,48 @@ const plain: ToolColorize = (_color, text) => text;
 
 const PARAM_PREVIEW_CHARS = 72;
 
+/** Memoized saved-workflow trees for renderCall; null = resolution failed. */
+const savedFlowTreeCache = new Map<string, string | null>();
+
 function oneLine(value: string, max: number): string {
   const flat = value.replace(/\s+/g, " ").trim();
   return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
 }
 
 /**
+ * Resolve a saved workflow's expanded flow tree for display. Filesystem
+ * discovery is not free, so callers memoize per tool call.
+ */
+export function resolveSavedFlowTree(
+  name: string,
+  cwd: string,
+): string | undefined {
+  try {
+    const { workflows } = discoverWorkflows(cwd, "both");
+    const def = resolveWorkflowByName(workflows, name);
+    if (!def) return undefined;
+    const expanded = validateFlow(structuredClone(def.flow) as unknown, {
+      resolveWorkflow: (candidate) =>
+        resolveWorkflowByName(workflows, candidate),
+      selfName: def.name,
+      params: def.params,
+    });
+    return renderFlowTree(expanded);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Icon tree preview of the tool call — tolerant of partial/invalid args.
- * One header line (icon, name, dim label); params each on their own dim line.
+ * One header line (icon, name, dim label), params each on their own dim
+ * line, then the full vertical structure (resolved by the caller for saved
+ * workflows, parsed from args for inline flows).
  */
 export function formatCallPreview(
   params: WorkflowToolParamsType,
   color: ToolColorize = plain,
+  savedFlowTree?: string,
 ): string {
   const lines: string[] = [];
   const label = params.label ? color("dim", ` · ${params.label}`) : "";
@@ -124,6 +154,7 @@ export function formatCallPreview(
           color("dim", `   ${key}: ${oneLine(value, PARAM_PREVIEW_CHARS)}`),
         );
       }
+      if (savedFlowTree) lines.push(savedFlowTree);
     } else if (params.flow !== undefined) {
       if (params.label) lines.push(color("dim", params.label));
       const issues: { path: string; message: string }[] = [];
@@ -210,9 +241,24 @@ export function createWorkflowTool(
       'In flows, thread data explicitly: bind seq steps with "as" and reference {name}/{previous} in later tasks; use output:"json" when downstream steps need structured access.',
     ],
     parameters: WorkflowToolParams,
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const color: ToolColorize = (name, text) => theme.fg(name, text);
-      const previewText = formatCallPreview(args, color);
+      // Resolving a saved workflow's tree hits the filesystem; memoize per
+      // tool call so redraws stay free.
+      let savedFlowTree: string | undefined;
+      if (args.name !== undefined && context?.argsComplete) {
+        // Keyed by tool call: each invocation resolves once, so redraws are
+        // free but a later call sees fresh file contents.
+        const key = context.toolCallId;
+        let cached = savedFlowTreeCache.get(key);
+        if (cached === undefined) {
+          if (savedFlowTreeCache.size > 200) savedFlowTreeCache.clear();
+          cached = resolveSavedFlowTree(args.name, context.cwd) ?? null;
+          savedFlowTreeCache.set(key, cached);
+        }
+        savedFlowTree = cached ?? undefined;
+      }
+      const previewText = formatCallPreview(args, color, savedFlowTree);
       return new Text(previewText || "workflow", 1, 0);
     },
     renderResult(result, options, theme) {

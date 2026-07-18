@@ -248,6 +248,25 @@ describe("call and result previews", () => {
     expect(preview).not.toContain("workflow ·");
   });
 
+  test("saved workflows resolve and render their full expanded tree", async () => {
+    const { resolveSavedFlowTree, formatCallPreview } = await import(
+      "../../src/triggers/tool.js"
+    );
+    const tree = resolveSavedFlowTree("greet", projectDir);
+    expect(tree).toBe("✦ echo · greet {params.target}");
+    const preview = formatCallPreview(
+      { name: "greet", params: { target: "world" } },
+      undefined,
+      tree,
+    );
+    expect(preview.split("\n")).toEqual([
+      "❖ greet",
+      "   target: world",
+      "✦ echo · greet {params.target}",
+    ]);
+    expect(resolveSavedFlowTree("nonexistent", projectDir)).toBeUndefined();
+  });
+
   test("inline flows render as the icon tree", async () => {
     const { formatCallPreview } = await import("../../src/triggers/tool.js");
     const preview = formatCallPreview({

@@ -5,7 +5,7 @@
  * the flat `agent:`/`task:` single-unit form). The markdown body is pure
  * documentation.
  *
- * Discovery mirrors agents: user `~/.pi/workflows` plus the nearest project
+ * Discovery mirrors agents: user `~/.pi/agent/workflows` plus the nearest project
  * `.pi/workflows` walking up from cwd; project wins on name conflicts.
  */
 
@@ -72,7 +72,7 @@ function toErrorMessage(e: unknown): string {
 }
 
 function getUserWorkflowsDir(): string {
-  return path.join(path.dirname(getAgentDir()), "workflows");
+  return path.join(getAgentDir(), "workflows");
 }
 
 function isDirectory(p: string): boolean {

@@ -58,7 +58,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       const lines = ["## Agents", ""];
       if (discovery.agents.length === 0) {
         lines.push(
-          "No agents found. Create `.pi/agents/<name>.md` or `~/.pi/agents/<name>.md`.",
+          "No agents found. Create `.pi/agents/<name>.md` or `~/.pi/agent/agents/<name>.md`.",
         );
       }
       for (const agent of discovery.agents) {
@@ -132,7 +132,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       const lines = ["## Workflows", ""];
       if (workflows.length === 0) {
         lines.push(
-          "No workflows found. Create `.pi/workflows/<name>.md` or `~/.pi/workflows/<name>.md`.",
+          "No workflows found. Create `.pi/workflows/<name>.md` or `~/.pi/agent/workflows/<name>.md`.",
         );
       }
       for (const wf of workflows) {

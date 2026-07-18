@@ -68,12 +68,15 @@ function toErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+// User-scope resources live inside pi's agent dir (~/.pi/agent), matching
+// pi's own conventions for skills, prompts, and tools — and inheriting the
+// PI_CODING_AGENT_DIR override wholesale.
 function getUserAgentsDir(): string {
-  return path.join(path.dirname(getAgentDir()), "agents");
+  return path.join(getAgentDir(), "agents");
 }
 
 function getUserSkillsDir(): string {
-  return path.join(path.dirname(getAgentDir()), "skills");
+  return path.join(getAgentDir(), "skills");
 }
 
 function isDirectory(p: string): boolean {

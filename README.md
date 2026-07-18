@@ -98,7 +98,7 @@ You are a review agent. Review code through exactly the lens given in your
 task. Return concrete findings with file paths.
 ```
 
-Agents are discovered from `~/.pi/agents` (user) and the nearest `.pi/agents`
+Agents are discovered from `~/.pi/agent/agents` (user) and the nearest `.pi/agents`
 walking up from the cwd (project); project wins on name conflicts. An agent
 with a default `task:` is a complete, reusable unit: flow nodes can reference
 it without repeating the task.
@@ -146,7 +146,7 @@ thinking: high
 ---
 ```
 
-Workflows live in `~/.pi/workflows` and `.pi/workflows`, discovered like
+Workflows live in `~/.pi/agent/workflows` and `.pi/workflows`, discovered like
 agents. Every definition is fully validated at discovery (references, cycles,
 binding scopes); invalid files are listed in `/workflows` diagnostics and
 never run.

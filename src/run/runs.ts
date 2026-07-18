@@ -111,11 +111,19 @@ export class RunManager {
         requirement.cwd || requirement.scope
           ? ` (cwd: ${effectiveCwd}, scope: ${effectiveScope})`
           : "";
-      if (resolution.kind === "missing")
-        problems.push(
-          `unknown agent '${requirement.name}'${where}. Available: ${formatAgentList(discovery.agents)}`,
+      if (resolution.kind === "missing") {
+        // A same-named file that failed to parse is the likely culprit —
+        // surface its diagnostic instead of a bare "unknown".
+        const related = discovery.diagnostics.filter((diagnostic) =>
+          diagnostic.filePath.includes(`/${requirement.name}.`),
         );
-      else if (resolution.kind === "ambiguous")
+        const hint = related.length
+          ? ` (${related.map((d) => `${d.filePath}: ${d.message}`).join("; ")})`
+          : "";
+        problems.push(
+          `unknown agent '${requirement.name}'${where}. Available: ${formatAgentList(discovery.agents)}${hint}`,
+        );
+      } else if (resolution.kind === "ambiguous")
         problems.push(
           `ambiguous agent '${requirement.name}'${where} (${resolution.matches.map((a) => a.name).join(", ")})`,
         );

@@ -109,6 +109,28 @@ describe("preflight with node overrides", () => {
   });
 });
 
+describe("preflight diagnostics", () => {
+  test("a same-named agent file that fails to parse is surfaced", () => {
+    fs.writeFileSync(
+      path.join(projectDir, ".pi", "agents", "broken.md"),
+      "---\nname: broken\ndescription: d\nbogus: key\n---\nBody.\n",
+    );
+    const { engine } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({ kind: "agent", name: "broken", task: "t" });
+    expect(() =>
+      manager.start({
+        flow,
+        cwd: projectDir,
+        scope: "project",
+        source: { kind: "tool" },
+      }),
+    ).toThrow(
+      /unknown agent 'broken'.*broken\.md: Unsupported frontmatter keys: bogus/,
+    );
+  });
+});
+
 describe("budgets", () => {
   test("rejects non-positive or fractional budget values", () => {
     const { engine } = fakeEngine();

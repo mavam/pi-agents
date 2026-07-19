@@ -398,15 +398,50 @@ function buildWorkflowsSpec(
       return `${color("muted", KIND_ICONS.workflow)} ${`/${wf.name}`.padEnd(16)}  ${color("dim", wf.source.padEnd(7))}  ${wf.description}${triggers}${hidden}`;
     },
     headerLine: (wf, color) => {
-      const parts = [`/${wf.name}`, wf.source];
-      if (wf.params.length > 0)
-        parts.push(
-          `params: ${wf.params.map((param) => param.name).join(", ")}`,
-        );
-      if (wf.on && wf.on.length > 0) parts.push(`on: ${wf.on.join(", ")}`);
-      return parts.join(color("dim", " · "));
+      return [`/${wf.name}`, wf.source].join(color("dim", " · "));
     },
-    detail: (wf, color) => renderFlowTree(wf.flow, color).split("\n"),
+    detail: (wf, color) => {
+      const meta = (key: string, value: string) =>
+        `${color("dim", `${key}:`)} ${value}`;
+      const fallback = (text: string) => color("dim", `(${text})`);
+      const lines = [
+        color("dim", wf.description),
+        "",
+        meta("file", wf.filePath),
+      ];
+      if (wf.trigger) lines.push(meta("trigger", wf.trigger));
+      lines.push(
+        meta(
+          "on",
+          wf.on && wf.on.length > 0
+            ? wf.on.join(", ") +
+                (wf.debounce !== undefined
+                  ? ` (debounce ${wf.debounce}ms)`
+                  : "")
+            : fallback("manual only"),
+        ),
+      );
+      if (wf.params.length === 0) {
+        lines.push(meta("params", fallback("none")));
+      } else {
+        lines.push(meta("params", ""));
+        for (const param of wf.params) {
+          const flags = [
+            param.required ? "required" : undefined,
+            param.default !== undefined
+              ? `default: ${param.default}`
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join(", ");
+          lines.push(
+            `  ${param.name}${flags ? color("dim", ` (${flags})`) : ""}${param.description ? color("dim", ` — ${param.description}`) : ""}`,
+          );
+        }
+      }
+      lines.push("", ...renderFlowTree(wf.flow, color).split("\n"));
+      return lines;
+    },
     onAction: (key, wf) => {
       if (key === "enter") {
         ctx.ui.setEditorText(`/${wf.name} `);

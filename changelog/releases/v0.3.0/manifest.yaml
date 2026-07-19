@@ -1,0 +1,9 @@
+created: 2026-07-19
+title: Composable workflows and interactive run management
+intro: >-
+  Build reusable, data-driven agent workflows and run them from the model, slash commands,
+  or event hooks. Inspect and manage every workflow and run from new interactive TUI
+  overlays, with live progress at a glance.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.2.1

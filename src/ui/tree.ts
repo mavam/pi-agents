@@ -278,13 +278,16 @@ export function renderFlowTree(
 }
 
 /** Flow tree with kind icons replaced by live status icons. */
-export function renderRunTree(run: RunView): string {
+export function renderRunTree(
+  run: RunView,
+  color: TreeColorize = plainTree,
+): string {
   const statuses = aggregateStatuses(run);
   return renderLines(
-    build(run.header.flow, "$", plainTree),
+    build(run.header.flow, "$", color),
     statuses,
     "",
     true,
-    plainTree,
+    color,
   ).join("\n");
 }

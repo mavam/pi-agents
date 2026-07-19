@@ -232,7 +232,7 @@ function liveTokens(run: RunView): number {
   return total;
 }
 
-function formatElapsed(ms: number): string {
+export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -317,11 +317,24 @@ export function formatRunWidget(
   ];
 }
 
+/** Runs the widget shows: live, and not individually hidden. Pure. */
+export function visibleWidgetRuns(
+  runs: Iterable<RunView>,
+  hiddenRunIds: ReadonlySet<string>,
+): RunView[] {
+  return [...runs].filter(
+    (run) => run.status === "running" && !hiddenRunIds.has(run.header.id),
+  );
+}
+
 export class RunWidget {
   private readonly manager: RunManager;
   private lastContext: ExtensionContext | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private frame = 0;
+  /** Run ids muted from the summary (session-scoped, via the /runs overlay `h`). */
+  private readonly hidden = new Set<string>();
+  private enabled = true;
 
   constructor(manager: RunManager) {
     this.manager = manager;
@@ -334,14 +347,34 @@ export class RunWidget {
     this.render(context);
   }
 
+  isHidden(runId: string): boolean {
+    return this.hidden.has(runId);
+  }
+
+  /** Show/hide one run in the summary. Returns true when now hidden. */
+  toggleHidden(runId: string): boolean {
+    if (!this.hidden.delete(runId)) this.hidden.add(runId);
+    this.update();
+    return this.hidden.has(runId);
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /** Turn the whole live summary on/off. Returns the new state. */
+  toggleEnabled(): boolean {
+    this.enabled = !this.enabled;
+    this.update();
+    return this.enabled;
+  }
+
   private running(): RunView[] {
-    return [...this.manager.state.runs.values()].filter(
-      (run) => run.status === "running",
-    );
+    return visibleWidgetRuns(this.manager.state.runs.values(), this.hidden);
   }
 
   private render(context: ExtensionContext): void {
-    const running = this.running();
+    const running = this.enabled ? this.running() : [];
     if (running.length === 0) {
       this.stopTicking();
       context.ui.setWidget(WIDGET_KEY, undefined);

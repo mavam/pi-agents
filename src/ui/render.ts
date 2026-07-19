@@ -73,6 +73,14 @@ export function formatValuePreview(value: unknown, maxChars = 400): string {
   return `${text.slice(0, maxChars)}…`;
 }
 
+/** Wrap text in a code fence long enough to contain embedded backticks. */
+export function fenced(text: string): string {
+  const runs = text.match(/`+/g) ?? [];
+  const longest = runs.reduce((max, run) => Math.max(max, run.length), 2);
+  const fence = "`".repeat(longest + 1);
+  return `${fence}\n${text}\n${fence}`;
+}
+
 export function formatRunOverviewLine(run: RunView): string {
   const icon = STATUS_ICONS[run.status] ?? "?";
   const label =

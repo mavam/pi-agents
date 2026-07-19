@@ -10,7 +10,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { discoverAgents } from "../catalog/agents.js";
+import { type Agent, discoverAgents } from "../catalog/agents.js";
 import {
   discoverWorkflows,
   resolveWorkflowByName,
@@ -20,14 +20,18 @@ import { validateFlow } from "../model/validate.js";
 import { isProjectTrusted } from "../run/persist.js";
 import type { RunView } from "../run/state.js";
 import { toMermaid } from "../ui/mermaid.js";
+import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
 import {
+  fenced,
   formatRunOverviewLine,
   formatUsage,
   formatValuePreview,
+  STATUS_ICONS,
   sendInfo,
   shortId,
 } from "../ui/render.js";
-import { renderFlowTree, renderRunTree } from "../ui/tree.js";
+import { KIND_ICONS, renderFlowTree, renderRunTree } from "../ui/tree.js";
+import { type Colorize, formatElapsed } from "../ui/widget.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
 /** Command names that saved workflows may not claim. */
@@ -52,8 +56,17 @@ function scopeFor(ctx: Pick<ExtensionContext, "isProjectTrusted">): Scope {
 
 export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   pi.registerCommand("agents", {
-    description: "List discovered agents",
-    handler: async (_args, ctx) => {
+    description:
+      "Browse discovered agents (interactive in the TUI; `list` for text)",
+    getArgumentCompletions: (prefix) =>
+      ["list"]
+        .filter((arg) => arg.startsWith(prefix))
+        .map((arg) => ({ value: arg, label: arg })),
+    handler: async (args, ctx) => {
+      if (ctx.hasUI && ctx.mode === "tui" && args.trim() !== "list") {
+        await openOverlay(ctx, buildAgentsSpec(pi, ctx));
+        return;
+      }
       const discovery = discoverAgents(ctx.cwd, scopeFor(ctx));
       const lines = ["## Agents", ""];
       if (discovery.agents.length === 0) {
@@ -97,34 +110,22 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         sendInfo(pi, `Unknown agent \`${name}\`. Try \`/agents\`.`);
         return;
       }
-      const lines = [
-        `## ${agent.name} (${agent.source})`,
-        "",
-        agent.description,
-        "",
-        `- file: ${agent.filePath}`,
-      ];
-      if (agent.model) lines.push(`- model: ${agent.model}`);
-      if (agent.thinking) lines.push(`- thinking: ${agent.thinking}`);
-      if (agent.skills.length > 0)
-        lines.push(`- skills: ${agent.skills.join(", ")}`);
-      if (agent.tools)
-        lines.push(`- tools: ${agent.tools.join(", ") || "(none)"}`);
-      lines.push(
-        "",
-        "### System prompt",
-        "",
-        "```",
-        agent.systemPrompt || "(empty)",
-        "```",
-      );
-      sendInfo(pi, lines.join("\n"));
+      sendInfo(pi, formatAgentDetails(agent));
     },
   });
 
   pi.registerCommand("workflows", {
-    description: "List saved workflows",
-    handler: async (_args, ctx) => {
+    description:
+      "Browse saved workflows (interactive in the TUI; `list` for text)",
+    getArgumentCompletions: (prefix) =>
+      ["list"]
+        .filter((arg) => arg.startsWith(prefix))
+        .map((arg) => ({ value: arg, label: arg })),
+    handler: async (args, ctx) => {
+      if (ctx.hasUI && ctx.mode === "tui" && args.trim() !== "list") {
+        await openOverlay(ctx, buildWorkflowsSpec(pi, deps, ctx));
+        return;
+      }
       const { workflows, diagnostics } = discoverWorkflows(
         ctx.cwd,
         scopeFor(ctx),
@@ -178,8 +179,26 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 
   pi.registerCommand("runs", {
-    description: "Browse workflow runs",
-    handler: async () => {
+    description:
+      "Browse workflow runs (interactive in the TUI; `list` for text, `widget` to toggle the live summary)",
+    getArgumentCompletions: (prefix) =>
+      ["list", "widget"]
+        .filter((arg) => arg.startsWith(prefix))
+        .map((arg) => ({ value: arg, label: arg })),
+    handler: async (args, ctx) => {
+      const arg = args.trim();
+      if (arg === "widget") {
+        const enabled = deps.widget.toggleEnabled();
+        ctx.ui.notify(
+          `Live run summary ${enabled ? "enabled" : "disabled"}.`,
+          "info",
+        );
+        return;
+      }
+      if (ctx.hasUI && ctx.mode === "tui" && arg !== "list") {
+        await openOverlay(ctx, buildRunsSpec(pi, deps, ctx));
+        return;
+      }
       const runs = [...deps.manager.state.runs.values()];
       if (runs.length === 0) {
         sendInfo(pi, "No runs yet.");
@@ -261,6 +280,300 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Interactive overlays (TUI only; non-TUI modes keep the markdown output)
+
+const STATUS_COLORS: Record<string, Parameters<Colorize>[0]> = {
+  running: "accent",
+  completed: "success",
+  failed: "error",
+  cancelled: "dim",
+  stopped: "dim",
+};
+
+function buildRunsSpec(
+  pi: ExtensionAPI,
+  deps: CommandDeps,
+  ctx: ExtensionCommandContext,
+): OverlaySpec<RunView> {
+  return {
+    title: "Runs",
+    emptyText: "No runs yet.",
+    footer: "↑↓ move · ⏎ inspect · c cancel · r rerun · h hide · esc close",
+    items: () => [...deps.manager.state.runs.values()].reverse(),
+    keyOf: (run) => run.header.id,
+    row: (run, color) => {
+      const icon = color(
+        STATUS_COLORS[run.status] ?? "dim",
+        STATUS_ICONS[run.status] ?? "?",
+      );
+      const label =
+        run.header.label ?? run.header.source.workflow ?? run.header.flow.kind;
+      const source =
+        run.header.source.kind === "hook"
+          ? `hook:${run.header.source.event ?? "?"}`
+          : run.header.source.kind;
+      const usage = formatUsage(run.usage);
+      const hidden = deps.widget.isHidden(run.header.id)
+        ? color("dim", "  ⊘ hidden")
+        : "";
+      return `${icon} ${color("dim", shortId(run.header.id))}  ${run.status.padEnd(9)}  ${`${label} (${source})`.padEnd(24)}${usage ? `  ${color("dim", usage)}` : ""}${hidden}`;
+    },
+    headerLine: (run, color) => {
+      const parts = [
+        shortId(run.header.id),
+        run.header.label ?? run.header.flow.kind,
+        formatElapsed((run.endedAt ?? Date.now()) - run.createdAt),
+        formatUsage(run.usage) || undefined,
+      ].filter((part): part is string => part !== undefined);
+      return parts.join(color("dim", " · "));
+    },
+    detail: (run, color) => {
+      const lines = (renderRunTree(run, color) || "(no nodes yet)").split("\n");
+      if (run.error) lines.push(color("error", `✗ ${run.error}`));
+      const value =
+        run.status !== "running" ? formatValuePreview(run.value, 300) : "";
+      if (value) lines.push("", ...value.split("\n"));
+      return lines;
+    },
+    onAction: (key, run) => {
+      if (key === "enter") {
+        sendInfo(pi, formatRunDetails(run, true));
+        return "close";
+      }
+      if (key === "c") {
+        const stopped = deps.manager.stop(run.header.id);
+        ctx.ui.notify(
+          stopped
+            ? `Stopping run ${shortId(run.header.id)}…`
+            : "Run is not live.",
+          stopped ? "info" : "warning",
+        );
+      }
+      if (key === "h") {
+        const hidden = deps.widget.toggleHidden(run.header.id);
+        ctx.ui.notify(
+          `Run ${shortId(run.header.id)} ${hidden ? "hidden from" : "shown in"} the live summary.`,
+          "info",
+        );
+      }
+      if (key === "r") {
+        deps.notifications.setContext(ctx);
+        try {
+          const started = startTriggeredRun(deps, {
+            flow: run.header.flow,
+            cwd: run.header.cwd ?? ctx.cwd,
+            scope: run.header.scope,
+            label: run.header.label,
+            budgets: run.header.budgets,
+            source: run.header.source,
+            ctx,
+            background: true,
+          });
+          ctx.ui.notify(`Started run ${shortId(started.runId)}.`, "info");
+        } catch (error) {
+          ctx.ui.notify(
+            error instanceof Error ? error.message : String(error),
+            "error",
+          );
+        }
+      }
+    },
+    live: () =>
+      [...deps.manager.state.runs.values()].some(
+        (run) => run.status === "running",
+      ),
+  };
+}
+
+function buildWorkflowsSpec(
+  pi: ExtensionAPI,
+  deps: CommandDeps,
+  ctx: ExtensionCommandContext,
+): OverlaySpec<WorkflowDef> {
+  return {
+    title: "Workflows",
+    emptyText:
+      "No workflows found. Create .pi/workflows/<name>.yaml or ~/.pi/agent/workflows/<name>.yaml.",
+    footer: "↑↓ move · ⏎ compose · r run · n new · esc close",
+    items: () => discoverWorkflows(ctx.cwd, scopeFor(ctx)).workflows,
+    keyOf: (wf) => `${wf.source}:${wf.name}`,
+    row: (wf, color) => {
+      const triggers =
+        wf.on && wf.on.length > 0
+          ? color("dim", `  on: ${wf.on.join(", ")}`)
+          : "";
+      return `${color("muted", KIND_ICONS.workflow)} ${`/${wf.name}`.padEnd(16)}  ${color("dim", wf.source.padEnd(7))}  ${wf.description}${triggers}`;
+    },
+    headerLine: (wf, color) => {
+      return [`/${wf.name}`, wf.source].join(color("dim", " · "));
+    },
+    detail: (wf, color) => {
+      const meta = (key: string, value: string) =>
+        `${color("dim", `${key}:`)} ${value}`;
+      const fallback = (text: string) => color("dim", `(${text})`);
+      const lines = [
+        color("dim", wf.description),
+        "",
+        meta("file", wf.filePath),
+      ];
+      if (wf.trigger) lines.push(meta("trigger", wf.trigger));
+      lines.push(
+        meta(
+          "on",
+          wf.on && wf.on.length > 0
+            ? wf.on.join(", ") +
+                (wf.debounce !== undefined
+                  ? ` (debounce ${wf.debounce}ms)`
+                  : "")
+            : fallback("manual only"),
+        ),
+      );
+      if (wf.params.length === 0) {
+        lines.push(meta("params", fallback("none")));
+      } else {
+        lines.push(meta("params", ""));
+        for (const param of wf.params) {
+          const flags = [
+            param.required ? "required" : undefined,
+            param.default !== undefined
+              ? `default: ${param.default}`
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join(", ");
+          lines.push(
+            `  ${param.name}${flags ? color("dim", ` (${flags})`) : ""}${param.description ? color("dim", ` — ${param.description}`) : ""}`,
+          );
+        }
+      }
+      lines.push("", ...renderFlowTree(wf.flow, color).split("\n"));
+      return lines;
+    },
+    onAction: (key, wf) => {
+      if (key === "enter") {
+        ctx.ui.setEditorText(`/${wf.name} `);
+        return "close";
+      }
+      if (key === "r") {
+        const missing = wf.params.filter(
+          (param) => param.required && param.default === undefined,
+        );
+        if (missing.length > 0) {
+          ctx.ui.setEditorText(`/${wf.name} `);
+          ctx.ui.notify(
+            `/${wf.name} needs: ${missing.map((param) => param.name).join(", ")}`,
+            "warning",
+          );
+          return "close";
+        }
+        void runWorkflowCommand(pi, wf.name, "", ctx, deps);
+        return "close";
+      }
+      if (key === "n") {
+        // Defer past the overlay teardown so the input dialogs get focus.
+        setTimeout(() => void newDefinitionWizard(pi, ctx), 0);
+        return "close";
+      }
+    },
+  };
+}
+
+const AGENT_PROMPT_PREVIEW_LINES = 6;
+
+function buildAgentsSpec(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+): OverlaySpec<Agent> {
+  return {
+    title: "Agents",
+    emptyText:
+      "No agents found. Create .pi/agents/<name>.md or ~/.pi/agent/agents/<name>.md.",
+    footer: "↑↓ move · ⏎ inspect · n new · esc close",
+    items: () => discoverAgents(ctx.cwd, scopeFor(ctx)).agents,
+    keyOf: (agent) => `${agent.source}:${agent.name}`,
+    row: (agent, color) =>
+      `${color("muted", KIND_ICONS.agent)} ${agent.name.padEnd(16)}  ${color("dim", agent.source.padEnd(7))}  ${agent.description}`,
+    headerLine: (agent, color) => {
+      return [agent.name, agent.source].join(color("dim", " · "));
+    },
+    detail: (agent, color) => {
+      const meta = (key: string, value: string) =>
+        `${color("dim", `${key}:`)} ${value}`;
+      const fallback = (text: string) => color("dim", `(${text})`);
+      const lines = [
+        color("dim", agent.description),
+        "",
+        meta("file", agent.filePath),
+        meta("model", agent.model ?? fallback("session default")),
+        meta("thinking", agent.thinking ?? fallback("session default")),
+        meta(
+          "skills",
+          agent.skills.length > 0 ? agent.skills.join(", ") : fallback("none"),
+        ),
+        meta(
+          "tools",
+          agent.tools
+            ? agent.tools.join(", ") || fallback("none")
+            : fallback("all"),
+        ),
+      ];
+      const prompt = agent.systemPrompt.split("\n");
+      if (prompt.some((line) => line.trim())) {
+        lines.push("");
+        lines.push(...prompt.slice(0, AGENT_PROMPT_PREVIEW_LINES));
+        if (prompt.length > AGENT_PROMPT_PREVIEW_LINES) {
+          lines.push(
+            color(
+              "dim",
+              `… +${prompt.length - AGENT_PROMPT_PREVIEW_LINES} prompt lines (⏎ for all)`,
+            ),
+          );
+        }
+      }
+      return lines;
+    },
+    onAction: (key, agent) => {
+      if (key === "enter") {
+        sendInfo(pi, formatAgentDetails(agent));
+        return "close";
+      }
+      if (key === "n") {
+        // Defer past the overlay teardown so the input dialogs get focus.
+        setTimeout(() => void newDefinitionWizard(pi, ctx), 0);
+        return "close";
+      }
+      return undefined;
+    },
+  };
+}
+
+/** Human starts (name + intent), model finishes: draft the definition file. */
+async function newDefinitionWizard(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+): Promise<void> {
+  const kind = await ctx.ui.select("Create new…", ["workflow", "agent"]);
+  if (!kind) return;
+  const name = await ctx.ui.input(`New ${kind} name`, "kebab-case-name");
+  if (!name?.trim()) return;
+  const description = await ctx.ui.input(`What should ${name.trim()} do?`);
+  if (!description?.trim()) return;
+  const target =
+    kind === "workflow"
+      ? `.pi/workflows/${name.trim()}.yaml`
+      : `.pi/agents/${name.trim()}.md`;
+  pi.sendUserMessage(
+    [
+      `Create a new pi-agents ${kind} named \`${name.trim()}\`: ${description.trim()}`,
+      "",
+      `Write it to \`${target}\`. Study the existing definitions under \`.pi/\` ` +
+        "and the pi-agents README for the format, keep it minimal, and " +
+        "verify it appears in `/workflows list` (or `/agents`) afterwards.",
+    ].join("\n"),
+  );
+}
+
 /** Poll a live run and post the final tree once it settles. */
 function watchUntilDone(
   pi: ExtensionAPI,
@@ -276,6 +589,30 @@ function watchUntilDone(
     if (run) sendInfo(pi, formatRunDetails(run));
   }, 500);
   timer.unref?.();
+}
+
+function formatAgentDetails(agent: Agent): string {
+  const lines = [
+    `## ${agent.name} (${agent.source})`,
+    "",
+    agent.description,
+    "",
+    `- file: ${agent.filePath}`,
+  ];
+  if (agent.model) lines.push(`- model: ${agent.model}`);
+  if (agent.thinking) lines.push(`- thinking: ${agent.thinking}`);
+  if (agent.skills.length > 0)
+    lines.push(`- skills: ${agent.skills.join(", ")}`);
+  if (agent.tools) lines.push(`- tools: ${agent.tools.join(", ") || "(none)"}`);
+  lines.push(
+    "",
+    "### System prompt",
+    "",
+    "```",
+    agent.systemPrompt || "(empty)",
+    "```",
+  );
+  return lines.join("\n");
 }
 
 function formatWorkflowDetails(wf: WorkflowDef): string {
@@ -318,6 +655,25 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
 
 const MAX_FULL_RESULT_CHARS = 64_000;
 
+function valueText(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === "string"
+    ? value
+    : (JSON.stringify(value, null, 2) ?? String(value));
+}
+
+/** Fenced full value, bounded by MAX_FULL_RESULT_CHARS. */
+function fullValueLines(text: string): string[] {
+  if (text.length > MAX_FULL_RESULT_CHARS) {
+    return [
+      fenced(text.slice(0, MAX_FULL_RESULT_CHARS)),
+      "",
+      `… truncated ${text.length - MAX_FULL_RESULT_CHARS} characters.`,
+    ];
+  }
+  return [fenced(text)];
+}
+
 /** The complete run value (bounded only by what persistence retained). */
 function formatRunResultFull(run: RunView): string {
   const lines = [`## Run ${shortId(run.header.id)} — result`, ""];
@@ -326,30 +682,16 @@ function formatRunResultFull(run: RunView): string {
     return lines.join("\n");
   }
   if (run.error) lines.push(`⚠ ${run.error}`, "");
-  const value = run.value;
-  if (value === undefined) {
+  const text = valueText(run.value);
+  if (text === undefined) {
     lines.push("(no result value)");
     return lines.join("\n");
   }
-  const text =
-    typeof value === "string"
-      ? value
-      : (JSON.stringify(value, null, 2) ?? String(value));
-  if (text.length > MAX_FULL_RESULT_CHARS) {
-    lines.push(
-      "```",
-      text.slice(0, MAX_FULL_RESULT_CHARS),
-      "```",
-      "",
-      `… truncated ${text.length - MAX_FULL_RESULT_CHARS} characters.`,
-    );
-  } else {
-    lines.push("```", text, "```");
-  }
+  lines.push(...fullValueLines(text));
   return lines.join("\n");
 }
 
-function formatRunDetails(run: RunView): string {
+function formatRunDetails(run: RunView, fullValue = false): string {
   const lines = [
     `## Run ${shortId(run.header.id)} — ${run.status}`,
     "",
@@ -363,10 +705,15 @@ function formatRunDetails(run: RunView): string {
     );
   if (run.error) lines.push(`- error: ${run.error}`);
   lines.push("", "```", renderRunTree(run) || "(no nodes yet)", "```");
-  const value = formatValuePreview(run.value);
-  if (value) {
-    lines.push("", "### Result (preview)", "", "```", value, "```");
-    lines.push("", `Full result: \`/run ${shortId(run.header.id)} result\``);
+  if (fullValue) {
+    const text = valueText(run.value);
+    if (text) lines.push("", "### Result", "", ...fullValueLines(text));
+  } else {
+    const value = formatValuePreview(run.value);
+    if (value) {
+      lines.push("", "### Result (preview)", "", fenced(value));
+      lines.push("", `Full result: \`/run ${shortId(run.header.id)} result\``);
+    }
   }
   return lines.join("\n");
 }

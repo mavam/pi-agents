@@ -22,6 +22,7 @@ import type { RunView } from "../run/state.js";
 import { toMermaid } from "../ui/mermaid.js";
 import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
 import {
+  fenced,
   formatRunOverviewLine,
   formatUsage,
   formatValuePreview,
@@ -673,14 +674,12 @@ function formatRunResultFull(run: RunView): string {
       : (JSON.stringify(value, null, 2) ?? String(value));
   if (text.length > MAX_FULL_RESULT_CHARS) {
     lines.push(
-      "```",
-      text.slice(0, MAX_FULL_RESULT_CHARS),
-      "```",
+      fenced(text.slice(0, MAX_FULL_RESULT_CHARS)),
       "",
       `… truncated ${text.length - MAX_FULL_RESULT_CHARS} characters.`,
     );
   } else {
-    lines.push("```", text, "```");
+    lines.push(fenced(text));
   }
   return lines.join("\n");
 }
@@ -701,7 +700,7 @@ function formatRunDetails(run: RunView): string {
   lines.push("", "```", renderRunTree(run) || "(no nodes yet)", "```");
   const value = formatValuePreview(run.value);
   if (value) {
-    lines.push("", "### Result (preview)", "", "```", value, "```");
+    lines.push("", "### Result (preview)", "", fenced(value));
     lines.push("", `Full result: \`/run ${shortId(run.header.id)} result\``);
   }
   return lines.join("\n");

@@ -13,6 +13,7 @@ import type { RunEvent } from "../run/events.js";
 import { getSessionFile, isIdle } from "../run/persist.js";
 import type { RunManager } from "../run/runs.js";
 import {
+  fenced,
   formatUsage,
   formatValuePreview,
   NOTIFICATION_TYPE,
@@ -82,9 +83,17 @@ export class NotificationManager {
   private buildNotification(event: RunEvent): RunNotification | undefined {
     if (event.type === "run_completed") {
       const run = this.manager.state.runs.get(event.runId);
+      // Fence the value preview: raw JSON/text would be reflowed (and
+      // mangled) by the markdown renderer.
+      const preview =
+        event.status === "completed"
+          ? formatValuePreview(event.value, 600)
+          : "";
       const summary =
         event.status === "completed"
-          ? formatValuePreview(event.value, 600) || "(no output)"
+          ? preview
+            ? fenced(preview)
+            : "(no output)"
           : (event.error ?? "unknown error");
       const usage = formatUsage(event.usage);
       return {

@@ -345,14 +345,14 @@ never moves; the detail pane only ever grows downward.
 ```
 
 Keys — all overlays: `↑`/`↓` (or `k`/`j`) move, `esc` closes. Runs:
-`⏎` posts the full run details to the chat, `c` cancels a live run,
-`r` starts the same flow again. Workflows: `⏎` puts `/<name> ` into the
-composer so you can add arguments, `r` runs it immediately (workflows with
-required parameters fall back to composing), `h` hides/shows that workflow's
-runs in the live summary above the composer. Agents: `⏎` posts the full
-agent details. In the workflows and agents overlays, `n` starts a new
-workflow or agent: you name it and describe the intent, the model drafts
-the definition file.
+`⏎` posts the run details with the full result to the chat, `c` cancels a
+live run, `r` starts the same flow again, and `h` shows/hides that run in
+the live summary above the composer (useful for long-running flows).
+Workflows: `⏎` puts `/<name> ` into the composer so you can add arguments,
+`r` runs it immediately (workflows with required parameters fall back to
+composing). Agents: `⏎` posts the full agent details. In the workflows and
+agents overlays, `n` starts a new workflow or agent: you name it and
+describe the intent, the model drafts the definition file.
 
 The live summary widget can be toggled wholesale with `/runs widget`. There
 is no default keybinding for it; bind one via pi's keybindings if you want

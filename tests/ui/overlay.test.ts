@@ -103,29 +103,24 @@ describe("renderOverlay", () => {
 });
 
 describe("visibleWidgetRuns", () => {
-  const run = (status: RunView["status"], workflow?: string): RunView =>
+  const run = (id: string, status: RunView["status"]): RunView =>
     ({
       status,
-      header: { source: { kind: "command", workflow } },
+      header: { id, source: { kind: "command" } },
     }) as unknown as RunView;
 
   test("keeps live runs and drops settled or hidden ones", () => {
     const runs = [
-      run("running", "review"),
-      run("running", "triage"),
-      run("running"),
-      run("completed", "review"),
+      run("aaa", "running"),
+      run("bbb", "running"),
+      run("ccc", "completed"),
     ];
-    const visible = visibleWidgetRuns(runs, new Set(["triage"]));
-    expect(visible).toHaveLength(2);
-    expect(visible.map((r) => r.header.source.workflow)).toEqual([
-      "review",
-      undefined,
-    ]);
+    const visible = visibleWidgetRuns(runs, new Set(["bbb"]));
+    expect(visible.map((r) => r.header.id)).toEqual(["aaa"]);
   });
 
-  test("no hidden set entries keeps all live runs", () => {
-    const runs = [run("running", "review"), run("failed", "review")];
+  test("no hidden entries keeps all live runs", () => {
+    const runs = [run("aaa", "running"), run("bbb", "failed")];
     expect(visibleWidgetRuns(runs, new Set())).toHaveLength(1);
   });
 });

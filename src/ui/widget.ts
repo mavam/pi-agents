@@ -317,15 +317,13 @@ export function formatRunWidget(
   ];
 }
 
-/** Runs the widget shows: live, and not from a hidden workflow. Pure. */
+/** Runs the widget shows: live, and not individually hidden. Pure. */
 export function visibleWidgetRuns(
   runs: Iterable<RunView>,
-  hidden: ReadonlySet<string>,
+  hiddenRunIds: ReadonlySet<string>,
 ): RunView[] {
   return [...runs].filter(
-    (run) =>
-      run.status === "running" &&
-      !(run.header.source.workflow && hidden.has(run.header.source.workflow)),
+    (run) => run.status === "running" && !hiddenRunIds.has(run.header.id),
   );
 }
 
@@ -334,7 +332,7 @@ export class RunWidget {
   private lastContext: ExtensionContext | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private frame = 0;
-  /** Workflow names muted from the summary (session-scoped, via /workflows `h`). */
+  /** Run ids muted from the summary (session-scoped, via the /runs overlay `h`). */
   private readonly hidden = new Set<string>();
   private enabled = true;
 
@@ -349,15 +347,15 @@ export class RunWidget {
     this.render(context);
   }
 
-  isHidden(workflow: string): boolean {
-    return this.hidden.has(workflow);
+  isHidden(runId: string): boolean {
+    return this.hidden.has(runId);
   }
 
-  /** Mute/unmute one workflow's runs in the summary. Returns the new state. */
-  toggleHidden(workflow: string): boolean {
-    if (!this.hidden.delete(workflow)) this.hidden.add(workflow);
+  /** Show/hide one run in the summary. Returns true when now hidden. */
+  toggleHidden(runId: string): boolean {
+    if (!this.hidden.delete(runId)) this.hidden.add(runId);
     this.update();
-    return this.hidden.has(workflow);
+    return this.hidden.has(runId);
   }
 
   isEnabled(): boolean {

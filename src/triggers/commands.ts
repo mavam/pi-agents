@@ -299,7 +299,7 @@ function buildRunsSpec(
   return {
     title: "Runs",
     emptyText: "No runs yet.",
-    footer: "↑↓ move · ⏎ inspect · c cancel · r rerun · esc close",
+    footer: "↑↓ move · ⏎ inspect · c cancel · r rerun · h hide · esc close",
     items: () => [...deps.manager.state.runs.values()].reverse(),
     keyOf: (run) => run.header.id,
     row: (run, color) => {
@@ -314,7 +314,10 @@ function buildRunsSpec(
           ? `hook:${run.header.source.event ?? "?"}`
           : run.header.source.kind;
       const usage = formatUsage(run.usage);
-      return `${icon} ${color("dim", shortId(run.header.id))}  ${run.status.padEnd(9)}  ${`${label} (${source})`.padEnd(24)}${usage ? `  ${color("dim", usage)}` : ""}`;
+      const hidden = deps.widget.isHidden(run.header.id)
+        ? color("dim", "  ⊘ hidden")
+        : "";
+      return `${icon} ${color("dim", shortId(run.header.id))}  ${run.status.padEnd(9)}  ${`${label} (${source})`.padEnd(24)}${usage ? `  ${color("dim", usage)}` : ""}${hidden}`;
     },
     headerLine: (run, color) => {
       const parts = [
@@ -345,6 +348,13 @@ function buildRunsSpec(
             ? `Stopping run ${shortId(run.header.id)}…`
             : "Run is not live.",
           stopped ? "info" : "warning",
+        );
+      }
+      if (key === "h") {
+        const hidden = deps.widget.toggleHidden(run.header.id);
+        ctx.ui.notify(
+          `Run ${shortId(run.header.id)} ${hidden ? "hidden from" : "shown in"} the live summary.`,
+          "info",
         );
       }
       if (key === "r") {
@@ -385,7 +395,7 @@ function buildWorkflowsSpec(
     title: "Workflows",
     emptyText:
       "No workflows found. Create .pi/workflows/<name>.yaml or ~/.pi/agent/workflows/<name>.yaml.",
-    footer: "↑↓ move · ⏎ compose · r run · h hide · n new · esc close",
+    footer: "↑↓ move · ⏎ compose · r run · n new · esc close",
     items: () => discoverWorkflows(ctx.cwd, scopeFor(ctx)).workflows,
     keyOf: (wf) => `${wf.source}:${wf.name}`,
     row: (wf, color) => {
@@ -393,10 +403,7 @@ function buildWorkflowsSpec(
         wf.on && wf.on.length > 0
           ? color("dim", `  on: ${wf.on.join(", ")}`)
           : "";
-      const hidden = deps.widget.isHidden(wf.name)
-        ? color("dim", "  ⊘ hidden")
-        : "";
-      return `${color("muted", KIND_ICONS.workflow)} ${`/${wf.name}`.padEnd(16)}  ${color("dim", wf.source.padEnd(7))}  ${wf.description}${triggers}${hidden}`;
+      return `${color("muted", KIND_ICONS.workflow)} ${`/${wf.name}`.padEnd(16)}  ${color("dim", wf.source.padEnd(7))}  ${wf.description}${triggers}`;
     },
     headerLine: (wf, color) => {
       return [`/${wf.name}`, wf.source].join(color("dim", " · "));
@@ -462,13 +469,6 @@ function buildWorkflowsSpec(
         }
         void runWorkflowCommand(pi, wf.name, "", ctx, deps);
         return "close";
-      }
-      if (key === "h") {
-        const hidden = deps.widget.toggleHidden(wf.name);
-        ctx.ui.notify(
-          `${wf.name} ${hidden ? "hidden from" : "shown in"} the live summary.`,
-          "info",
-        );
       }
       if (key === "n") {
         // Defer past the overlay teardown so the input dialogs get focus.

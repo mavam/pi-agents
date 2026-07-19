@@ -459,17 +459,29 @@ function buildAgentsSpec(
     row: (agent, color) =>
       `${color("muted", KIND_ICONS.agent)} ${agent.name.padEnd(16)}  ${color("dim", agent.source.padEnd(7))}  ${agent.description}`,
     headerLine: (agent, color) => {
-      const parts = [agent.name, agent.source];
-      if (agent.model) parts.push(agent.model);
-      if (agent.thinking) parts.push(`thinking: ${agent.thinking}`);
-      return parts.join(color("dim", " · "));
+      return [agent.name, agent.source].join(color("dim", " · "));
     },
     detail: (agent, color) => {
-      const lines = [color("dim", agent.description)];
-      if (agent.skills.length > 0)
-        lines.push(`skills: ${agent.skills.join(", ")}`);
-      if (agent.tools)
-        lines.push(`tools: ${agent.tools.join(", ") || "(none)"}`);
+      const meta = (key: string, value: string) =>
+        `${color("dim", `${key}:`)} ${value}`;
+      const fallback = (text: string) => color("dim", `(${text})`);
+      const lines = [
+        color("dim", agent.description),
+        "",
+        meta("file", agent.filePath),
+        meta("model", agent.model ?? fallback("session default")),
+        meta("thinking", agent.thinking ?? fallback("session default")),
+        meta(
+          "skills",
+          agent.skills.length > 0 ? agent.skills.join(", ") : fallback("none"),
+        ),
+        meta(
+          "tools",
+          agent.tools
+            ? agent.tools.join(", ") || fallback("none")
+            : fallback("all"),
+        ),
+      ];
       const prompt = agent.systemPrompt.split("\n");
       if (prompt.some((line) => line.trim())) {
         lines.push("");

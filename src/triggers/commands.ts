@@ -335,7 +335,7 @@ function buildRunsSpec(
     },
     onAction: (key, run) => {
       if (key === "enter") {
-        sendInfo(pi, formatRunDetails(run));
+        sendInfo(pi, formatRunDetails(run, true));
         return "close";
       }
       if (key === "c") {
@@ -655,6 +655,25 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
 
 const MAX_FULL_RESULT_CHARS = 64_000;
 
+function valueText(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === "string"
+    ? value
+    : (JSON.stringify(value, null, 2) ?? String(value));
+}
+
+/** Fenced full value, bounded by MAX_FULL_RESULT_CHARS. */
+function fullValueLines(text: string): string[] {
+  if (text.length > MAX_FULL_RESULT_CHARS) {
+    return [
+      fenced(text.slice(0, MAX_FULL_RESULT_CHARS)),
+      "",
+      `… truncated ${text.length - MAX_FULL_RESULT_CHARS} characters.`,
+    ];
+  }
+  return [fenced(text)];
+}
+
 /** The complete run value (bounded only by what persistence retained). */
 function formatRunResultFull(run: RunView): string {
   const lines = [`## Run ${shortId(run.header.id)} — result`, ""];
@@ -663,28 +682,16 @@ function formatRunResultFull(run: RunView): string {
     return lines.join("\n");
   }
   if (run.error) lines.push(`⚠ ${run.error}`, "");
-  const value = run.value;
-  if (value === undefined) {
+  const text = valueText(run.value);
+  if (text === undefined) {
     lines.push("(no result value)");
     return lines.join("\n");
   }
-  const text =
-    typeof value === "string"
-      ? value
-      : (JSON.stringify(value, null, 2) ?? String(value));
-  if (text.length > MAX_FULL_RESULT_CHARS) {
-    lines.push(
-      fenced(text.slice(0, MAX_FULL_RESULT_CHARS)),
-      "",
-      `… truncated ${text.length - MAX_FULL_RESULT_CHARS} characters.`,
-    );
-  } else {
-    lines.push(fenced(text));
-  }
+  lines.push(...fullValueLines(text));
   return lines.join("\n");
 }
 
-function formatRunDetails(run: RunView): string {
+function formatRunDetails(run: RunView, fullValue = false): string {
   const lines = [
     `## Run ${shortId(run.header.id)} — ${run.status}`,
     "",
@@ -698,10 +705,15 @@ function formatRunDetails(run: RunView): string {
     );
   if (run.error) lines.push(`- error: ${run.error}`);
   lines.push("", "```", renderRunTree(run) || "(no nodes yet)", "```");
-  const value = formatValuePreview(run.value);
-  if (value) {
-    lines.push("", "### Result (preview)", "", fenced(value));
-    lines.push("", `Full result: \`/run ${shortId(run.header.id)} result\``);
+  if (fullValue) {
+    const text = valueText(run.value);
+    if (text) lines.push("", "### Result", "", ...fullValueLines(text));
+  } else {
+    const value = formatValuePreview(run.value);
+    if (value) {
+      lines.push("", "### Result (preview)", "", fenced(value));
+      lines.push("", `Full result: \`/run ${shortId(run.header.id)} result\``);
+    }
   }
   return lines.join("\n");
 }

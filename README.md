@@ -313,15 +313,50 @@ pi-agents itself starts from the parent's limits rather than the defaults.
 | --------------------- | ---------------------------------------------------- |
 | `/agents`             | List discovered agents.                              |
 | `/agent <name>`       | Show one agent in full.                              |
-| `/workflows`          | List saved workflows (with validation diagnostics).  |
+| `/workflows`          | Browse saved workflows interactively (`list` for the plain text version with validation diagnostics). |
 | `/workflow <name>`    | Show one workflow: params, triggers, docs, flow.     |
 | `/<name> [args]`      | Run saved workflow `<name>` directly.                |
-| `/runs`               | Browse runs.                                         |
+| `/runs`               | Browse runs interactively (`list` for plain text, `widget` to toggle the live summary). |
 | `/run <id>`           | Inspect a run (unique id prefixes work).             |
 | `/run <id> result`    | The complete result value of a finished run.         |
 | `/run <id> watch`     | Snapshot now, final tree when the run settles.       |
 | `/run <id> mermaid`   | Deterministic Mermaid diagram of the run's flow.     |
 | `/run <id> stop`      | Abort a live run.                                    |
+
+### Interactive browsing
+
+In the TUI, `/runs` and `/workflows` open a split-pane overlay: a table on
+top, the selected item's flow tree below. Scrolling moves the tree with the
+selection, and live runs refresh in place.
+
+```
+╭─ Runs (2/4) ───────────────────────────────────────╮
+│   ● 1a2b3c4d  completed  review (command)   $0.08  │
+│ ▸ ● c9e5799a  completed  triage (command)   $0.21  │
+│   ◉ 77aa01bc  running    ship-it (command)  $0.01  │
+├─ c9e5799a · triage · 1m32s · 5 turns ↑33k ↓2k ─────┤
+│  ● scout → {files} · List files to review          │
+│  ⇶ map {files} (×4)                                │
+│     └─ ● reviewer · Review {item} [4/4]            │
+│  ● ⑂ reduce → syn · Merge {items}                  │
+╰─ ↑↓ move · ⏎ inspect · c cancel · r rerun · esc ───╯
+```
+
+Keys — both overlays: `↑`/`↓` (or `k`/`j`) move, `esc` closes. Runs:
+`⏎` posts the full run details to the chat, `c` cancels a live run,
+`r` starts the same flow again. Workflows: `⏎` puts `/<name> ` into the
+composer so you can add arguments, `r` runs it immediately (workflows with
+required parameters fall back to composing), `h` hides/shows that workflow's
+runs in the live summary above the composer, and `n` starts a new workflow
+or agent: you name it and describe the intent, the model drafts the
+definition file.
+
+The live summary widget can be toggled wholesale with `/runs widget`. There
+is no default keybinding for it; bind one via pi's keybindings if you want
+one-keystroke access.
+
+In non-TUI modes (RPC, JSON, print) both commands keep their plain markdown
+output.
 
 ## 🔐 Project trust
 

@@ -1,0 +1,263 @@
+/**
+ * Interactive split-pane overlay for /runs and /workflows: a keyboard-
+ * navigable table on top, the selected item's flow tree in a detail pane
+ * below. One generic component; the two commands supply an OverlaySpec.
+ *
+ *   ╭─ Runs (2/4) ───────────────────────────────────────╮
+ *   │   ● 1a2b3c4d  completed  review    3t ↑12k  $0.08  │
+ *   │ ▸ ● c9e5799a  completed  triage    5t ↑33k  $0.21  │
+ *   ├─ c9e5799a · triage (command) · 1m32s · 33k tok ────┤
+ *   │  ● scout → {files} · List files to review          │
+ *   │  ⇶ map {files} (×4)                                │
+ *   ╰─ ↑↓ move · ⏎ inspect · c cancel · r rerun · esc ───╯
+ */
+
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  type Component,
+  getKeybindings,
+  parseKey,
+  type TUI,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import { type Colorize, plainColorize } from "./widget.js";
+
+const MAX_TABLE_ROWS = 10;
+const REFRESH_MS = 500;
+
+/** What the overlay shows and does; items are re-read every render, so a
+ * live model (runs completing, workflows hidden) refreshes for free. */
+export interface OverlaySpec<T> {
+  title: string;
+  /** Shown when items() is empty. */
+  emptyText: string;
+  /** Key-hint line embedded in the bottom border. */
+  footer: string;
+  items: () => T[];
+  /** Stable identity, so selection survives list reorder/refresh. */
+  keyOf: (item: T) => string;
+  /** One table line (no selection marker; the renderer adds it). */
+  row: (item: T, color: Colorize) => string;
+  /** Metadata line embedded in the separator between table and detail. */
+  headerLine: (item: T, color: Colorize) => string;
+  /** Detail pane lines (typically the flow tree). */
+  detail: (item: T, color: Colorize) => string[];
+  /** Handle enter or a single-letter shortcut; "close" dismisses the overlay. */
+  onAction: (key: string, item: T) => "close" | undefined;
+  /** When true, the overlay re-renders every 500ms. */
+  live?: () => boolean;
+}
+
+function clamp(value: number, low: number, high: number): number {
+  return Math.max(low, Math.min(high, value));
+}
+
+/** `│ content…pad │` — ANSI-aware fill to the exact overlay width. */
+function boxLine(content: string, width: number, color: Colorize): string {
+  const inner = Math.max(1, width - 4);
+  const clipped = truncateToWidth(content, inner);
+  const pad = " ".repeat(Math.max(0, inner - visibleWidth(clipped)));
+  return `${color("dim", "│ ")}${clipped}${pad}${color("dim", " │")}`;
+}
+
+/** `╭─ label ────╮` — a border row with an embedded (pre-colored) label. */
+function edgeLine(
+  corners: [string, string],
+  label: string,
+  width: number,
+  color: Colorize,
+): string {
+  const text = label
+    ? ` ${truncateToWidth(label, Math.max(1, width - 6))} `
+    : "";
+  const fill = Math.max(0, width - 3 - visibleWidth(text));
+  return (
+    color("dim", `${corners[0]}─`) +
+    text +
+    color("dim", `${"─".repeat(fill)}${corners[1]}`)
+  );
+}
+
+/**
+ * Pure layout: title border, scrolling table window with a ▸ marker,
+ * separator with the selected item's metadata, detail pane, footer border.
+ * Testable with plainColorize; every line fits `width`.
+ */
+export function renderOverlay<T>(
+  spec: OverlaySpec<T>,
+  items: T[],
+  selected: number,
+  width: number,
+  height: number,
+  color: Colorize = plainColorize,
+): string[] {
+  const lines: string[] = [];
+  if (items.length === 0) {
+    lines.push(edgeLine(["╭", "╮"], color("accent", spec.title), width, color));
+    lines.push(boxLine(color("dim", spec.emptyText), width, color));
+    lines.push(edgeLine(["╰", "╯"], color("dim", spec.footer), width, color));
+    return lines;
+  }
+
+  const index = clamp(selected, 0, items.length - 1);
+  const item = items[index] as T;
+  const available = Math.max(2, height - 3);
+  const tableRows = Math.min(
+    items.length,
+    MAX_TABLE_ROWS,
+    Math.max(1, Math.ceil(available / 2)),
+  );
+  const detailRows = Math.max(0, available - tableRows);
+
+  const title = `${spec.title} (${index + 1}/${items.length})`;
+  lines.push(edgeLine(["╭", "╮"], color("accent", title), width, color));
+
+  const start = clamp(
+    index - Math.floor(tableRows / 2),
+    0,
+    items.length - tableRows,
+  );
+  for (let i = start; i < start + tableRows; i++) {
+    const marker = i === index ? color("accent", "▸ ") : "  ";
+    lines.push(
+      boxLine(`${marker}${spec.row(items[i] as T, color)}`, width, color),
+    );
+  }
+
+  lines.push(edgeLine(["├", "┤"], spec.headerLine(item, color), width, color));
+
+  const detail = spec.detail(item, color);
+  const shown =
+    detail.length > detailRows
+      ? [
+          ...detail.slice(0, Math.max(0, detailRows - 1)),
+          color(
+            "dim",
+            `… +${detail.length - Math.max(0, detailRows - 1)} more lines`,
+          ),
+        ]
+      : detail;
+  for (const line of shown) lines.push(boxLine(line, width, color));
+
+  lines.push(edgeLine(["╰", "╯"], color("dim", spec.footer), width, color));
+  return lines;
+}
+
+/** The focused overlay component: selection state, keys, live refresh. */
+export class SplitPaneOverlay<T> implements Component {
+  private readonly tui: TUI;
+  private readonly color: Colorize;
+  private readonly spec: OverlaySpec<T>;
+  private readonly done: () => void;
+  private selectedKey: string | undefined;
+  private timer: ReturnType<typeof setInterval> | undefined;
+
+  constructor(
+    tui: TUI,
+    color: Colorize,
+    spec: OverlaySpec<T>,
+    done: () => void,
+  ) {
+    this.tui = tui;
+    this.color = color;
+    this.spec = spec;
+    this.done = done;
+  }
+
+  private currentIndex(items: T[]): number {
+    if (this.selectedKey === undefined) return 0;
+    const index = items.findIndex(
+      (item) => this.spec.keyOf(item) === this.selectedKey,
+    );
+    return index >= 0 ? index : 0;
+  }
+
+  private select(items: T[], index: number): void {
+    const item = items[clamp(index, 0, items.length - 1)];
+    this.selectedKey = item !== undefined ? this.spec.keyOf(item) : undefined;
+  }
+
+  private close(): void {
+    this.dispose();
+    this.done();
+  }
+
+  private syncTimer(): void {
+    const live = this.spec.live?.() ?? false;
+    if (live && !this.timer) {
+      this.timer = setInterval(() => this.tui.requestRender(), REFRESH_MS);
+      this.timer.unref?.();
+    } else if (!live && this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
+
+  render(width: number): string[] {
+    const items = this.spec.items();
+    this.syncTimer();
+    const index = this.currentIndex(items);
+    this.select(items, index);
+    // Self-cap: the TUI clips overlays from the top, which would eat the
+    // footer — so never render more lines than fit the terminal.
+    const height = Math.max(8, this.tui.terminal.rows - 4);
+    return renderOverlay(this.spec, items, index, width, height, this.color);
+  }
+
+  handleInput(data: string): void {
+    const keybindings = getKeybindings();
+    if (keybindings.matches(data, "tui.select.cancel")) {
+      this.close();
+      return;
+    }
+    const items = this.spec.items();
+    if (items.length === 0) return;
+    const index = this.currentIndex(items);
+    if (keybindings.matches(data, "tui.select.up") || data === "k") {
+      this.select(items, index - 1);
+    } else if (keybindings.matches(data, "tui.select.down") || data === "j") {
+      this.select(items, index + 1);
+    } else if (keybindings.matches(data, "tui.select.pageUp")) {
+      this.select(items, index - MAX_TABLE_ROWS);
+    } else if (keybindings.matches(data, "tui.select.pageDown")) {
+      this.select(items, index + MAX_TABLE_ROWS);
+    } else if (keybindings.matches(data, "tui.select.confirm")) {
+      this.act("enter", items[index] as T);
+    } else {
+      const key = parseKey(data) ?? data;
+      if (/^[a-z]$/.test(key)) this.act(key, items[index] as T);
+    }
+    this.tui.requestRender();
+  }
+
+  private act(key: string, item: T): void {
+    if (this.spec.onAction(key, item) === "close") this.close();
+  }
+
+  invalidate(): void {
+    // Stateless rendering: every render() re-reads the spec's items.
+  }
+
+  dispose(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+  }
+}
+
+/** Open a split-pane overlay and resolve when the user dismisses it. */
+export async function openOverlay<T>(
+  ctx: Pick<ExtensionContext, "ui">,
+  spec: OverlaySpec<T>,
+): Promise<void> {
+  await ctx.ui.custom<void>(
+    (tui, theme, _keybindings, done) => {
+      const color: Colorize = (name, text) => theme.fg(name, text);
+      return new SplitPaneOverlay(tui, color, spec, () => done(undefined));
+    },
+    {
+      overlay: true,
+      overlayOptions: { width: "85%", maxHeight: "85%", anchor: "center" },
+    },
+  );
+}

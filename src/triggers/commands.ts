@@ -20,14 +20,17 @@ import { validateFlow } from "../model/validate.js";
 import { isProjectTrusted } from "../run/persist.js";
 import type { RunView } from "../run/state.js";
 import { toMermaid } from "../ui/mermaid.js";
+import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
 import {
   formatRunOverviewLine,
   formatUsage,
   formatValuePreview,
+  STATUS_ICONS,
   sendInfo,
   shortId,
 } from "../ui/render.js";
-import { renderFlowTree, renderRunTree } from "../ui/tree.js";
+import { KIND_ICONS, renderFlowTree, renderRunTree } from "../ui/tree.js";
+import { type Colorize, formatElapsed } from "../ui/widget.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
 /** Command names that saved workflows may not claim. */
@@ -123,8 +126,17 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 
   pi.registerCommand("workflows", {
-    description: "List saved workflows",
-    handler: async (_args, ctx) => {
+    description:
+      "Browse saved workflows (interactive in the TUI; `list` for text)",
+    getArgumentCompletions: (prefix) =>
+      ["list"]
+        .filter((arg) => arg.startsWith(prefix))
+        .map((arg) => ({ value: arg, label: arg })),
+    handler: async (args, ctx) => {
+      if (ctx.hasUI && ctx.mode === "tui" && args.trim() !== "list") {
+        await openOverlay(ctx, buildWorkflowsSpec(pi, deps, ctx));
+        return;
+      }
       const { workflows, diagnostics } = discoverWorkflows(
         ctx.cwd,
         scopeFor(ctx),
@@ -178,8 +190,26 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 
   pi.registerCommand("runs", {
-    description: "Browse workflow runs",
-    handler: async () => {
+    description:
+      "Browse workflow runs (interactive in the TUI; `list` for text, `widget` to toggle the live summary)",
+    getArgumentCompletions: (prefix) =>
+      ["list", "widget"]
+        .filter((arg) => arg.startsWith(prefix))
+        .map((arg) => ({ value: arg, label: arg })),
+    handler: async (args, ctx) => {
+      const arg = args.trim();
+      if (arg === "widget") {
+        const enabled = deps.widget.toggleEnabled();
+        ctx.ui.notify(
+          `Live run summary ${enabled ? "enabled" : "disabled"}.`,
+          "info",
+        );
+        return;
+      }
+      if (ctx.hasUI && ctx.mode === "tui" && arg !== "list") {
+        await openOverlay(ctx, buildRunsSpec(pi, deps, ctx));
+        return;
+      }
       const runs = [...deps.manager.state.runs.values()];
       if (runs.length === 0) {
         sendInfo(pi, "No runs yet.");
@@ -259,6 +289,196 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       sendInfo(pi, formatRunDetails(run));
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Interactive overlays (TUI only; non-TUI modes keep the markdown output)
+
+const STATUS_COLORS: Record<string, Parameters<Colorize>[0]> = {
+  running: "accent",
+  completed: "success",
+  failed: "error",
+  cancelled: "dim",
+  stopped: "dim",
+};
+
+function buildRunsSpec(
+  pi: ExtensionAPI,
+  deps: CommandDeps,
+  ctx: ExtensionCommandContext,
+): OverlaySpec<RunView> {
+  return {
+    title: "Runs",
+    emptyText: "No runs yet.",
+    footer: "↑↓ move · ⏎ inspect · c cancel · r rerun · esc close",
+    items: () => [...deps.manager.state.runs.values()].reverse(),
+    keyOf: (run) => run.header.id,
+    row: (run, color) => {
+      const icon = color(
+        STATUS_COLORS[run.status] ?? "dim",
+        STATUS_ICONS[run.status] ?? "?",
+      );
+      const label =
+        run.header.label ?? run.header.source.workflow ?? run.header.flow.kind;
+      const source =
+        run.header.source.kind === "hook"
+          ? `hook:${run.header.source.event ?? "?"}`
+          : run.header.source.kind;
+      const usage = formatUsage(run.usage);
+      return `${icon} ${color("dim", shortId(run.header.id))}  ${run.status.padEnd(9)}  ${`${label} (${source})`.padEnd(24)}${usage ? `  ${color("dim", usage)}` : ""}`;
+    },
+    headerLine: (run, color) => {
+      const parts = [
+        shortId(run.header.id),
+        run.header.label ?? run.header.flow.kind,
+        formatElapsed((run.endedAt ?? Date.now()) - run.createdAt),
+        formatUsage(run.usage) || undefined,
+      ].filter((part): part is string => part !== undefined);
+      return parts.join(color("dim", " · "));
+    },
+    detail: (run, color) => {
+      const lines = (renderRunTree(run) || "(no nodes yet)").split("\n");
+      if (run.error) lines.push(color("error", `✗ ${run.error}`));
+      const value =
+        run.status !== "running" ? formatValuePreview(run.value, 300) : "";
+      if (value) lines.push("", ...value.split("\n"));
+      return lines;
+    },
+    onAction: (key, run) => {
+      if (key === "enter") {
+        sendInfo(pi, formatRunDetails(run));
+        return "close";
+      }
+      if (key === "c") {
+        const stopped = deps.manager.stop(run.header.id);
+        ctx.ui.notify(
+          stopped
+            ? `Stopping run ${shortId(run.header.id)}…`
+            : "Run is not live.",
+          stopped ? "info" : "warning",
+        );
+      }
+      if (key === "r") {
+        deps.notifications.setContext(ctx);
+        try {
+          const started = startTriggeredRun(deps, {
+            flow: run.header.flow,
+            cwd: run.header.cwd ?? ctx.cwd,
+            scope: run.header.scope,
+            label: run.header.label,
+            budgets: run.header.budgets,
+            source: run.header.source,
+            ctx,
+            background: true,
+          });
+          ctx.ui.notify(`Started run ${shortId(started.runId)}.`, "info");
+        } catch (error) {
+          ctx.ui.notify(
+            error instanceof Error ? error.message : String(error),
+            "error",
+          );
+        }
+      }
+    },
+    live: () =>
+      [...deps.manager.state.runs.values()].some(
+        (run) => run.status === "running",
+      ),
+  };
+}
+
+function buildWorkflowsSpec(
+  pi: ExtensionAPI,
+  deps: CommandDeps,
+  ctx: ExtensionCommandContext,
+): OverlaySpec<WorkflowDef> {
+  return {
+    title: "Workflows",
+    emptyText:
+      "No workflows found. Create .pi/workflows/<name>.yaml or ~/.pi/agent/workflows/<name>.yaml.",
+    footer: "↑↓ move · ⏎ compose · r run · h hide · n new · esc close",
+    items: () => discoverWorkflows(ctx.cwd, scopeFor(ctx)).workflows,
+    keyOf: (wf) => `${wf.source}:${wf.name}`,
+    row: (wf, color) => {
+      const triggers =
+        wf.on && wf.on.length > 0
+          ? color("dim", `  on: ${wf.on.join(", ")}`)
+          : "";
+      const hidden = deps.widget.isHidden(wf.name)
+        ? color("dim", "  ⊘ hidden")
+        : "";
+      return `${color("muted", KIND_ICONS.workflow)} ${`/${wf.name}`.padEnd(16)}  ${color("dim", wf.source.padEnd(7))}  ${wf.description}${triggers}${hidden}`;
+    },
+    headerLine: (wf, color) => {
+      const parts = [`/${wf.name}`, wf.source];
+      if (wf.params.length > 0)
+        parts.push(
+          `params: ${wf.params.map((param) => param.name).join(", ")}`,
+        );
+      if (wf.on && wf.on.length > 0) parts.push(`on: ${wf.on.join(", ")}`);
+      return parts.join(color("dim", " · "));
+    },
+    detail: (wf, color) => renderFlowTree(wf.flow, color).split("\n"),
+    onAction: (key, wf) => {
+      if (key === "enter") {
+        ctx.ui.setEditorText(`/${wf.name} `);
+        return "close";
+      }
+      if (key === "r") {
+        const missing = wf.params.filter(
+          (param) => param.required && param.default === undefined,
+        );
+        if (missing.length > 0) {
+          ctx.ui.setEditorText(`/${wf.name} `);
+          ctx.ui.notify(
+            `/${wf.name} needs: ${missing.map((param) => param.name).join(", ")}`,
+            "warning",
+          );
+          return "close";
+        }
+        void runWorkflowCommand(pi, wf.name, "", ctx, deps);
+        return "close";
+      }
+      if (key === "h") {
+        const hidden = deps.widget.toggleHidden(wf.name);
+        ctx.ui.notify(
+          `${wf.name} ${hidden ? "hidden from" : "shown in"} the live summary.`,
+          "info",
+        );
+      }
+      if (key === "n") {
+        // Defer past the overlay teardown so the input dialogs get focus.
+        setTimeout(() => void newDefinitionWizard(pi, ctx), 0);
+        return "close";
+      }
+    },
+  };
+}
+
+/** Human starts (name + intent), model finishes: draft the definition file. */
+async function newDefinitionWizard(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+): Promise<void> {
+  const kind = await ctx.ui.select("Create new…", ["workflow", "agent"]);
+  if (!kind) return;
+  const name = await ctx.ui.input(`New ${kind} name`, "kebab-case-name");
+  if (!name?.trim()) return;
+  const description = await ctx.ui.input(`What should ${name.trim()} do?`);
+  if (!description?.trim()) return;
+  const target =
+    kind === "workflow"
+      ? `.pi/workflows/${name.trim()}.yaml`
+      : `.pi/agents/${name.trim()}.md`;
+  pi.sendUserMessage(
+    [
+      `Create a new pi-agents ${kind} named \`${name.trim()}\`: ${description.trim()}`,
+      "",
+      `Write it to \`${target}\`. Study the existing definitions under \`.pi/\` ` +
+        "and the pi-agents README for the format, keep it minimal, and " +
+        "verify it appears in `/workflows list` (or `/agents`) afterwards.",
+    ].join("\n"),
+  );
 }
 
 /** Poll a live run and post the final tree once it settles. */

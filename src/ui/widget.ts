@@ -232,7 +232,7 @@ function liveTokens(run: RunView): number {
   return total;
 }
 
-function formatElapsed(ms: number): string {
+export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -317,11 +317,26 @@ export function formatRunWidget(
   ];
 }
 
+/** Runs the widget shows: live, and not from a hidden workflow. Pure. */
+export function visibleWidgetRuns(
+  runs: Iterable<RunView>,
+  hidden: ReadonlySet<string>,
+): RunView[] {
+  return [...runs].filter(
+    (run) =>
+      run.status === "running" &&
+      !(run.header.source.workflow && hidden.has(run.header.source.workflow)),
+  );
+}
+
 export class RunWidget {
   private readonly manager: RunManager;
   private lastContext: ExtensionContext | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private frame = 0;
+  /** Workflow names muted from the summary (session-scoped, via /workflows `h`). */
+  private readonly hidden = new Set<string>();
+  private enabled = true;
 
   constructor(manager: RunManager) {
     this.manager = manager;
@@ -334,14 +349,34 @@ export class RunWidget {
     this.render(context);
   }
 
+  isHidden(workflow: string): boolean {
+    return this.hidden.has(workflow);
+  }
+
+  /** Mute/unmute one workflow's runs in the summary. Returns the new state. */
+  toggleHidden(workflow: string): boolean {
+    if (!this.hidden.delete(workflow)) this.hidden.add(workflow);
+    this.update();
+    return this.hidden.has(workflow);
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /** Turn the whole live summary on/off. Returns the new state. */
+  toggleEnabled(): boolean {
+    this.enabled = !this.enabled;
+    this.update();
+    return this.enabled;
+  }
+
   private running(): RunView[] {
-    return [...this.manager.state.runs.values()].filter(
-      (run) => run.status === "running",
-    );
+    return visibleWidgetRuns(this.manager.state.runs.values(), this.hidden);
   }
 
   private render(context: ExtensionContext): void {
-    const running = this.running();
+    const running = this.enabled ? this.running() : [];
     if (running.length === 0) {
       this.stopTicking();
       context.ui.setWidget(WIDGET_KEY, undefined);

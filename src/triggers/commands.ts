@@ -10,7 +10,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { discoverAgents } from "../catalog/agents.js";
+import { type Agent, discoverAgents } from "../catalog/agents.js";
 import {
   discoverWorkflows,
   resolveWorkflowByName,
@@ -55,8 +55,17 @@ function scopeFor(ctx: Pick<ExtensionContext, "isProjectTrusted">): Scope {
 
 export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   pi.registerCommand("agents", {
-    description: "List discovered agents",
-    handler: async (_args, ctx) => {
+    description:
+      "Browse discovered agents (interactive in the TUI; `list` for text)",
+    getArgumentCompletions: (prefix) =>
+      ["list"]
+        .filter((arg) => arg.startsWith(prefix))
+        .map((arg) => ({ value: arg, label: arg })),
+    handler: async (args, ctx) => {
+      if (ctx.hasUI && ctx.mode === "tui" && args.trim() !== "list") {
+        await openOverlay(ctx, buildAgentsSpec(pi, ctx));
+        return;
+      }
       const discovery = discoverAgents(ctx.cwd, scopeFor(ctx));
       const lines = ["## Agents", ""];
       if (discovery.agents.length === 0) {
@@ -100,28 +109,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         sendInfo(pi, `Unknown agent \`${name}\`. Try \`/agents\`.`);
         return;
       }
-      const lines = [
-        `## ${agent.name} (${agent.source})`,
-        "",
-        agent.description,
-        "",
-        `- file: ${agent.filePath}`,
-      ];
-      if (agent.model) lines.push(`- model: ${agent.model}`);
-      if (agent.thinking) lines.push(`- thinking: ${agent.thinking}`);
-      if (agent.skills.length > 0)
-        lines.push(`- skills: ${agent.skills.join(", ")}`);
-      if (agent.tools)
-        lines.push(`- tools: ${agent.tools.join(", ") || "(none)"}`);
-      lines.push(
-        "",
-        "### System prompt",
-        "",
-        "```",
-        agent.systemPrompt || "(empty)",
-        "```",
-      );
-      sendInfo(pi, lines.join("\n"));
+      sendInfo(pi, formatAgentDetails(agent));
     },
   });
 
@@ -455,6 +443,63 @@ function buildWorkflowsSpec(
   };
 }
 
+const AGENT_PROMPT_PREVIEW_LINES = 6;
+
+function buildAgentsSpec(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+): OverlaySpec<Agent> {
+  return {
+    title: "Agents",
+    emptyText:
+      "No agents found. Create .pi/agents/<name>.md or ~/.pi/agent/agents/<name>.md.",
+    footer: "↑↓ move · ⏎ inspect · n new · esc close",
+    items: () => discoverAgents(ctx.cwd, scopeFor(ctx)).agents,
+    keyOf: (agent) => `${agent.source}:${agent.name}`,
+    row: (agent, color) =>
+      `${color("muted", KIND_ICONS.agent)} ${agent.name.padEnd(16)}  ${color("dim", agent.source.padEnd(7))}  ${agent.description}`,
+    headerLine: (agent, color) => {
+      const parts = [agent.name, agent.source];
+      if (agent.model) parts.push(agent.model);
+      if (agent.thinking) parts.push(`thinking: ${agent.thinking}`);
+      return parts.join(color("dim", " · "));
+    },
+    detail: (agent, color) => {
+      const lines = [color("dim", agent.description)];
+      if (agent.skills.length > 0)
+        lines.push(`skills: ${agent.skills.join(", ")}`);
+      if (agent.tools)
+        lines.push(`tools: ${agent.tools.join(", ") || "(none)"}`);
+      const prompt = agent.systemPrompt.split("\n");
+      if (prompt.some((line) => line.trim())) {
+        lines.push("");
+        lines.push(...prompt.slice(0, AGENT_PROMPT_PREVIEW_LINES));
+        if (prompt.length > AGENT_PROMPT_PREVIEW_LINES) {
+          lines.push(
+            color(
+              "dim",
+              `… +${prompt.length - AGENT_PROMPT_PREVIEW_LINES} prompt lines (⏎ for all)`,
+            ),
+          );
+        }
+      }
+      return lines;
+    },
+    onAction: (key, agent) => {
+      if (key === "enter") {
+        sendInfo(pi, formatAgentDetails(agent));
+        return "close";
+      }
+      if (key === "n") {
+        // Defer past the overlay teardown so the input dialogs get focus.
+        setTimeout(() => void newDefinitionWizard(pi, ctx), 0);
+        return "close";
+      }
+      return undefined;
+    },
+  };
+}
+
 /** Human starts (name + intent), model finishes: draft the definition file. */
 async function newDefinitionWizard(
   pi: ExtensionAPI,
@@ -496,6 +541,30 @@ function watchUntilDone(
     if (run) sendInfo(pi, formatRunDetails(run));
   }, 500);
   timer.unref?.();
+}
+
+function formatAgentDetails(agent: Agent): string {
+  const lines = [
+    `## ${agent.name} (${agent.source})`,
+    "",
+    agent.description,
+    "",
+    `- file: ${agent.filePath}`,
+  ];
+  if (agent.model) lines.push(`- model: ${agent.model}`);
+  if (agent.thinking) lines.push(`- thinking: ${agent.thinking}`);
+  if (agent.skills.length > 0)
+    lines.push(`- skills: ${agent.skills.join(", ")}`);
+  if (agent.tools) lines.push(`- tools: ${agent.tools.join(", ") || "(none)"}`);
+  lines.push(
+    "",
+    "### System prompt",
+    "",
+    "```",
+    agent.systemPrompt || "(empty)",
+    "```",
+  );
+  return lines.join("\n");
 }
 
 function formatWorkflowDetails(wf: WorkflowDef): string {

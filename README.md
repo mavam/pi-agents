@@ -311,7 +311,7 @@ pi-agents itself starts from the parent's limits rather than the defaults.
 
 | Command               | Description                                          |
 | --------------------- | ---------------------------------------------------- |
-| `/agents`             | List discovered agents.                              |
+| `/agents`             | Browse discovered agents interactively (`list` for plain text). |
 | `/agent <name>`       | Show one agent in full.                              |
 | `/workflows`          | Browse saved workflows interactively (`list` for the plain text version with validation diagnostics). |
 | `/workflow <name>`    | Show one workflow: params, triggers, docs, flow.     |
@@ -325,9 +325,11 @@ pi-agents itself starts from the parent's limits rather than the defaults.
 
 ### Interactive browsing
 
-In the TUI, `/runs` and `/workflows` open a split-pane overlay: a table on
-top, the selected item's flow tree below. Scrolling moves the tree with the
-selection, and live runs refresh in place.
+In the TUI, `/runs`, `/workflows`, and `/agents` open a split-pane overlay:
+a table on top, the selected item's flow tree (or agent details) below.
+Scrolling moves the detail pane with the selection, live runs refresh in
+place, and the overlay is pinned near the top of the screen — the table
+never moves; the detail pane only ever grows downward.
 
 ```
 ╭─ Runs (2/4) ───────────────────────────────────────╮
@@ -342,14 +344,15 @@ selection, and live runs refresh in place.
 ╰─ ↑↓ move · ⏎ inspect · c cancel · r rerun · esc ───╯
 ```
 
-Keys — both overlays: `↑`/`↓` (or `k`/`j`) move, `esc` closes. Runs:
+Keys — all overlays: `↑`/`↓` (or `k`/`j`) move, `esc` closes. Runs:
 `⏎` posts the full run details to the chat, `c` cancels a live run,
 `r` starts the same flow again. Workflows: `⏎` puts `/<name> ` into the
 composer so you can add arguments, `r` runs it immediately (workflows with
 required parameters fall back to composing), `h` hides/shows that workflow's
-runs in the live summary above the composer, and `n` starts a new workflow
-or agent: you name it and describe the intent, the model drafts the
-definition file.
+runs in the live summary above the composer. Agents: `⏎` posts the full
+agent details. In the workflows and agents overlays, `n` starts a new
+workflow or agent: you name it and describe the intent, the model drafts
+the definition file.
 
 The live summary widget can be toggled wholesale with `/runs widget`. There
 is no default keybinding for it; bind one via pi's keybindings if you want

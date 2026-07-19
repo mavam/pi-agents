@@ -79,6 +79,17 @@ describe("renderOverlay", () => {
     expect(truncated.some((line) => line.includes("more lines"))).toBe(true);
   });
 
+  test("detail pane pads to the floor so rows above never shift", () => {
+    // 1 table row + 1 detail line, but a floor of 8 detail rows:
+    // top border + table + separator + 8 detail rows + bottom border.
+    const lines = renderOverlay(spec(["a"]), ["a"], 0, 60, 20, undefined, 8);
+    expect(lines).toHaveLength(12);
+    expect(lines.some((line) => line.includes("detail of a"))).toBe(true);
+    // The floor never exceeds the height budget.
+    const capped = renderOverlay(spec(["a"]), ["a"], 0, 60, 10, undefined, 99);
+    expect(capped.length).toBeLessThanOrEqual(10);
+  });
+
   test("empty list renders the empty text", () => {
     const lines = renderOverlay(spec([]), [], 0, 40, 20);
     expect(lines).toHaveLength(3);

@@ -53,6 +53,20 @@ function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
 }
 
+/** Split the height budget between the table and the detail pane. */
+function paneRows(
+  itemCount: number,
+  height: number,
+): { tableRows: number; detailRows: number } {
+  const available = Math.max(2, height - 3);
+  const tableRows = Math.min(
+    itemCount,
+    MAX_TABLE_ROWS,
+    Math.max(1, Math.ceil(available / 2)),
+  );
+  return { tableRows, detailRows: Math.max(0, available - tableRows) };
+}
+
 /** `│ content…pad │` — ANSI-aware fill to the exact overlay width. */
 function boxLine(content: string, width: number, color: Colorize): string {
   const inner = Math.max(1, width - 4);
@@ -91,6 +105,7 @@ export function renderOverlay<T>(
   width: number,
   height: number,
   color: Colorize = plainColorize,
+  minDetailRows = 0,
 ): string[] {
   const lines: string[] = [];
   if (items.length === 0) {
@@ -102,13 +117,7 @@ export function renderOverlay<T>(
 
   const index = clamp(selected, 0, items.length - 1);
   const item = items[index] as T;
-  const available = Math.max(2, height - 3);
-  const tableRows = Math.min(
-    items.length,
-    MAX_TABLE_ROWS,
-    Math.max(1, Math.ceil(available / 2)),
-  );
-  const detailRows = Math.max(0, available - tableRows);
+  const { tableRows, detailRows } = paneRows(items.length, height);
 
   const title = `${spec.title} (${index + 1}/${items.length})`;
   lines.push(edgeLine(["╭", "╮"], color("accent", title), width, color));
@@ -138,7 +147,12 @@ export function renderOverlay<T>(
           ),
         ]
       : detail;
+  // Pad to the floor so the pane never shrinks while browsing (no layout
+  // shift on the rows above; the box only ever grows downward).
+  const floor = clamp(minDetailRows, 0, detailRows);
   for (const line of shown) lines.push(boxLine(line, width, color));
+  for (let i = shown.length; i < floor; i++)
+    lines.push(boxLine("", width, color));
 
   lines.push(edgeLine(["╰", "╯"], color("dim", spec.footer), width, color));
   return lines;
@@ -152,6 +166,8 @@ export class SplitPaneOverlay<T> implements Component {
   private readonly done: () => void;
   private selectedKey: string | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
+  /** High-water mark of detail rows shown, so the pane never shrinks. */
+  private detailFloor = 0;
 
   constructor(
     tui: TUI,
@@ -202,7 +218,25 @@ export class SplitPaneOverlay<T> implements Component {
     // Self-cap: the TUI clips overlays from the top, which would eat the
     // footer — so never render more lines than fit the terminal.
     const height = Math.max(8, this.tui.terminal.rows - 4);
-    return renderOverlay(this.spec, items, index, width, height, this.color);
+    const item = items[index];
+    if (item !== undefined) {
+      const { detailRows } = paneRows(items.length, height);
+      const needed = this.spec.detail(item, this.color).length;
+      this.detailFloor = clamp(
+        Math.max(this.detailFloor, needed),
+        0,
+        detailRows,
+      );
+    }
+    return renderOverlay(
+      this.spec,
+      items,
+      index,
+      width,
+      height,
+      this.color,
+      this.detailFloor,
+    );
   }
 
   handleInput(data: string): void {
@@ -257,7 +291,9 @@ export async function openOverlay<T>(
     },
     {
       overlay: true,
-      overlayOptions: { width: "85%", maxHeight: "85%", anchor: "center" },
+      // A fixed top row (not a centered anchor): the box top and the table
+      // stay put while the detail pane grows downward with the selection.
+      overlayOptions: { width: "85%", maxHeight: "85%", row: 2 },
     },
   );
 }

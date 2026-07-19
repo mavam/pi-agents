@@ -325,7 +325,7 @@ function buildRunsSpec(
       return parts.join(color("dim", " · "));
     },
     detail: (run, color) => {
-      const lines = (renderRunTree(run) || "(no nodes yet)").split("\n");
+      const lines = (renderRunTree(run, color) || "(no nodes yet)").split("\n");
       if (run.error) lines.push(color("error", `✗ ${run.error}`));
       const value =
         run.status !== "running" ? formatValuePreview(run.value, 300) : "";

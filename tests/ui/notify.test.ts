@@ -82,4 +82,27 @@ describe("NotificationManager", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]?.options).toEqual({ triggerTurn: true });
   });
+
+  test("hasPending reflects queued notifications", () => {
+    const { pi, manager, makeCtx } = makeFakes();
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(false));
+    notifications.track("run-1", "session.jsonl", true);
+    expect(notifications.hasPending()).toBe(false);
+    notifications.handleRunEvent(completed("run-1"));
+    expect(notifications.hasPending()).toBe(true);
+    notifications.flush(makeCtx(true));
+    expect(notifications.hasPending()).toBe(false);
+  });
+
+  test("flush against a still-busy context keeps the notification queued", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(false));
+    notifications.track("run-1", "session.jsonl", true);
+    notifications.handleRunEvent(completed("run-1"));
+    notifications.flush(makeCtx(false));
+    expect(sent).toHaveLength(0);
+    expect(notifications.hasPending()).toBe(true);
+  });
 });

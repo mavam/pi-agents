@@ -125,6 +125,14 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   pi.on("agent_end", (_event, ctx) => {
     refreshUi(ctx);
+    // At agent_end the host may still report the session as streaming: the
+    // agent loop clears isStreaming only after its run settles, while
+    // extension handlers fire from an unawaited event queue that usually
+    // runs first. Retry on a macrotask, by which point the run has settled,
+    // so queued notifications don't stall until the next user interaction.
+    if (notifications.hasPending()) {
+      setTimeout(() => notifications.flush(ctx), 0);
+    }
   });
 
   pi.on("session_shutdown", () => {

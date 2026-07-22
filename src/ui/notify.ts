@@ -32,7 +32,7 @@ export interface RunNotification {
 interface TrackedRun {
   originSessionFile?: string;
   /** Trigger a new agent turn on delivery (tool-launched runs). */
-  wake?: boolean;
+  wake: boolean;
   pendingFinal?: RunNotification;
 }
 
@@ -69,9 +69,17 @@ export class NotificationManager {
     if (event.type === "run_created" || !("runId" in event)) return;
     const tracked = this.tracked.get(event.runId);
     if (!tracked) return;
-    const notification = this.buildNotification(event, tracked.wake === true);
+    const notification = this.buildNotification(event, tracked.wake);
     if (!notification) return;
     this.deliverOrQueue(event.runId, tracked, notification);
+  }
+
+  /** Whether any tracked run has a queued, undelivered final notification. */
+  hasPending(): boolean {
+    for (const tracked of this.tracked.values()) {
+      if (tracked.pendingFinal) return true;
+    }
+    return false;
   }
 
   /** Deliver queued notifications when the origin session is current and idle. */
@@ -80,7 +88,7 @@ export class NotificationManager {
     for (const [runId, tracked] of [...this.tracked.entries()]) {
       if (!this.canDeliver(tracked, context)) continue;
       if (tracked.pendingFinal) {
-        this.send(tracked.pendingFinal, tracked.wake === true);
+        this.send(tracked.pendingFinal, tracked.wake);
         this.tracked.delete(runId);
       }
     }
@@ -130,7 +138,7 @@ export class NotificationManager {
     notification: RunNotification,
   ): void {
     if (this.canDeliver(tracked, this.currentContext)) {
-      this.send(notification, tracked.wake === true);
+      this.send(notification, tracked.wake);
       this.tracked.delete(runId);
       return;
     }

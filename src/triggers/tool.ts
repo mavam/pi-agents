@@ -354,7 +354,7 @@ export function createWorkflowTool(
           content: [
             {
               type: "text",
-              text: `Started workflow run ${id}${label ? ` (${label})` : ""} in the background. The result will arrive as a notification; the user can inspect it with /run ${id}. End your turn now — do not wait for it.`,
+              text: `Started workflow run ${id}${label ? ` (${label})` : ""} in the background. End your turn now — do not wait for it. When the run finishes you will be re-invoked with its result to continue; the user can inspect it with /run ${id}.`,
             },
           ],
           details: { runId, status: "running", label },

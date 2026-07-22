@@ -72,7 +72,13 @@ export function startTriggeredRun(
     onEvent: createPersister(origin),
   });
   if (opts.background) {
-    deps.notifications.track(started.runId, origin.sessionFile);
+    // Tool-launched runs wake the agent on completion so it can continue its
+    // task; command- and hook-launched runs only display their result.
+    deps.notifications.track(
+      started.runId,
+      origin.sessionFile,
+      opts.source.kind === "tool",
+    );
     deps.manager.markBackgrounded(started.runId);
     started.done.catch(() => {});
   }

@@ -31,6 +31,8 @@ export interface RunNotification {
 
 interface TrackedRun {
   originSessionFile?: string;
+  /** Trigger a new agent turn on delivery (tool-launched runs). */
+  wake: boolean;
   pendingFinal?: RunNotification;
 }
 
@@ -50,8 +52,12 @@ export class NotificationManager {
   }
 
   /** Start delivering the final notification for a backgrounded run. */
-  track(runId: string, originSessionFile: string | undefined): void {
-    this.tracked.set(runId, { originSessionFile });
+  track(
+    runId: string,
+    originSessionFile: string | undefined,
+    wake: boolean,
+  ): void {
+    this.tracked.set(runId, { originSessionFile, wake });
   }
 
   clear(): void {
@@ -63,9 +69,17 @@ export class NotificationManager {
     if (event.type === "run_created" || !("runId" in event)) return;
     const tracked = this.tracked.get(event.runId);
     if (!tracked) return;
-    const notification = this.buildNotification(event);
+    const notification = this.buildNotification(event, tracked.wake);
     if (!notification) return;
     this.deliverOrQueue(event.runId, tracked, notification);
+  }
+
+  /** Whether any tracked run has a queued, undelivered final notification. */
+  hasPending(): boolean {
+    for (const tracked of this.tracked.values()) {
+      if (tracked.pendingFinal) return true;
+    }
+    return false;
   }
 
   /** Deliver queued notifications when the origin session is current and idle. */
@@ -74,13 +88,16 @@ export class NotificationManager {
     for (const [runId, tracked] of [...this.tracked.entries()]) {
       if (!this.canDeliver(tracked, context)) continue;
       if (tracked.pendingFinal) {
-        this.send(tracked.pendingFinal);
+        this.send(tracked.pendingFinal, tracked.wake);
         this.tracked.delete(runId);
       }
     }
   }
 
-  private buildNotification(event: RunEvent): RunNotification | undefined {
+  private buildNotification(
+    event: RunEvent,
+    wake: boolean,
+  ): RunNotification | undefined {
     if (event.type === "run_completed") {
       const run = this.manager.state.runs.get(event.runId);
       // Fence the value preview: raw JSON/text would be reflowed (and
@@ -108,6 +125,7 @@ export class NotificationManager {
           summary,
           "",
           `Inspect with \`/run ${shortId(event.runId)}\` · full result: \`/run ${shortId(event.runId)} result\`.`,
+          ...(wake ? ["", "Continue your task using this result."] : []),
         ].join("\n"),
       };
     }
@@ -120,7 +138,7 @@ export class NotificationManager {
     notification: RunNotification,
   ): void {
     if (this.canDeliver(tracked, this.currentContext)) {
-      this.send(notification);
+      this.send(notification, tracked.wake);
       this.tracked.delete(runId);
       return;
     }
@@ -136,12 +154,17 @@ export class NotificationManager {
     return getSessionFile(ctx) === tracked.originSessionFile;
   }
 
-  private send(notification: RunNotification): void {
-    this.pi.sendMessage({
-      customType: NOTIFICATION_TYPE,
-      content: notification.text,
-      display: true,
-      details: notification,
-    });
+  // Delivery is gated on an idle session, so `triggerTurn` always hits the
+  // "not streaming → start new turn" branch of the host API.
+  private send(notification: RunNotification, wake: boolean): void {
+    this.pi.sendMessage(
+      {
+        customType: NOTIFICATION_TYPE,
+        content: notification.text,
+        display: true,
+        details: notification,
+      },
+      wake ? { triggerTurn: true } : undefined,
+    );
   }
 }

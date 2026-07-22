@@ -291,6 +291,106 @@ describe("node overrides", () => {
   });
 });
 
+describe("ad-hoc agents", () => {
+  test("an anonymous leaf runs without any agent directories", async () => {
+    const bareDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agents-bare-"));
+    try {
+      const { engine, specs } = fakeEngine();
+      const manager = new RunManager({ engine });
+      const flow = validateFlow({ kind: "agent", task: "do the thing" });
+      const { done } = manager.start({
+        flow,
+        cwd: bareDir,
+        scope: "both",
+        source: { kind: "tool" },
+      });
+      const outcome = await done;
+      expect(outcome.status).toBe("completed");
+      expect(specs[0]?.agent).toBe("ad-hoc");
+      expect(specs[0]?.systemPrompt).toBeUndefined();
+      expect(specs[0]?.tools).toBeUndefined();
+    } finally {
+      fs.rmSync(bareDir, { recursive: true, force: true });
+    }
+  });
+
+  test("anonymous calls inherit session defaults; node overrides win", async () => {
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        { kind: "agent", task: "session defaults" },
+        {
+          kind: "agent",
+          task: "overridden",
+          model: "node-model",
+          thinking: "minimal",
+        },
+      ],
+    });
+    const { done } = manager.start({
+      flow,
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+      defaults: { model: "prov/session-model", thinking: "high" },
+    });
+    await done;
+    expect(specs[0]?.model).toBe("prov/session-model");
+    expect(specs[0]?.thinking).toBe("high");
+    expect(specs[1]?.model).toBe("node-model");
+    expect(specs[1]?.thinking).toBe("minimal");
+  });
+
+  test("a mixed flow resolves named agents and passes anonymous ones through", async () => {
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "parallel",
+      branches: {
+        named: { kind: "agent", name: "echo", task: "t" },
+        anon: { kind: "agent", task: "t" },
+      },
+      reduce: { task: "merge {branches}" },
+    });
+    const { done } = manager.start({
+      flow,
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+    });
+    const outcome = await done;
+    expect(outcome.status).toBe("completed");
+    expect(specs.map((spec) => spec.agent).sort()).toEqual([
+      "ad-hoc",
+      "ad-hoc",
+      "echo",
+    ]);
+  });
+
+  test("named unknown agents still fail preflight in an anonymous flow", () => {
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        { kind: "agent", task: "anon" },
+        { kind: "agent", name: "ghost", task: "t" },
+      ],
+    });
+    expect(() =>
+      manager.start({
+        flow,
+        cwd: projectDir,
+        scope: "project",
+        source: { kind: "tool" },
+      }),
+    ).toThrow(/unknown agent 'ghost'/);
+    expect(specs).toHaveLength(0);
+  });
+});
+
 describe("empty tools allowlist", () => {
   test("tools: [] reaches the engine as an empty list, not undefined", async () => {
     fs.writeFileSync(

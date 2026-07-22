@@ -51,6 +51,17 @@ describe("toMermaid", () => {
     expect(first).toContain("-.->|repeat|");
   });
 
+  test("anonymous leaves and reducers label as ad-hoc", () => {
+    const flow = validateFlow({
+      kind: "parallel",
+      branches: { a: { kind: "agent", task: "ta" } },
+      reduce: { task: "merge {branches}" },
+    });
+    const diagram = toMermaid(flow);
+    expect(diagram).toContain('["ad-hoc"]');
+    expect(diagram).toContain("reduce: ad-hoc");
+  });
+
   test("workflow refs render as subgraphs", () => {
     const flow = validateFlow(
       { kind: "workflow", name: "review", params: { target: "src/" } },

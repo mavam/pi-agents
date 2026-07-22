@@ -102,15 +102,16 @@ function findNearestProjectWorkflowsDir(cwd: string): string | null {
 }
 
 /**
- * The flow expression: either an explicit `flow:` tree or
- * the flat single-unit form (`agent:` + optional task/model/thinking), which
- * normalizes to a bare agent leaf.
+ * The flow expression: either an explicit `flow:` tree or the flat
+ * single-unit form (`task:` + optional agent/model/thinking), which
+ * normalizes to a bare agent leaf. Without `agent:` the leaf is anonymous
+ * and runs as an ad-hoc agent.
  */
 function extractRawFlow(
   fm: Record<string, unknown>,
 ): { ok: true; flow: unknown } | { ok: false; error: string } {
   const hasFlow = fm.flow !== undefined;
-  const hasFlat = fm.agent !== undefined;
+  const hasFlat = fm.agent !== undefined || fm.task !== undefined;
   if (hasFlow && hasFlat) {
     return {
       ok: false,
@@ -118,7 +119,7 @@ function extractRawFlow(
     };
   }
   if (hasFlow) {
-    for (const key of ["task", "model", "thinking"]) {
+    for (const key of ["model", "thinking"]) {
       if (fm[key] !== undefined) {
         return {
           ok: false,
@@ -129,11 +130,13 @@ function extractRawFlow(
     return { ok: true, flow: fm.flow };
   }
   if (hasFlat) {
-    if (typeof fm.agent !== "string" || !fm.agent.trim()) {
-      return {
-        ok: false,
-        error: "Invalid 'agent' (must be a non-empty string)",
-      };
+    if (fm.agent !== undefined) {
+      if (typeof fm.agent !== "string" || !fm.agent.trim()) {
+        return {
+          ok: false,
+          error: "Invalid 'agent' (must be a non-empty string)",
+        };
+      }
     }
     if (fm.task === undefined) {
       return { ok: false, error: "The flat agent form requires 'task:'" };
@@ -147,7 +150,7 @@ function extractRawFlow(
       ok: true,
       flow: {
         kind: "agent",
-        name: fm.agent.trim(),
+        ...(typeof fm.agent === "string" ? { name: fm.agent.trim() } : {}),
         ...(fm.task !== undefined ? { task: fm.task } : {}),
         ...(fm.model !== undefined ? { model: fm.model } : {}),
         ...(fm.thinking !== undefined ? { thinking: fm.thinking } : {}),
@@ -157,7 +160,7 @@ function extractRawFlow(
   return {
     ok: false,
     error:
-      "No flow found: add a 'flow:' key, or the flat 'agent:'/'task:' form",
+      "No flow found: add a 'flow:' key, or the flat form ('task:' with an optional 'agent:')",
   };
 }
 

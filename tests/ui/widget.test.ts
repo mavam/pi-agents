@@ -16,7 +16,7 @@ const REVIEW_FLOW = {
 
 async function recordedRun(
   raw: unknown,
-  handler: (agent: string, task: string) => string,
+  handler: (agent: string | undefined, task: string) => string,
   keep: (event: RunEvent) => boolean = () => true,
 ): Promise<RunView> {
   const flow = validateFlow(raw);
@@ -44,6 +44,24 @@ describe("formatRunWidget", () => {
     expect(line2).toContain("● bugs → reviewer");
     expect(line2).toContain("● clarity → reviewer");
     expect(line2).toContain("● ⑂ reduce → worker");
+  });
+
+  test("anonymous branches and reducers show ad-hoc segments", async () => {
+    const run = await recordedRun(
+      {
+        kind: "parallel",
+        branches: {
+          bugs: { kind: "agent", task: "bugs" },
+          clarity: { kind: "agent", name: "reviewer", task: "clarity" },
+        },
+        reduce: { task: "merge {branches}" },
+      },
+      () => "ok",
+    );
+    const [, line2] = formatRunWidget(run, run.createdAt + 1_000, 3);
+    expect(line2).toContain("● bugs → ad-hoc");
+    expect(line2).toContain("● clarity → reviewer");
+    expect(line2).toContain("● ⑂ reduce → ad-hoc");
   });
 
   test("mid-run shows partial percent and a running segment", async () => {

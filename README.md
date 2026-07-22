@@ -14,13 +14,34 @@ itself a valid workflow.
 pi install npm:pi-agents
 ```
 
+Zero configuration required. Right after installing, the model can delegate
+and compose work with anonymous **ad-hoc agents** — no agent files needed:
+
+```json
+{
+  "flow": {
+    "kind": "parallel",
+    "branches": {
+      "bugs":    { "kind": "agent", "task": "Review src/run for bugs" },
+      "clarity": { "kind": "agent", "task": "Review src/run for clarity" }
+    },
+    "reduce": { "task": "Merge and prioritize:\n{branches}" }
+  }
+}
+```
+
+An agent node without a `name` spawns a generic delegated pi process: the
+active session's model and thinking level (unless the node overrides them),
+the normal pi system prompt, and the default tool set. Named agent files are
+optional reusable personas layered on top.
+
 ## 📖 Concepts
 
 Three nouns carry the whole framework:
 
 | Concept      | What it is                                                                                       |
 | ------------ | ------------------------------------------------------------------------------------------------ |
-| **agent**    | A markdown file defining a delegated pi subprocess (`.pi/agents/*.md`).                          |
+| **agent**    | A delegated pi subprocess: anonymous (ad-hoc, just a task) or a reusable persona defined in a markdown file (`.pi/agents/*.md`). |
 | **workflow** | A saved, named composition of agents (`.pi/workflows/*.yaml`) — or an inline expression.           |
 | **run**      | One persisted execution of a workflow. Browse with `/runs`, inspect with `/run <id>`.            |
 
@@ -80,7 +101,11 @@ steps need dot-path access or predicates. Escape literal braces as `{{`/`}}`.
 
 ## ⚡ Quick start
 
-### 1. Define an agent
+### 1. (Optional) Define an agent profile
+
+Agent files exist for *reuse*: a persona, tool allowlist, skills, and model
+defaults you want to apply consistently across flows. Don't create one for a
+one-off delegation — omit `name` and let an ad-hoc agent do it.
 
 `.pi/agents/reviewer.md`:
 
@@ -128,18 +153,26 @@ flow:
     task: "Merge and prioritize:\n{branches}"
 ```
 
-For a single-unit workflow — one agent, one task, no graph — skip `flow:`
-entirely and use the flat form, which normalizes to a bare agent leaf but
-keeps full workflow powers (params, `/name` command, `on:` hooks, and
-`{kind: workflow, name: …}` references from other flows):
+For a single-unit workflow — one task, no graph — skip `flow:` entirely and
+use the flat form, which normalizes to a bare agent leaf but keeps full
+workflow powers (params, `/name` command, `on:` hooks, and
+`{kind: workflow, name: …}` references from other flows). `agent:` is
+optional; without it the task runs as an ad-hoc agent:
+
+```yaml
+name: summarize
+description: Summarize a target
+params: [{ name: target, required: true }]
+task: "Summarize {params.target}"
+thinking: high
+```
 
 ```yaml
 name: bug-hunt
 description: Hunt correctness bugs in a target
 params: [{ name: target, required: true }]
-agent: reviewer
+agent: reviewer # optional: use the reviewer profile
 task: "Review {params.target} strictly for bugs."
-thinking: high
 ```
 
 Workflows live in `~/.pi/agent/workflows` and `.pi/workflows`, discovered like
@@ -201,7 +234,8 @@ catalog (names, `trigger` guidance, params). Inline flows go through exactly
 the same validation as saved ones — unknown agents, bad references, and
 scope violations come back as node-path errors the model can correct — and
 a bare agent leaf is a valid flow, so single delegation is just
-`workflow({flow: {kind: "agent", name: "explorer", task: "…"}})`.
+`workflow({flow: {kind: "agent", task: "…"}})` (add `name:` only to use a
+saved profile).
 
 ## 🧮 Node reference
 
@@ -209,8 +243,8 @@ a bare agent leaf is a valid flow, so single delegation is just
 
 ```yaml
 kind: agent
-name: reviewer          # must match a discovered agent
 task: "Review {previous}"
+name: reviewer          # optional; must match a discovered agent profile
 output: text            # or "json": parse the result (fences tolerated)
 model: some-model       # optional override (wins over the agent file)
 thinking: low           # optional override (wins over the agent file)
@@ -220,7 +254,10 @@ scope: both             # agent discovery: user|project|both
 ```
 
 A bare `agent` node is a complete workflow — single delegation needs nothing
-more. Precedence for model/thinking: flow node → agent file → active session.
+more. Without `name` the node runs as an anonymous ad-hoc agent (rendered as
+`ad-hoc`): no profile prompt, default tools, session model/thinking.
+Precedence for model/thinking: flow node → agent file (named only) → active
+session.
 
 ### `sequence`
 
@@ -243,8 +280,8 @@ mode: all               # "all" (default) | "any" | { quorum: n }
 onError: fail           # "fail" (default, cancels siblings) | "collect"
 concurrency: 4          # cap on simultaneous branches
 reduce:                 # optional fold over the collected value
-  agent: synthesizer
   task: "Merge {branches}"
+  agent: synthesizer    # optional; omit to reduce with an ad-hoc agent
 ```
 
 Value: `all`/`quorum` yield `{branch: value}`; `any` yields the winner's

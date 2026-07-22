@@ -80,7 +80,7 @@ export function buildSystemPromptAppendix(cwd: string, trusted = true): string {
   const agents = buildAgentsPrompt(cwd, scope);
   const workflows = buildWorkflowsPrompt(cwd, scope);
   const parts = [
-    "The following delegated agents are available to the `workflow` tool:",
+    "The following reusable agent profiles are available to the `workflow` tool (optional: agent leaves without `name` run as anonymous ad-hoc agents):",
     agents.prompt,
     "",
     "The following saved workflows can be invoked with `workflow({name, params})`:",

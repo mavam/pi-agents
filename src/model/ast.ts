@@ -38,11 +38,21 @@ export interface BaseNode {
   label?: string;
 }
 
+/**
+ * Display label for agent calls that name no profile (ad-hoc delegation).
+ * Purely presentational; `"ad-hoc"` is not a reserved agent name.
+ */
+export const ADHOC_LABEL = "ad-hoc";
+
 /** Leaf node: run one delegated agent on a task. */
 export interface AgentNode extends BaseNode {
   kind: "agent";
-  /** Agent name (matches a discovered agent's frontmatter `name`). */
-  name: string;
+  /**
+   * Agent name (matches a discovered agent's frontmatter `name`). When
+   * absent, the task runs as an anonymous ad-hoc agent: no catalog lookup,
+   * no profile system prompt, default tools, session model/thinking.
+   */
+  name?: string;
   /** Task prompt; may interpolate `{bindings}`. */
   task: string;
   /** How to interpret the agent's final output. Default: "text". */
@@ -67,7 +77,8 @@ export type ParMode = "all" | "any" | { quorum: number };
 
 /** Reducer: a synthetic agent call that folds collected results into one value. */
 export interface Reduce {
-  agent: string;
+  /** Agent name; absent runs the reducer as an anonymous ad-hoc agent. */
+  agent?: string;
   /** Task prompt; interpolates `{branches}` (parallel) or `{items}` (map). */
   task: string;
   output?: OutputMode;

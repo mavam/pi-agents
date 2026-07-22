@@ -9,6 +9,7 @@
  */
 
 import {
+  ADHOC_LABEL,
   bodyPath,
   branchPath,
   type FlowNode,
@@ -99,11 +100,11 @@ function build(
   color: TreeColorize,
 ): DisplayNode[] {
   const reduceNode = (
-    reduce: { agent: string; task: string },
+    reduce: { agent?: string; task: string },
     parentPath: string,
   ): DisplayNode => ({
     icon: KIND_ICONS.reduce,
-    text: `reduce${color("dim", " → ")}${reduce.agent}${color("dim", " · ")}${colorizeRefs(preview(reduce.task), color)}`,
+    text: `reduce${color("dim", " → ")}${reduce.agent ?? ADHOC_LABEL}${color("dim", " · ")}${colorizeRefs(preview(reduce.task), color)}`,
     path: reducePath(parentPath),
     children: [],
   });
@@ -112,7 +113,7 @@ function build(
       return [
         {
           icon: KIND_ICONS.agent,
-          text: `${node.name}${binding(node, color)}${color("dim", " · ")}${colorizeRefs(preview(node.task), color)}`,
+          text: `${node.name ?? ADHOC_LABEL}${binding(node, color)}${color("dim", " · ")}${colorizeRefs(preview(node.task), color)}`,
           path,
           children: [],
         },

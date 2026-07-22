@@ -78,6 +78,26 @@ describe("renderFlowTree", () => {
     expect(tree).not.toContain("≡");
   });
 
+  test("anonymous agents and reducers render as ad-hoc", () => {
+    expect(
+      renderFlowTree(
+        validateFlow({ kind: "agent", task: "Create a worktree" }),
+      ),
+    ).toBe("✦ ad-hoc · Create a worktree");
+    const flow = validateFlow({
+      kind: "parallel",
+      branches: {
+        a: { kind: "agent", task: "Review A" },
+        b: { kind: "agent", name: "reviewer", task: "Review B" },
+      },
+      reduce: { task: "Merge {branches}" },
+    });
+    const tree = renderFlowTree(flow);
+    expect(tree).toContain("├─ a → ✦ ad-hoc · Review A");
+    expect(tree).toContain("├─ b → ✦ reviewer · Review B");
+    expect(tree).toContain("└─ ⑂ reduce → ad-hoc · Merge {branches}");
+  });
+
   test("multi-step branches group under their key; workflow refs show params", () => {
     const def: WorkflowLike = {
       name: "inner",
@@ -181,6 +201,37 @@ describe("renderRunTree", () => {
     expect(tree).toContain("└─ ● reviewer · review {item} [3/3]");
     // Kind icons are replaced by status icons in overlay mode.
     expect(tree).not.toContain("✦");
+  });
+
+  test("anonymous runs replay from persisted events and render as ad-hoc", async () => {
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        { kind: "agent", task: "scout", as: "map" },
+        { kind: "agent", name: "worker", task: "use {map}" },
+      ],
+    });
+    const events: RunEvent[] = [];
+    await executeFlow({
+      runId: "r3",
+      flow,
+      runAgent: async () => ({ text: "ok" }),
+      emit: (event) => events.push(event),
+    });
+    // Round-trip through JSON exactly like the sidecar persistence does.
+    const replayed = events.map(
+      (event) => JSON.parse(JSON.stringify(event)) as RunEvent,
+    );
+    const run = rebuildRunState(replayed).runs.get("r3");
+    if (!run) throw new Error("missing run");
+    const tree = renderRunTree(run);
+    expect(tree).toContain("● ad-hoc → {map} · scout");
+    expect(tree).toContain("● worker · use {map}");
+    const nodes = [...run.nodes.values()].filter(
+      (node) => node.kind === "agent",
+    );
+    expect(nodes.some((node) => node.agent === undefined)).toBe(true);
+    expect(nodes.some((node) => node.agent === "worker")).toBe(true);
   });
 
   test("failures surface inline with ✗", async () => {

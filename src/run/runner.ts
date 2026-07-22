@@ -1,7 +1,8 @@
 /**
- * The AgentRunner implementation over the spawn engine: resolves the agent by
- * name from the catalog, assembles its system prompt (body + skills), spawns
- * a delegated pi process, and streams progress.
+ * The AgentRunner implementation over the spawn engine: resolves named agents
+ * from the catalog and assembles their system prompt (body + skills), or
+ * spawns anonymous ad-hoc calls as plain delegated pi processes, then streams
+ * progress.
  */
 
 import {
@@ -13,7 +14,12 @@ import {
 } from "../catalog/agents.js";
 import { BUDGETS_ENV_VAR, DEPTH_ENV_VAR } from "../engine/subprocess.js";
 import type { SpawnEngine } from "../engine/types.js";
-import { type Budgets, effectiveScope, type Scope } from "../model/ast.js";
+import {
+  ADHOC_LABEL,
+  type Budgets,
+  effectiveScope,
+  type Scope,
+} from "../model/ast.js";
 import type { AgentCall, AgentRunner } from "./interpreter.js";
 
 /** Session-level fallbacks for agents without explicit frontmatter. */
@@ -67,12 +73,20 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
   return async (call: AgentCall) => {
     const cwd = call.cwd ?? options.cwd;
     const scope = effectiveScope(call.scope, trusted, options.scope ?? "both");
-    const agent = resolveAgentOrThrow(call.agent, cwd, scope);
+    // Named calls resolve a catalog profile; anonymous (ad-hoc) calls skip
+    // discovery entirely and spawn a plain delegated pi process.
+    const agent =
+      call.agent !== undefined
+        ? resolveAgentOrThrow(call.agent, cwd, scope)
+        : undefined;
 
-    const { prompt: skillsPrompt } = buildSkillsPrompt(agent.skills, cwd);
-    const systemPrompt = [agent.systemPrompt, skillsPrompt]
-      .filter(Boolean)
-      .join("\n\n");
+    let systemPrompt: string | undefined;
+    if (agent) {
+      const { prompt: skillsPrompt } = buildSkillsPrompt(agent.skills, cwd);
+      systemPrompt =
+        [agent.systemPrompt, skillsPrompt].filter(Boolean).join("\n\n") ||
+        undefined;
+    }
 
     const env: Record<string, string> = {
       [DEPTH_ENV_VAR]: String(depth + 1),
@@ -82,14 +96,14 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
     }
 
     const handle = options.engine.spawn({
-      agent: agent.name,
+      agent: agent?.name ?? ADHOC_LABEL,
       task: call.task,
       cwd,
-      systemPrompt: systemPrompt || undefined,
+      systemPrompt,
       // Precedence: flow node override > agent file > active session default.
-      model: call.model ?? agent.model ?? options.defaults?.model,
-      thinking: call.thinking ?? agent.thinking ?? options.defaults?.thinking,
-      tools: agent.tools,
+      model: call.model ?? agent?.model ?? options.defaults?.model,
+      thinking: call.thinking ?? agent?.thinking ?? options.defaults?.thinking,
+      tools: agent?.tools,
       env,
     });
 

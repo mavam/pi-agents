@@ -71,7 +71,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       const lines = ["## Agents", ""];
       if (discovery.agents.length === 0) {
         lines.push(
-          "No agents found. Create `.pi/agents/<name>.md` or `~/.pi/agent/agents/<name>.md`.",
+          "No agent profiles found. Workflows can still delegate with anonymous ad-hoc agents (omit the agent name). To define a reusable persona, create `.pi/agents/<name>.md` or `~/.pi/agent/agents/<name>.md`.",
         );
       }
       for (const agent of discovery.agents) {
@@ -488,7 +488,7 @@ function buildAgentsSpec(
   return {
     title: "Agents",
     emptyText:
-      "No agents found. Create .pi/agents/<name>.md or ~/.pi/agent/agents/<name>.md.",
+      "No agent profiles found. Workflows can still delegate with anonymous ad-hoc agents (omit the agent name). For a reusable persona, create .pi/agents/<name>.md or ~/.pi/agent/agents/<name>.md.",
     footer: "↑↓ move · ⏎ inspect · n new · esc close",
     items: () => discoverAgents(ctx.cwd, scopeFor(ctx)).agents,
     keyOf: (agent) => `${agent.source}:${agent.name}`,

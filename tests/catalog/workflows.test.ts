@@ -130,13 +130,65 @@ thinking: low
   });
 
   test("rejects flat-form keys next to flow:", () => {
+    expect(
+      parseWorkflowFile(
+        writeWorkflow(
+          "stray.yaml",
+          "name: stray\ndescription: d\ntask: t\nflow: { kind: agent, name: reviewer, task: t }\n",
+        ),
+        "project",
+      ),
+    ).toContain("not both");
+    expect(
+      parseWorkflowFile(
+        writeWorkflow(
+          "stray-model.yaml",
+          "name: stray-model\ndescription: d\nmodel: m\nflow: { kind: agent, name: reviewer, task: t }\n",
+        ),
+        "project",
+      ),
+    ).toContain("'model' belongs to the flat agent form");
+  });
+
+  test("task-only flat form yields an anonymous leaf", () => {
     const filePath = writeWorkflow(
-      "stray.yaml",
-      "name: stray\ndescription: d\ntask: t\nflow: { kind: agent, name: reviewer, task: t }\n",
+      "summarize.yaml",
+      `name: summarize
+description: Summarize a target
+params:
+  - { name: target, required: true }
+task: "Summarize {params.target}"
+model: cheap-model
+thinking: low
+`,
     );
-    expect(parseWorkflowFile(filePath, "project")).toContain(
-      "'task' belongs to the flat agent form",
+    const result = parseWorkflowFile(filePath, "project");
+    if (typeof result === "string") throw new Error(result);
+    expect(result.flow).toMatchObject({
+      kind: "agent",
+      task: "Summarize {params.target}",
+      model: "cheap-model",
+      thinking: "low",
+    });
+    expect((result.flow as { name?: string }).name).toBeUndefined();
+  });
+
+  test("explicit anonymous leaves are valid in saved flows", () => {
+    const filePath = writeWorkflow(
+      "anon-flow.yaml",
+      `name: anon-flow
+description: d
+flow:
+  kind: parallel
+  branches:
+    a: { kind: agent, task: "review A" }
+    b: { kind: agent, task: "review B" }
+  reduce: { task: "merge {branches}" }
+`,
     );
+    const result = parseWorkflowFile(filePath, "project");
+    if (typeof result === "string") throw new Error(result);
+    expect(result.flow.kind).toBe("parallel");
   });
 
   test("rejects non-object files and parse errors", () => {

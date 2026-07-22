@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { FlowNode, WorkflowLike } from "../../src/model/ast.js";
 import {
   collectAgentNames,
+  collectAgentRequirements,
   FlowValidationError,
   validateFlow,
 } from "../../src/model/validate.js";
@@ -72,11 +73,28 @@ describe("structural validation", () => {
     expectIssue(agent("a", "t", { retries: 3 }), "unknown key 'retries'");
   });
 
-  test("agent requires name and task", () => {
-    expectIssue({ kind: "agent" }, "'name' must be a non-empty string");
+  test("agent requires a task; name is optional", () => {
+    expectIssue({ kind: "agent" }, "'task' must be a non-empty string");
     expectIssue(
       { kind: "agent", name: "a" },
       "'task' must be a non-empty string",
+    );
+    expectValid({ kind: "agent", task: "do the thing" });
+  });
+
+  test("an anonymous agent with overrides is a valid flow", () => {
+    expectValid({
+      kind: "agent",
+      task: "do the thing",
+      model: "some-model",
+      thinking: "low",
+    });
+  });
+
+  test("a present name must be non-empty", () => {
+    expectIssue(
+      { kind: "agent", name: "", task: "t" },
+      "'name' must be a non-empty string when present",
     );
   });
 
@@ -103,7 +121,7 @@ describe("structural validation", () => {
   });
 
   test("nested errors carry node paths", () => {
-    expectIssue(seq(agent("a", "t"), { kind: "agent" }), "$.steps[1]: 'name'");
+    expectIssue(seq(agent("a", "t"), { kind: "agent" }), "$.steps[1]: 'task'");
   });
 
   test("par requires branches", () => {
@@ -147,7 +165,7 @@ describe("structural validation", () => {
     );
   });
 
-  test("reduce requires agent and task", () => {
+  test("reduce requires a task; agent is optional", () => {
     expectIssue(
       {
         kind: "parallel",
@@ -155,6 +173,19 @@ describe("structural validation", () => {
         reduce: { agent: "r" },
       },
       "$.reduce: 'task' must be a non-empty string",
+    );
+    expectValid({
+      kind: "parallel",
+      branches: { a: agent("x", "t") },
+      reduce: { task: "merge {branches}" },
+    });
+    expectIssue(
+      {
+        kind: "parallel",
+        branches: { a: agent("x", "t") },
+        reduce: { agent: "", task: "merge {branches}" },
+      },
+      "$.reduce: 'agent' must be a non-empty string when present",
     );
   });
 
@@ -643,5 +674,49 @@ describe("collectAgentNames", () => {
       "scout",
       "synthesizer",
     ]);
+  });
+
+  test("skips anonymous leaves and reducers", () => {
+    const flow = validateFlow({
+      kind: "parallel",
+      branches: {
+        a: { kind: "agent", task: "review A" },
+        b: agent("reviewer", "review B"),
+      },
+      reduce: { task: "merge {branches}" },
+    });
+    expect([...collectAgentNames(flow)]).toEqual(["reviewer"]);
+  });
+});
+
+describe("collectAgentRequirements", () => {
+  test("excludes anonymous calls but retains named ones with overrides", () => {
+    const flow = validateFlow(
+      seq(
+        { kind: "agent", task: "anonymous step" },
+        agent("scout", "t", { cwd: "/elsewhere", scope: "user" }),
+        {
+          kind: "parallel",
+          branches: { a: { kind: "agent", task: "review" } },
+          reduce: { task: "merge {branches}" },
+        },
+      ),
+    );
+    expect(collectAgentRequirements(flow)).toEqual([
+      { name: "scout", cwd: "/elsewhere", scope: "user" },
+    ]);
+  });
+
+  test("an entirely anonymous flow yields no requirements", () => {
+    const flow = validateFlow(
+      {
+        kind: "map",
+        over: "{params.files}",
+        body: { kind: "agent", task: "review {item}" },
+        reduce: { task: "merge {items}" },
+      },
+      { params: [{ name: "files" }] },
+    );
+    expect(collectAgentRequirements(flow)).toEqual([]);
   });
 });

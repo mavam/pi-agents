@@ -28,10 +28,10 @@ import { KIND_ICONS, renderFlowTree } from "../ui/tree.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
-- {"kind":"agent","name":"<agent>","task":"...","output":"text"|"json","model":"...","thinking":"..."} — run one delegated agent (leaf). A bare agent node is a valid flow; model/thinking override the agent file.
+- {"kind":"agent","task":"...","name":"<agent>","output":"text"|"json","model":"...","thinking":"..."} — run one delegated agent (leaf). A bare agent node is a valid flow. "name" is OPTIONAL: omit it to run the task as an anonymous ad-hoc agent (session model/thinking, default tools); set it only to use a reusable profile from <agents>. model/thinking override the profile or session defaults.
 - {"kind":"sequence","steps":[node,...]} — run steps in order; value = last step's value.
-- {"kind":"parallel","branches":{"a":node,...},"mode":"all"|"any"|{"quorum":n},"onError":"fail"|"collect","concurrency":n,"reduce":{"agent":"...","task":"merge {branches}"}} — run branches concurrently. Value: "all"/quorum → {branch: value}; "any" → the winner's value (siblings cancelled).
-- {"kind":"map","over":"{binding}","body":node,"concurrency":n,"reduce":{"agent":"...","task":"merge {items}"}} — fan out body per element of the array {binding} resolves to; the body sees {item} and {index}. Value: array of body values.
+- {"kind":"parallel","branches":{"a":node,...},"mode":"all"|"any"|{"quorum":n},"onError":"fail"|"collect","concurrency":n,"reduce":{"task":"merge {branches}","agent":"..."}} — run branches concurrently. Value: "all"/quorum → {branch: value}; "any" → the winner's value (siblings cancelled). The reducer's "agent" is optional too.
+- {"kind":"map","over":"{binding}","body":node,"concurrency":n,"reduce":{"task":"merge {items}"}} — fan out body per element of the array {binding} resolves to; the body sees {item} and {index}. Value: array of body values.
 - {"kind":"loop","body":node,"max":n,"until":predicate} — repeat body until the predicate holds over its JSON value; the body sees {iteration} and {last}. Predicates: {"eq":["path",value]}, {"ne":[..]}, {"gt":["path",n]}, {"lt":[..]}, {"exists":"path"}, {"empty":"path"}, {"and":[..]}, {"or":[..]}, {"not":..}.
 - {"kind":"workflow","name":"<saved>","params":{"k":"v"}} — invoke a saved workflow.
 
@@ -242,6 +242,7 @@ export function createWorkflowTool(
       "workflow: delegate work to isolated agents — a single agent leaf, or a composition (sequence/parallel/map/loop) of them",
     promptGuidelines: [
       "Prefer the `workflow` tool for delegation: a bare agent leaf for one isolated task, sequence/parallel/map/loop compositions for multi-agent work.",
+      "Omit the agent name for one-off delegation; it is only needed to select a reusable profile from <agents>. Never invent agent names or create agent-definition files merely to execute an ad-hoc flow.",
       "Check <workflows> in the system prompt first; prefer a saved workflow via workflow({name, params}) when one matches the request.",
       'In flows, thread data explicitly: bind sequence steps with "as" and reference {name}/{previous} in later tasks; use output:"json" when downstream steps need structured access.',
     ],

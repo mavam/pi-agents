@@ -40,7 +40,8 @@ import { CancelledError, type PoolOutcome, runPool } from "./scheduler.js";
 // Agent runner abstraction (implemented over the spawn engine; faked in tests)
 
 export interface AgentCall {
-  agent: string;
+  /** Agent name; absent spawns an anonymous ad-hoc agent (no catalog lookup). */
+  agent?: string;
   task: string;
   output: OutputMode;
   /** Node-level model override (wins over the agent file). */

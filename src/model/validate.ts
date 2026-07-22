@@ -168,6 +168,24 @@ function requiredString(
   return value;
 }
 
+function optionalNonEmptyString(
+  obj: Record<string, unknown>,
+  key: string,
+  path: string,
+  issues: Issues,
+): string | undefined {
+  const value = obj[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length === 0) {
+    issues.push({
+      path,
+      message: `'${key}' must be a non-empty string when present`,
+    });
+    return undefined;
+  }
+  return value;
+}
+
 function optionalPositiveInt(
   obj: Record<string, unknown>,
   key: string,
@@ -297,7 +315,7 @@ function parseAgent(
   return {
     kind: "agent",
     ...parseBase(obj, path, issues),
-    name: requiredString(obj, "name", path, issues),
+    name: optionalNonEmptyString(obj, "name", path, issues),
     task: requiredString(obj, "task", path, issues),
     output: optionalEnum(
       obj,
@@ -349,7 +367,7 @@ function parseReduce(
   if (!obj) return undefined;
   checkKeys(obj, ["agent", "task", "output"], path, issues);
   return {
-    agent: requiredString(obj, "agent", path, issues),
+    agent: optionalNonEmptyString(obj, "agent", path, issues),
     task: requiredString(obj, "task", path, issues),
     output: optionalEnum(
       obj,
@@ -989,9 +1007,10 @@ export interface AgentRequirement {
 }
 
 /**
- * All agents an expanded flow can spawn (reduce agents included), each with
- * the node-level cwd/scope overrides that will apply at spawn time — so
- * preflight resolves every agent exactly the way the runner will.
+ * All named agents an expanded flow can spawn (reduce agents included), each
+ * with the node-level cwd/scope overrides that will apply at spawn time — so
+ * preflight resolves every agent exactly the way the runner will. Anonymous
+ * (ad-hoc) calls need no resolution and are not collected.
  */
 export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
   const seen = new Set<string>();
@@ -1005,18 +1024,21 @@ export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
   const visit = (current: FlowNode): void => {
     switch (current.kind) {
       case "agent":
-        add({ name: current.name, cwd: current.cwd, scope: current.scope });
+        if (current.name !== undefined)
+          add({ name: current.name, cwd: current.cwd, scope: current.scope });
         return;
       case "sequence":
         for (const step of current.steps) visit(step);
         return;
       case "parallel":
         for (const branch of Object.values(current.branches)) visit(branch);
-        if (current.reduce) add({ name: current.reduce.agent });
+        if (current.reduce?.agent !== undefined)
+          add({ name: current.reduce.agent });
         return;
       case "map":
         visit(current.body);
-        if (current.reduce) add({ name: current.reduce.agent });
+        if (current.reduce?.agent !== undefined)
+          add({ name: current.reduce.agent });
         return;
       case "loop":
         visit(current.body);
@@ -1030,24 +1052,26 @@ export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
   return requirements;
 }
 
-/** All agent names an expanded flow can spawn (reduce agents included), for preflight resolution. */
+/** All named agents an expanded flow can spawn (reduce agents included); anonymous calls are skipped. */
 export function collectAgentNames(node: FlowNode): Set<string> {
   const names = new Set<string>();
   const visit = (current: FlowNode): void => {
     switch (current.kind) {
       case "agent":
-        names.add(current.name);
+        if (current.name !== undefined) names.add(current.name);
         return;
       case "sequence":
         for (const step of current.steps) visit(step);
         return;
       case "parallel":
         for (const branch of Object.values(current.branches)) visit(branch);
-        if (current.reduce) names.add(current.reduce.agent);
+        if (current.reduce?.agent !== undefined)
+          names.add(current.reduce.agent);
         return;
       case "map":
         visit(current.body);
-        if (current.reduce) names.add(current.reduce.agent);
+        if (current.reduce?.agent !== undefined)
+          names.add(current.reduce.agent);
         return;
       case "loop":
         visit(current.body);

@@ -14,6 +14,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
 import {
+  ADHOC_LABEL,
   bodyPath,
   branchPath,
   type FlowNode,
@@ -131,14 +132,19 @@ export function widgetSegments(
       status,
     });
   };
-  const agentText = (node: Extract<FlowNode, { kind: "agent" }>): string =>
-    node.as ? `${node.name} → {${node.as}}` : node.name;
+  const agentText = (node: Extract<FlowNode, { kind: "agent" }>): string => {
+    const name = node.name ?? ADHOC_LABEL;
+    return node.as ? `${name} → {${node.as}}` : name;
+  };
 
   /** Summarize any node as one collapsed segment. */
   const unit = (node: FlowNode, path: string, prefix = ""): void => {
     switch (node.kind) {
       case "agent":
-        push(path, `${prefix}${prefix ? node.name : agentText(node)}`);
+        push(
+          path,
+          `${prefix}${prefix ? (node.name ?? ADHOC_LABEL) : agentText(node)}`,
+        );
         return;
       case "sequence":
         push(path, `${prefix}≡ ${node.label ?? "sequence"}`);
@@ -173,13 +179,19 @@ export function widgetSegments(
   } else if (root.kind === "parallel") {
     for (const [key, branch] of Object.entries(root.branches)) {
       if (branch.kind === "agent") {
-        push(branchPath(rootPath, key), `${key} → ${branch.name}`);
+        push(
+          branchPath(rootPath, key),
+          `${key} → ${branch.name ?? ADHOC_LABEL}`,
+        );
       } else {
         unit(branch, branchPath(rootPath, key), `${key} `);
       }
     }
     if (root.reduce) {
-      push(reducePath(rootPath), `⑂ reduce → ${root.reduce.agent}`);
+      push(
+        reducePath(rootPath),
+        `⑂ reduce → ${root.reduce.agent ?? ADHOC_LABEL}`,
+      );
     }
   } else {
     unit(root, rootPath);

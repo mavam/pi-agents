@@ -396,7 +396,7 @@ export function buildAgentsPrompt(
 
   if (agents.length === 0) {
     lines.push(
-      "  <none>No agents were discovered for this cwd and scope.</none>",
+      "  <none>No named agent profiles were discovered for this cwd and scope. Anonymous ad-hoc agents remain available by omitting `name`.</none>",
     );
   } else {
     for (const agent of agents) {

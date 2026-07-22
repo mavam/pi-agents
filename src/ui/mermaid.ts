@@ -4,7 +4,7 @@
  * same flow always yields the same diagram.
  */
 
-import type { FlowNode, ParMode } from "../model/ast.js";
+import { ADHOC_LABEL, type FlowNode, type ParMode } from "../model/ast.js";
 import { formatPredicate } from "../model/predicate.js";
 
 function escapeLabel(text: string): string {
@@ -27,7 +27,9 @@ export function toMermaid(flow: FlowNode): string {
     switch (node.kind) {
       case "agent": {
         const id = nextId();
-        lines.push(`  ${id}["${escapeLabel(node.label ?? node.name)}"]`);
+        lines.push(
+          `  ${id}["${escapeLabel(node.label ?? node.name ?? ADHOC_LABEL)}"]`,
+        );
         return { entry: id, exit: id };
       }
       case "sequence": {
@@ -56,7 +58,7 @@ export function toMermaid(flow: FlowNode): string {
         if (node.reduce) {
           const reduce = nextId();
           lines.push(
-            `  ${reduce}["reduce: ${escapeLabel(node.reduce.agent)}"]`,
+            `  ${reduce}["reduce: ${escapeLabel(node.reduce.agent ?? ADHOC_LABEL)}"]`,
           );
           lines.push(`  ${join} --> ${reduce}`);
           exit = reduce;
@@ -75,7 +77,7 @@ export function toMermaid(flow: FlowNode): string {
         if (node.reduce) {
           const reduce = nextId();
           lines.push(
-            `  ${reduce}["reduce: ${escapeLabel(node.reduce.agent)}"]`,
+            `  ${reduce}["reduce: ${escapeLabel(node.reduce.agent ?? ADHOC_LABEL)}"]`,
           );
           lines.push(`  ${join} --> ${reduce}`);
           exit = reduce;

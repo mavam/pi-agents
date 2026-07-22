@@ -203,6 +203,66 @@ describe("workflow tool", () => {
     expect(specs).toHaveLength(0);
   });
 
+  test("runs an anonymous leaf against a completely empty catalog", async () => {
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agents-empty-"));
+    try {
+      const { engine, specs } = fakeEngine((spec) => `did: ${spec.task}`);
+      const tool = createWorkflowTool(makeDeps(engine));
+      const result = await tool.execute(
+        "t-anon-1",
+        {
+          flow: { kind: "agent", task: "create a worktree" },
+          scope: "both",
+        },
+        undefined,
+        undefined,
+        { cwd: emptyDir } as unknown as ExtensionContext,
+      );
+      const text = (result.content[0] as { text: string }).text;
+      expect(text).toContain('status="completed"');
+      expect(text).toContain("did: create a worktree");
+      expect(specs[0]?.agent).toBe("ad-hoc");
+      expect(specs[0]?.systemPrompt).toBeUndefined();
+      expect(specs[0]?.tools).toBeUndefined();
+    } finally {
+      fs.rmSync(emptyDir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs sequence and parallel flows of only anonymous agents", async () => {
+    const { engine, specs } = fakeEngine((spec) => `ok: ${spec.task}`);
+    const tool = createWorkflowTool(makeDeps(engine));
+    const result = await tool.execute(
+      "t-anon-2",
+      {
+        flow: {
+          kind: "sequence",
+          steps: [
+            { kind: "agent", task: "scout", as: "map" },
+            {
+              kind: "parallel",
+              branches: {
+                a: { kind: "agent", task: "review A using {map}" },
+                b: { kind: "agent", task: "review B using {map}" },
+              },
+              reduce: { task: "merge {branches}" },
+            },
+          ],
+        },
+        scope: "project",
+      },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('status="completed"');
+    expect(specs).toHaveLength(4);
+    expect(new Set(specs.map((spec) => spec.agent))).toEqual(
+      new Set(["ad-hoc"]),
+    );
+  });
+
   test("failed runs return an error result", async () => {
     const failingEngine: SpawnEngine = {
       spawn(spec) {
@@ -273,6 +333,14 @@ describe("call and result previews", () => {
       flow: { kind: "agent", name: "echo", task: "hello" },
     });
     expect(preview).toBe("✦ echo · hello");
+  });
+
+  test("anonymous inline leaves render as ad-hoc", async () => {
+    const { formatCallPreview } = await import("../../src/triggers/tool.js");
+    const preview = formatCallPreview({
+      flow: { kind: "agent", task: "hello" },
+    });
+    expect(preview).toBe("✦ ad-hoc · hello");
   });
 
   test("result preview replaces the model-facing continuation text", async () => {
@@ -402,6 +470,33 @@ describe("project trust", () => {
         untrustedCtx(),
       ),
     ).rejects.toThrow("not trusted");
+  });
+
+  test("untrusted projects can run purely anonymous inline flows", async () => {
+    const { engine, specs } = fakeEngine((spec) => `ok: ${spec.task}`);
+    const tool = createWorkflowTool(makeDeps(engine));
+    const result = await tool.execute(
+      "t-trust-anon",
+      {
+        flow: {
+          kind: "parallel",
+          branches: {
+            a: { kind: "agent", task: "review A" },
+            b: { kind: "agent", task: "review B" },
+          },
+          reduce: { task: "merge {branches}" },
+        },
+      },
+      undefined,
+      undefined,
+      untrustedCtx(),
+    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('status="completed"');
+    expect(specs).toHaveLength(3);
+    expect(new Set(specs.map((spec) => spec.agent))).toEqual(
+      new Set(["ad-hoc"]),
+    );
   });
 
   test("per-node project scope overrides clamp to user when untrusted", async () => {

@@ -94,6 +94,8 @@ export interface SpawnHandle {
   updates: AsyncIterable<SpawnProgress>;
   /** Resolves with the outcome; rejects with SpawnFailure or SpawnAborted. */
   wait(): Promise<SpawnOutcome>;
+  /** Queue a steering message; unavailable on engines without live input. */
+  steer?(message: string): Promise<void>;
   abort(): void;
 }
 

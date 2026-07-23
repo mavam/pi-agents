@@ -150,6 +150,7 @@ describe("background tool runs", () => {
     const ctx = {
       cwd: projectDir,
       hasUI: true,
+      mode: "tui",
       isIdle: () => true,
       model: { provider: "test", id: "session-model" },
       sessionManager: {

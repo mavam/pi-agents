@@ -352,7 +352,9 @@ export class RunWidget {
 
   update(ctx?: ExtensionContext): void {
     const context = ctx ?? this.lastContext;
-    if (!context?.hasUI) return;
+    // RPC exposes a UI bridge, but delegated/headless sessions must not start
+    // widget timers or emit display requests. The widget belongs to the TUI.
+    if (context?.mode !== "tui") return;
     this.lastContext = context;
     this.render(context);
   }

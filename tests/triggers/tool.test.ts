@@ -1,17 +1,23 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { parseStreamingJson } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import type { SpawnEngine, SpawnSpec } from "../../src/engine/types.js";
 import { emptyUsage } from "../../src/engine/types.js";
 import { RunManager } from "../../src/run/runs.js";
 import { parseCommandArgs } from "../../src/triggers/commands.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
-import { createWorkflowTool } from "../../src/triggers/tool.js";
+import {
+  createWorkflowTool,
+  type WorkflowToolParamsType,
+  type WorkflowToolRenderState,
+} from "../../src/triggers/tool.js";
 import { NotificationManager } from "../../src/ui/notify.js";
 import { RunWidget } from "../../src/ui/widget.js";
 
@@ -27,6 +33,35 @@ function makeDeps(engine: SpawnEngine): TriggerDeps {
     notifications: new NotificationManager(pi, manager),
     widget: new RunWidget(manager),
   };
+}
+
+type WorkflowTool = ReturnType<typeof createWorkflowTool>;
+type RenderCallContext = Parameters<NonNullable<WorkflowTool["renderCall"]>>[2];
+
+function renderCallContext(
+  args: WorkflowToolParamsType,
+  state: WorkflowToolRenderState,
+  overrides: Partial<RenderCallContext> = {},
+): RenderCallContext {
+  return {
+    args,
+    toolCallId: "t-render",
+    invalidate: () => {},
+    lastComponent: undefined,
+    state,
+    cwd: projectDir,
+    executionStarted: false,
+    argsComplete: false,
+    isPartial: true,
+    expanded: false,
+    showImages: true,
+    isError: false,
+    ...overrides,
+  };
+}
+
+function renderedText(component: { render(width: number): string[] }): string {
+  return component.render(120).join("\n");
 }
 
 let projectDir: string;
@@ -341,6 +376,205 @@ describe("call and result previews", () => {
       flow: { kind: "agent", task: "hello" },
     });
     expect(preview).toBe("✦ ad-hoc · hello");
+  });
+
+  test("streaming previews retain the newest valid tree", async () => {
+    const { formatCallPreview } = await import("../../src/triggers/tool.js");
+    const state: WorkflowToolRenderState = {};
+    const first = formatCallPreview(
+      { flow: { kind: "agent", task: "first" } },
+      undefined,
+      undefined,
+      state,
+    );
+    expect(first).toBe("✦ ad-hoc · first");
+
+    const invalid = formatCallPreview(
+      { flow: { kind: "paral" } },
+      undefined,
+      undefined,
+      state,
+    );
+    expect(invalid).toBe(first);
+    expect(invalid).not.toContain('{"kind":');
+
+    const newest = formatCallPreview(
+      { flow: { kind: "agent", task: "newest" } },
+      undefined,
+      undefined,
+      state,
+    );
+    expect(newest).toBe("✦ ad-hoc · newest");
+    expect(state.lastValidFlowTree).toBe(newest);
+    expect(
+      formatCallPreview(
+        { flow: { kind: "agent", task: "newest", output: "" } },
+        undefined,
+        undefined,
+        state,
+      ),
+    ).toBe(newest);
+  });
+
+  test("streaming previews suppress raw JSON until a tree is valid", async () => {
+    const { formatCallPreview } = await import("../../src/triggers/tool.js");
+    expect(
+      formatCallPreview({ flow: { kind: "paral" } }, undefined, undefined, {}),
+    ).toBe("");
+    expect(
+      formatCallPreview(
+        { flow: { kind: "paral" }, label: "Streaming" },
+        undefined,
+        undefined,
+        {},
+      ),
+    ).toBe("Streaming");
+  });
+
+  test("completed invalid previews retain the diagnostic JSON", async () => {
+    const { formatCallPreview } = await import("../../src/triggers/tool.js");
+    const preview = formatCallPreview({ flow: { kind: "paral" } });
+    expect(preview).toContain('{"kind":"paral"}');
+  });
+
+  test("streaming every argument prefix never regresses to raw JSON", async () => {
+    const { formatCallPreview } = await import("../../src/triggers/tool.js");
+    const completeArgs = {
+      flow: {
+        kind: "parallel",
+        branches: {
+          investigate: {
+            kind: "agent",
+            task: "Investigate the rendering lifecycle and flicker source",
+            output: "text",
+          },
+          reproduce: {
+            kind: "sequence",
+            steps: [
+              {
+                kind: "agent",
+                task: "Build a minimal streaming reproduction",
+                output: "json",
+                as: "case",
+              },
+              {
+                kind: "agent",
+                task: "Analyze {case} and propose regression checks",
+              },
+            ],
+          },
+        },
+        onError: "collect",
+        reduce: { task: "Synthesize {branches} into one recommendation" },
+      },
+      label: "Investigate workflow rendering flicker",
+    } satisfies WorkflowToolParamsType;
+    const json = JSON.stringify(completeArgs);
+    const state: WorkflowToolRenderState = {};
+    let previousLineCount = 0;
+
+    for (let length = 1; length <= json.length; length++) {
+      const args = parseStreamingJson<WorkflowToolParamsType>(
+        json.slice(0, length),
+      );
+      const preview = formatCallPreview(args, undefined, undefined, state);
+      expect(preview).not.toContain('{"kind":');
+      if (state.lastValidFlowTree) {
+        expect(preview).toContain(state.lastValidFlowTree);
+        const lineCount = preview.split("\n").length;
+        expect(lineCount).toBeGreaterThanOrEqual(previousLineCount);
+        previousLineCount = lineCount;
+      }
+    }
+
+    const completed = formatCallPreview(completeArgs);
+    expect(formatCallPreview(completeArgs, undefined, undefined, state)).toBe(
+      completed,
+    );
+  });
+
+  test("renderCall keeps stable streaming frames on one Text component", () => {
+    const { engine } = fakeEngine(() => "ok");
+    const tool = createWorkflowTool(makeDeps(engine));
+    const renderCall = tool.renderCall as NonNullable<typeof tool.renderCall>;
+    const theme = {
+      fg: (_color: string, text: string) => text,
+    } as Parameters<typeof renderCall>[1];
+    const state: WorkflowToolRenderState = {};
+    const validArgs = { flow: { kind: "agent", task: "first" } };
+    const first = renderCall(
+      validArgs,
+      theme,
+      renderCallContext(validArgs, state),
+    );
+    if (!(first instanceof Text)) throw new Error("expected Text renderer");
+    const stableText = renderedText(first);
+    const setText = spyOn(first, "setText");
+
+    const invalidArgs = { flow: { kind: "paral" } };
+    const second = renderCall(
+      invalidArgs,
+      theme,
+      renderCallContext(invalidArgs, state, { lastComponent: first }),
+    );
+    expect(second).toBe(first);
+    expect(renderedText(second)).toBe(stableText);
+    expect(setText).not.toHaveBeenCalled();
+
+    const changedArgs = { flow: { kind: "agent", task: "newest" } };
+    renderCall(
+      changedArgs,
+      theme,
+      renderCallContext(changedArgs, state, { lastComponent: first }),
+    );
+    expect(setText).toHaveBeenCalledTimes(1);
+    expect(renderedText(first)).toContain("✦ ad-hoc · newest");
+
+    renderCall(
+      invalidArgs,
+      theme,
+      renderCallContext(invalidArgs, state, {
+        argsComplete: true,
+        lastComponent: first,
+      }),
+    );
+    expect(setText).toHaveBeenCalledTimes(2);
+    expect(renderedText(first)).toContain('{"kind":"paral"}');
+  });
+
+  test("saved workflow previews cache within their renderer row", () => {
+    const { engine } = fakeEngine(() => "ok");
+    const tool = createWorkflowTool(makeDeps(engine));
+    const renderCall = tool.renderCall as NonNullable<typeof tool.renderCall>;
+    const theme = {
+      fg: (_color: string, text: string) => text,
+    } as Parameters<typeof renderCall>[1];
+    const savedState: WorkflowToolRenderState = {};
+    const savedArgs = { name: "greet" };
+    const saved = renderCall(
+      savedArgs,
+      theme,
+      renderCallContext(savedArgs, savedState, {
+        argsComplete: true,
+        toolCallId: "same-id",
+      }),
+    );
+    expect(savedState.savedFlowTree).toBe("✦ echo · greet {params.target}");
+    expect(renderedText(saved)).toContain("✦ echo · greet {params.target}");
+
+    const missingState: WorkflowToolRenderState = {};
+    const missingArgs = { name: "missing" };
+    const missing = renderCall(
+      missingArgs,
+      theme,
+      renderCallContext(missingArgs, missingState, {
+        argsComplete: true,
+        toolCallId: "same-id",
+      }),
+    );
+    expect(missingState.savedFlowTree).toBeNull();
+    expect(renderedText(missing)).toContain("❖ missing");
+    expect(renderedText(missing)).not.toContain("✦ echo");
   });
 
   test("result preview replaces the model-facing continuation text", async () => {

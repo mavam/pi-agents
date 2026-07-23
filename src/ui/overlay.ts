@@ -7,7 +7,7 @@
  *   │   ● 1a2b3c4d  completed  review    3t ↑12k  $0.08  │
  *   │ ▸ ● c9e5799a  completed  triage    5t ↑33k  $0.21  │
  *   ├─ c9e5799a · triage (command) · 1m32s · 33k tok ────┤
- *   │  ● scout → {files} · List files to review          │
+ *   │  ✦ scout → {files} · List files to review          │
  *   │  ⇶ map {files} (×4)                                │
  *   ╰─ ↑↓ move · ⏎ inspect · c cancel · r rerun · esc ───╯
  */
@@ -26,14 +26,21 @@ import { type Colorize, plainColorize } from "./widget.js";
 const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
 
+/** Border text; a function makes it dynamic (e.g. per drill-down mode). */
+export type OverlayChrome = string | (() => string);
+
+/** What an action asks the overlay to do: dismiss, move the selection
+ * (e.g. after a mode switch changes the key namespace), or nothing. */
+export type OverlayAction = "close" | { selectKey: string } | undefined;
+
 /** What the overlay shows and does; items are re-read every render, so a
  * live model (runs completing, workflows hidden) refreshes for free. */
 export interface OverlaySpec<T> {
-  title: string;
+  title: OverlayChrome;
   /** Shown when items() is empty. */
-  emptyText: string;
+  emptyText: OverlayChrome;
   /** Key-hint line embedded in the bottom border. */
-  footer: string;
+  footer: OverlayChrome;
   items: () => T[];
   /** Stable identity, so selection survives list reorder/refresh. */
   keyOf: (item: T) => string;
@@ -43,10 +50,16 @@ export interface OverlaySpec<T> {
   headerLine: (item: T, color: Colorize) => string;
   /** Detail pane lines (typically the flow tree). */
   detail: (item: T, color: Colorize) => string[];
-  /** Handle enter or a single-letter shortcut; "close" dismisses the overlay. */
-  onAction: (key: string, item: T) => "close" | undefined;
+  /** Handle enter or a single-letter shortcut. */
+  onAction: (key: string, item: T) => OverlayAction;
+  /** Intercept esc (e.g. to back out of a drill-down); default closes. */
+  onCancel?: () => OverlayAction;
   /** When true, the overlay re-renders every 500ms. */
   live?: () => boolean;
+}
+
+function chrome(value: OverlayChrome): string {
+  return typeof value === "function" ? value() : value;
 }
 
 function clamp(value: number, low: number, high: number): number {
@@ -109,9 +122,13 @@ export function renderOverlay<T>(
 ): string[] {
   const lines: string[] = [];
   if (items.length === 0) {
-    lines.push(edgeLine(["╭", "╮"], color("accent", spec.title), width, color));
-    lines.push(boxLine(color("dim", spec.emptyText), width, color));
-    lines.push(edgeLine(["╰", "╯"], color("dim", spec.footer), width, color));
+    lines.push(
+      edgeLine(["╭", "╮"], color("accent", chrome(spec.title)), width, color),
+    );
+    lines.push(boxLine(color("dim", chrome(spec.emptyText)), width, color));
+    lines.push(
+      edgeLine(["╰", "╯"], color("dim", chrome(spec.footer)), width, color),
+    );
     return lines;
   }
 
@@ -119,7 +136,7 @@ export function renderOverlay<T>(
   const item = items[index] as T;
   const { tableRows, detailRows } = paneRows(items.length, height);
 
-  const title = `${spec.title} (${index + 1}/${items.length})`;
+  const title = `${chrome(spec.title)} (${index + 1}/${items.length})`;
   lines.push(edgeLine(["╭", "╮"], color("accent", title), width, color));
 
   const start = clamp(
@@ -154,7 +171,9 @@ export function renderOverlay<T>(
   for (let i = shown.length; i < floor; i++)
     lines.push(boxLine("", width, color));
 
-  lines.push(edgeLine(["╰", "╯"], color("dim", spec.footer), width, color));
+  lines.push(
+    edgeLine(["╰", "╯"], color("dim", chrome(spec.footer)), width, color),
+  );
   return lines;
 }
 
@@ -242,7 +261,8 @@ export class SplitPaneOverlay<T> implements Component {
   handleInput(data: string): void {
     const keybindings = getKeybindings();
     if (keybindings.matches(data, "tui.select.cancel")) {
-      this.close();
+      this.apply(this.spec.onCancel ? this.spec.onCancel() : "close");
+      this.tui.requestRender();
       return;
     }
     const items = this.spec.items();
@@ -266,7 +286,12 @@ export class SplitPaneOverlay<T> implements Component {
   }
 
   private act(key: string, item: T): void {
-    if (this.spec.onAction(key, item) === "close") this.close();
+    this.apply(this.spec.onAction(key, item));
+  }
+
+  private apply(action: OverlayAction): void {
+    if (action === "close") this.close();
+    else if (action) this.selectedKey = action.selectKey;
   }
 
   invalidate(): void {

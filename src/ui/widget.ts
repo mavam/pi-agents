@@ -22,7 +22,7 @@ import {
   stepPath,
 } from "../model/ast.js";
 import type { RunManager } from "../run/runs.js";
-import type { RunView } from "../run/state.js";
+import { type RunView, workNodes } from "../run/state.js";
 import { formatTokens, shortId } from "./render.js";
 import { aggregateStatuses, type PathStatus } from "./tree.js";
 
@@ -54,7 +54,7 @@ export interface WidgetSegment {
 
 /** Colors used by the widget; the identity function makes it testable. */
 export type Colorize = (
-  color: "success" | "accent" | "muted" | "dim" | "error" | "text",
+  color: "success" | "accent" | "warning" | "muted" | "dim" | "error" | "text",
   text: string,
 ) => string;
 
@@ -224,9 +224,7 @@ function countStaticLeaves(node: FlowNode): number {
 
 /** Completion over known agents: seen instances plus unstarted skeleton leaves. */
 export function widgetProgress(run: RunView): { done: number; total: number } {
-  const agentNodes = [...run.nodes.values()].filter(
-    (node) => node.kind === "agent" || node.kind === "reduce",
-  );
+  const agentNodes = workNodes(run);
   const done = agentNodes.filter((node) => node.status === "completed").length;
   const seenPaths = new Set(agentNodes.map((node) => node.path)).size;
   const unstarted = Math.max(0, countStaticLeaves(run.header.flow) - seenPaths);
@@ -257,7 +255,7 @@ function segmentColor(status: SegmentStatus): Parameters<Colorize>[0] {
     case "completed":
       return "success";
     case "running":
-      return "accent";
+      return "warning";
     case "failed":
       return "error";
     default:

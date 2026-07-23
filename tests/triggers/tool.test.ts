@@ -222,7 +222,7 @@ describe("workflow tool", () => {
       expect(text).toContain('status="completed"');
       expect(text).toContain("did: create a worktree");
       expect(specs[0]?.agent).toBe("ad-hoc");
-      expect(specs[0]?.systemPrompt).toBeUndefined();
+      expect(specs[0]?.systemPrompt).toContain("final message"); // result contract only, no persona
       expect(specs[0]?.tools).toBeUndefined();
     } finally {
       fs.rmSync(emptyDir, { recursive: true, force: true });

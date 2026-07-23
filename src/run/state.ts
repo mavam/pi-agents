@@ -147,6 +147,17 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
   }
 }
 
+/** The run's work leaves (agents and reduces) in first-seen order; composite
+ * scaffolding nodes (sequence/parallel/map/loop/workflow) are skipped. */
+export function workNodes(run: RunView): NodeView[] {
+  return run.order
+    .map((instance) => run.nodes.get(instance))
+    .filter(
+      (node): node is NodeView =>
+        node !== undefined && (node.kind === "agent" || node.kind === "reduce"),
+    );
+}
+
 export function rebuildRunState(events: Iterable<RunEvent>): RunState {
   const state = createRunState();
   for (const event of events) applyRunEvent(state, event);

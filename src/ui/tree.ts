@@ -39,15 +39,28 @@ export const STATUS_TREE_ICONS = {
   cancelled: "⊘",
 } as const;
 
+const STATUS_TREE_COLORS: Record<
+  keyof typeof STATUS_TREE_ICONS,
+  Parameters<TreeColorize>[0]
+> = {
+  // Traffic light: dim → yellow → green/red.
+  pending: "dim",
+  running: "warning",
+  completed: "success",
+  failed: "error",
+  cancelled: "dim",
+};
+
 const TASK_PREVIEW_CHARS = 56;
 
 /**
  * Dataflow-first coloring: `{references}` in accent, prose and connectors
- * dim, kind glyphs muted. The identity default keeps plain contexts
- * (markdown code fences, tests) byte-identical.
+ * dim, kind glyphs muted, status icons by outcome (green when completed).
+ * The identity default keeps plain contexts (markdown code fences, tests)
+ * byte-identical.
  */
 export type TreeColorize = (
-  color: "accent" | "dim" | "muted",
+  color: "accent" | "dim" | "muted" | "success" | "warning" | "error",
   text: string,
 ) => string;
 
@@ -242,19 +255,29 @@ function renderLines(
   top: boolean,
   color: TreeColorize,
 ): string[] {
+  // Identity colorizers (markdown fences, tests) render plainly.
+  const coloring = color("dim", "·") !== "·";
   const lines: string[] = [];
   nodes.forEach((node, index) => {
     const last = index === nodes.length - 1;
     const connector = top ? "" : last ? "└─ " : "├─ ";
     const childPrefix = top ? "" : prefix + (last ? "   " : "│  ");
     const status = node.path ? statuses?.get(node.path) : undefined;
-    // Static trees mute the kind glyphs; status overlays keep their icons
-    // plain (they carry the signal).
-    const icon = statuses
-      ? (status?.icon ?? STATUS_TREE_ICONS.pending)
-      : node.icon !== undefined
-        ? color("muted", node.icon)
-        : undefined;
+    // Static trees mute the kind glyphs. Status overlays keep the kind
+    // glyph so fork/join/map structure stays readable mid-run and encode
+    // the outcome in its color (matching the run rows and the live
+    // widget); plain contexts (markdown fences) have no color to carry
+    // state, so they pair the glyph with a status icon instead.
+    let icon: string | undefined;
+    if (statuses) {
+      const tint = STATUS_TREE_COLORS[status?.status ?? "pending"];
+      const statusGlyph = status?.icon ?? STATUS_TREE_ICONS.pending;
+      icon = coloring
+        ? color(tint, node.icon ?? statusGlyph)
+        : [statusGlyph, node.icon].filter(Boolean).join(" ");
+    } else if (node.icon !== undefined) {
+      icon = color("muted", node.icon);
+    }
     const detail = status?.detail ? ` [${status.detail}]` : "";
     const error = status?.error ? ` — ${preview(status.error)}` : "";
     const skeleton = `${prefix}${connector}`;

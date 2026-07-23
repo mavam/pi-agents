@@ -100,6 +100,20 @@ describe("renderOverlay", () => {
     const lines = renderOverlay(spec(["a", "b"]), ["a", "b"], 99, 40, 20);
     expect(lines.find((line) => line.includes("▸"))).toContain("row b");
   });
+
+  test("function-valued chrome is resolved on every render", () => {
+    const dynamic: OverlaySpec<string> = {
+      ...spec(["a"]),
+      title: () => "Mode A",
+      footer: () => "keys A",
+      emptyText: () => "empty A",
+    };
+    const lines = renderOverlay(dynamic, ["a"], 0, 50, 20);
+    expect(lines[0]).toContain("Mode A (1/1)");
+    expect(lines.at(-1)).toContain("keys A");
+    const empty = renderOverlay(dynamic, [], 0, 50, 20);
+    expect(empty[1]).toContain("empty A");
+  });
 });
 
 describe("visibleWidgetRuns", () => {

@@ -20,12 +20,16 @@ import {
 } from "../catalog/workflows.js";
 import { type Budgets, effectiveScope, type Scope } from "../model/ast.js";
 import { parseFlowNode, validateFlow } from "../model/validate.js";
-import { MAX_PERSISTED_VALUE_CHARS, type RunStatus } from "../run/events.js";
+import type { RunStatus } from "../run/events.js";
 import type { RunOutcome } from "../run/interpreter.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { formatUsage, shortId } from "../ui/render.js";
 import { KIND_ICONS, renderFlowTree } from "../ui/tree.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
+
+/** Cap on the value text embedded in a tool result (context budget only —
+ * persistence keeps values uncropped). */
+const MAX_TOOL_RESULT_CHARS = 16_000;
 
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
 - {"kind":"agent","task":"...","name":"<agent>","output":"text"|"json","model":"...","thinking":"..."} — run one delegated agent (leaf). A bare agent node is a valid flow. "name" is OPTIONAL: omit it to run the task as an anonymous ad-hoc agent (session model/thinking, default tools); set it only to use a reusable profile from <agents>. model/thinking override the profile or session defaults.
@@ -93,7 +97,7 @@ export interface WorkflowToolDetails {
 
 /** Minimal color hook so the pure formatters are testable without a theme. */
 export type ToolColorize = (
-  color: "dim" | "accent" | "success" | "error" | "muted",
+  color: "dim" | "accent" | "success" | "warning" | "error" | "muted",
   text: string,
 ) => string;
 
@@ -220,8 +224,8 @@ export function formatRunResult(
     // Bound what flows back into the model's context; the full value stays
     // retrievable via /run <id> result.
     const value =
-      full.length > MAX_PERSISTED_VALUE_CHARS
-        ? `${full.slice(0, MAX_PERSISTED_VALUE_CHARS)}\n… [truncated ${full.length - MAX_PERSISTED_VALUE_CHARS} characters; full result: /run ${shortId(runId)} result]`
+      full.length > MAX_TOOL_RESULT_CHARS
+        ? `${full.slice(0, MAX_TOOL_RESULT_CHARS)}\n… [truncated ${full.length - MAX_TOOL_RESULT_CHARS} characters; full result: /run ${shortId(runId)} result]`
         : full;
     lines.push("<value>", value, "</value>");
   } else {

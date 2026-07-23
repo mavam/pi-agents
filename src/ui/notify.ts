@@ -124,7 +124,7 @@ export class NotificationManager {
           "",
           summary,
           "",
-          `Inspect with \`/run ${shortId(event.runId)}\` · full result: \`/run ${shortId(event.runId)} result\`.`,
+          `Inspect with \`/run ${shortId(event.runId)}\` · full result: \`/run ${shortId(event.runId)} result\` · per-agent: \`/run ${shortId(event.runId)} agents\`.`,
           ...(wake ? ["", "Continue your task using this result."] : []),
         ].join("\n"),
       };

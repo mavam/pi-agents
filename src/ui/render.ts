@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
-import type { RunView } from "../run/state.js";
+import type { NodeView, RunView } from "../run/state.js";
 
 export const MESSAGE_TYPE = "pi-agents:message";
 
@@ -79,6 +79,23 @@ export function fenced(text: string): string {
   const longest = runs.reduce((max, run) => Math.max(max, run.length), 2);
   const fence = "`".repeat(longest + 1);
   return `${fence}\n${text}\n${fence}`;
+}
+
+/**
+ * Short human name for a node instance path: `$.branches.bugs` → `bugs`,
+ * `$.reduce` → `reduce`, `$.body@2` → `@2`, `$.steps[1].body#3` → `2#3`.
+ * A bare-agent root (`$`) falls back to the label, agent name, or kind.
+ */
+export function nodeDisplayName(
+  node: Pick<NodeView, "instance" | "label" | "agent" | "kind">,
+): string {
+  const name = node.instance
+    .replace(/^\$/, "")
+    .replaceAll(".branches.", ".")
+    .replaceAll(/\.steps\[(\d+)\]/g, (_, index) => `.${Number(index) + 1}`)
+    .replaceAll(".body", "")
+    .replace(/^\./, "");
+  return name || (node.label ?? node.agent ?? node.kind);
 }
 
 export function formatRunOverviewLine(run: RunView): string {

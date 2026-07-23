@@ -53,7 +53,7 @@ and saved workflows inline like function calls.
 
 | Icon | Node       | Meaning                                                   | Value                                      |
 | :--: | ---------- | --------------------------------------------------------- | ------------------------------------------ |
-| `✦`  | `agent`    | Run one delegated agent on a task (the only leaf).        | Its final text, or parsed JSON.            |
+| `✦`  | `agent`    | Run one delegated agent on a task (the only leaf).        | Its final message's text, or parsed JSON.  |
 | `≡`  | `sequence` | Run steps in order.                                       | The last step's value.                     |
 | `⑃`  | `parallel` | Run named branches concurrently, optionally `⑂` reduce.   | `{branch: value}`, or the reducer's value. |
 | `⇶`  | `map`      | Fan out a body per element of a runtime array.            | Array of body values, or the reducer's.    |
@@ -258,6 +258,16 @@ more. Without `name` the node runs as an anonymous ad-hoc agent (rendered as
 `ad-hoc`): no profile prompt, default tools, session model/thinking.
 Precedence for model/thinking: flow node → agent file (named only) → active
 session.
+
+**Value contract.** An agent's value is the text of its *last* assistant
+message — nothing else. Thinking, tool calls, tool output, and earlier
+messages are discarded (they only feed the live progress display), and the
+subprocess runs without a session, so no transcript exists anywhere: the
+final message is the delegated agent's sole artifact. With `output: json`
+that text is parsed into a JSON value (code fences tolerated; a parse
+failure fails the node). Write tasks so the agent *ends* with the complete
+deliverable — an agent that reports findings mid-session and closes with
+"done" yields the value `"done"`.
 
 ### `sequence`
 

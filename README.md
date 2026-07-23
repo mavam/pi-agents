@@ -402,7 +402,9 @@ never moves; the detail pane only ever grows downward.
 Keys — all overlays: `↑`/`↓` (or `k`/`j`) move, `esc` closes. Runs:
 `⏎` posts the run details with the full result to the chat, `c` cancels a
 live run, `r` starts the same flow again, and `h` shows/hides that run in
-the live summary above the composer (useful for long-running flows).
+the live summary above the composer (useful for long-running flows). Press
+`a` to inspect a run's agents; on a running agent, `s` opens an inline
+composer for a steering message.
 Workflows: `⏎` puts `/<name> ` into the composer so you can add arguments,
 `r` runs it immediately (workflows with required parameters fall back to
 composing). Agents: `⏎` posts the full agent details. In the workflows and
@@ -436,6 +438,22 @@ sidecar; results are delivered as notifications when that session is idle.
 After a pi restart, in-flight runs are marked stopped — they cannot resume —
 but their history remains inspectable.
 
+### Steering live agents
+
+Steering queues a course correction for an already-running delegated agent;
+it does not start, resume, or restart one. Messages use Pi's deterministic
+`one-at-a-time` steering mode, so delivery follows the current assistant
+turn's tool-call batch. A message is limited to 2,000 characters and is added
+to run history only after the child accepts it. Accepted messages appear in
+the agent detail view and are persisted with their source (`user`, `tool`, or
+`rpc`). Steering-triggered assistant turns count toward the run's normal usage
+and turn totals.
+
+Besides the `/runs` overlay, the model can call the separate `steer` tool with
+a run ID (full or unique prefix), an optional exact node instance, and the
+message. The instance may be omitted only while exactly one agent in that run
+is steerable.
+
 ## 🔌 Event bus and RPC
 
 pi-agents exposes its live run stream and a small control protocol through
@@ -449,11 +467,12 @@ typed client is exported from `pi-agents/api`.
 | `pi-agents:rpc:request` | `{ protocol: 1, id, caller?, op, params? }` |
 | `pi-agents:rpc:reply:<id>` | Correlated success or error reply |
 
-The run channel carries `run_created`, node lifecycle, loop iteration,
-`run_backgrounded`, and `run_completed` events. These are detached, deeply
-frozen snapshots: subscribers cannot mutate pi-agents' internal run state or
-the event seen by later subscribers. Only new live events are published; use
-RPC `list` for the current session's known run summaries.
+The run channel carries `run_created`, node lifecycle (including
+`node_steered` after queue acceptance), loop iteration, `run_backgrounded`,
+and `run_completed` events. These are detached, deeply frozen snapshots:
+subscribers cannot mutate pi-agents' internal run state or the event seen by
+later subscribers. Only new live events are published; use RPC `list` for the
+current session's known run summaries.
 
 Raw RPC callers must subscribe before emitting because replies may be
 synchronous:
@@ -488,13 +507,18 @@ await agents.stop(runId); // only while the run is live
 off();
 ```
 
-RPC operations are `ping`, `start`, `stop`, and `list`. `start` accepts exactly
-one of an inline `flow` or saved `workflow`, optional literal workflow
-parameters and label, and an optional absolute existing `cwd`. RPC runs always
-run in the background, use the normal inherited/default budgets, and obey the active
-session's project-trust decision. In untrusted projects only user agents and
-workflows resolve. A `start` request made outside an active session returns an
-error.
+RPC operations are `ping`, `start`, `stop`, `steer`, and `list`. `start`
+accepts exactly one of an inline `flow` or saved `workflow`, optional literal
+workflow parameters and label, and an optional absolute existing `cwd`.
+`start` confirms that the run was scheduled; it does not wait for a child agent
+to become steerable. `steer` targets a currently running child and may reject
+while a run is starting, between nodes, or waiting for capacity. It accepts an
+exact `runId`, optional exact live node `instance`, and a message; omission of
+`instance` is valid only when one agent is steerable at the time of the request.
+RPC runs always run in the background, use the normal inherited/default
+budgets, and obey the active session's project-trust decision. In untrusted
+projects only user agents and workflows resolve. A `start` request made outside
+an active session returns an error.
 
 The RPC listener is installed at every delegation depth. Because the bus is
 process-local, the root session and each delegated pi process expose independent

@@ -16,6 +16,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   getKeybindings,
+  Input,
   parseKey,
   type TUI,
   truncateToWidth,
@@ -31,7 +32,16 @@ export type OverlayChrome = string | (() => string);
 
 /** What an action asks the overlay to do: dismiss, move the selection
  * (e.g. after a mode switch changes the key namespace), or nothing. */
-export type OverlayAction = "close" | { selectKey: string } | undefined;
+export interface OverlayComposer {
+  label: string;
+  submit: (value: string) => void | Promise<void>;
+}
+
+export type OverlayAction =
+  | "close"
+  | { selectKey: string }
+  | { compose: OverlayComposer }
+  | undefined;
 
 /** What the overlay shows and does; items are re-read every render, so a
  * live model (runs completing, workflows hidden) refreshes for free. */
@@ -41,6 +51,8 @@ export interface OverlaySpec<T> {
   emptyText: OverlayChrome;
   /** Key-hint line embedded in the bottom border. */
   footer: OverlayChrome;
+  /** Optional item-sensitive footer (for actions available only when live). */
+  footerFor?: (item: T) => string;
   items: () => T[];
   /** Stable identity, so selection survives list reorder/refresh. */
   keyOf: (item: T) => string;
@@ -66,12 +78,19 @@ function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
 }
 
+/** Render pi-tui's single-line input without its built-in `> ` prompt. */
+function renderInlineInput(input: Input, width: number): string {
+  const line = input.render(width + 2)[0] ?? "";
+  return line.startsWith("> ") ? line.slice(2) : line;
+}
+
 /** Split the height budget between the table and the detail pane. */
 function paneRows(
   itemCount: number,
   height: number,
+  reservedRows = 0,
 ): { tableRows: number; detailRows: number } {
-  const available = Math.max(2, height - 3);
+  const available = Math.max(2, height - 3 - reservedRows);
   const tableRows = Math.min(
     itemCount,
     MAX_TABLE_ROWS,
@@ -119,6 +138,8 @@ export function renderOverlay<T>(
   height: number,
   color: Colorize = plainColorize,
   minDetailRows = 0,
+  composerLines: string[] = [],
+  footerOverride?: string,
 ): string[] {
   const lines: string[] = [];
   if (items.length === 0) {
@@ -127,14 +148,23 @@ export function renderOverlay<T>(
     );
     lines.push(boxLine(color("dim", chrome(spec.emptyText)), width, color));
     lines.push(
-      edgeLine(["╰", "╯"], color("dim", chrome(spec.footer)), width, color),
+      edgeLine(
+        ["╰", "╯"],
+        color("dim", footerOverride ?? chrome(spec.footer)),
+        width,
+        color,
+      ),
     );
     return lines;
   }
 
   const index = clamp(selected, 0, items.length - 1);
   const item = items[index] as T;
-  const { tableRows, detailRows } = paneRows(items.length, height);
+  const { tableRows, detailRows } = paneRows(
+    items.length,
+    height,
+    composerLines.length,
+  );
 
   const title = `${chrome(spec.title)} (${index + 1}/${items.length})`;
   lines.push(edgeLine(["╭", "╮"], color("accent", title), width, color));
@@ -171,8 +201,18 @@ export function renderOverlay<T>(
   for (let i = shown.length; i < floor; i++)
     lines.push(boxLine("", width, color));
 
+  for (const line of composerLines) lines.push(boxLine(line, width, color));
+
   lines.push(
-    edgeLine(["╰", "╯"], color("dim", chrome(spec.footer)), width, color),
+    edgeLine(
+      ["╰", "╯"],
+      color(
+        "dim",
+        footerOverride ?? spec.footerFor?.(item) ?? chrome(spec.footer),
+      ),
+      width,
+      color,
+    ),
   );
   return lines;
 }
@@ -185,6 +225,7 @@ export class SplitPaneOverlay<T> implements Component {
   private readonly done: () => void;
   private selectedKey: string | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private composer: { spec: OverlayComposer; input: Input } | undefined;
   /** High-water mark of detail rows shown, so the pane never shrinks. */
   private detailFloor = 0;
 
@@ -239,7 +280,11 @@ export class SplitPaneOverlay<T> implements Component {
     const height = Math.max(8, this.tui.terminal.rows - 4);
     const item = items[index];
     if (item !== undefined) {
-      const { detailRows } = paneRows(items.length, height);
+      const { detailRows } = paneRows(
+        items.length,
+        height,
+        this.composer ? 1 : 0,
+      );
       const needed = this.spec.detail(item, this.color).length;
       this.detailFloor = clamp(
         Math.max(this.detailFloor, needed),
@@ -247,6 +292,11 @@ export class SplitPaneOverlay<T> implements Component {
         detailRows,
       );
     }
+    const composerLines = this.composer
+      ? [
+          `${this.color("accent", `${this.composer.spec.label}:`)} ${renderInlineInput(this.composer.input, Math.max(1, width - this.composer.spec.label.length - 8))}`,
+        ]
+      : [];
     return renderOverlay(
       this.spec,
       items,
@@ -255,10 +305,17 @@ export class SplitPaneOverlay<T> implements Component {
       height,
       this.color,
       this.detailFloor,
+      composerLines,
+      this.composer ? "enter send · esc cancel" : undefined,
     );
   }
 
   handleInput(data: string): void {
+    if (this.composer) {
+      this.composer.input.handleInput(data);
+      this.tui.requestRender();
+      return;
+    }
     const keybindings = getKeybindings();
     if (keybindings.matches(data, "tui.select.cancel")) {
       this.apply(this.spec.onCancel ? this.spec.onCancel() : "close");
@@ -291,7 +348,23 @@ export class SplitPaneOverlay<T> implements Component {
 
   private apply(action: OverlayAction): void {
     if (action === "close") this.close();
-    else if (action) this.selectedKey = action.selectKey;
+    else if (action && "selectKey" in action)
+      this.selectedKey = action.selectKey;
+    else if (action && "compose" in action) {
+      const input = new Input();
+      input.focused = true;
+      input.onEscape = () => {
+        this.composer = undefined;
+        this.tui.requestRender();
+      };
+      input.onSubmit = (value) => {
+        const composer = this.composer;
+        this.composer = undefined;
+        if (composer) void Promise.resolve(composer.spec.submit(value));
+        this.tui.requestRender();
+      };
+      this.composer = { spec: action.compose, input };
+    }
   }
 
   invalidate(): void {

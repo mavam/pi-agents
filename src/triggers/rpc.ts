@@ -14,6 +14,7 @@ import {
   RPC_REQUEST_CHANNEL,
   type RpcReply,
   type StartRpcData,
+  type SteerRpcData,
   type StopRpcData,
 } from "../api.js";
 import {
@@ -93,9 +94,9 @@ export class RpcManager {
 
   install(): void {
     if (this.unsubscribe) return;
-    this.unsubscribe = this.pi.events.on(RPC_REQUEST_CHANNEL, (raw) =>
-      this.handle(raw),
-    );
+    this.unsubscribe = this.pi.events.on(RPC_REQUEST_CHANNEL, (raw) => {
+      void this.handle(raw);
+    });
   }
 
   setContext(ctx: ExtensionContext | undefined): void {
@@ -108,7 +109,7 @@ export class RpcManager {
     this.unsubscribe = undefined;
   }
 
-  private handle(raw: unknown): void {
+  private async handle(raw: unknown): Promise<void> {
     if (
       !isRecord(raw) ||
       typeof raw.id !== "string" ||
@@ -124,7 +125,12 @@ export class RpcManager {
       const caller = optionalString(raw.caller, "caller", MAX_CALLER_LENGTH);
       if (typeof raw.op !== "string") throw new Error("'op' must be a string");
 
-      let data: PingRpcData | StartRpcData | StopRpcData | ListRpcData;
+      let data:
+        | PingRpcData
+        | StartRpcData
+        | StopRpcData
+        | SteerRpcData
+        | ListRpcData;
       switch (raw.op) {
         case "ping":
           if (raw.params !== undefined)
@@ -136,6 +142,9 @@ export class RpcManager {
           break;
         case "stop":
           data = this.stop(raw.params);
+          break;
+        case "steer":
+          data = await this.steer(raw.params, caller);
           break;
         case "list":
           if (raw.params !== undefined)
@@ -215,6 +224,47 @@ export class RpcManager {
       throw new Error(`run '${raw.runId}' is not live`);
     }
     return { runId: raw.runId };
+  }
+
+  private async steer(
+    raw: unknown,
+    caller: string | undefined,
+  ): Promise<SteerRpcData> {
+    if (!isRecord(raw)) throw new Error("'steer' requires params");
+    const runId = optionalString(raw.runId, "steer.runId");
+    const requestedInstance = optionalString(raw.instance, "steer.instance");
+    if (typeof raw.message !== "string")
+      throw new Error("'steer' requires runId and message");
+    const message = raw.message;
+    if (!runId) throw new Error("'steer' requires runId and message");
+    const available = this.deps.manager.steerableInstances(runId);
+    const instance =
+      requestedInstance ?? (available.length === 1 ? available[0] : undefined);
+    if (!instance || !available.includes(instance)) {
+      const suffix = available.length > 0 ? available.join(", ") : "none";
+      throw new Error(
+        requestedInstance
+          ? `instance '${requestedInstance}' is not steerable. Available: ${suffix}`
+          : `run '${runId}' has ${available.length} steerable instances. Specify one of: ${suffix}`,
+      );
+    }
+    const result = await this.deps.manager.steer(
+      runId,
+      instance,
+      message,
+      "rpc",
+      caller,
+    );
+    if (result.status !== "queued") {
+      throw new Error(
+        result.status === "rejected"
+          ? result.error
+          : result.reason === "run_not_live"
+            ? `run '${runId}' is not live`
+            : `instance '${instance}' is no longer steerable`,
+      );
+    }
+    return { runId, instance };
   }
 
   private list(): ListRpcData {

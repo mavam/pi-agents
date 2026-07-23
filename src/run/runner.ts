@@ -13,7 +13,7 @@ import {
   resolveAgentByName,
 } from "../catalog/agents.js";
 import { BUDGETS_ENV_VAR, DEPTH_ENV_VAR } from "../engine/subprocess.js";
-import type { SpawnEngine } from "../engine/types.js";
+import type { SpawnEngine, SpawnHandle } from "../engine/types.js";
 import {
   ADHOC_LABEL,
   type Budgets,
@@ -43,6 +43,8 @@ export interface RunnerOptions {
   defaults?: SpawnDefaults;
   /** Effective budget limits, inherited by delegated processes. */
   budgetLimits?: Required<Budgets>;
+  /** Observe a live handle; return a disposer that unregisters it. */
+  onHandle?: (call: AgentCall, handle: SpawnHandle) => (() => void) | undefined;
 }
 
 /** Resolve one agent by name or throw with an actionable message. */
@@ -134,6 +136,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       tools: agent?.tools,
       env,
     });
+    const unregisterHandle = options.onHandle?.(call, handle);
 
     const onAbort = () => handle.abort();
     if (call.signal.aborted) onAbort();
@@ -151,6 +154,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
     } finally {
       call.signal.removeEventListener("abort", onAbort);
       await progressPump.catch(() => {});
+      unregisterHandle?.();
     }
   };
 }

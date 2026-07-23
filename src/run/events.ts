@@ -16,6 +16,8 @@ export type NodeStatus = "running" | "completed" | "failed" | "cancelled";
 
 export type CancelReason = "any" | "quorum" | "sibling_failed" | "stopped";
 
+export type SteeringSource = "user" | "tool" | "rpc";
+
 export interface RunSource {
   kind: "tool" | "command" | "hook" | "rpc";
   /** Saved workflow name, when the run came from one. */
@@ -77,6 +79,17 @@ export type RunEvent =
       path: string;
       instance: string;
       reason: CancelReason;
+    }
+  | {
+      type: "node_steered";
+      at: number;
+      runId: string;
+      path: string;
+      instance: string;
+      message: string;
+      source: SteeringSource;
+      /** Self-declared extension name for cross-extension RPC steering. */
+      caller?: string;
     }
   | {
       type: "loop_iteration";

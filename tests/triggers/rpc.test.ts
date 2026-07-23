@@ -14,6 +14,7 @@ import {
   type RpcReply,
   RUN_EVENT_CHANNEL,
   type StartRpcData,
+  type SteerRpcData,
 } from "../../src/api.js";
 import type { SpawnEngine, SpawnSpec } from "../../src/engine/types.js";
 import { emptyUsage, SpawnAborted } from "../../src/engine/types.js";
@@ -56,7 +57,7 @@ function immediateEngine(specs: SpawnSpec[]): SpawnEngine {
   };
 }
 
-function blockingEngine(specs: SpawnSpec[]): SpawnEngine {
+function blockingEngine(specs: SpawnSpec[], steering: string[]): SpawnEngine {
   return {
     spawn(spec) {
       specs.push(spec);
@@ -68,6 +69,9 @@ function blockingEngine(specs: SpawnSpec[]): SpawnEngine {
         status: "running",
         updates: emptyUpdates(),
         wait: () => result,
+        steer: async (message) => {
+          steering.push(message);
+        },
         abort: () => reject(new SpawnAborted(spec.agent)),
       };
     },
@@ -95,13 +99,16 @@ function harness(options: HarnessOptions = {}) {
   const bus = new TestBus();
   const sent: unknown[] = [];
   const specs: SpawnSpec[] = [];
+  const steering: string[] = [];
   const pi = {
     events: bus,
     sendMessage: (message: unknown) => sent.push(message),
   } as unknown as ExtensionAPI;
   let notifications!: NotificationManager;
   const manager = new RunManager({
-    engine: options.blocking ? blockingEngine(specs) : immediateEngine(specs),
+    engine: options.blocking
+      ? blockingEngine(specs, steering)
+      : immediateEngine(specs),
     onEvent: (event) => notifications.handleRunEvent(event),
     publish: createRunEventPublisher(pi),
   });
@@ -122,7 +129,7 @@ function harness(options: HarnessOptions = {}) {
     sessionManager: { getSessionFile: () => undefined },
   } as unknown as ExtensionContext;
   if (options.active ?? true) rpc.setContext(ctx);
-  return { bus, manager, pi, rpc, sent, specs };
+  return { bus, manager, pi, rpc, sent, specs, steering };
 }
 
 function call<T>(
@@ -276,6 +283,53 @@ describe("RpcManager", () => {
       params: { runId: started.data.runId },
     });
     expect(again.success).toBe(false);
+  });
+
+  test("steers the sole live instance and publishes attribution", async () => {
+    const { bus, manager, steering } = harness({ blocking: true });
+    const started = await call<StartRpcData>(bus, {
+      protocol: PROTOCOL_VERSION,
+      id: "start-steer",
+      op: "start",
+      params: { flow: { kind: "agent", task: "wait" } },
+    });
+    expect(started.success).toBe(true);
+    if (!started.success) return;
+    await until(
+      () => manager.steerableInstances(started.data.runId).length === 1,
+    );
+
+    const reply = await call<SteerRpcData>(bus, {
+      protocol: PROTOCOL_VERSION,
+      id: "steer-live",
+      caller: "test-dashboard",
+      op: "steer",
+      params: {
+        runId: started.data.runId,
+        message: "  inspect the retry path  ",
+      },
+    });
+    expect(reply).toEqual({
+      protocol: PROTOCOL_VERSION,
+      id: "steer-live",
+      success: true,
+      data: { runId: started.data.runId, instance: "$" },
+    });
+    expect(steering).toEqual(["inspect the retry path"]);
+    expect(
+      manager.state.runs.get(started.data.runId)?.nodes.get("$")?.steering,
+    ).toEqual([
+      expect.objectContaining({
+        message: "inspect the retry path",
+        source: "rpc",
+        caller: "test-dashboard",
+      }),
+    ]);
+
+    expect(manager.stop(started.data.runId)).toBe(true);
+    await until(
+      () => manager.state.runs.get(started.data.runId)?.status === "stopped",
+    );
   });
 
   test("validates protocol, operations, start shape, cwd, and trust", async () => {

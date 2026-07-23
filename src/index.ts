@@ -31,7 +31,7 @@ import {
 import { HookManager } from "./triggers/hooks.js";
 import { RpcManager } from "./triggers/rpc.js";
 import type { TriggerDeps } from "./triggers/start.js";
-import { createWorkflowTool } from "./triggers/tool.js";
+import { createSteerTool, createWorkflowTool } from "./triggers/tool.js";
 import { NotificationManager } from "./ui/notify.js";
 import {
   MESSAGE_TYPE,
@@ -85,6 +85,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   registerRenderers(pi);
   pi.registerTool(createWorkflowTool(deps));
+  pi.registerTool(createSteerTool(deps));
   registerCommands(pi, deps);
 
   // Event hooks only run in the root process: delegated children would

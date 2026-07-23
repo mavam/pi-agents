@@ -82,6 +82,20 @@ describe("sidecar persistence", () => {
     expect(events[1]).toMatchObject({ type: "loop_iteration", iteration: 1 });
   });
 
+  test("large values round-trip uncropped", () => {
+    const big = "y".repeat(100_000);
+    const completed: RunEvent = {
+      type: "node_completed",
+      at: 1,
+      runId: "r",
+      instance: "$",
+      value: big,
+    };
+    expect(appendRunEvent({ sessionFile }, completed)).toBe(true);
+    const events = readRunEvents(sessionFile);
+    expect(events[0]).toMatchObject({ type: "node_completed", value: big });
+  });
+
   test("no session file means no persistence", () => {
     expect(appendRunEvent({}, event(0))).toBe(false);
     expect(readRunEvents(undefined)).toEqual([]);

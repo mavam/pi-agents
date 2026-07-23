@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { validateFlow } from "../../src/model/validate.js";
 import type { RunEvent } from "../../src/run/events.js";
-import { truncateValue } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
 import {
   markRunningRunsStopped,
@@ -82,18 +81,5 @@ describe("run state reducer", () => {
       },
     ]);
     expect(state.runs.size).toBe(0);
-  });
-});
-
-describe("truncateValue", () => {
-  test("passes small values through", () => {
-    expect(truncateValue({ a: 1 })).toEqual({ a: 1 });
-  });
-
-  test("replaces oversized values with a marked string", () => {
-    const big = "y".repeat(20_000);
-    const result = truncateValue(big) as string;
-    expect(result.length).toBeLessThan(big.length);
-    expect(result).toContain("truncated");
   });
 });

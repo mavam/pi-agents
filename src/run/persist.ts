@@ -12,7 +12,7 @@
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type RunEvent, truncateEventForPersistence } from "./events.js";
+import type { RunEvent } from "./events.js";
 
 export interface RunEventOrigin {
   sessionFile?: string;
@@ -34,10 +34,11 @@ export function appendRunEvent(
   event: RunEvent,
 ): boolean {
   if (!origin.sessionFile) return false;
-  const entry = truncateEventForPersistence(event);
+  // Events persist uncropped: node and run values are the only artifact of
+  // an agent's work, so the sidecar is the source of truth across restarts.
   appendFileSync(
     sidecarPath(origin.sessionFile),
-    `${JSON.stringify(entry)}\n`,
+    `${JSON.stringify(event)}\n`,
     "utf-8",
   );
   return true;

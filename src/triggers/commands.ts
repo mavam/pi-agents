@@ -347,6 +347,15 @@ function buildRunsSpec(
       drillRunId
         ? "↑↓ move · ⏎ post output · esc back"
         : "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc close",
+    footerFor: (item) => {
+      if (item.kind !== "node") {
+        return "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc close";
+      }
+      const steerable = deps.manager
+        .steerableInstances(item.run.header.id)
+        .includes(item.node.instance);
+      return `↑↓ move · ⏎ post output${steerable ? " · s steer" : ""} · esc back`;
+    },
     items: () => {
       const run = drilledRun();
       if (run)
@@ -418,9 +427,28 @@ function buildRunsSpec(
     detail: (item, color) => {
       if (item.kind === "node") {
         const { node } = item;
-        if (node.error) return [color("error", `✗ ${node.error}`)];
+        const steering = (node.steering ?? []).flatMap((entry) =>
+          entry.message
+            .split("\n")
+            .map((line, index) =>
+              color(
+                "accent",
+                index === 0
+                  ? `↪ steer (${entry.source}${entry.caller ? `:${entry.caller}` : ""}): ${line}`
+                  : `  ${line}`,
+              ),
+            ),
+        );
+        if (node.error)
+          return [
+            ...steering,
+            ...(steering.length > 0 ? [""] : []),
+            color("error", `✗ ${node.error}`),
+          ];
         if (node.status === "cancelled")
           return [
+            ...steering,
+            ...(steering.length > 0 ? [""] : []),
             color(
               "dim",
               `cancelled${node.cancelReason ? ` (${node.cancelReason})` : ""}`,
@@ -432,15 +460,15 @@ function buildRunsSpec(
             .filter((line) => line.trim() !== "")
             .slice(-3);
           return tail.length > 0
-            ? tail.map((line) => color("dim", line))
-            : [color("dim", "running…")];
+            ? [...steering, ...tail.map((line) => color("dim", line))]
+            : [...steering, color("dim", "running…")];
         }
         const preview = formatValuePreview(node.value, 600);
         const lines = preview
           ? preview.split("\n")
           : [color("dim", "(no output value)")];
         lines.push("", color("dim", "⏎ post full output"));
-        return lines;
+        return [...steering, ...(steering.length > 0 ? [""] : []), ...lines];
       }
       const run = item.run;
       const lines = (renderRunTree(run, color) || "(no nodes yet)").split("\n");
@@ -455,6 +483,34 @@ function buildRunsSpec(
         if (key === "enter") {
           sendInfo(pi, formatNodeResultFull(item.run, item.node));
           return "close";
+        }
+        if (
+          key === "s" &&
+          deps.manager
+            .steerableInstances(item.run.header.id)
+            .includes(item.node.instance)
+        ) {
+          return {
+            compose: {
+              label: `Steer ${nodeDisplayName(item.node)}`,
+              submit: async (message) => {
+                const result = await deps.manager.steer(
+                  item.run.header.id,
+                  item.node.instance,
+                  message,
+                  "user",
+                );
+                ctx.ui.notify(
+                  result.status === "queued"
+                    ? "Steering queued — delivery follows the current tool-call batch."
+                    : result.status === "rejected"
+                      ? result.error
+                      : "Agent is no longer steerable.",
+                  result.status === "queued" ? "info" : "warning",
+                );
+              },
+            },
+          };
         }
         return undefined;
       }
@@ -896,6 +952,19 @@ export function formatNodeResultFull(run: RunView, node: NodeView): string {
   if (usage) lines.push(`- usage: ${usage}`);
   if (node.endedAt)
     lines.push(`- duration: ${formatElapsed(node.endedAt - node.startedAt)}`);
+  const steering = node.steering ?? [];
+  if (steering.length > 0) {
+    lines.push("", "### Steering");
+    for (const entry of steering) {
+      const source = `${entry.source}${entry.caller ? `:${entry.caller}` : ""}`;
+      lines.push(
+        "",
+        `- ${new Date(entry.at).toISOString()} (${source})`,
+        "",
+        fenced(entry.message),
+      );
+    }
+  }
   if (node.error) lines.push("", `⚠ ${node.error}`);
   if (node.status === "running") {
     lines.push("", "Still running — no output yet.");

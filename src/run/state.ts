@@ -12,7 +12,15 @@ import type {
   RunEvent,
   RunHeader,
   RunStatus,
+  SteeringSource,
 } from "./events.js";
+
+export interface SteeringEntry {
+  at: number;
+  message: string;
+  source: SteeringSource;
+  caller?: string;
+}
 
 export interface NodeView {
   path: string;
@@ -29,6 +37,8 @@ export interface NodeView {
   progressText?: string;
   /** Latest streamed usage of a running agent. In-memory only. */
   progressUsage?: SpawnUsage;
+  /** Accepted steering messages in delivery order. */
+  steering: SteeringEntry[];
   startedAt: number;
   endedAt?: number;
 }
@@ -86,6 +96,7 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
         agent: event.agent,
         label: event.label,
         status: "running",
+        steering: [],
         startedAt: event.at,
       });
       run.order.push(event.instance);
@@ -117,6 +128,7 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
           instance: event.instance,
           kind: "agent",
           status: "cancelled",
+          steering: [],
           startedAt: event.at,
         };
         run.nodes.set(event.instance, node);
@@ -125,6 +137,17 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
       node.status = "cancelled";
       node.cancelReason = event.reason;
       node.endedAt = event.at;
+      return;
+    }
+    case "node_steered": {
+      const node = run.nodes.get(event.instance);
+      if (!node) return;
+      node.steering.push({
+        at: event.at,
+        message: event.message,
+        source: event.source,
+        caller: event.caller,
+      });
       return;
     }
     case "loop_iteration": {

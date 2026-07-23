@@ -227,6 +227,21 @@ describe("formatNodeResultFull", () => {
     lookup.node.progressText = "reading files…";
     expect(formatNodeResultFull(run, lookup.node)).toContain("reading files…");
   });
+
+  test("shows accepted steering history and attribution", async () => {
+    const run = await recordedRun(REVIEW_FLOW, () => "ok");
+    const target = workNodes(run)[0] as NodeView;
+    target.steering.push({
+      at: Date.UTC(2026, 6, 23, 12, 0, 0),
+      message: "Focus on the retry path.",
+      source: "rpc",
+      caller: "dashboard",
+    });
+    const text = formatNodeResultFull(run, target);
+    expect(text).toContain("### Steering");
+    expect(text).toContain("2026-07-23T12:00:00.000Z (rpc:dashboard)");
+    expect(text).toContain("Focus on the retry path.");
+  });
 });
 
 describe("completeRunArgs", () => {

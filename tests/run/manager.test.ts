@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { SpawnEngine, SpawnSpec } from "../../src/engine/types.js";
+import type {
+  SpawnEngine,
+  SpawnHandle,
+  SpawnSpec,
+} from "../../src/engine/types.js";
 import { emptyUsage } from "../../src/engine/types.js";
 import { validateFlow } from "../../src/model/validate.js";
 import { RunManager } from "../../src/run/runs.js";
@@ -45,6 +49,52 @@ function fakeEngine(
       },
     },
   };
+}
+
+function steerableEngine(): {
+  engine: SpawnEngine;
+  messages: string[];
+  finish: () => void;
+} {
+  const messages: string[] = [];
+  let status: SpawnHandle["status"] = "running";
+  let finish!: () => void;
+  const completion = new Promise<void>((resolve) => {
+    finish = () => {
+      status = "completed";
+      resolve();
+    };
+  });
+  return {
+    messages,
+    finish,
+    engine: {
+      spawn() {
+        return {
+          get status() {
+            return status;
+          },
+          updates: emptyUpdates(),
+          async wait() {
+            await completion;
+            return { text: "ok", exitCode: 0, usage: emptyUsage() };
+          },
+          async steer(message) {
+            messages.push(message);
+          },
+          abort() {},
+        };
+      },
+    },
+  };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("condition was not reached");
 }
 
 beforeEach(() => {
@@ -408,5 +458,79 @@ describe("empty tools allowlist", () => {
     });
     await done;
     expect(specs[0]?.tools).toEqual([]);
+  });
+});
+
+describe("live steering", () => {
+  test("routes a validated message and records it only after acceptance", async () => {
+    const controlled = steerableEngine();
+    const manager = new RunManager({ engine: controlled.engine });
+    const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
+    const started = manager.start({
+      flow,
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+    });
+
+    await waitFor(() => manager.steerableInstances(started.runId).length === 1);
+    expect(manager.steerableInstances(started.runId)).toEqual(["$"]);
+    await expect(
+      manager.steer(
+        started.runId,
+        "$",
+        "  revise the conclusion  ",
+        "tool",
+        "parent-agent",
+      ),
+    ).resolves.toEqual({
+      status: "queued",
+      runId: started.runId,
+      instance: "$",
+    });
+    expect(controlled.messages).toEqual(["revise the conclusion"]);
+    expect(
+      manager.state.runs.get(started.runId)?.nodes.get("$")?.steering,
+    ).toEqual([
+      expect.objectContaining({
+        message: "revise the conclusion",
+        source: "tool",
+        caller: "parent-agent",
+      }),
+    ]);
+
+    controlled.finish();
+    await started.done;
+    expect(manager.steerableInstances(started.runId)).toEqual([]);
+    await expect(
+      manager.steer(started.runId, "$", "too late", "user"),
+    ).resolves.toEqual({ status: "unavailable", reason: "run_not_live" });
+  });
+
+  test("rejects empty and oversized messages before delivery", async () => {
+    const controlled = steerableEngine();
+    const manager = new RunManager({ engine: controlled.engine });
+    const started = manager.start({
+      flow: validateFlow({ kind: "agent", name: "echo", task: "t" }),
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+    });
+    await waitFor(() => manager.steerableInstances(started.runId).length === 1);
+
+    expect(await manager.steer(started.runId, "$", "   ", "user")).toEqual({
+      status: "rejected",
+      error: "steering message must not be empty",
+    });
+    expect(
+      await manager.steer(started.runId, "$", "x".repeat(2_001), "user"),
+    ).toEqual({
+      status: "rejected",
+      error: "steering message must be at most 2000 characters",
+    });
+    expect(controlled.messages).toEqual([]);
+
+    controlled.finish();
+    await started.done;
   });
 });

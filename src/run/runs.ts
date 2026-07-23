@@ -8,7 +8,7 @@ import {
   formatAgentList,
   resolveAgentByName,
 } from "../catalog/agents.js";
-import type { SpawnEngine } from "../engine/types.js";
+import type { SpawnEngine, SpawnHandle } from "../engine/types.js";
 import {
   type Budgets,
   DEFAULT_BUDGETS,
@@ -18,7 +18,7 @@ import {
 } from "../model/ast.js";
 import { collectAgentRequirements } from "../model/validate.js";
 import { validateBudgets } from "./budgets.js";
-import type { RunEvent, RunSource } from "./events.js";
+import type { RunEvent, RunSource, SteeringSource } from "./events.js";
 import {
   type AgentRunner,
   executeFlow,
@@ -77,11 +77,38 @@ export type RunLookup =
   | { kind: "ambiguous"; matches: RunView[] }
   | { kind: "missing" };
 
+export const MAX_STEERING_MESSAGE_CHARS = 2_000;
+
+export type SteerResult =
+  | { status: "queued"; runId: string; instance: string }
+  | {
+      status: "unavailable";
+      reason: "run_not_live" | "instance_not_steerable";
+    }
+  | { status: "rejected"; error: string };
+
+interface LiveHandle {
+  handle: SpawnHandle;
+  path: string;
+}
+
+export function normalizeSteeringMessage(message: string): string {
+  const normalized = message.trim();
+  if (!normalized) throw new Error("steering message must not be empty");
+  if (normalized.length > MAX_STEERING_MESSAGE_CHARS) {
+    throw new Error(
+      `steering message must be at most ${MAX_STEERING_MESSAGE_CHARS} characters`,
+    );
+  }
+  return normalized;
+}
+
 export class RunManager {
   readonly state: RunState = createRunState();
   private readonly options: RunManagerOptions;
   private readonly controllers = new Map<string, AbortController>();
   private readonly persisters = new Map<string, (event: RunEvent) => void>();
+  private readonly liveHandles = new Map<string, Map<string, LiveHandle>>();
 
   constructor(options: RunManagerOptions) {
     this.options = options;
@@ -161,6 +188,22 @@ export class RunManager {
       depth: this.options.depth,
       defaults: opts.defaults,
       budgetLimits,
+      onHandle: (call, handle) => {
+        let handles = this.liveHandles.get(runId);
+        if (!handles) {
+          handles = new Map();
+          this.liveHandles.set(runId, handles);
+        }
+        const live = { handle, path: call.path };
+        handles.set(call.instance, live);
+        return () => {
+          const current = this.liveHandles.get(runId);
+          if (current?.get(call.instance) === live) {
+            current.delete(call.instance);
+            if (current.size === 0) this.liveHandles.delete(runId);
+          }
+        };
+      },
     });
     const runner: AgentRunner = (call) =>
       baseRunner({
@@ -192,6 +235,7 @@ export class RunManager {
     }).finally(() => {
       this.controllers.delete(runId);
       this.persisters.delete(runId);
+      this.liveHandles.delete(runId);
     });
 
     return { runId, done };
@@ -259,6 +303,60 @@ export class RunManager {
 
   liveRunIds(): string[] {
     return [...this.controllers.keys()];
+  }
+
+  /** Exact instance ids of live child processes that support steering. */
+  steerableInstances(runId: string): string[] {
+    const handles = this.liveHandles.get(runId);
+    if (!handles) return [];
+    return [...handles.entries()].flatMap(([instance, live]) =>
+      live.handle.status === "running" && live.handle.steer ? [instance] : [],
+    );
+  }
+
+  /** Queue a correction for one live child and persist it after acceptance. */
+  async steer(
+    runId: string,
+    instance: string,
+    message: string,
+    source: SteeringSource,
+    caller?: string,
+  ): Promise<SteerResult> {
+    let normalized: string;
+    try {
+      normalized = normalizeSteeringMessage(message);
+    } catch (error) {
+      return {
+        status: "rejected",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (!this.controllers.has(runId)) {
+      return { status: "unavailable", reason: "run_not_live" };
+    }
+    const live = this.liveHandles.get(runId)?.get(instance);
+    if (!live?.handle.steer || live.handle.status !== "running") {
+      return { status: "unavailable", reason: "instance_not_steerable" };
+    }
+    try {
+      await live.handle.steer(normalized);
+    } catch (error) {
+      return {
+        status: "rejected",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    this.emit(runId, {
+      type: "node_steered",
+      at: Date.now(),
+      runId,
+      path: live.path,
+      instance,
+      message: normalized,
+      source,
+      caller,
+    });
+    return { status: "queued", runId, instance };
   }
 
   /** Find a run by full id or unique prefix. */

@@ -8,12 +8,18 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import type { SpawnEngine, SpawnSpec } from "../../src/engine/types.js";
+import type {
+  SpawnEngine,
+  SpawnHandle,
+  SpawnSpec,
+} from "../../src/engine/types.js";
 import { emptyUsage } from "../../src/engine/types.js";
+import { validateFlow } from "../../src/model/validate.js";
 import { RunManager } from "../../src/run/runs.js";
 import { parseCommandArgs } from "../../src/triggers/commands.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
 import {
+  createSteerTool,
   createWorkflowTool,
   type WorkflowToolParamsType,
   type WorkflowToolRenderState,
@@ -93,6 +99,52 @@ function fakeEngine(handler: (spec: SpawnSpec) => string): {
       },
     },
   };
+}
+
+function steerableEngine(): {
+  engine: SpawnEngine;
+  messages: string[];
+  finish: () => void;
+} {
+  const messages: string[] = [];
+  let status: SpawnHandle["status"] = "running";
+  let finish!: () => void;
+  const completion = new Promise<void>((resolve) => {
+    finish = () => {
+      status = "completed";
+      resolve();
+    };
+  });
+  return {
+    messages,
+    finish,
+    engine: {
+      spawn() {
+        return {
+          get status() {
+            return status;
+          },
+          updates: emptyUpdates(),
+          async wait() {
+            await completion;
+            return { text: "ok", exitCode: 0, usage: emptyUsage() };
+          },
+          async steer(message) {
+            messages.push(message);
+          },
+          abort() {},
+        };
+      },
+    },
+  };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("condition was not reached");
 }
 
 function writeFile(relative: string, content: string): void {
@@ -322,6 +374,72 @@ describe("workflow tool", () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain('status="failed"');
     expect(text).toContain("exploded");
+  });
+
+  test("RPC mode stays foreground even though pi exposes a UI bridge", async () => {
+    const { engine } = fakeEngine(() => "nested result");
+    const tool = createWorkflowTool(makeDeps(engine));
+    const result = await tool.execute(
+      "t-rpc",
+      { flow: { kind: "agent", name: "echo", task: "nested" } },
+      undefined,
+      undefined,
+      {
+        cwd: projectDir,
+        mode: "rpc",
+        hasUI: true,
+      } as unknown as ExtensionContext,
+    );
+    expect(result.details.status).toBe("completed");
+    expect((result.content[0] as { text: string }).text).toContain(
+      "nested result",
+    );
+    expect(result.terminate).toBeUndefined();
+  });
+});
+
+describe("steer tool", () => {
+  test("resolves a run prefix, infers its sole instance, and queues once", async () => {
+    const controlled = steerableEngine();
+    const deps = makeDeps(controlled.engine);
+    const started = deps.manager.start({
+      flow: validateFlow({ kind: "agent", name: "echo", task: "wait" }),
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+    });
+    await waitFor(
+      () => deps.manager.steerableInstances(started.runId).length === 1,
+    );
+
+    const result = await createSteerTool(deps).execute(
+      "steer-1",
+      {
+        run: started.runId.slice(0, 8),
+        message: "  prioritize the regression  ",
+      },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(controlled.messages).toEqual(["prioritize the regression"]);
+    expect(result.details).toEqual({ runId: started.runId, instance: "$" });
+    expect((result.content[0] as { text: string }).text).toContain(
+      "Steering queued for $",
+    );
+
+    await expect(
+      createSteerTool(deps).execute(
+        "steer-2",
+        { run: started.runId, instance: "$.missing", message: "try this" },
+        undefined,
+        undefined,
+        ctx(),
+      ),
+    ).rejects.toThrow("is not steerable");
+
+    controlled.finish();
+    await started.done;
   });
 });
 

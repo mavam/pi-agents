@@ -82,4 +82,35 @@ describe("run state reducer", () => {
     ]);
     expect(state.runs.size).toBe(0);
   });
+
+  test("replays accepted steering messages on their node", async () => {
+    const events = await recordedEvents();
+    const startedIndex = events.findIndex(
+      (event) =>
+        event.type === "node_started" && event.instance === "$.steps[0]",
+    );
+    expect(startedIndex).toBeGreaterThanOrEqual(0);
+    events.splice(startedIndex + 1, 0, {
+      type: "node_steered",
+      at: 2,
+      runId: "run-42",
+      path: "$.steps[0]",
+      instance: "$.steps[0]",
+      message: "focus on failures",
+      source: "rpc",
+      caller: "controller",
+    });
+
+    expect(
+      rebuildRunState(events).runs.get("run-42")?.nodes.get("$.steps[0]")
+        ?.steering,
+    ).toEqual([
+      {
+        at: 2,
+        message: "focus on failures",
+        source: "rpc",
+        caller: "controller",
+      },
+    ]);
+  });
 });

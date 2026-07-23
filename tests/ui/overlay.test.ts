@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunView } from "../../src/run/state.js";
-import { type OverlaySpec, renderOverlay } from "../../src/ui/overlay.js";
+import {
+  type OverlaySpec,
+  renderOverlay,
+  SplitPaneOverlay,
+} from "../../src/ui/overlay.js";
 import { visibleWidgetRuns } from "../../src/ui/widget.js";
 
 function spec(
@@ -113,6 +117,66 @@ describe("renderOverlay", () => {
     expect(lines.at(-1)).toContain("keys A");
     const empty = renderOverlay(dynamic, [], 0, 50, 20);
     expect(empty[1]).toContain("empty A");
+  });
+
+  test("reserves a composer row and replaces the footer hints", () => {
+    const lines = renderOverlay(
+      spec(["a"]),
+      ["a"],
+      0,
+      60,
+      14,
+      undefined,
+      0,
+      ["Steer: revise the result"],
+      "enter send · esc cancel",
+    );
+    expect(
+      lines.some((line) => line.includes("Steer: revise the result")),
+    ).toBe(true);
+    expect(lines.at(-1)).toContain("enter send · esc cancel");
+    expect(lines.length).toBeLessThanOrEqual(14);
+  });
+
+  test("composer captures text and submits without closing the overlay", async () => {
+    let submitted: string | undefined;
+    let closed = false;
+    const tui = {
+      terminal: { rows: 24 },
+      requestRender: () => {},
+    } as unknown as TUI;
+    const composerSpec: OverlaySpec<string> = {
+      ...spec(["a"]),
+      onAction: (key) =>
+        key === "s"
+          ? {
+              compose: {
+                label: "Steer a",
+                submit: (value) => {
+                  submitted = value;
+                },
+              },
+            }
+          : undefined,
+    };
+    const overlay = new SplitPaneOverlay(
+      tui,
+      (_color, text) => text,
+      composerSpec,
+      () => {
+        closed = true;
+      },
+    );
+
+    overlay.handleInput("s");
+    expect(overlay.render(60).at(-1)).toContain("enter send · esc cancel");
+    overlay.handleInput("revise the result");
+    overlay.handleInput("\r");
+    await Promise.resolve();
+    expect(submitted).toBe("revise the result");
+    expect(closed).toBe(false);
+    expect(overlay.render(60).at(-1)).toContain("hints");
+    overlay.dispose();
   });
 });
 

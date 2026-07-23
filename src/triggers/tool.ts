@@ -23,6 +23,7 @@ import { parseFlowNode, validateFlow } from "../model/validate.js";
 import type { RunStatus } from "../run/events.js";
 import type { RunOutcome } from "../run/interpreter.js";
 import { isProjectTrusted } from "../run/persist.js";
+import { MAX_STEERING_MESSAGE_CHARS } from "../run/runs.js";
 import { formatUsage, shortId } from "../ui/render.js";
 import { KIND_ICONS, renderFlowTree } from "../ui/tree.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
@@ -93,6 +94,92 @@ export interface WorkflowToolDetails {
   status: RunStatus;
   label?: string;
   error?: string;
+}
+
+const SteerToolParams = Type.Object({
+  run: Type.String({
+    description: "Full workflow run id or unique id prefix.",
+  }),
+  instance: Type.Optional(
+    Type.String({
+      description:
+        "Exact live node instance. Omit only when the run has one steerable agent.",
+    }),
+  ),
+  message: Type.String({
+    description: `Course correction to queue for the delegated agent (maximum ${MAX_STEERING_MESSAGE_CHARS} characters).`,
+  }),
+});
+
+interface SteerToolDetails {
+  runId: string;
+  instance: string;
+}
+
+/** Model-facing control for a live background agent. */
+export function createSteerTool(
+  deps: TriggerDeps,
+): ToolDefinition<typeof SteerToolParams, SteerToolDetails> {
+  return {
+    name: "steer",
+    label: "Steer",
+    description:
+      "Queue a course correction for one agent in a live background workflow run. The message is delivered after the agent's current assistant turn finishes its tool calls. If several agents are running, pass an exact instance returned by the error message or /run inspection.",
+    promptSnippet:
+      "steer: correct the course of one agent in a live background workflow run",
+    promptGuidelines: [
+      "Use steer only for a run that is already live; it never starts, restarts, or resumes an agent.",
+      "Omit instance only when exactly one agent in the run is currently steerable.",
+    ],
+    parameters: SteerToolParams,
+    async execute(_toolCallId, params) {
+      const lookup = deps.manager.find(params.run);
+      if (lookup.kind === "missing") {
+        throw new Error(`No run matching '${params.run}'.`);
+      }
+      if (lookup.kind === "ambiguous") {
+        throw new Error(
+          `Ambiguous run id '${params.run}': ${lookup.matches.map((run) => shortId(run.header.id)).join(", ")}`,
+        );
+      }
+      const runId = lookup.run.header.id;
+      const available = deps.manager.steerableInstances(runId);
+      const instance =
+        params.instance ?? (available.length === 1 ? available[0] : undefined);
+      if (!instance || !available.includes(instance)) {
+        const choices = available.length > 0 ? available.join(", ") : "none";
+        throw new Error(
+          params.instance
+            ? `Instance '${params.instance}' is not steerable. Available: ${choices}`
+            : `Run ${shortId(runId)} has ${available.length} steerable instances. Specify one of: ${choices}`,
+        );
+      }
+      const result = await deps.manager.steer(
+        runId,
+        instance,
+        params.message,
+        "tool",
+      );
+      if (result.status !== "queued") {
+        throw new Error(
+          result.status === "rejected"
+            ? result.error
+            : result.reason === "run_not_live"
+              ? `Run ${shortId(runId)} is not live.`
+              : `Instance '${instance}' is no longer steerable.`,
+        );
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Steering queued for ${instance} in run ${shortId(runId)}. It will be delivered after the current assistant turn finishes its tool calls.`,
+          },
+        ],
+        details: { runId, instance },
+      };
+    },
+  };
 }
 
 /** Minimal color hook so the pure formatters are testable without a theme. */

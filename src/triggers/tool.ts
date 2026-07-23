@@ -105,8 +105,15 @@ const plain: ToolColorize = (_color, text) => text;
 
 const PARAM_PREVIEW_CHARS = 72;
 
-/** Memoized saved-workflow trees for renderCall; null = resolution failed. */
-const savedFlowTreeCache = new Map<string, string | null>();
+/** Per-tool-row state shared across workflow call renders. */
+export interface WorkflowToolRenderState {
+  /** Last successfully rendered inline flow tree. */
+  lastValidFlowTree?: string;
+  /** Memoized saved-workflow tree; null means resolution failed. */
+  savedFlowTree?: string | null;
+  /** Text currently held by the reusable call component. */
+  callText?: string;
+}
 
 function oneLine(value: string, max: number): string {
   const flat = value.replace(/\s+/g, " ").trim();
@@ -148,6 +155,7 @@ export function formatCallPreview(
   params: WorkflowToolParamsType,
   color: ToolColorize = plain,
   savedFlowTree?: string,
+  streamingState?: WorkflowToolRenderState,
 ): string {
   const lines: string[] = [];
   const label = params.label ? color("dim", ` · ${params.label}`) : "";
@@ -167,13 +175,17 @@ export function formatCallPreview(
       const issues: { path: string; message: string }[] = [];
       const parsed = parseFlowNode(params.flow, "$", issues);
       if (parsed && issues.length === 0) {
-        lines.push(renderFlowTree(parsed, color));
-      } else {
+        const tree = renderFlowTree(parsed, color);
+        if (streamingState) streamingState.lastValidFlowTree = tree;
+        lines.push(tree);
+      } else if (streamingState?.lastValidFlowTree) {
+        lines.push(streamingState.lastValidFlowTree);
+      } else if (!streamingState) {
         lines.push(`${JSON.stringify(params.flow)?.slice(0, 200) ?? ""}…`);
       }
     }
   } catch {
-    // Streaming args may be incomplete; the default renderer takes over.
+    // Streaming args may be incomplete; the caller supplies a stable fallback.
   }
   return lines.join("\n");
 }
@@ -237,7 +249,11 @@ export function formatRunResult(
 
 export function createWorkflowTool(
   deps: TriggerDeps,
-): ToolDefinition<typeof WorkflowToolParams, WorkflowToolDetails> {
+): ToolDefinition<
+  typeof WorkflowToolParams,
+  WorkflowToolDetails,
+  WorkflowToolRenderState
+> {
   return {
     name: "workflow",
     label: "Workflow",
@@ -256,20 +272,27 @@ export function createWorkflowTool(
       // Resolving a saved workflow's tree hits the filesystem; memoize per
       // tool call so redraws stay free.
       let savedFlowTree: string | undefined;
-      if (args.name !== undefined && context?.argsComplete) {
-        // Keyed by tool call: each invocation resolves once, so redraws are
-        // free but a later call sees fresh file contents.
-        const key = context.toolCallId;
-        let cached = savedFlowTreeCache.get(key);
+      if (args.name !== undefined && context.argsComplete) {
+        let cached = context.state.savedFlowTree;
         if (cached === undefined) {
-          if (savedFlowTreeCache.size > 200) savedFlowTreeCache.clear();
           cached = resolveSavedFlowTree(args.name, context.cwd, color) ?? null;
-          savedFlowTreeCache.set(key, cached);
+          context.state.savedFlowTree = cached;
         }
         savedFlowTree = cached ?? undefined;
       }
-      const previewText = formatCallPreview(args, color, savedFlowTree);
-      return new Text(previewText || "workflow", 1, 0);
+      const streamingState = context.argsComplete ? undefined : context.state;
+      const callText =
+        formatCallPreview(args, color, savedFlowTree, streamingState) ||
+        "workflow";
+      if (context.lastComponent instanceof Text) {
+        if (context.state.callText !== callText) {
+          context.lastComponent.setText(callText);
+        }
+        context.state.callText = callText;
+        return context.lastComponent;
+      }
+      context.state.callText = callText;
+      return new Text(callText, 1, 0);
     },
     renderResult(result, options, theme) {
       const color: ToolColorize = (name, text) => theme.fg(name, text);

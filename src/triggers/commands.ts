@@ -18,7 +18,12 @@ import {
 import type { Scope, WorkflowDef, WorkflowParamDef } from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
 import { isProjectTrusted } from "../run/persist.js";
-import { type NodeView, type RunView, workNodes } from "../run/state.js";
+import {
+  type NodeView,
+  type RunView,
+  type SteeringEntry,
+  workNodes,
+} from "../run/state.js";
 import { toMermaid } from "../ui/mermaid.js";
 import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
 import {
@@ -325,6 +330,15 @@ type RunsItem =
   | { kind: "run"; run: RunView }
   | { kind: "node"; run: RunView; node: NodeView };
 
+/** Compact provenance marker for steering history in the runs overlay. */
+export function steeringMarker(
+  entry: Pick<SteeringEntry, "source" | "caller">,
+): string {
+  if (entry.source === "user") return "↪";
+  if (entry.source === "tool") return "✦";
+  return entry.caller ? `⇢ ${entry.caller}:` : "⇢";
+}
+
 function buildRunsSpec(
   pi: ExtensionAPI,
   deps: CommandDeps,
@@ -433,9 +447,7 @@ function buildRunsSpec(
             .map((line, index) =>
               color(
                 "accent",
-                index === 0
-                  ? `↪ steer (${entry.source}${entry.caller ? `:${entry.caller}` : ""}): ${line}`
-                  : `  ${line}`,
+                index === 0 ? `${steeringMarker(entry)} ${line}` : `  ${line}`,
               ),
             ),
         );
@@ -492,7 +504,7 @@ function buildRunsSpec(
         ) {
           return {
             compose: {
-              label: `Steer ${nodeDisplayName(item.node)}`,
+              label: "Steer",
               submit: async (message) => {
                 const result = await deps.manager.steer(
                   item.run.header.id,

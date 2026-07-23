@@ -151,7 +151,7 @@ describe("renderOverlay", () => {
         key === "s"
           ? {
               compose: {
-                label: "Steer a",
+                label: "Steer",
                 submit: (value) => {
                   submitted = value;
                 },
@@ -169,7 +169,10 @@ describe("renderOverlay", () => {
     );
 
     overlay.handleInput("s");
-    expect(overlay.render(60).at(-1)).toContain("enter send · esc cancel");
+    const composing = overlay.render(60);
+    expect(composing.some((line) => line.includes("Steer:"))).toBe(true);
+    expect(composing.some((line) => line.includes("Steer: >"))).toBe(false);
+    expect(composing.at(-1)).toContain("enter send · esc cancel");
     overlay.handleInput("revise the result");
     overlay.handleInput("\r");
     await Promise.resolve();

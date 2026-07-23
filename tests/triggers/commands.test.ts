@@ -13,6 +13,7 @@ import {
   findNodeInRun,
   formatNodeResultFull,
   formatRunNodesList,
+  steeringMarker,
 } from "../../src/triggers/commands.js";
 import { formatRunSource, nodeDisplayName } from "../../src/ui/render.js";
 
@@ -85,6 +86,17 @@ describe("formatRunSource", () => {
       "rpc:pi-dashboard",
     );
     expect(formatRunSource({ kind: "rpc" })).toBe("rpc");
+  });
+});
+
+describe("steeringMarker", () => {
+  test("distinguishes manual, agent, and extension steering", () => {
+    expect(steeringMarker({ source: "user" })).toBe("↪");
+    expect(steeringMarker({ source: "tool" })).toBe("✦");
+    expect(steeringMarker({ source: "rpc", caller: "dashboard" })).toBe(
+      "⇢ dashboard:",
+    );
+    expect(steeringMarker({ source: "rpc" })).toBe("⇢");
   });
 });
 

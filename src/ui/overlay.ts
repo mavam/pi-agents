@@ -78,6 +78,12 @@ function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
 }
 
+/** Render pi-tui's single-line input without its built-in `> ` prompt. */
+function renderInlineInput(input: Input, width: number): string {
+  const line = input.render(width + 2)[0] ?? "";
+  return line.startsWith("> ") ? line.slice(2) : line;
+}
+
 /** Split the height budget between the table and the detail pane. */
 function paneRows(
   itemCount: number,
@@ -288,7 +294,7 @@ export class SplitPaneOverlay<T> implements Component {
     }
     const composerLines = this.composer
       ? [
-          `${this.color("accent", `${this.composer.spec.label}:`)} ${this.composer.input.render(Math.max(1, width - this.composer.spec.label.length - 8))[0] ?? ""}`,
+          `${this.color("accent", `${this.composer.spec.label}:`)} ${renderInlineInput(this.composer.input, Math.max(1, width - this.composer.spec.label.length - 8))}`,
         ]
       : [];
     return renderOverlay(

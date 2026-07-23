@@ -24,6 +24,7 @@ import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
 import {
   fenced,
   formatRunOverviewLine,
+  formatRunSource,
   formatUsage,
   formatValuePreview,
   nodeDisplayName,
@@ -383,10 +384,7 @@ function buildRunsSpec(
       );
       const label =
         run.header.label ?? run.header.source.workflow ?? run.header.flow.kind;
-      const source =
-        run.header.source.kind === "hook"
-          ? `hook:${run.header.source.event ?? "?"}`
-          : run.header.source.kind;
+      const source = formatRunSource(run.header.source);
       const usage = formatUsage(run.usage);
       const hidden = deps.widget.isHidden(run.header.id)
         ? color("dim", "  ⊘ hidden")
@@ -959,7 +957,7 @@ function formatRunDetails(run: RunView, fullValue = false): string {
     `## Run ${shortId(run.header.id)} — ${run.status}`,
     "",
     `- label: ${run.header.label ?? "(none)"}`,
-    `- source: ${run.header.source.kind}${run.header.source.workflow ? ` (${run.header.source.workflow})` : ""}${run.header.source.event ? ` on ${run.header.source.event}` : ""}`,
+    `- source: ${formatRunSource(run.header.source)}${run.header.source.workflow ? ` (${run.header.source.workflow})` : ""}`,
     `- started: ${new Date(run.createdAt).toLocaleString()}`,
   ];
   if (run.usage)

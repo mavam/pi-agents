@@ -38,10 +38,12 @@ export interface RunManagerOptions {
   depth?: number;
   /** Budget limits inherited from the parent process (PI_AGENTS_BUDGETS). */
   defaultBudgets?: Budgets;
-  /** Sink for every run event (persistence, notifications). */
+  /** Internal sink for every run event (for example, notifications). */
   onEvent?: (event: RunEvent) => void;
   /** Called after state changed (widget/UI refresh). */
   onStateChanged?: (runId: string) => void;
+  /** Best-effort external publication, called after all internal sinks. */
+  publish?: (event: RunEvent) => void;
 }
 
 export interface StartRunOptions {
@@ -149,12 +151,7 @@ export class RunManager {
     this.controllers.set(runId, controller);
     if (opts.onEvent) this.persisters.set(runId, opts.onEvent);
 
-    const emit = (event: RunEvent): void => {
-      applyRunEvent(this.state, event);
-      this.persisters.get(runId)?.(event);
-      this.options.onEvent?.(event);
-      this.options.onStateChanged?.(runId);
-    };
+    const emit = (event: RunEvent): void => this.emit(runId, event);
 
     const baseRunner = createAgentRunner({
       engine: this.options.engine,
@@ -203,10 +200,20 @@ export class RunManager {
   /** Record that a run moved to the background (persisted like any event). */
   markBackgrounded(runId: string): void {
     const event: RunEvent = { type: "run_backgrounded", at: Date.now(), runId };
+    this.emit(runId, event);
+  }
+
+  /** Apply one event and fan it out in internal-before-external order. */
+  private emit(runId: string, event: RunEvent): void {
     applyRunEvent(this.state, event);
     this.persisters.get(runId)?.(event);
     this.options.onEvent?.(event);
     this.options.onStateChanged?.(runId);
+    try {
+      this.options.publish?.(event);
+    } catch {
+      // Public observers must never be able to interrupt execution.
+    }
   }
 
   /**

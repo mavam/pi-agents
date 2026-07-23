@@ -1,8 +1,8 @@
 /**
- * Shared run-start path for all three trigger surfaces (tool, slash command,
- * event hook): creates the sidecar persistence origin, captures session
- * defaults (model/thinking), starts the run, and handles background
- * bookkeeping (notification tracking + widget refresh).
+ * Shared run-start path for every trigger surface (tool, slash command, event
+ * hook, RPC): creates the sidecar persistence origin, captures session defaults
+ * (model/thinking), starts the run, and handles background bookkeeping
+ * (notification tracking + widget refresh).
  */
 
 import type {

@@ -1,15 +1,16 @@
 /**
- * Subprocess spawn engine: each spawn runs a fresh `pi` process in JSON
- * print mode and parses `message_end` events off stdout.
+ * Subprocess spawn engine: each spawn runs a fresh `pi` process in RPC mode,
+ * sends one initial prompt, and keeps stdin open for steering and aborts.
  *
- *   pi --mode json -p --no-session [--model M] [--thinking T] [--tools a,b]
- *      [--append-system-prompt <tmpfile>]        # task arrives on stdin
+ *   pi --mode rpc --no-session [--model M] [--thinking T] [--tools a,b]
+ *      [--append-system-prompt <tmpfile>]
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import {
   emptyUsage,
   SpawnAborted,
@@ -30,7 +31,9 @@ export const DEPTH_ENV_VAR = "PI_AGENTS_DEPTH";
 /** Environment variable carrying inherited budget limits (JSON) to children. */
 export const BUDGETS_ENV_VAR = "PI_AGENTS_BUDGETS";
 
-const FORCE_KILL_AFTER_MS = 5000;
+const CONTROL_RESPONSE_TIMEOUT_MS = 30_000;
+const TERMINATE_AFTER_MS = 1_000;
+const FORCE_KILL_AFTER_MS = 5_000;
 
 class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -83,18 +86,97 @@ interface AssistantMessage {
   errorMessage?: string;
 }
 
-function parseMessageEndEvent(line: string): AssistantMessage | undefined {
-  try {
-    const parsed: unknown = JSON.parse(line);
-    if (typeof parsed !== "object" || parsed === null) return undefined;
-    const event = parsed as { type?: unknown; message?: unknown };
-    if (event.type !== "message_end") return undefined;
-    if (typeof event.message !== "object" || event.message === null)
-      return undefined;
-    return event.message as AssistantMessage;
-  } catch {
-    return undefined;
+interface RpcResponse {
+  type: "response";
+  id?: string;
+  command?: string;
+  success: boolean;
+  error?: string;
+  data?: unknown;
+}
+
+interface PendingCommand {
+  command: string;
+  resolve: (response: RpcResponse) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assistantMessage(value: unknown): AssistantMessage | undefined {
+  if (!isRecord(value) || value.type !== "message_end") return undefined;
+  if (!isRecord(value.message)) return undefined;
+  if (value.message.role !== "assistant") return undefined;
+  if (
+    value.message.content !== undefined &&
+    !Array.isArray(value.message.content)
+  ) {
+    throw new Error("Invalid assistant message content from delegated pi");
   }
+  for (const part of value.message.content ?? []) {
+    if (!isRecord(part) || typeof part.type !== "string") {
+      throw new Error("Invalid assistant message content from delegated pi");
+    }
+    if (part.text !== undefined && typeof part.text !== "string") {
+      throw new Error("Invalid assistant message text from delegated pi");
+    }
+  }
+  const usage = value.message.usage;
+  if (usage !== undefined) {
+    if (!isRecord(usage)) {
+      throw new Error("Invalid assistant message usage from delegated pi");
+    }
+    for (const field of [
+      "input",
+      "output",
+      "cacheRead",
+      "cacheWrite",
+      "totalTokens",
+    ]) {
+      const amount = usage[field];
+      if (
+        amount !== undefined &&
+        (typeof amount !== "number" || !Number.isFinite(amount))
+      ) {
+        throw new Error("Invalid assistant message usage from delegated pi");
+      }
+    }
+    if (usage.cost !== undefined) {
+      if (!isRecord(usage.cost)) {
+        throw new Error("Invalid assistant message cost from delegated pi");
+      }
+      const total = usage.cost.total;
+      if (
+        total !== undefined &&
+        (typeof total !== "number" || !Number.isFinite(total))
+      ) {
+        throw new Error("Invalid assistant message cost from delegated pi");
+      }
+    }
+  }
+  for (const field of ["model", "stopReason", "errorMessage"]) {
+    const text = value.message[field];
+    if (text !== undefined && typeof text !== "string") {
+      throw new Error(`Invalid assistant message ${field} from delegated pi`);
+    }
+  }
+  return value.message as unknown as AssistantMessage;
+}
+
+function idleRpcState(value: unknown): boolean {
+  if (!isRecord(value)) {
+    throw new Error("Invalid get_state response from delegated pi");
+  }
+  if (
+    typeof value.isStreaming !== "boolean" ||
+    typeof value.pendingMessageCount !== "number"
+  ) {
+    throw new Error("Invalid get_state response from delegated pi");
+  }
+  return !value.isStreaming && value.pendingMessageCount === 0;
 }
 
 function messageText(message: AssistantMessage): string {
@@ -158,18 +240,30 @@ export function formatFailureReason(
 
 export function createSubprocessSpawnEngine(options?: {
   spawnProcess?: SpawnProcess;
+  /** Test hooks; production uses the conservative defaults above. */
+  terminateAfterMs?: number;
+  forceKillAfterMs?: number;
 }): SpawnEngine {
   const spawnProcess = options?.spawnProcess ?? spawn;
+  const terminateAfterMs = options?.terminateAfterMs ?? TERMINATE_AFTER_MS;
+  const forceKillAfterMs = options?.forceKillAfterMs ?? FORCE_KILL_AFTER_MS;
 
   return {
     spawn(spec: SpawnSpec): SpawnHandle {
       const updates = new AsyncQueue<SpawnProgress>();
       let status: SpawnHandle["status"] = "running";
       let proc: ChildProcessWithoutNullStreams | undefined;
+      let terminateTimer: ReturnType<typeof setTimeout> | undefined;
       let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
       let tempDir: string | undefined;
       let settled = false;
+      let agentStarted = false;
+      let agentSettled = false;
+      let promptAccepted = false;
+      let stdinEnded = false;
+      let sentTerminationSignal = false;
       let wasAborted = false;
+      let terminalFailure: Error | undefined;
 
       const usage: SpawnUsage = emptyUsage();
       let latestText = "";
@@ -178,8 +272,11 @@ export function createSubprocessSpawnEngine(options?: {
       let resolvedModel = spec.model;
       let stderr = "";
       let buffered = "";
+      const decoder = new StringDecoder("utf8");
+      const pendingCommands = new Map<string, PendingCommand>();
+      let requestId = 0;
 
-      const args: string[] = ["--mode", "json", "-p", "--no-session"];
+      const args: string[] = ["--mode", "rpc", "--no-session"];
       if (spec.model) args.push("--model", spec.model);
       if (spec.thinking) args.push("--thinking", spec.thinking);
       // An explicit empty allowlist means "no tools", not "all tools".
@@ -193,26 +290,117 @@ export function createSubprocessSpawnEngine(options?: {
         args.push("--append-system-prompt", tmp.filePath);
       }
 
+      let resolveWait!: (outcome: SpawnOutcome) => void;
+      let rejectWait!: (error: Error) => void;
+      const waitPromise = new Promise<SpawnOutcome>((resolve, reject) => {
+        resolveWait = resolve;
+        rejectWait = reject;
+      });
+      // Prevent unhandled-rejection noise when abort() races wait().
+      waitPromise.catch(() => {});
+
       const cleanup = () => {
-        if (forceKillTimer) {
-          clearTimeout(forceKillTimer);
-          forceKillTimer = undefined;
+        if (terminateTimer) clearTimeout(terminateTimer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        terminateTimer = undefined;
+        forceKillTimer = undefined;
+        for (const pending of pendingCommands.values()) {
+          clearTimeout(pending.timer);
         }
+        pendingCommands.clear();
         if (tempDir) {
           try {
             fs.rmSync(tempDir, { recursive: true, force: true });
           } catch {
-            // ignore cleanup errors
+            // Ignore cleanup errors.
           }
           tempDir = undefined;
         }
         updates.finish();
       };
 
-      const parseLine = (line: string) => {
-        if (!line.trim()) return;
-        const message = parseMessageEndEvent(line);
-        if (!message) return;
+      const rejectPending = (error: Error) => {
+        for (const pending of pendingCommands.values()) {
+          clearTimeout(pending.timer);
+          pending.reject(error);
+        }
+        pendingCommands.clear();
+      };
+
+      const scheduleTermination = () => {
+        if (!proc || terminateTimer || forceKillTimer) return;
+        terminateTimer = setTimeout(() => {
+          terminateTimer = undefined;
+          if (!proc || !isChildProcessRunning(proc)) return;
+          sentTerminationSignal = true;
+          proc.kill("SIGTERM");
+          forceKillTimer = setTimeout(() => {
+            forceKillTimer = undefined;
+            if (proc && isChildProcessRunning(proc)) proc.kill("SIGKILL");
+          }, forceKillAfterMs);
+          forceKillTimer.unref?.();
+        }, terminateAfterMs);
+        terminateTimer.unref?.();
+      };
+
+      const endStdin = () => {
+        if (!proc || stdinEnded) return;
+        stdinEnded = true;
+        proc.stdin.end();
+        scheduleTermination();
+      };
+
+      const failProtocol = (message: string) => {
+        if (settled || terminalFailure || wasAborted) return;
+        terminalFailure = new Error(message);
+        rejectPending(terminalFailure);
+        endStdin();
+      };
+
+      const writeRecord = (record: Record<string, unknown>): void => {
+        if (!proc || stdinEnded || !isChildProcessRunning(proc)) {
+          throw new Error("Delegated pi RPC process is not writable");
+        }
+        proc.stdin.write(`${JSON.stringify(record)}\n`);
+      };
+
+      const sendCommand = (
+        command: Record<string, unknown> & { type: string },
+      ): Promise<RpcResponse> => {
+        const id = `pi-agents-${++requestId}`;
+        return new Promise<RpcResponse>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            pendingCommands.delete(id);
+            reject(
+              new Error(
+                `Timed out waiting for pi RPC '${command.type}' response`,
+              ),
+            );
+          }, CONTROL_RESPONSE_TIMEOUT_MS);
+          timer.unref?.();
+          pendingCommands.set(id, {
+            command: command.type,
+            resolve: (response) => {
+              clearTimeout(timer);
+              resolve(response);
+            },
+            reject: (error) => {
+              clearTimeout(timer);
+              reject(error);
+            },
+            timer,
+          });
+          try {
+            writeRecord({ ...command, id });
+          } catch (error) {
+            pendingCommands.delete(id);
+            clearTimeout(timer);
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+      };
+
+      const recordAssistantMessage = (message: AssistantMessage) => {
         if (message.role === "assistant") {
           usage.turns += 1;
           if (message.usage) {
@@ -221,8 +409,10 @@ export function createSubprocessSpawnEngine(options?: {
             usage.cacheRead += message.usage.cacheRead || 0;
             usage.cacheWrite += message.usage.cacheWrite || 0;
             usage.cost += message.usage.cost?.total || 0;
-            usage.contextTokens =
-              message.usage.totalTokens || usage.contextTokens;
+            usage.contextTokens = Math.max(
+              usage.contextTokens,
+              message.usage.totalTokens || 0,
+            );
           }
           if (message.model) resolvedModel = message.model;
           if (message.stopReason) stopReason = message.stopReason;
@@ -233,72 +423,171 @@ export function createSubprocessSpawnEngine(options?: {
         updates.push({ text: latestText, usage: { ...usage } });
       };
 
-      const waitPromise = new Promise<SpawnOutcome>((resolve, reject) => {
+      const handleResponse = (response: RpcResponse) => {
+        if (!response.id) return;
+        const pending = pendingCommands.get(response.id);
+        if (!pending) return;
+        pendingCommands.delete(response.id);
+        if (response.success) {
+          pending.resolve(response);
+          return;
+        }
+        pending.reject(
+          new Error(
+            response.error || `pi RPC '${pending.command}' command failed`,
+          ),
+        );
+      };
+
+      const handleExtensionUiRequest = (record: Record<string, unknown>) => {
+        if (typeof record.id !== "string" || typeof record.method !== "string")
+          return;
+        if (["select", "confirm", "input", "editor"].includes(record.method)) {
+          try {
+            writeRecord({
+              type: "extension_ui_response",
+              id: record.id,
+              cancelled: true,
+            });
+          } catch (error) {
+            failProtocol(
+              `Failed to cancel delegated extension UI request: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+      };
+
+      const parseLine = (rawLine: string) => {
+        const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+        if (!line) return;
+        let record: unknown;
         try {
-          proc = spawnProcess("pi", args, {
-            cwd: spec.cwd,
-            env: { ...process.env, ...(spec.env ?? {}) },
-            shell: false,
-            stdio: ["pipe", "pipe", "pipe"],
-          });
+          record = JSON.parse(line);
         } catch (error) {
-          const errorText =
-            error instanceof Error ? error.message : String(error);
-          status = "failed";
-          cleanup();
-          reject(
-            new SpawnFailure(
-              `Failed to spawn "pi": ${errorText}`,
-              spec.agent,
-              1,
-            ),
+          failProtocol(
+            `Invalid JSON from delegated pi RPC process: ${error instanceof Error ? error.message : String(error)}`,
           );
           return;
         }
+        if (!isRecord(record) || typeof record.type !== "string") {
+          failProtocol("Invalid record from delegated pi RPC process");
+          return;
+        }
+        try {
+          if (record.type === "response") {
+            if (typeof record.success !== "boolean") {
+              throw new Error("Invalid response from delegated pi RPC process");
+            }
+            handleResponse(record as unknown as RpcResponse);
+            return;
+          }
+          if (record.type === "extension_ui_request") {
+            handleExtensionUiRequest(record);
+            return;
+          }
+          const message = assistantMessage(record);
+          if (message) recordAssistantMessage(message);
+          if (record.type === "agent_start") agentStarted = true;
+          if (record.type === "agent_settled" && !agentSettled) {
+            agentSettled = true;
+            endStdin();
+          }
+        } catch (error) {
+          failProtocol(
+            error instanceof Error
+              ? error.message
+              : "Invalid record from delegated pi RPC process",
+          );
+        }
+      };
 
+      try {
+        proc = spawnProcess("pi", args, {
+          cwd: spec.cwd,
+          env: { ...process.env, ...(spec.env ?? {}) },
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      } catch (error) {
+        const errorText =
+          error instanceof Error ? error.message : String(error);
+        status = "failed";
+        cleanup();
+        rejectWait(
+          new SpawnFailure(`Failed to spawn "pi": ${errorText}`, spec.agent, 1),
+        );
+      }
+
+      if (proc) {
         proc.stdout.on("data", (chunk) => {
-          buffered += chunk.toString();
-          const lines = buffered.split("\n");
-          buffered = lines.pop() || "";
-          for (const line of lines) parseLine(line);
+          buffered +=
+            typeof chunk === "string" ? chunk : decoder.write(chunk as Buffer);
+          while (true) {
+            const newlineIndex = buffered.indexOf("\n");
+            if (newlineIndex === -1) break;
+            const line = buffered.slice(0, newlineIndex);
+            buffered = buffered.slice(newlineIndex + 1);
+            parseLine(line);
+          }
         });
 
         proc.stderr.on("data", (chunk) => {
           stderr += chunk.toString();
         });
 
+        proc.stdin.on("error", (error) => {
+          // EOF is the normal post-settlement shutdown path. Any earlier
+          // broken pipe means a control command could not be delivered.
+          if (agentSettled && stdinEnded) return;
+          failProtocol(
+            `Failed to write to delegated pi RPC process: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+
         proc.on("close", (code, signalCode) => {
           if (settled) return;
+          buffered += decoder.end();
+          if (buffered) {
+            const finalLine = buffered;
+            buffered = "";
+            parseLine(finalLine);
+          }
           settled = true;
-          if (buffered.trim()) parseLine(buffered);
+          const closedError = new Error(
+            `Delegated pi RPC process exited before responding (code=${String(code)}, signal=${String(signalCode)})`,
+          );
+          rejectPending(closedError);
 
           if (wasAborted) {
             status = "aborted";
             cleanup();
-            reject(new SpawnAborted(spec.agent));
+            rejectWait(new SpawnAborted(spec.agent));
             return;
           }
 
           const exitCode = signalCode ? 1 : (code ?? 0);
-          const isError =
-            exitCode !== 0 ||
+          const processFailed =
+            terminalFailure !== undefined ||
+            !agentSettled ||
             stopReason === "error" ||
             stopReason === "aborted" ||
-            Boolean(signalCode);
-          if (isError) {
+            (exitCode !== 0 && !sentTerminationSignal);
+          if (processFailed) {
             status = "failed";
             const signalNote = signalCode
               ? `Delegated "pi" process terminated by signal ${signalCode}.`
               : "";
             const rawReason =
+              terminalFailure?.message ||
               errorMessage ||
               stderr ||
               signalNote ||
-              latestText ||
-              "(no output)";
+              (!agentSettled
+                ? "Delegated pi RPC process exited before agent_settled."
+                : latestText || "(no output)");
             const reason = formatFailureReason(rawReason, resolvedModel);
             cleanup();
-            reject(
+            rejectWait(
               new SpawnFailure(
                 `Agent ${spec.agent} failed: ${reason}`,
                 spec.agent,
@@ -311,7 +600,7 @@ export function createSubprocessSpawnEngine(options?: {
 
           status = "completed";
           cleanup();
-          resolve({
+          resolveWait({
             text: latestText || "(no output)",
             exitCode,
             usage: { ...usage },
@@ -321,25 +610,45 @@ export function createSubprocessSpawnEngine(options?: {
 
         proc.on("error", (error) => {
           if (settled) return;
-          settled = true;
-          const errorText =
-            error instanceof Error ? error.message : String(error);
-          status = "failed";
-          cleanup();
-          reject(
-            new SpawnFailure(
-              `Failed to spawn "pi": ${errorText}`,
-              spec.agent,
-              1,
-              stderr,
-            ),
+          failProtocol(
+            `Failed to run delegated "pi": ${error instanceof Error ? error.message : String(error)}`,
           );
         });
+      }
 
-        proc.stdin.end(spec.task);
+      const startupPromise = proc
+        ? (async () => {
+            try {
+              await sendCommand({
+                type: "set_steering_mode",
+                mode: "one-at-a-time",
+              });
+            } catch (error) {
+              const cause =
+                error instanceof Error ? error.message : String(error);
+              throw new Error(
+                `Pi RPC initialization failed while configuring steering mode. pi-agents requires the latest Pi release; run "pi update pi" and retry. Cause: ${cause}`,
+              );
+            }
+            if (wasAborted) throw new SpawnAborted(spec.agent);
+            await sendCommand({ type: "prompt", message: spec.task });
+            promptAccepted = true;
+            if (agentStarted || agentSettled) return;
+            const state = await sendCommand({ type: "get_state" });
+            if (!agentStarted && !agentSettled && idleRpcState(state.data)) {
+              throw new Error(
+                "Delegated pi accepted the prompt without starting an agent run",
+              );
+            }
+          })()
+        : Promise.reject(new Error("Delegated pi RPC process did not start"));
+
+      startupPromise.catch((error) => {
+        if (wasAborted || settled) return;
+        failProtocol(
+          `Failed to initialize delegated pi RPC process: ${error instanceof Error ? error.message : String(error)}`,
+        );
       });
-      // Prevent unhandled-rejection noise when abort() races wait().
-      waitPromise.catch(() => {});
 
       return {
         get status() {
@@ -347,14 +656,29 @@ export function createSubprocessSpawnEngine(options?: {
         },
         updates,
         wait: () => waitPromise,
+        steer: async (message: string) => {
+          await startupPromise;
+          if (wasAborted || agentSettled || settled || status !== "running") {
+            throw new Error(`Agent ${spec.agent} is no longer running`);
+          }
+          await Promise.race([
+            sendCommand({ type: "steer", message }),
+            waitPromise.then(
+              () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
+              () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
+            ),
+          ]);
+        },
         abort: () => {
-          if (wasAborted) return;
+          if (wasAborted || settled) return;
           wasAborted = true;
           if (!proc) return;
-          proc.kill("SIGTERM");
-          forceKillTimer = setTimeout(() => {
-            if (proc && isChildProcessRunning(proc)) proc.kill("SIGKILL");
-          }, FORCE_KILL_AFTER_MS);
+          if (!promptAccepted) {
+            endStdin();
+            return;
+          }
+          void sendCommand({ type: "abort" }).catch(() => {});
+          scheduleTermination();
         },
       };
     },

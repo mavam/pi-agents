@@ -362,8 +362,11 @@ export function createWorkflowTool(
       const flow = validateFlow(raw, { resolveWorkflow });
       // Interactive sessions background immediately: the tool returns right
       // away, progress shows in the widget, and the result arrives as an
-      // idle notification. Headless (-p) runs stay foreground.
-      const background = ctx.hasUI === true;
+      // idle notification. Headless modes stay foreground.
+      // RPC exposes a UI bridge (`hasUI === true`) even though delegated
+      // children have nobody to answer it. Only the interactive TUI should
+      // background runs; print/JSON/RPC modes must await nested workflows.
+      const background = ctx.mode === "tui";
       const { runId, done } = startTriggeredRun(deps, {
         flow,
         cwd,

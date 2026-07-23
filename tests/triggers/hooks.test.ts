@@ -89,6 +89,7 @@ function harness(options: HarnessOptions = {}) {
   const ctx = {
     cwd: projectDir,
     hasUI: true,
+    mode: "tui",
     isIdle: () => true,
     isProjectTrusted: () => trusted,
     sessionManager: {

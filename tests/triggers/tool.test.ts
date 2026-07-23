@@ -616,6 +616,7 @@ describe("live result rendering", () => {
     const uiCtx = {
       cwd: projectDir,
       hasUI: true,
+      mode: "tui",
       isIdle: () => true,
       sessionManager: {
         getLeafId: () => null,

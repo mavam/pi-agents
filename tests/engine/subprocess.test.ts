@@ -9,26 +9,97 @@ import {
 } from "../../src/engine/subprocess.js";
 import { SpawnAborted, SpawnFailure } from "../../src/engine/types.js";
 
+class FakeStdin extends EventEmitter {
+  readonly records: Array<Record<string, unknown>> = [];
+  ended = false;
+  onRecord?: (record: Record<string, unknown>) => void;
+
+  write(data: string): boolean {
+    for (const line of data.split("\n").filter(Boolean)) {
+      const record = JSON.parse(line) as Record<string, unknown>;
+      this.records.push(record);
+      this.onRecord?.(record);
+    }
+    return true;
+  }
+
+  end(): void {
+    this.ended = true;
+  }
+}
+
+interface FakeProcOptions {
+  promptStartsAgent?: boolean;
+  promptPrelude?: Array<Record<string, unknown>>;
+  manualGetState?: boolean;
+}
+
 class FakeProc extends EventEmitter {
   stdout = new EventEmitter();
   stderr = new EventEmitter();
-  stdinData = "";
-  stdin = {
-    end: (data?: string) => {
-      this.stdinData = data ?? "";
-    },
-  };
+  stdin = new FakeStdin();
   exitCode: number | null = null;
   signalCode: string | null = null;
   killed: string[] = [];
+  streaming = false;
+
+  constructor(
+    failCommand?: string,
+    private readonly options: FakeProcOptions = {},
+  ) {
+    super();
+    this.stdin.onRecord = (record) => {
+      if (typeof record.id !== "string" || typeof record.type !== "string")
+        return;
+      if (record.type === "get_state" && this.options.manualGetState) return;
+      queueMicrotask(() => {
+        if (record.type === "prompt") {
+          for (const event of this.options.promptPrelude ?? []) {
+            this.emitRecord(event);
+          }
+        }
+        const commandSucceeded = record.type !== failCommand;
+        this.emitRecord({
+          type: "response",
+          id: record.id,
+          command: record.type,
+          success: commandSucceeded,
+          ...(record.type === "get_state"
+            ? {
+                data: {
+                  isStreaming: this.streaming,
+                  pendingMessageCount: 0,
+                },
+              }
+            : {}),
+          ...(record.type === failCommand
+            ? { error: `unsupported ${record.type}` }
+            : {}),
+        });
+        if (
+          commandSucceeded &&
+          record.type === "prompt" &&
+          this.options.promptStartsAgent !== false
+        ) {
+          this.emitRecord({ type: "agent_start" });
+        }
+      });
+    };
+  }
 
   kill(signal?: string) {
     this.killed.push(signal ?? "SIGTERM");
     return true;
   }
 
+  emitRecord(record: Record<string, unknown>, suffix = "\n") {
+    if (record.type === "agent_start") this.streaming = true;
+    if (record.type === "agent_settled") this.streaming = false;
+    this.stdout.emit("data", `${JSON.stringify(record)}${suffix}`);
+  }
+
   emitAssistant(text: string, extra: Record<string, unknown> = {}) {
-    const event = {
+    this.emitRecord({
       type: "message_end",
       message: {
         role: "assistant",
@@ -44,8 +115,11 @@ class FakeProc extends EventEmitter {
         model: "test-model",
         ...extra,
       },
-    };
-    this.stdout.emit("data", `${JSON.stringify(event)}\n`);
+    });
+  }
+
+  settle() {
+    this.emitRecord({ type: "agent_settled" });
   }
 
   close(code: number, signal: string | null = null) {
@@ -55,7 +129,11 @@ class FakeProc extends EventEmitter {
   }
 }
 
-function makeEngine() {
+function makeEngine(
+  failCommand?: string,
+  timings?: { terminateAfterMs: number; forceKillAfterMs: number },
+  procOptions?: FakeProcOptions,
+) {
   const procs: Array<{
     proc: FakeProc;
     command: string;
@@ -67,15 +145,33 @@ function makeEngine() {
     args: string[],
     options: Record<string, unknown>,
   ) => {
-    const proc = new FakeProc();
+    const proc = new FakeProc(failCommand, procOptions);
     procs.push({ proc, command, args, options });
     return proc;
   }) as unknown as SpawnProcess;
-  return { engine: createSubprocessSpawnEngine({ spawnProcess }), procs };
+  return {
+    engine: createSubprocessSpawnEngine({ spawnProcess, ...timings }),
+    procs,
+  };
+}
+
+async function ready(proc: FakeProc): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    await Promise.resolve();
+    if (proc.stdin.records.some((record) => record.type === "prompt")) return;
+  }
+  throw new Error("fake RPC process never received prompt");
+}
+
+function finish(proc: FakeProc, text = "ok"): void {
+  proc.emitAssistant(text);
+  proc.emitRecord({ type: "agent_end", messages: [], willRetry: false });
+  proc.settle();
+  proc.close(0);
 }
 
 describe("subprocess spawn engine", () => {
-  test("builds the pi invocation and pipes the task on stdin", async () => {
+  test("builds the RPC invocation and initializes before prompting", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
       agent: "scout",
@@ -85,23 +181,24 @@ describe("subprocess spawn engine", () => {
       thinking: "low",
       tools: ["read", "grep"],
     });
-    const spawned = procs[0];
-    expect(spawned?.command).toBe("pi");
-    expect(spawned?.args.slice(0, 4)).toEqual([
-      "--mode",
-      "json",
-      "-p",
-      "--no-session",
-    ]);
-    expect(spawned?.args).toContain("--model");
-    expect(spawned?.args).toContain("some-model");
-    expect(spawned?.args).toContain("--thinking");
-    expect(spawned?.args).toContain("--tools");
-    expect(spawned?.args).toContain("read,grep");
-    expect(spawned?.proc.stdinData).toBe("find things");
+    const spawned = procs[0] as (typeof procs)[number];
+    expect(spawned.command).toBe("pi");
+    expect(spawned.args.slice(0, 3)).toEqual(["--mode", "rpc", "--no-session"]);
+    expect(spawned.args).not.toContain("-p");
+    expect(spawned.args).toContain("some-model");
+    expect(spawned.args).toContain("--thinking");
+    expect(spawned.args).toContain("--tools");
+    expect(spawned.args).toContain("read,grep");
 
-    spawned?.proc.emitAssistant("hello");
-    spawned?.proc.close(0);
+    await ready(spawned.proc);
+    expect(spawned.proc.stdin.records.map((record) => record.type)).toEqual([
+      "set_steering_mode",
+      "prompt",
+    ]);
+    expect(spawned.proc.stdin.records[0]?.mode).toBe("one-at-a-time");
+    expect(spawned.proc.stdin.records[1]?.message).toBe("find things");
+
+    finish(spawned.proc, "hello");
     const outcome = await handle.wait();
     expect(outcome.text).toBe("hello");
     expect(outcome.usage.turns).toBe(1);
@@ -109,31 +206,31 @@ describe("subprocess spawn engine", () => {
     expect(outcome.usage.cost).toBeCloseTo(0.03);
     expect(outcome.model).toBe("test-model");
     expect(handle.status).toBe("completed");
+    expect(spawned.proc.stdin.ended).toBe(true);
   });
 
-  test("an empty tools allowlist becomes --no-tools", async () => {
-    const { engine, procs } = makeEngine();
-    const handle = engine.spawn({
+  test("tool allowlists preserve empty, omitted, and populated semantics", async () => {
+    const empty = makeEngine();
+    const emptyHandle = empty.engine.spawn({
       agent: "locked",
       task: "t",
       cwd: "/tmp",
       tools: [],
     });
-    expect(procs[0]?.args).toContain("--no-tools");
-    expect(procs[0]?.args).not.toContain("--tools");
-    procs[0]?.proc.emitAssistant("ok");
-    procs[0]?.proc.close(0);
-    await handle.wait();
-  });
+    expect(empty.procs[0]?.args).toContain("--no-tools");
+    finish(empty.procs[0]?.proc as FakeProc);
+    await emptyHandle.wait();
 
-  test("omitted tools adds no restriction flags", async () => {
-    const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "open", task: "t", cwd: "/tmp" });
-    expect(procs[0]?.args).not.toContain("--no-tools");
-    expect(procs[0]?.args).not.toContain("--tools");
-    procs[0]?.proc.emitAssistant("ok");
-    procs[0]?.proc.close(0);
-    await handle.wait();
+    const open = makeEngine();
+    const openHandle = open.engine.spawn({
+      agent: "open",
+      task: "t",
+      cwd: "/tmp",
+    });
+    expect(open.procs[0]?.args).not.toContain("--no-tools");
+    expect(open.procs[0]?.args).not.toContain("--tools");
+    finish(open.procs[0]?.proc as FakeProc);
+    await openHandle.wait();
   });
 
   test("writes the system prompt to a temp file and cleans it up", async () => {
@@ -146,47 +243,190 @@ describe("subprocess spawn engine", () => {
     });
     const args = procs[0]?.args ?? [];
     const flagIndex = args.indexOf("--append-system-prompt");
-    expect(flagIndex).toBeGreaterThan(-1);
     const promptPath = args[flagIndex + 1] as string;
     expect(fs.readFileSync(promptPath, "utf-8")).toBe("You are a scout.");
-
-    procs[0]?.proc.emitAssistant("ok");
-    procs[0]?.proc.close(0);
+    finish(procs[0]?.proc as FakeProc);
     await handle.wait();
     expect(fs.existsSync(promptPath)).toBe(false);
   });
 
-  test("nonzero exit rejects with SpawnFailure", async () => {
+  test("agent_end is not completion; agent_settled is", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitAssistant("first");
+    proc.emitRecord({ type: "agent_end", messages: [], willRetry: true });
+    expect(proc.stdin.ended).toBe(false);
+    proc.emitAssistant("second");
+    proc.settle();
+    expect(proc.stdin.ended).toBe(true);
+    proc.close(0);
+    const outcome = await handle.wait();
+    expect(outcome.text).toBe("second");
+    expect(outcome.usage.turns).toBe(2);
+  });
+
+  test("accepted extension commands without an agent run fail promptly", async () => {
+    const { engine, procs } = makeEngine(undefined, undefined, {
+      promptStartsAgent: false,
+      promptPrelude: [
+        {
+          type: "message_end",
+          message: {
+            role: "custom",
+            customType: "noop",
+            content: "handled",
+          },
+        },
+      ],
+    });
+    const handle = engine.spawn({ agent: "w", task: "/noop", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    for (let i = 0; i < 10 && !proc.stdin.ended; i++) {
+      await Promise.resolve();
+    }
+    expect(
+      proc.stdin.records.some((record) => record.type === "get_state"),
+    ).toBe(true);
+    expect(proc.stdin.ended).toBe(true);
+    proc.close(0);
+    await expect(handle.wait()).rejects.toThrow(
+      "accepted the prompt without starting an agent run",
+    );
+  });
+
+  test("handled input events without an agent run fail promptly", async () => {
+    const { engine, procs } = makeEngine(undefined, undefined, {
+      promptStartsAgent: false,
+    });
+    const handle = engine.spawn({ agent: "w", task: "handled", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    for (let i = 0; i < 10 && !proc.stdin.ended; i++) {
+      await Promise.resolve();
+    }
+    expect(proc.stdin.ended).toBe(true);
+    proc.close(0);
+    await expect(handle.wait()).rejects.toThrow(
+      "accepted the prompt without starting an agent run",
+    );
+  });
+
+  test("an observed agent start wins a racing idle state response", async () => {
+    const { engine, procs } = makeEngine(undefined, undefined, {
+      promptStartsAgent: false,
+      manualGetState: true,
+    });
+    const handle = engine.spawn({ agent: "w", task: "fast", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    let getState: Record<string, unknown> | undefined;
+    for (let i = 0; i < 10 && !getState; i++) {
+      await Promise.resolve();
+      getState = proc.stdin.records.find(
+        (record) => record.type === "get_state",
+      );
+    }
+    expect(getState).toBeDefined();
+    proc.emitRecord({ type: "agent_start" });
+    proc.emitRecord({
+      type: "response",
+      id: getState?.id,
+      command: "get_state",
+      success: true,
+      data: { isStreaming: false, pendingMessageCount: 0 },
+    });
+    finish(proc, "done");
+    await expect(handle.wait()).resolves.toMatchObject({ text: "done" });
+  });
+
+  test("settled children that ignore stdin EOF escalate to TERM then KILL", async () => {
+    const { engine, procs } = makeEngine(undefined, {
+      terminateAfterMs: 1,
+      forceKillAfterMs: 1,
+    });
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await ready(proc);
+    await Promise.resolve();
+    proc.emitAssistant("done");
+    proc.settle();
+    expect(proc.stdin.ended).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(proc.killed).toEqual(["SIGTERM", "SIGKILL"]);
+    proc.close(0, "SIGKILL");
+    await expect(handle.wait()).resolves.toMatchObject({ text: "done" });
+  });
+
+  test("failed RPC initialization rejects with the command error", async () => {
+    const { engine, procs } = makeEngine("set_steering_mode");
+    const handle = engine.spawn({ agent: "worker", task: "t", cwd: "/tmp" });
+    for (let i = 0; i < 10 && !procs[0]?.proc.stdin.ended; i++) {
+      await Promise.resolve();
+    }
+    procs[0]?.proc.close(0);
+    await expect(handle.wait()).rejects.toThrow(
+      "requires the latest Pi release",
+    );
+    await expect(handle.wait()).rejects.toThrow('run "pi update pi"');
+    await expect(handle.wait()).rejects.toThrow(
+      "unsupported set_steering_mode",
+    );
+  });
+
+  test("nonzero exit before settlement rejects with SpawnFailure", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({ agent: "worker", task: "t", cwd: "/tmp" });
     procs[0]?.proc.stderr.emit("data", "something broke");
     procs[0]?.proc.close(2);
-    expect(handle.wait()).rejects.toThrow(SpawnFailure);
+    await expect(handle.wait()).rejects.toThrow(SpawnFailure);
     await handle.wait().catch((error: SpawnFailure) => {
       expect(error.message).toContain("worker failed");
       expect(error.exitCode).toBe(2);
     });
   });
 
-  test("stopReason error rejects even with exit 0", async () => {
+  test("stopReason error rejects even after settlement", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
-    procs[0]?.proc.emitAssistant("partial", {
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitAssistant("partial", {
       stopReason: "error",
       errorMessage: "model exploded",
     });
-    procs[0]?.proc.close(0);
+    proc.settle();
+    proc.close(0);
     await expect(handle.wait()).rejects.toThrow("model exploded");
   });
 
-  test("abort sends SIGTERM and rejects with SpawnAborted", async () => {
+  test("abort uses RPC after readiness and rejects with SpawnAborted", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await ready(proc);
+    await Promise.resolve();
+    await Promise.resolve();
     handle.abort();
-    expect(procs[0]?.proc.killed).toContain("SIGTERM");
-    procs[0]?.proc.close(1, "SIGTERM");
+    expect(proc.stdin.records.some((record) => record.type === "abort")).toBe(
+      true,
+    );
+    proc.settle();
+    proc.close(0);
     await expect(handle.wait()).rejects.toThrow(SpawnAborted);
     expect(handle.status).toBe("aborted");
+  });
+
+  test("steer waits for readiness and receives correlated acknowledgement", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await handle.steer?.("change course");
+    expect(
+      proc.stdin.records.find((record) => record.type === "steer")?.message,
+    ).toBe("change course");
+    finish(proc);
+    await handle.wait();
+    await expect(handle.steer?.("too late")).rejects.toThrow(
+      "no longer running",
+    );
   });
 
   test("streams progress updates", async () => {
@@ -196,30 +436,79 @@ describe("subprocess spawn engine", () => {
     const reader = (async () => {
       for await (const update of handle.updates) seen.push(update.text);
     })();
-    procs[0]?.proc.emitAssistant("first");
-    procs[0]?.proc.emitAssistant("second");
-    procs[0]?.proc.close(0);
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitAssistant("first");
+    proc.emitAssistant("second");
+    proc.settle();
+    proc.close(0);
     await handle.wait();
     await reader;
     expect(seen).toEqual(["first", "second"]);
   });
 
-  test("split JSON lines across chunks still parse", async () => {
+  test("strict JSONL preserves chunking, CRLF, and Unicode separators", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    const text = "chunked still-one-line done";
     const line = `${JSON.stringify({
       type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "chunked" }],
-      },
-    })}\n`;
-    const mid = Math.floor(line.length / 2);
-    procs[0]?.proc.stdout.emit("data", line.slice(0, mid));
-    procs[0]?.proc.stdout.emit("data", line.slice(mid));
-    procs[0]?.proc.close(0);
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    })}\r\n`;
+    const bytes = Buffer.from(line);
+    const mid = bytes.indexOf(Buffer.from(" ")) + 1;
+    proc.stdout.emit("data", bytes.subarray(0, mid));
+    proc.stdout.emit("data", bytes.subarray(mid));
+    proc.settle();
+    proc.close(0);
     const outcome = await handle.wait();
-    expect(outcome.text).toBe("chunked");
+    expect(outcome.text).toBe(text);
+  });
+
+  test("blocking extension UI requests are cancelled", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "extension_ui_request",
+      id: "dialog-1",
+      method: "confirm",
+      title: "Question",
+    });
+    expect(proc.stdin.records).toContainEqual({
+      type: "extension_ui_response",
+      id: "dialog-1",
+      cancelled: true,
+    });
+    finish(proc);
+    await handle.wait();
+  });
+
+  test("malformed RPC output fails the spawn", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    proc.settle();
+    proc.stdout.emit("data", "{broken");
+    proc.close(0);
+    await expect(handle.wait()).rejects.toThrow("Invalid JSON");
+  });
+
+  test("malformed assistant content fails only the delegated spawn", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    expect(() =>
+      proc.emitRecord({
+        type: "message_end",
+        message: { role: "assistant", content: { type: "text" } },
+      }),
+    ).not.toThrow();
+    expect(proc.stdin.ended).toBe(true);
+    expect(() => proc.close(0)).not.toThrow();
+    await expect(handle.wait()).rejects.toThrow(
+      "Invalid assistant message content",
+    );
   });
 });
 

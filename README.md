@@ -35,6 +35,10 @@ active session's model and thinking level (unless the node overrides them),
 the normal pi system prompt, and the default tool set. Named agent files are
 optional reusable personas layered on top.
 
+Delegated agents use the `pi` executable on `PATH` through Pi's current RPC
+protocol. pi-agents intentionally follows the latest Pi release instead of
+pinning or maintaining a legacy execution fallback, so keep Pi up to date.
+
 ## 📖 Concepts
 
 Three nouns carry the whole framework:
@@ -414,7 +418,7 @@ output.
 
 ## 🔐 Project trust
 
-pi-agents honors pi's project-trust decision (pi ≥ 0.80). In an untrusted
+pi-agents honors Pi's current project-trust decision. In an untrusted
 project, project-local agents and workflows (`.pi/agents`, `.pi/workflows`)
 are invisible everywhere: they are not injected into the system prompt, not
 registered as commands, never fired by event hooks, and per-node

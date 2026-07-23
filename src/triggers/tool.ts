@@ -33,14 +33,19 @@ import { startTriggeredRun, type TriggerDeps } from "./start.js";
 const MAX_TOOL_RESULT_CHARS = 16_000;
 
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
-- {"kind":"agent","task":"...","name":"<agent>","output":"text"|"json","model":"...","thinking":"..."} — run one delegated agent (leaf). A bare agent node is a valid flow. "name" is OPTIONAL: omit it to run the task as an anonymous ad-hoc agent (session model/thinking, default tools); set it only to use a reusable profile from <agents>. model/thinking override the profile or session defaults.
-- {"kind":"sequence","steps":[node,...]} — run steps in order; value = last step's value.
-- {"kind":"parallel","branches":{"a":node,...},"mode":"all"|"any"|{"quorum":n},"onError":"fail"|"collect","concurrency":n,"reduce":{"task":"merge {branches}","agent":"..."}} — run branches concurrently. Value: "all"/quorum → {branch: value}; "any" → the winner's value (siblings cancelled). The reducer's "agent" is optional too.
-- {"kind":"map","over":"{binding}","body":node,"concurrency":n,"reduce":{"task":"merge {items}"}} — fan out body per element of the array {binding} resolves to; the body sees {item} and {index}. Value: array of body values.
-- {"kind":"loop","body":node,"max":n,"until":predicate} — repeat body until the predicate holds over its JSON value; the body sees {iteration} and {last}. Predicates: {"eq":["path",value]}, {"ne":[..]}, {"gt":["path",n]}, {"lt":[..]}, {"exists":"path"}, {"empty":"path"}, {"and":[..]}, {"or":[..]}, {"not":..}.
-- {"kind":"workflow","name":"<saved>","params":{"k":"v"}} — invoke a saved workflow.
+- {"kind":"agent","task":"...","name":"...","output":"text"|"json","model":"...","thinking":"..."} — one delegated agent (leaf; a bare agent node is a valid flow). Omit "name" for an anonymous ad-hoc agent; set it only to use a profile from <agents>.
+- {"kind":"sequence","steps":[node,...]} — steps in order; value = the last step's.
+- {"kind":"parallel","branches":{"a":node,...},"mode":"all"|"any"|{"quorum":n},"onError":"fail"|"collect","concurrency":n,"reduce":{"task":"merge {branches}","agent":"..."}} — concurrent branches; value = {branch: value}, or the winner's value for "any".
+- {"kind":"map","over":"{binding}","body":node,"concurrency":n,"reduce":{"task":"merge {items}"}} — run body per element of the array {binding}; the body sees {item} and {index}; value = array of body values.
+- {"kind":"loop","body":node,"max":n,"until":predicate} — repeat body (it sees {iteration} and {last}) until the predicate holds over its JSON value. Predicates: {"eq":["path",value]}, "ne", "gt", "lt", {"exists":"path"}, {"empty":"path"}, "and", "or", "not".
+- {"kind":"workflow","name":"...","params":{"k":"v"}} — invoke a saved workflow.
 
-Data flows ONLY through explicit references. Mark a sequence step with "as":"name" and reference {name} or {name.dot.path} in later task strings; {previous} is the immediately preceding step's value. Use "output":"json" upstream when you need dot-path access or predicates. Nothing flows implicitly.`;
+Data flows ONLY through explicit references: "as":"x" names a step's value; later tasks reference {x} or {x.dot.path} (set "output":"json" upstream for structured access); {previous} is the preceding step's value. Nothing flows implicitly. Invalid nodes fail with exact node-path errors — fix and retry.`;
+
+/** The `flow` parameter defers to the tool description so the grammar is
+ * sent once per request, not twice. */
+export const FLOW_PARAM_DESCRIPTION =
+  'Inline flow expression to run (instead of "name"). Node grammar: see the tool description.';
 
 const WorkflowToolParams = Type.Object({
   name: Type.Optional(
@@ -56,7 +61,7 @@ const WorkflowToolParams = Type.Object({
   ),
   flow: Type.Optional(
     Type.Unknown({
-      description: `Inline flow expression to run (instead of "name"). ${FLOW_REFERENCE}`,
+      description: FLOW_PARAM_DESCRIPTION,
     }),
   ),
   label: Type.Optional(

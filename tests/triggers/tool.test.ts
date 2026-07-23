@@ -21,6 +21,7 @@ import type { TriggerDeps } from "../../src/triggers/start.js";
 import {
   createSteerTool,
   createWorkflowTool,
+  FLOW_PARAM_DESCRIPTION,
   type WorkflowToolParamsType,
   type WorkflowToolRenderState,
 } from "../../src/triggers/tool.js";
@@ -910,5 +911,49 @@ describe("parseCommandArgs", () => {
 
   test("empty args yield no values", () => {
     expect(parseCommandArgs("  ", params)).toEqual({ values: {}, errors: [] });
+  });
+});
+
+describe("workflow tool description", () => {
+  const inertEngine = {
+    spawn: () => {
+      throw new Error("not used");
+    },
+  } as unknown as SpawnEngine;
+
+  /** A grammar fragment that appears only inside the node reference. */
+  const GRAMMAR_MARKER = '{"kind":"parallel","branches"';
+
+  /** Match a needle inside JSON.stringify output, where quotes are escaped. */
+  function escaped(needle: string): string {
+    return JSON.stringify(needle).slice(1, -1);
+  }
+
+  test("the node grammar appears exactly once in the tool definition", () => {
+    const tool = createWorkflowTool(makeDeps(inertEngine));
+    const serialized = JSON.stringify({
+      description: tool.description,
+      parameters: tool.parameters,
+    });
+    expect(serialized.split(escaped(GRAMMAR_MARKER)).length - 1).toBe(1);
+    expect(JSON.stringify(tool.parameters)).toContain(
+      escaped(FLOW_PARAM_DESCRIPTION),
+    );
+  });
+
+  test("the description covers every node kind and the binding rules", () => {
+    const tool = createWorkflowTool(makeDeps(inertEngine));
+    for (const kind of [
+      "agent",
+      "sequence",
+      "parallel",
+      "map",
+      "loop",
+      "workflow",
+    ]) {
+      expect(tool.description).toContain(`"kind":"${kind}"`);
+    }
+    expect(tool.description).toContain("{previous}");
+    expect(tool.description).toContain('"as"');
   });
 });

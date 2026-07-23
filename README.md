@@ -503,7 +503,6 @@ const off = agents.onRunEvent((event) => {
   if (event.type === "run_completed") console.log(event.status);
 });
 const { runId } = await agents.start({ workflow: "review", params: { target: "src" } });
-await agents.steer({ runId, message: "Prioritize correctness over style." });
 await agents.stop(runId); // only while the run is live
 off();
 ```
@@ -511,12 +510,15 @@ off();
 RPC operations are `ping`, `start`, `stop`, `steer`, and `list`. `start`
 accepts exactly one of an inline `flow` or saved `workflow`, optional literal
 workflow parameters and label, and an optional absolute existing `cwd`.
-`steer` accepts an exact `runId`, optional exact live node `instance`, and a
-message; omission of `instance` is valid only when one agent is steerable. RPC
-runs always run in the background, use the normal inherited/default budgets,
-and obey the active session's project-trust decision. In untrusted projects
-only user agents and workflows resolve. A `start` request made outside an
-active session returns an error.
+`start` confirms that the run was scheduled; it does not wait for a child agent
+to become steerable. `steer` targets a currently running child and may reject
+while a run is starting, between nodes, or waiting for capacity. It accepts an
+exact `runId`, optional exact live node `instance`, and a message; omission of
+`instance` is valid only when one agent is steerable at the time of the request.
+RPC runs always run in the background, use the normal inherited/default
+budgets, and obey the active session's project-trust decision. In untrusted
+projects only user agents and workflows resolve. A `start` request made outside
+an active session returns an error.
 
 The RPC listener is installed at every delegation depth. Because the bus is
 process-local, the root session and each delegated pi process expose independent

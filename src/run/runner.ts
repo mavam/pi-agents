@@ -18,6 +18,7 @@ import {
   ADHOC_LABEL,
   type Budgets,
   effectiveScope,
+  type OutputMode,
   type Scope,
 } from "../model/ast.js";
 import type { AgentCall, AgentRunner } from "./interpreter.js";
@@ -67,6 +68,31 @@ export function resolveAgentOrThrow(
   }
 }
 
+/**
+ * The result contract appended to every delegated agent's system prompt:
+ * only the final message survives (see the value contract in the README),
+ * so the agent must end with the deliverable itself.
+ */
+export function delegationPreamble(output: OutputMode): string {
+  const lines = [
+    "You run non-interactively as a delegated agent inside a workflow:",
+    "nobody can reply to you, and only the text of your final message is",
+    "returned to the caller as your result — everything before it is",
+    "discarded. End your turn with one dedicated message containing the",
+    "complete deliverable itself, not a summary of what you did, a",
+    "reference to earlier messages, or a closing remark.",
+  ];
+  if (output === "json") {
+    lines.push(
+      "",
+      "The caller parses your result as JSON: your final message must be a",
+      "single JSON value with no surrounding prose (a ```json fence is",
+      "acceptable).",
+    );
+  }
+  return lines.join("\n");
+}
+
 export function createAgentRunner(options: RunnerOptions): AgentRunner {
   const depth = options.depth ?? 0;
   const trusted = options.trusted ?? true;
@@ -80,13 +106,15 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
         ? resolveAgentOrThrow(call.agent, cwd, scope)
         : undefined;
 
-    let systemPrompt: string | undefined;
+    // Persona and skills first (named agents only), then the result
+    // contract every delegated agent gets — ad-hoc ones included.
+    const parts: string[] = [];
     if (agent) {
       const { prompt: skillsPrompt } = buildSkillsPrompt(agent.skills, cwd);
-      systemPrompt =
-        [agent.systemPrompt, skillsPrompt].filter(Boolean).join("\n\n") ||
-        undefined;
+      parts.push(agent.systemPrompt, skillsPrompt);
     }
+    parts.push(delegationPreamble(call.output));
+    const systemPrompt = parts.filter(Boolean).join("\n\n");
 
     const env: Record<string, string> = {
       [DEPTH_ENV_VAR]: String(depth + 1),

@@ -267,7 +267,9 @@ final message is the delegated agent's sole artifact. With `output: json`
 that text is parsed into a JSON value (code fences tolerated; a parse
 failure fails the node). Write tasks so the agent *ends* with the complete
 deliverable — an agent that reports findings mid-session and closes with
-"done" yields the value `"done"`.
+"done" yields the value `"done"`. Every delegated agent — ad-hoc ones
+included — has this contract appended to its system prompt, and `output:
+json` additionally instructs it to reply with a single raw JSON value.
 
 ### `sequence`
 

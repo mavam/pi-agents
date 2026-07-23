@@ -307,7 +307,7 @@ describe("ad-hoc agents", () => {
       const outcome = await done;
       expect(outcome.status).toBe("completed");
       expect(specs[0]?.agent).toBe("ad-hoc");
-      expect(specs[0]?.systemPrompt).toBeUndefined();
+      expect(specs[0]?.systemPrompt).toContain("final message"); // result contract only, no persona
       expect(specs[0]?.tools).toBeUndefined();
     } finally {
       fs.rmSync(bareDir, { recursive: true, force: true });

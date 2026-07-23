@@ -32,6 +32,7 @@ import { HookManager } from "./triggers/hooks.js";
 import { RpcManager } from "./triggers/rpc.js";
 import type { TriggerDeps } from "./triggers/start.js";
 import { createSteerTool, createWorkflowTool } from "./triggers/tool.js";
+import { FancyFooterRunReporter } from "./ui/footer.js";
 import { NotificationManager } from "./ui/notify.js";
 import {
   MESSAGE_TYPE,
@@ -69,17 +70,22 @@ export default function agentExtension(pi: ExtensionAPI): void {
   // Assigned right below; the manager's callbacks fire only once runs exist.
   let notifications: NotificationManager;
   let widget: RunWidget;
+  let footerReporter: FancyFooterRunReporter;
 
   const manager = new RunManager({
     engine,
     depth,
     defaultBudgets: inheritedBudgets(),
     onEvent: (event) => notifications.handleRunEvent(event),
-    onStateChanged: () => widget.update(),
+    onStateChanged: () => {
+      widget.update();
+      footerReporter.update();
+    },
     publish: createRunEventPublisher(pi),
   });
   notifications = new NotificationManager(pi, manager);
   widget = new RunWidget(manager);
+  footerReporter = new FancyFooterRunReporter(pi, manager);
 
   const deps: TriggerDeps = { pi, manager, notifications, widget };
 
@@ -104,6 +110,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     notifications.setContext(ctx);
     manager.absorbHistory(readRunEvents(getSessionFile(ctx)));
     widget.update(ctx);
+    footerReporter.update();
     notifications.flush(ctx);
   };
 
@@ -152,6 +159,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     rpc.dispose();
     hooks?.dispose();
     widget.dispose();
+    footerReporter.dispose();
     manager.stopAll();
     notifications.clear();
   });

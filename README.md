@@ -417,12 +417,13 @@ one-keystroke access.
 
 When
 [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) is installed,
-pi-agents also contributes a `pi-agents.runs` footer widget with active run,
-agent-progress, and token counts. This compact footer widget is **off by
-default**; enable it from `/fancy-footer` if you want it. It uses the
-footer's event protocol directly, so pi-agents has no package dependency on
-pi-fancy-footer. Snapshots are published only when run state changes and when
-the footer announces that it is ready; there is no polling interval.
+pi-agents also contributes two compact counters: `❖N` for active workflow
+executions and `✦A/T` for completed and total agents across those executions.
+Both widgets are **off by default** and can be enabled independently from
+`/fancy-footer`. They use the footer's event protocol directly, so pi-agents
+has no package dependency on pi-fancy-footer. Snapshots are published only
+when run state changes and when the footer announces that it is ready; there
+is no polling interval.
 
 In non-TUI modes (RPC, JSON, print) both commands keep their plain markdown
 output.

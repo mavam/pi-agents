@@ -231,7 +231,7 @@ export function widgetProgress(run: RunView): { done: number; total: number } {
   return { done, total: agentNodes.length + unstarted };
 }
 
-export function liveTokens(run: RunView): number {
+function liveTokens(run: RunView): number {
   let total = 0;
   for (const node of run.nodes.values()) {
     const usage: SpawnUsage | undefined =

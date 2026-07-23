@@ -8,37 +8,41 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { RunManager } from "../run/runs.js";
 import type { RunView } from "../run/state.js";
-import { formatTokens } from "./render.js";
-import { liveTokens, widgetProgress } from "./widget.js";
+import { KIND_ICONS } from "./tree.js";
+import { widgetProgress } from "./widget.js";
 
-export const FANCY_FOOTER_RUNS_WIDGET_ID = "pi-agents.runs";
+export const FANCY_FOOTER_WORKFLOWS_WIDGET_ID = "pi-agents.workflows";
+export const FANCY_FOOTER_AGENTS_WIDGET_ID = "pi-agents.agents";
 
 const FANCY_FOOTER_PROTOCOL = 1;
 const FANCY_FOOTER_WIDGET_EVENT = "pi-fancy-footer:widget";
 const FANCY_FOOTER_READY_EVENT = "pi-fancy-footer:ready";
 
-/** One stable, non-animated summary of every active run. */
-export function formatFancyFooterRunSummary(runs: Iterable<RunView>): string {
+export interface FancyFooterRunSummary {
+  workflows: string;
+  agents: string;
+}
+
+/** Stable, non-animated counts across every active run. */
+export function formatFancyFooterRunSummary(
+  runs: Iterable<RunView>,
+): FancyFooterRunSummary {
   const active = [...runs].filter((run) => run.status === "running");
-  if (active.length === 0) return "";
+  if (active.length === 0) return { workflows: "", agents: "" };
 
   let done = 0;
   let total = 0;
-  let tokens = 0;
   for (const run of active) {
     const progress = widgetProgress(run);
     done += progress.done;
     total += progress.total;
-    tokens += liveTokens(run);
   }
 
-  const runLabel = active.length === 1 ? "run" : "runs";
-  const agentLabel = total === 1 ? "agent" : "agents";
-  return `${active.length} ${runLabel} · ${done}/${total} ${agentLabel} · ${formatTokens(tokens)} tok`;
+  return { workflows: String(active.length), agents: `${done}/${total}` };
 }
 
 export class FancyFooterRunReporter {
-  private lastText: string | undefined;
+  private readonly lastText = new Map<string, string>();
   private readonly stopReady: () => void;
   private disposed = false;
 
@@ -66,31 +70,66 @@ export class FancyFooterRunReporter {
   /** Publish only when the stable snapshot changes, unless ready forces it. */
   update(force = false): void {
     if (this.disposed) return;
-    const text = formatFancyFooterRunSummary(this.manager.state.runs.values());
-    if (!force && text === this.lastText) return;
-    this.lastText = text;
+    const summary = formatFancyFooterRunSummary(
+      this.manager.state.runs.values(),
+    );
+    this.publish(
+      {
+        id: FANCY_FOOTER_WORKFLOWS_WIDGET_ID,
+        label: "Active workflows",
+        description: "Number of active pi-agents workflow executions.",
+        glyph: KIND_ICONS.workflow,
+        color: "accent",
+        position: 9,
+      },
+      summary.workflows,
+      force,
+    );
+    this.publish(
+      {
+        id: FANCY_FOOTER_AGENTS_WIDGET_ID,
+        label: "Agent progress",
+        description: "Completed and total agents across active workflows.",
+        glyph: KIND_ICONS.agent,
+        color: "success",
+        position: 10,
+      },
+      summary.agents,
+      force,
+    );
+  }
+
+  private publish(
+    widget: {
+      id: string;
+      label: string;
+      description: string;
+      glyph: string;
+      color: "accent" | "success";
+      position: number;
+    },
+    text: string,
+    force: boolean,
+  ): void {
+    if (!force && this.lastText.get(widget.id) === text) return;
+    this.lastText.set(widget.id, text);
     this.pi.events.emit(FANCY_FOOTER_WIDGET_EVENT, {
       protocol: FANCY_FOOTER_PROTOCOL,
       type: "upsert",
       widget: {
-        id: FANCY_FOOTER_RUNS_WIDGET_ID,
-        label: "Agent runs",
-        description: "Active pi-agents runs, progress, and token usage.",
+        id: widget.id,
+        label: widget.label,
+        description: widget.description,
         content: { type: "text", text },
         icon: {
-          glyphs: {
-            nerd: "󰚩",
-            emoji: "🤖",
-            unicode: "◇",
-            ascii: "A",
-          },
-          color: "accent",
+          glyphs: widget.glyph,
+          color: widget.color,
         },
         style: { textColor: "text" },
         layout: {
           enabled: false,
           row: 1,
-          position: 9,
+          position: widget.position,
           align: "right",
           fill: "none",
         },
@@ -102,10 +141,15 @@ export class FancyFooterRunReporter {
     if (this.disposed) return;
     this.disposed = true;
     this.stopReady();
-    this.pi.events.emit(FANCY_FOOTER_WIDGET_EVENT, {
-      protocol: FANCY_FOOTER_PROTOCOL,
-      type: "remove",
-      id: FANCY_FOOTER_RUNS_WIDGET_ID,
-    });
+    for (const id of [
+      FANCY_FOOTER_WORKFLOWS_WIDGET_ID,
+      FANCY_FOOTER_AGENTS_WIDGET_ID,
+    ]) {
+      this.pi.events.emit(FANCY_FOOTER_WIDGET_EVENT, {
+        protocol: FANCY_FOOTER_PROTOCOL,
+        type: "remove",
+        id,
+      });
+    }
   }
 }

@@ -1,5 +1,5 @@
 ---
-title: Optional fancy footer run summary
+title: Optional fancy footer workflow counters
 type: feature
 authors:
   - mavam
@@ -9,10 +9,11 @@ prs:
 created: 2026-07-23T17:56:35.764767Z
 ---
 
-`pi-agents` now offers a compact `pi-agents.runs` widget for
-`pi-fancy-footer`. It summarizes active runs, aggregate agent progress, and
-live token usage, for example `2 runs · 4/7 agents · 12.4k tok`.
+`pi-agents` now offers two compact widgets for `pi-fancy-footer`: `❖N` shows
+the number of active workflow executions, while `✦A/T` shows completed and
+total agents across those executions. For example, `❖2 ✦4/7` means two
+executions are active and four of their seven agents have completed.
 
-The widget is off by default. Open `/fancy-footer` and move **Agent runs** off
-the bench to enable it. The integration uses the footer's event protocol, so
+Both widgets are off by default and can be enabled independently from
+`/fancy-footer`. The integration uses the footer's event protocol, so
 installing `pi-fancy-footer` remains optional.

@@ -88,16 +88,26 @@ class TestEventBus {
 }
 
 describe("fancy footer run summary", () => {
-  test("summarizes active progress and live tokens without a clock", () => {
+  test("counts active executions and completed agents without usage", () => {
     const run = activeRun();
-    expect(formatFancyFooterRunSummary([run])).toBe(
-      "1 run · 1/2 agents · 2.0k tok",
-    );
+    expect(formatFancyFooterRunSummary([run])).toEqual({
+      workflows: "1",
+      agents: "1/2",
+    });
+    const second = activeRun();
+    second.header = { ...second.header, id: "r2" };
+    expect(formatFancyFooterRunSummary([run, second])).toEqual({
+      workflows: "2",
+      agents: "2/4",
+    });
     run.status = "completed";
-    expect(formatFancyFooterRunSummary([run])).toBe("");
+    expect(formatFancyFooterRunSummary([run])).toEqual({
+      workflows: "",
+      agents: "",
+    });
   });
 
-  test("publishes an opt-in snapshot, deduplicates, and republishes on ready", () => {
+  test("publishes two opt-in snapshots and deduplicates them independently", () => {
     const bus = new TestEventBus();
     const run = activeRun();
     const manager = {
@@ -108,34 +118,66 @@ describe("fancy footer run summary", () => {
       manager,
     );
 
-    expect(bus.emitted).toHaveLength(1);
+    expect(bus.emitted).toHaveLength(2);
     expect(bus.emitted[0]).toMatchObject({
       channel: "pi-fancy-footer:widget",
       data: {
         protocol: 1,
         type: "upsert",
         widget: {
-          id: "pi-agents.runs",
-          content: { type: "text", text: "1 run · 1/2 agents · 2.0k tok" },
+          id: "pi-agents.workflows",
+          content: { type: "text", text: "1" },
           layout: { enabled: false, row: 1, position: 9 },
+        },
+      },
+    });
+    expect(bus.emitted[1]).toMatchObject({
+      channel: "pi-fancy-footer:widget",
+      data: {
+        protocol: 1,
+        type: "upsert",
+        widget: {
+          id: "pi-agents.agents",
+          content: { type: "text", text: "1/2" },
+          layout: { enabled: false, row: 1, position: 10 },
         },
       },
     });
 
     reporter.update();
-    expect(bus.emitted).toHaveLength(1);
-
-    bus.receive("pi-fancy-footer:ready", { protocol: 2, version: "2.0.0" });
-    expect(bus.emitted).toHaveLength(1);
-    bus.receive("pi-fancy-footer:ready", { protocol: 1, version: "2.0.0" });
     expect(bus.emitted).toHaveLength(2);
 
-    reporter.dispose();
-    expect(bus.emitted.at(-1)).toEqual({
-      channel: "pi-fancy-footer:widget",
-      data: { protocol: 1, type: "remove", id: "pi-agents.runs" },
-    });
-    bus.receive("pi-fancy-footer:ready", { protocol: 1, version: "2.0.0" });
+    const running = run.nodes.get("$.branches.live");
+    if (!running) throw new Error("missing running agent");
+    running.status = "completed";
+    reporter.update();
     expect(bus.emitted).toHaveLength(3);
+    expect(bus.emitted.at(-1)).toMatchObject({
+      data: {
+        widget: {
+          id: "pi-agents.agents",
+          content: { text: "2/2" },
+        },
+      },
+    });
+
+    bus.receive("pi-fancy-footer:ready", { protocol: 2, version: "2.0.0" });
+    expect(bus.emitted).toHaveLength(3);
+    bus.receive("pi-fancy-footer:ready", { protocol: 1, version: "2.0.0" });
+    expect(bus.emitted).toHaveLength(5);
+
+    reporter.dispose();
+    expect(bus.emitted.slice(-2)).toEqual([
+      {
+        channel: "pi-fancy-footer:widget",
+        data: { protocol: 1, type: "remove", id: "pi-agents.workflows" },
+      },
+      {
+        channel: "pi-fancy-footer:widget",
+        data: { protocol: 1, type: "remove", id: "pi-agents.agents" },
+      },
+    ]);
+    bus.receive("pi-fancy-footer:ready", { protocol: 1, version: "2.0.0" });
+    expect(bus.emitted).toHaveLength(7);
   });
 });

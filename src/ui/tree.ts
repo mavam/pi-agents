@@ -39,15 +39,27 @@ export const STATUS_TREE_ICONS = {
   cancelled: "⊘",
 } as const;
 
+const STATUS_TREE_COLORS: Record<
+  keyof typeof STATUS_TREE_ICONS,
+  Parameters<TreeColorize>[0]
+> = {
+  pending: "dim",
+  running: "accent",
+  completed: "success",
+  failed: "error",
+  cancelled: "dim",
+};
+
 const TASK_PREVIEW_CHARS = 56;
 
 /**
  * Dataflow-first coloring: `{references}` in accent, prose and connectors
- * dim, kind glyphs muted. The identity default keeps plain contexts
- * (markdown code fences, tests) byte-identical.
+ * dim, kind glyphs muted, status icons by outcome (green when completed).
+ * The identity default keeps plain contexts (markdown code fences, tests)
+ * byte-identical.
  */
 export type TreeColorize = (
-  color: "accent" | "dim" | "muted",
+  color: "accent" | "dim" | "muted" | "success" | "error",
   text: string,
 ) => string;
 
@@ -248,10 +260,13 @@ function renderLines(
     const connector = top ? "" : last ? "└─ " : "├─ ";
     const childPrefix = top ? "" : prefix + (last ? "   " : "│  ");
     const status = node.path ? statuses?.get(node.path) : undefined;
-    // Static trees mute the kind glyphs; status overlays keep their icons
-    // plain (they carry the signal).
+    // Static trees mute the kind glyphs; status overlays color their icons
+    // by outcome, matching the run rows and the live widget.
     const icon = statuses
-      ? (status?.icon ?? STATUS_TREE_ICONS.pending)
+      ? color(
+          STATUS_TREE_COLORS[status?.status ?? "pending"],
+          status?.icon ?? STATUS_TREE_ICONS.pending,
+        )
       : node.icon !== undefined
         ? color("muted", node.icon)
         : undefined;

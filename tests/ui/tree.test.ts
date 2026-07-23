@@ -234,6 +234,35 @@ describe("renderRunTree", () => {
     expect(nodes.some((node) => node.agent === "worker")).toBe(true);
   });
 
+  test("status icons are colored by outcome", async () => {
+    const flow = validateFlow({
+      kind: "parallel",
+      branches: {
+        good: { kind: "agent", name: "a", task: "ok" },
+        bad: { kind: "agent", name: "b", task: "boom" },
+      },
+    });
+    const events: RunEvent[] = [];
+    await executeFlow({
+      runId: "r4",
+      flow,
+      runAgent: async (call) => {
+        if (call.agent === "b") throw new Error("kaput");
+        return { text: "ok" };
+      },
+      emit: (event) => events.push(event),
+    });
+    const run = rebuildRunState(events).runs.get("r4");
+    if (!run) throw new Error("missing run");
+    const mark = (color: string, text: string) =>
+      `<${color}>${text}</${color}>`;
+    const tree = renderRunTree(run, mark);
+    expect(tree).toContain("<success>●</success>");
+    expect(tree).toContain("<error>✗</error>");
+    // Default rendering stays byte-identical (no color markers).
+    expect(renderRunTree(run)).not.toContain("<");
+  });
+
   test("failures surface inline with ✗", async () => {
     const flow = validateFlow({ kind: "agent", name: "a", task: "boom" });
     const events: RunEvent[] = [];

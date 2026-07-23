@@ -23,6 +23,12 @@
   "bugs": {
     "url": "https://github.com/mavam/pi-agents/issues"
   },
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api.ts",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
   "engines": {
     "node": ">=20.0.0"
   },

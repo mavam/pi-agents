@@ -1,10 +1,11 @@
 /**
  * pi-agents extension entry point: constructs the engine, run manager, and
- * UI managers; registers the workflow tool, slash commands, event hooks, and
- * the system-prompt catalogs; and rebuilds run history from the sidecar
- * store next to the session file.
+ * UI managers; registers the workflow tool, slash commands, event hooks,
+ * cross-extension RPC, and the system-prompt catalogs; and rebuilds run
+ * history from the sidecar store next to the session file.
  */
 
+import { createRequire } from "node:module";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -21,12 +22,14 @@ import {
   isProjectTrusted,
   readRunEvents,
 } from "./run/persist.js";
+import { createRunEventPublisher, publishReady } from "./run/publish.js";
 import { RunManager } from "./run/runs.js";
 import {
   registerCommands,
   registerWorkflowCommands,
 } from "./triggers/commands.js";
 import { HookManager } from "./triggers/hooks.js";
+import { RpcManager } from "./triggers/rpc.js";
 import type { TriggerDeps } from "./triggers/start.js";
 import { createWorkflowTool } from "./triggers/tool.js";
 import { NotificationManager } from "./ui/notify.js";
@@ -36,6 +39,10 @@ import {
   registerRenderers,
 } from "./ui/render.js";
 import { RunWidget } from "./ui/widget.js";
+
+const PACKAGE_VERSION = (
+  createRequire(import.meta.url)("../package.json") as { version: string }
+).version;
 
 function currentDepth(): number {
   const raw = process.env[DEPTH_ENV_VAR];
@@ -69,6 +76,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     defaultBudgets: inheritedBudgets(),
     onEvent: (event) => notifications.handleRunEvent(event),
     onStateChanged: () => widget.update(),
+    publish: createRunEventPublisher(pi),
   });
   notifications = new NotificationManager(pi, manager);
   widget = new RunWidget(manager);
@@ -82,7 +90,8 @@ export default function agentExtension(pi: ExtensionAPI): void {
   // Event hooks only run in the root process: delegated children would
   // otherwise re-trigger the same workflows from their own lifecycle events.
   const hooks = depth === 0 ? new HookManager(pi, deps) : undefined;
-  hooks?.install();
+  const rpc = new RpcManager(pi, deps, PACKAGE_VERSION);
+  rpc.install();
 
   const refreshUi = (ctx: ExtensionContext): void => {
     notifications.setContext(ctx);
@@ -105,13 +114,16 @@ export default function agentExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    rpc.setContext(ctx);
     reloadRunState(ctx);
     const trusted = isProjectTrusted(ctx);
     registerWorkflowCommands(pi, ctx.cwd, deps, trusted);
     hooks?.refresh(ctx.cwd, trusted);
+    publishReady(pi, PACKAGE_VERSION);
   });
 
   pi.on("session_tree", (_event, ctx) => {
+    rpc.setContext(ctx);
     reloadRunState(ctx);
   });
 
@@ -136,11 +148,16 @@ export default function agentExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
+    rpc.dispose();
     hooks?.dispose();
     widget.dispose();
     manager.stopAll();
     notifications.clear();
   });
+
+  // Register hooks after core lifecycle handlers so session context and the
+  // ready signal are established before a session_start workflow can run.
+  hooks?.install();
 }
 
 export { MESSAGE_TYPE, NOTIFICATION_TYPE };

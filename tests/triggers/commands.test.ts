@@ -14,7 +14,7 @@ import {
   formatNodeResultFull,
   formatRunNodesList,
 } from "../../src/triggers/commands.js";
-import { nodeDisplayName } from "../../src/ui/render.js";
+import { formatRunSource, nodeDisplayName } from "../../src/ui/render.js";
 
 const REVIEW_FLOW = {
   kind: "parallel",
@@ -73,6 +73,18 @@ describe("nodeDisplayName", () => {
     expect(nodeDisplayName(node("$", { label: "scout" }))).toBe("scout");
     expect(nodeDisplayName(node("$", { agent: "reviewer" }))).toBe("reviewer");
     expect(nodeDisplayName(node("$"))).toBe("agent");
+  });
+});
+
+describe("formatRunSource", () => {
+  test("includes hook events and RPC callers", () => {
+    expect(formatRunSource({ kind: "hook", event: "turn_end" })).toBe(
+      "hook:turn_end",
+    );
+    expect(formatRunSource({ kind: "rpc", caller: "pi-dashboard" })).toBe(
+      "rpc:pi-dashboard",
+    );
+    expect(formatRunSource({ kind: "rpc" })).toBe("rpc");
   });
 });
 

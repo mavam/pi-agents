@@ -17,11 +17,13 @@ export type NodeStatus = "running" | "completed" | "failed" | "cancelled";
 export type CancelReason = "any" | "quorum" | "sibling_failed" | "stopped";
 
 export interface RunSource {
-  kind: "tool" | "command" | "hook";
+  kind: "tool" | "command" | "hook" | "rpc";
   /** Saved workflow name, when the run came from one. */
   workflow?: string;
   /** Triggering pi event name, for hook runs. */
   event?: string;
+  /** Self-declared calling extension, for RPC runs. */
+  caller?: string;
 }
 
 export interface RunHeader {

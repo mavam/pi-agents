@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
+import type { RunSource } from "../run/events.js";
 import type { NodeView, RunView } from "../run/state.js";
 
 export const MESSAGE_TYPE = "pi-agents:message";
@@ -35,6 +36,13 @@ export function sendInfo(pi: ExtensionAPI, text: string): void {
 
 export function shortId(runId: string): string {
   return runId.slice(0, 8);
+}
+
+export function formatRunSource(source: RunSource): string {
+  if (source.kind === "hook") return `hook:${source.event ?? "?"}`;
+  if (source.kind === "rpc")
+    return source.caller ? `rpc:${source.caller}` : "rpc";
+  return source.kind;
 }
 
 export function formatUsage(usage: SpawnUsage | undefined): string {
@@ -102,10 +110,7 @@ export function formatRunOverviewLine(run: RunView): string {
   const icon = STATUS_ICONS[run.status] ?? "?";
   const label =
     run.header.label ?? run.header.source.workflow ?? run.header.flow.kind;
-  const source =
-    run.header.source.kind === "hook"
-      ? `hook:${run.header.source.event ?? "?"}`
-      : run.header.source.kind;
+  const source = formatRunSource(run.header.source);
   const usage = formatUsage(run.usage);
   return `${icon} ${shortId(run.header.id)}  ${run.status.padEnd(9)} ${label} (${source})${usage ? `  ${usage}` : ""}`;
 }

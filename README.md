@@ -182,7 +182,7 @@ never run.
 
 ### 3. Trigger it
 
-Workflows fire from three surfaces:
+Workflows fire from four surfaces:
 
 1. **The model.** Saved workflows (name, description, `trigger`, params)
    are advertised in the system prompt; the model runs them — or composes
@@ -196,6 +196,8 @@ Workflows fire from three surfaces:
    and the workflow fires on those pi events, always in the background,
    with the event payload bound as `{params.event}`. Hooks run only in the
    root pi process, never inside delegated children.
+4. **Other extensions.** Co-loaded pi extensions can start, stop, and inspect
+   runs over the in-process event bus. See [Event bus and RPC](#-event-bus-and-rpc).
 
 ## 🛠️ The `workflow` tool: ad-hoc flows from the model
 
@@ -429,6 +431,71 @@ sessions, all command and hook runs) keep writing to their origin session's
 sidecar; results are delivered as notifications when that session is idle.
 After a pi restart, in-flight runs are marked stopped — they cannot resume —
 but their history remains inspectable.
+
+## 🔌 Event bus and RPC
+
+pi-agents exposes its live run stream and a small control protocol through
+`pi.events`. The raw channels require no import from this package; an optional
+typed client is exported from `pi-agents/api`.
+
+| Channel | Payload |
+|---|---|
+| `pi-agents:ready` | `{ protocol: 1, version }` once per session start |
+| `pi-agents:run-event` | `{ protocol: 1, event: RunEvent }` |
+| `pi-agents:rpc:request` | `{ protocol: 1, id, caller?, op, params? }` |
+| `pi-agents:rpc:reply:<id>` | Correlated success or error reply |
+
+The run channel carries `run_created`, node lifecycle, loop iteration,
+`run_backgrounded`, and `run_completed` events. These are detached snapshots:
+subscribers cannot mutate pi-agents' internal run state. Only new live events
+are published; use RPC `list` for the current session's known run summaries.
+
+Raw RPC callers must subscribe before emitting because replies may be
+synchronous:
+
+```ts
+const id = crypto.randomUUID();
+const replyChannel = `pi-agents:rpc:reply:${id}`;
+const unsubscribe = pi.events.on(replyChannel, (reply) => {
+  unsubscribe();
+  console.log(reply);
+});
+pi.events.emit("pi-agents:rpc:request", {
+  protocol: 1,
+  id,
+  caller: "my-extension",
+  op: "start",
+  params: { workflow: "review", params: { target: "src" } },
+});
+```
+
+The typed client handles IDs, correlation, timeouts, and listener cleanup:
+
+```ts
+import { createPiAgentsClient } from "pi-agents/api";
+
+const agents = createPiAgentsClient(pi, { caller: "my-extension" });
+const off = agents.onRunEvent((event) => {
+  if (event.type === "run_completed") console.log(event.status);
+});
+const { runId } = await agents.start({ workflow: "review", params: { target: "src" } });
+await agents.stop(runId); // only while the run is live
+off();
+```
+
+RPC operations are `ping`, `start`, `stop`, and `list`. `start` accepts exactly
+one of an inline `flow` or saved `workflow`, optional literal workflow
+parameters and label, and an optional absolute existing `cwd`. RPC runs always
+run in the background, use the normal inherited/default budgets, and obey the active
+session's project-trust decision. In untrusted projects only user agents and
+workflows resolve. A `start` request made outside an active session returns an
+error.
+
+The bus is process-local. A subscriber may issue a guarded RPC request while
+handling a run event, but listeners that automatically start work must filter
+specific transitions or deduplicate run IDs to avoid creating their own event
+loop. Workflows cannot declare pi-agents' public channels in `on:`; that
+integration remains deliberately unsupported.
 
 ## 📄 License
 

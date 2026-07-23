@@ -43,8 +43,9 @@ const STATUS_TREE_COLORS: Record<
   keyof typeof STATUS_TREE_ICONS,
   Parameters<TreeColorize>[0]
 > = {
+  // Traffic light: dim → yellow → green/red.
   pending: "dim",
-  running: "accent",
+  running: "warning",
   completed: "success",
   failed: "error",
   cancelled: "dim",
@@ -59,7 +60,7 @@ const TASK_PREVIEW_CHARS = 56;
  * byte-identical.
  */
 export type TreeColorize = (
-  color: "accent" | "dim" | "muted" | "success" | "error",
+  color: "accent" | "dim" | "muted" | "success" | "warning" | "error",
   text: string,
 ) => string;
 

@@ -97,7 +97,7 @@ export interface WorkflowToolDetails {
 
 /** Minimal color hook so the pure formatters are testable without a theme. */
 export type ToolColorize = (
-  color: "dim" | "accent" | "success" | "error" | "muted",
+  color: "dim" | "accent" | "success" | "warning" | "error" | "muted",
   text: string,
 ) => string;
 

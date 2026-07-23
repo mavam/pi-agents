@@ -54,7 +54,7 @@ export interface WidgetSegment {
 
 /** Colors used by the widget; the identity function makes it testable. */
 export type Colorize = (
-  color: "success" | "accent" | "muted" | "dim" | "error" | "text",
+  color: "success" | "accent" | "warning" | "muted" | "dim" | "error" | "text",
   text: string,
 ) => string;
 
@@ -255,7 +255,7 @@ function segmentColor(status: SegmentStatus): Parameters<Colorize>[0] {
     case "completed":
       return "success";
     case "running":
-      return "accent";
+      return "warning";
     case "failed":
       return "error";
     default:

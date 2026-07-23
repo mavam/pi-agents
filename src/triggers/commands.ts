@@ -312,7 +312,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
 // Interactive overlays (TUI only; non-TUI modes keep the markdown output)
 
 const STATUS_COLORS: Record<string, Parameters<Colorize>[0]> = {
-  running: "accent",
+  running: "warning",
   completed: "success",
   failed: "error",
   cancelled: "dim",

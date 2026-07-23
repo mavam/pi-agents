@@ -33,6 +33,7 @@ import {
   formatUsage,
   formatValuePreview,
   nodeDisplayName,
+  renderResultValue,
   STATUS_ICONS,
   sendInfo,
   shortId,
@@ -863,16 +864,16 @@ function valueText(value: unknown): string | undefined {
     : (JSON.stringify(value, null, 2) ?? String(value));
 }
 
-/** Fenced full value, bounded by MAX_FULL_RESULT_CHARS. */
-function fullValueLines(text: string): string[] {
+/** Markdown string or fenced structured value, bounded by MAX_FULL_RESULT_CHARS. */
+function fullValueLines(value: unknown, text: string): string[] {
   if (text.length > MAX_FULL_RESULT_CHARS) {
     return [
-      fenced(text.slice(0, MAX_FULL_RESULT_CHARS)),
+      renderResultValue(value, text.slice(0, MAX_FULL_RESULT_CHARS)),
       "",
       `… truncated ${text.length - MAX_FULL_RESULT_CHARS} characters.`,
     ];
   }
-  return [fenced(text)];
+  return [renderResultValue(value, text)];
 }
 
 /** The complete run value (bounded only by what persistence retained). */
@@ -888,7 +889,7 @@ function formatRunResultFull(run: RunView): string {
     lines.push("(no result value)");
     return lines.join("\n");
   }
-  lines.push(...fullValueLines(text));
+  lines.push(...fullValueLines(run.value, text));
   return lines.join("\n");
 }
 
@@ -988,7 +989,7 @@ export function formatNodeResultFull(run: RunView, node: NodeView): string {
     if (!node.error) lines.push("", "(no output value)");
     return lines.join("\n");
   }
-  lines.push("", ...fullValueLines(text));
+  lines.push("", ...fullValueLines(node.value, text));
   return lines.join("\n");
 }
 
@@ -1054,11 +1055,17 @@ function formatRunDetails(run: RunView, fullValue = false): string {
     );
   if (fullValue) {
     const text = valueText(run.value);
-    if (text) lines.push("", "### Result", "", ...fullValueLines(text));
+    if (text)
+      lines.push("", "### Result", "", ...fullValueLines(run.value, text));
   } else {
     const value = formatValuePreview(run.value);
     if (value) {
-      lines.push("", "### Result (preview)", "", fenced(value));
+      lines.push(
+        "",
+        "### Result (preview)",
+        "",
+        renderResultValue(run.value, value),
+      );
       lines.push("", `Full result: \`/run ${shortId(run.header.id)} result\``);
     }
   }

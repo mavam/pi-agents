@@ -1,0 +1,10 @@
+created: 2026-07-23
+title: Ad-hoc agents and live workflow control
+intro: >-
+  Pi Agents now runs ad-hoc workflow agents without predefined profiles and adds per-agent
+  inspection, live steering, and event-bus control. Reliable delegated completion,
+  uncropped persisted results, stable previews, and compact footer counters make long-running
+  workflows easier to operate.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.3.0

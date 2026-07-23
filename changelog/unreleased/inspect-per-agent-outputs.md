@@ -20,6 +20,8 @@ The command surface gained matching verbs: `/run <id> agents` lists a
 run's agents with collapsed previews, and `/run <id> result <node>`
 prints one agent's complete output. Nodes are addressable by display
 name (`bugs`, `@2`), agent name, or instance path, with tab completion
-walking id → verb → node name. Status icons in the run tree are now
-also colored by outcome — green completed, red failed — matching the
-run rows and the live widget, so progress reads at a glance.
+walking id → verb → node name. The run tree now keeps each node's kind
+glyph and encodes the outcome in its color — green completed, red
+failed — matching the run rows and the live widget, so both progress
+and fork/join structure read at a glance; colorless contexts (markdown
+fences) pair the glyph with a status icon instead.

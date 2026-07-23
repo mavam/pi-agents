@@ -254,22 +254,29 @@ function renderLines(
   top: boolean,
   color: TreeColorize,
 ): string[] {
+  // Identity colorizers (markdown fences, tests) render plainly.
+  const coloring = color("dim", "·") !== "·";
   const lines: string[] = [];
   nodes.forEach((node, index) => {
     const last = index === nodes.length - 1;
     const connector = top ? "" : last ? "└─ " : "├─ ";
     const childPrefix = top ? "" : prefix + (last ? "   " : "│  ");
     const status = node.path ? statuses?.get(node.path) : undefined;
-    // Static trees mute the kind glyphs; status overlays color their icons
-    // by outcome, matching the run rows and the live widget.
-    const icon = statuses
-      ? color(
-          STATUS_TREE_COLORS[status?.status ?? "pending"],
-          status?.icon ?? STATUS_TREE_ICONS.pending,
-        )
-      : node.icon !== undefined
-        ? color("muted", node.icon)
-        : undefined;
+    // Static trees mute the kind glyphs. Status overlays keep the kind
+    // glyph so fork/join/map structure stays readable mid-run and encode
+    // the outcome in its color (matching the run rows and the live
+    // widget); plain contexts (markdown fences) have no color to carry
+    // state, so they pair the glyph with a status icon instead.
+    let icon: string | undefined;
+    if (statuses) {
+      const tint = STATUS_TREE_COLORS[status?.status ?? "pending"];
+      const statusGlyph = status?.icon ?? STATUS_TREE_ICONS.pending;
+      icon = coloring
+        ? color(tint, node.icon ?? statusGlyph)
+        : [statusGlyph, node.icon].filter(Boolean).join(" ");
+    } else if (node.icon !== undefined) {
+      icon = color("muted", node.icon);
+    }
     const detail = status?.detail ? ` [${status.detail}]` : "";
     const error = status?.error ? ` — ${preview(status.error)}` : "";
     const skeleton = `${prefix}${connector}`;

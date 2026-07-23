@@ -7,7 +7,7 @@
  *   │   ● 1a2b3c4d  completed  review    3t ↑12k  $0.08  │
  *   │ ▸ ● c9e5799a  completed  triage    5t ↑33k  $0.21  │
  *   ├─ c9e5799a · triage (command) · 1m32s · 33k tok ────┤
- *   │  ● scout → {files} · List files to review          │
+ *   │  ✦ scout → {files} · List files to review          │
  *   │  ⇶ map {files} (×4)                                │
  *   ╰─ ↑↓ move · ⏎ inspect · c cancel · r rerun · esc ───╯
  */

@@ -196,11 +196,11 @@ describe("renderRunTree", () => {
     const run = rebuildRunState(events).runs.get("r1");
     if (!run) throw new Error("missing run");
     const tree = renderRunTree(run);
-    expect(tree).toContain("● scout → {files} · list");
+    expect(tree).toContain("● ✦ scout → {files} · list");
     // Three map items aggregate on the body line.
-    expect(tree).toContain("└─ ● reviewer · review {item} [3/3]");
-    // Kind icons are replaced by status icons in overlay mode.
-    expect(tree).not.toContain("✦");
+    expect(tree).toContain("└─ ● ✦ reviewer · review {item} [3/3]");
+    // Status icons join the kind glyphs, so structure stays readable.
+    expect(tree).toContain("● ⇶ map {files}");
   });
 
   test("anonymous runs replay from persisted events and render as ad-hoc", async () => {
@@ -225,8 +225,8 @@ describe("renderRunTree", () => {
     const run = rebuildRunState(replayed).runs.get("r3");
     if (!run) throw new Error("missing run");
     const tree = renderRunTree(run);
-    expect(tree).toContain("● ad-hoc → {map} · scout");
-    expect(tree).toContain("● worker · use {map}");
+    expect(tree).toContain("● ✦ ad-hoc → {map} · scout");
+    expect(tree).toContain("● ✦ worker · use {map}");
     const nodes = [...run.nodes.values()].filter(
       (node) => node.kind === "agent",
     );
@@ -257,10 +257,15 @@ describe("renderRunTree", () => {
     const mark = (color: string, text: string) =>
       `<${color}>${text}</${color}>`;
     const tree = renderRunTree(run, mark);
-    expect(tree).toContain("<success>●</success>");
-    expect(tree).toContain("<error>✗</error>");
-    // Default rendering stays byte-identical (no color markers).
-    expect(renderRunTree(run)).not.toContain("<");
+    // Colored contexts keep the kind glyph and encode status in its tint.
+    expect(tree).toContain("<success>✦</success> a");
+    expect(tree).toContain("<error>✦</error> b");
+    expect(tree).not.toContain("●");
+    // Plain contexts pair a status icon with the kind glyph instead.
+    const plain = renderRunTree(run);
+    expect(plain).not.toContain("<");
+    expect(plain).toContain("● ✦ a");
+    expect(plain).toContain("✗ ✦ b");
   });
 
   test("failures surface inline with ✗", async () => {
@@ -277,6 +282,6 @@ describe("renderRunTree", () => {
     const run = rebuildRunState(events).runs.get("r2");
     if (!run) throw new Error("missing run");
     const tree = renderRunTree(run);
-    expect(tree).toContain("✗ a · boom — kaput");
+    expect(tree).toContain("✗ ✦ a · boom — kaput");
   });
 });

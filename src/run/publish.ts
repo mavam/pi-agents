@@ -10,16 +10,25 @@ import {
 } from "../api.js";
 import type { RunEvent } from "./events.js";
 
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (typeof value !== "object" || value === null || seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  for (const nested of Object.values(value)) deepFreeze(nested, seen);
+  return Object.freeze(value);
+}
+
 /**
- * Create the external event sink. The snapshot prevents subscribers from
- * mutating the event objects retained by RunManager state.
+ * Create the external event sink. The deeply frozen snapshot prevents
+ * subscribers from mutating RunManager state or each other's event view.
  */
 export function createRunEventPublisher(
   pi: Pick<ExtensionAPI, "events">,
 ): (event: RunEvent) => void {
   return (event) => {
     try {
-      const snapshot = Object.freeze(structuredClone(event));
+      const snapshot = deepFreeze(structuredClone(event));
       const envelope: RunEventEnvelope = Object.freeze({
         protocol: PROTOCOL_VERSION,
         event: snapshot,

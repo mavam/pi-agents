@@ -446,9 +446,10 @@ typed client is exported from `pi-agents/api`.
 | `pi-agents:rpc:reply:<id>` | Correlated success or error reply |
 
 The run channel carries `run_created`, node lifecycle, loop iteration,
-`run_backgrounded`, and `run_completed` events. These are detached snapshots:
-subscribers cannot mutate pi-agents' internal run state. Only new live events
-are published; use RPC `list` for the current session's known run summaries.
+`run_backgrounded`, and `run_completed` events. These are detached, deeply
+frozen snapshots: subscribers cannot mutate pi-agents' internal run state or
+the event seen by later subscribers. Only new live events are published; use
+RPC `list` for the current session's known run summaries.
 
 Raw RPC callers must subscribe before emitting because replies may be
 synchronous:
@@ -491,7 +492,9 @@ session's project-trust decision. In untrusted projects only user agents and
 workflows resolve. A `start` request made outside an active session returns an
 error.
 
-The bus is process-local. A subscriber may issue a guarded RPC request while
+The RPC listener is installed at every delegation depth. Because the bus is
+process-local, the root session and each delegated pi process expose independent
+RPC endpoints and run lists. A subscriber may issue a guarded RPC request while
 handling a run event, but listeners that automatically start work must filter
 specific transitions or deduplicate run IDs to avoid creating their own event
 loop. Workflows cannot declare pi-agents' public channels in `on:`; that

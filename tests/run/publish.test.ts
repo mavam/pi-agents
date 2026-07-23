@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe("run event publisher", () => {
-  test("publishes a detached snapshot", () => {
+  test("publishes a detached, deeply frozen snapshot", () => {
     const original: RunEvent = {
       type: "run_created",
       at: 1,
@@ -64,7 +64,15 @@ describe("run event publisher", () => {
           };
           expect(envelope.protocol).toBe(PROTOCOL_VERSION);
           expect(envelope.event).not.toBe(original);
-          envelope.event.run.label = "mutated";
+          expect(Object.isFrozen(envelope)).toBe(true);
+          expect(Object.isFrozen(envelope.event)).toBe(true);
+          expect(Object.isFrozen(envelope.event.run)).toBe(true);
+          expect(Object.isFrozen(envelope.event.run.source)).toBe(true);
+          expect(Object.isFrozen(envelope.event.run.flow)).toBe(true);
+          expect(Reflect.set(envelope.event.run, "label", "mutated")).toBe(
+            false,
+          );
+          expect(envelope.event.run.label).toBe("original");
         },
       },
     } as unknown as Pick<ExtensionAPI, "events">;

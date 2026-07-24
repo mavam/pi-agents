@@ -505,6 +505,304 @@ describe("budgets and aborts", () => {
   });
 });
 
+describe("switch", () => {
+  const gateSwitch = (
+    cases: unknown[],
+    elseArm: unknown,
+    extra: Record<string, unknown> = {},
+  ) =>
+    seq(agent("gate", "inspect", { as: "gate", output: "json" }), {
+      kind: "switch",
+      on: "{gate}",
+      cases,
+      else: elseArm,
+      ...extra,
+    });
+
+  test("first matching case wins; later truthy cases never run", async () => {
+    const { outcome, calls } = await run(
+      gateSwitch(
+        [
+          { when: { eq: ["status", "approved"] }, then: agent("first", "a") },
+          { when: { exists: "status" }, then: agent("second", "b") },
+        ],
+        agent("fallback", "c"),
+      ),
+      (call) =>
+        call.agent === "gate" ? '{"status": "approved"}' : `${call.agent}-ran`,
+    );
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toBe("first-ran");
+    expect(calls.map((call) => call.agent)).toEqual(["gate", "first"]);
+  });
+
+  test("falls through to else when no case matches", async () => {
+    const { outcome, calls } = await run(
+      gateSwitch(
+        [{ when: { eq: ["status", "approved"] }, then: agent("first", "a") }],
+        agent("fallback", "c"),
+      ),
+      (call) =>
+        call.agent === "gate" ? '{"status": "rejected"}' : `${call.agent}-ran`,
+    );
+    expect(outcome.value).toBe("fallback-ran");
+    expect(calls.map((call) => call.agent)).toEqual(["gate", "fallback"]);
+  });
+
+  test("the switch's value binds via as for later steps", async () => {
+    const { calls } = await run(
+      seq(
+        agent("gate", "inspect", { as: "gate", output: "json" }),
+        {
+          kind: "switch",
+          on: "{gate}",
+          cases: [{ when: { exists: "go" }, then: agent("worker", "work") }],
+          else: agent("idle", "idle"),
+          as: "outcome",
+        },
+        agent("closer", "wrap up {outcome}"),
+      ),
+      (call) => (call.agent === "gate" ? '{"go": 1}' : `${call.agent}-done`),
+    );
+    expect(calls[2]?.task).toBe("wrap up worker-done");
+  });
+
+  test("an unresolvable on path fails the node with a switch.on message", async () => {
+    const { outcome, events } = await run(
+      gateSwitch(
+        [{ when: { exists: "x" }, then: agent("a", "t") }],
+        agent("b", "t"),
+        { on: "{gate.decision.state}" },
+      ),
+      () => '{"status": "ok"}',
+    );
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain(
+      "switch.on: path 'decision.state' not found in {gate}",
+    );
+    expect(eventTypes(events, "node_failed").length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("an unknown on reference fails with a switch.on message", async () => {
+    const { runner } = makeRunner(() => "ok");
+    const outcome = await executeFlow({
+      runId: "run-x",
+      flow: {
+        kind: "switch",
+        on: "{ghost}",
+        cases: [{ when: { exists: "x" }, then: { kind: "agent", task: "t" } }],
+        else: { kind: "agent", task: "t" },
+      } as FlowNode,
+      runAgent: runner,
+      emit: () => {},
+    });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("switch.on: unknown reference {ghost}");
+  });
+
+  test('the "" path matches whole non-object subjects', async () => {
+    const { outcome } = await run(
+      seq(agent("gate", "inspect", { as: "gate" }), {
+        kind: "switch",
+        on: "{gate}",
+        cases: [{ when: { eq: ["", "yes"] }, then: agent("worker", "go") }],
+        else: agent("idle", "idle"),
+      }),
+      (call) => (call.agent === "gate" ? "yes" : `${call.agent}-ran`),
+    );
+    expect(outcome.value).toBe("worker-ran");
+  });
+
+  test("missing paths: eq/exists are false, ne/empty are true", async () => {
+    const routed = async (when: unknown) => {
+      const { calls } = await run(
+        gateSwitch([{ when, then: agent("hit", "h") }], agent("miss", "m")),
+        (call) => (call.agent === "gate" ? "{}" : "done"),
+      );
+      return calls[1]?.agent;
+    };
+    expect(await routed({ eq: ["missing", "x"] })).toBe("miss");
+    expect(await routed({ exists: "missing" })).toBe("miss");
+    expect(await routed({ ne: ["missing", "x"] })).toBe("hit");
+    expect(await routed({ empty: "missing" })).toBe("hit");
+  });
+
+  test("on {last} inside a loop routes differently across iterations", async () => {
+    const { outcome, calls, events } = await run(
+      {
+        kind: "loop",
+        max: 3,
+        until: { eq: ["", "done"] },
+        body: {
+          kind: "switch",
+          on: "{last}",
+          cases: [
+            {
+              when: { eq: ["", "continue"] },
+              then: agent("resumer", "resume"),
+            },
+          ],
+          else: agent("starter", "start"),
+        },
+      },
+      (call) => (call.agent === "starter" ? "continue" : "done"),
+    );
+    expect(outcome.value).toBe("done");
+    expect(calls.map((call) => call.agent)).toEqual(["starter", "resumer"]);
+    const instances = eventTypes(events, "node_started").map(
+      (event) => (event as { instance: string }).instance,
+    );
+    expect(instances).toContain("$.body#0.else");
+    expect(instances).toContain("$.body#1.cases[0].then");
+  });
+
+  test("events address the switch and only the executed arm", async () => {
+    const { events } = await run(
+      gateSwitch(
+        [{ when: { eq: ["status", "approved"] }, then: agent("shipper", "s") }],
+        agent("reporter", "r"),
+      ),
+      (call) => (call.agent === "gate" ? '{"status": "approved"}' : "shipped"),
+    );
+    const started = eventTypes(events, "node_started") as {
+      path: string;
+      kind: string;
+    }[];
+    const switchStart = started.find((event) => event.path === "$.steps[1]");
+    expect(switchStart?.kind).toBe("switch");
+    expect(started.map((event) => event.path)).toContain(
+      "$.steps[1].cases[0].then",
+    );
+    const touched = events
+      .filter((event) => "path" in event)
+      .map((event) => (event as { path: string }).path);
+    expect(touched).not.toContain("$.steps[1].else");
+    const completed = eventTypes(events, "node_completed").find(
+      (event) => (event as { path: string }).path === "$.steps[1]",
+    ) as { value: unknown };
+    expect(completed.value).toBe("shipped");
+  });
+
+  test("cancellation mid-arm cancels the arm and the switch", async () => {
+    const controller = new AbortController();
+    const { outcome, events } = await run(
+      gateSwitch(
+        [{ when: { eq: ["go", true] }, then: agent("worker", "work") }],
+        agent("idle", "idle"),
+      ),
+      (call) => {
+        if (call.agent === "gate") return '{"go": true}';
+        queueMicrotask(() => controller.abort());
+        return hangUntilAbort(call.signal);
+      },
+      { signal: controller.signal },
+    );
+    expect(outcome.status).toBe("stopped");
+    const cancelled = eventTypes(events, "node_cancelled").map(
+      (event) => (event as { path: string }).path,
+    );
+    expect(cancelled).toContain("$.steps[1].cases[0].then");
+    expect(cancelled).toContain("$.steps[1]");
+  });
+
+  test("the switch itself consumes no agent budget", async () => {
+    const { outcome } = await run(
+      gateSwitch(
+        [{ when: { exists: "go" }, then: agent("worker", "work") }],
+        agent("idle", "idle"),
+      ),
+      (call) => (call.agent === "gate" ? '{"go": 1}' : "ok"),
+      { budgets: { maxAgents: 2 } },
+    );
+    expect(outcome.status).toBe("completed");
+    expect(outcome.agents).toBe(2);
+  });
+});
+
+describe("value", () => {
+  test("a literal value passes through and spawns no agents", async () => {
+    const { outcome, calls, events } = await run(
+      { kind: "value", value: { a: 1, b: [true, null] } },
+      () => "unused",
+    );
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toEqual({ a: 1, b: [true, null] });
+    expect(outcome.agents).toBe(0);
+    expect(calls).toHaveLength(0);
+    const started = eventTypes(events, "node_started")[0] as { kind: string };
+    expect(started.kind).toBe("value");
+  });
+
+  test("single-reference strings substitute values; mixed strings interpolate", async () => {
+    const { outcome } = await run(
+      seq(agent("scout", "scan", { as: "scout", output: "json" }), {
+        kind: "value",
+        value: {
+          files: "{scout.files}",
+          count: "{scout.count}",
+          summary: "found {scout.count} files",
+          nested: [{ first: "{scout.files.0}" }, 42, true],
+        },
+      }),
+      () => '{"files": ["a.ts", "b.ts"], "count": 2}',
+    );
+    expect(outcome.value).toEqual({
+      files: ["a.ts", "b.ts"],
+      count: 2,
+      summary: "found 2 files",
+      nested: [{ first: "a.ts" }, 42, true],
+    });
+  });
+
+  test("an unresolvable path fails the node", async () => {
+    const { outcome } = await run(
+      seq(agent("scout", "scan", { as: "scout", output: "json" }), {
+        kind: "value",
+        value: "{scout.nope}",
+      }),
+      () => "{}",
+    );
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("value: path 'nope' not found in {scout}");
+  });
+
+  test("an exact reference resolving to undefined normalizes to null", async () => {
+    // {last} is undefined on iteration 0; JSON events cannot carry undefined.
+    const { outcome } = await run(
+      {
+        kind: "loop",
+        max: 1,
+        body: { kind: "value", value: { prior: "{last}", note: "was {last}" } },
+      },
+      () => "unused",
+    );
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toEqual({ prior: null, note: "was " });
+    expect(JSON.parse(JSON.stringify(outcome.value))).toEqual(outcome.value);
+  });
+
+  test("a value arm yields an existing binding without an echo agent", async () => {
+    const { outcome, calls } = await run(
+      seq(
+        agent("review", "review the change", { as: "review", output: "json" }),
+        {
+          kind: "switch",
+          on: "{review}",
+          cases: [{ when: { eq: ["pr", true] }, then: agent("codex", "gate") }],
+          else: {
+            kind: "value",
+            value: { outcome: "{review.outcome}", gated: false },
+          },
+        },
+      ),
+      (call) =>
+        call.agent === "review" ? '{"pr": false, "outcome": "clean"}' : "gated",
+    );
+    expect(outcome.value).toEqual({ outcome: "clean", gated: false });
+    expect(calls.map((call) => call.agent)).toEqual(["review"]);
+  });
+});
+
 describe("event stream shape", () => {
   test("run_created carries the expanded flow; events address nodes by path", async () => {
     const { events } = await run(

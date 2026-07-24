@@ -98,6 +98,59 @@ describe("renderFlowTree", () => {
     expect(tree).toContain("└─ ⑂ reduce → ad-hoc · Merge {branches}");
   });
 
+  test("switch arms show predicates; single-node arms collapse", () => {
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        {
+          kind: "agent",
+          name: "gate",
+          task: "inspect",
+          output: "json",
+          as: "gate",
+        },
+        {
+          kind: "switch",
+          on: "{gate}",
+          cases: [
+            {
+              when: { eq: ["status", "approved"] },
+              then: { kind: "agent", name: "shipper", task: "ship it" },
+            },
+            {
+              when: { exists: "findings" },
+              then: {
+                kind: "sequence",
+                steps: [
+                  { kind: "agent", name: "fixer", task: "fix" },
+                  { kind: "agent", name: "checker", task: "recheck" },
+                ],
+              },
+            },
+          ],
+          else: {
+            kind: "value",
+            value: { outcome: "{gate.outcome}" },
+            label: "outcome",
+          },
+          as: "result",
+        },
+      ],
+    });
+    const tree = renderFlowTree(flow);
+    expect(tree).toBe(
+      [
+        "✦ gate → {gate} · inspect",
+        "⎇ switch {gate} → {result}",
+        '├─ when status == "approved" → ✦ shipper · ship it',
+        "├─ when exists(findings):",
+        "│  ├─ ✦ fixer · fix",
+        "│  └─ ✦ checker · recheck",
+        '└─ else → ≔ outcome · {"outcome":"{gate.outcome}"}',
+      ].join("\n"),
+    );
+  });
+
   test("multi-step branches group under their key; workflow refs show params", () => {
     const def: WorkflowLike = {
       name: "inner",
@@ -201,6 +254,49 @@ describe("renderRunTree", () => {
     expect(tree).toContain("└─ ● ✦ reviewer · review {item} [3/3]");
     // Status icons join the kind glyphs, so structure stays readable.
     expect(tree).toContain("● ⇶ map {files}");
+  });
+
+  test("the executed switch arm completes; the others stay pending", async () => {
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        {
+          kind: "agent",
+          name: "gate",
+          task: "inspect",
+          output: "json",
+          as: "gate",
+        },
+        {
+          kind: "switch",
+          on: "{gate}",
+          cases: [
+            {
+              when: { eq: ["status", "approved"] },
+              then: { kind: "agent", name: "shipper", task: "ship" },
+            },
+          ],
+          else: { kind: "agent", name: "reporter", task: "report" },
+        },
+      ],
+    });
+    const events: RunEvent[] = [];
+    await executeFlow({
+      runId: "r5",
+      flow,
+      runAgent: async (call) =>
+        call.agent === "gate"
+          ? { text: '{"status": "approved"}' }
+          : { text: "shipped" },
+      emit: (event) => events.push(event),
+    });
+    const run = rebuildRunState(events).runs.get("r5");
+    if (!run) throw new Error("missing run");
+    const tree = renderRunTree(run);
+    expect(tree).toContain("● ⎇ switch {gate}");
+    expect(tree).toContain('when status == "approved" → ● ✦ shipper · ship');
+    // The else arm never ran: pending status icon.
+    expect(tree).toContain("else → ○ ✦ reporter · report");
   });
 
   test("anonymous runs replay from persisted events and render as ad-hoc", async () => {

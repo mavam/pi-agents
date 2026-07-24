@@ -5,13 +5,15 @@
  * kind icons are replaced by live status icons).
  *
  *   ✦ agent   ≡ sequence (transparent)   ⑃ parallel   ⑂ reduce   ⇶ map   ↺ loop
- *   ❖ workflow
+ *   ⎇ switch   ≔ value   ❖ workflow
  */
 
 import {
   ADHOC_LABEL,
   bodyPath,
   branchPath,
+  casePath,
+  elsePath,
   type FlowNode,
   type ParMode,
   reducePath,
@@ -28,6 +30,8 @@ export const KIND_ICONS = {
   reduce: "⑂",
   map: "⇶",
   loop: "↺",
+  switch: "⎇",
+  value: "≔",
   workflow: "❖",
 } as const;
 
@@ -184,6 +188,41 @@ function build(
         },
       ];
     }
+    case "switch": {
+      const arm = (
+        key: string,
+        sub: FlowNode,
+        subPath: string,
+      ): DisplayNode => {
+        const subs = build(sub, subPath, color);
+        if (subs.length === 1) {
+          const only = subs[0] as DisplayNode;
+          return { ...only, prefixText: `${key}${color("dim", " → ")}` };
+        }
+        return { text: `${key}:`, children: subs };
+      };
+      const children = node.cases.map((c, index) =>
+        arm(`when ${formatPredicate(c.when)}`, c.then, casePath(path, index)),
+      );
+      children.push(arm("else", node.else, elsePath(path)));
+      return [
+        {
+          icon: KIND_ICONS.switch,
+          text: `switch ${color("accent", node.on)}${binding(node, color)}`,
+          path,
+          children,
+        },
+      ];
+    }
+    case "value":
+      return [
+        {
+          icon: KIND_ICONS.value,
+          text: `${node.label ?? "value"}${binding(node, color)}${color("dim", " · ")}${colorizeRefs(preview(JSON.stringify(node.value) ?? "null"), color)}`,
+          path,
+          children: [],
+        },
+      ];
     case "workflow": {
       const params = Object.entries(node.params ?? {})
         .map(([key, value]) => `${key}: ${colorizeRefs(preview(value), color)}`)

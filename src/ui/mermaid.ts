@@ -11,6 +11,11 @@ function escapeLabel(text: string): string {
   return text.replaceAll('"', "'").replaceAll("\n", " ").slice(0, 60);
 }
 
+/** Edge labels additionally may not contain `|`, Mermaid's label delimiter. */
+function escapeEdgeLabel(text: string): string {
+  return escapeLabel(text).replaceAll("|", "∣");
+}
+
 function modeLabel(mode: ParMode | undefined): string {
   if (mode === undefined || mode === "all") return "all";
   if (mode === "any") return "any";
@@ -92,6 +97,28 @@ export function toMermaid(flow: FlowNode): string {
         lines.push(`  ${head} --> ${body.entry}`);
         lines.push(`  ${body.exit} -.->|repeat| ${head}`);
         return { entry: head, exit: head };
+      }
+      case "switch": {
+        const head = nextId();
+        lines.push(`  ${head}{"switch ${escapeLabel(node.on)}"}`);
+        const join = nextId();
+        lines.push(`  ${join}(("·"))`);
+        for (const arm of node.cases) {
+          const child = visit(arm.then);
+          lines.push(
+            `  ${head} -->|${escapeEdgeLabel(`when ${formatPredicate(arm.when)}`)}| ${child.entry}`,
+          );
+          lines.push(`  ${child.exit} --> ${join}`);
+        }
+        const fallback = visit(node.else);
+        lines.push(`  ${head} -->|else| ${fallback.entry}`);
+        lines.push(`  ${fallback.exit} --> ${join}`);
+        return { entry: head, exit: join };
+      }
+      case "value": {
+        const id = nextId();
+        lines.push(`  ${id}[/"${escapeLabel(node.label ?? "value")}"/]`);
+        return { entry: id, exit: id };
       }
       case "workflow": {
         const id = nextId();

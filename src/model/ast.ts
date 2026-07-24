@@ -129,6 +129,39 @@ export interface LoopNode extends BaseNode {
   until?: Predicate;
 }
 
+/** One arm of a `switch`: run `then` when `when` holds over the subject. */
+export interface SwitchCase {
+  when: Predicate;
+  then: FlowNode;
+}
+
+/**
+ * Exclusive, ordered, total conditional: evaluate `cases` in definition order
+ * against the value `on` resolves to and run the first arm whose predicate
+ * holds, or `else` when none match. Exactly one arm runs; its value is the
+ * switch's value. Arms see the same environment as the switch itself.
+ */
+export interface SwitchNode extends BaseNode {
+  kind: "switch";
+  /** A single-reference template (like `map.over`) naming the value to test. */
+  on: string;
+  /** Ordered arms; the first whose predicate holds runs. */
+  cases: SwitchCase[];
+  /** Required fallback arm — makes the node total. */
+  else: FlowNode;
+}
+
+/**
+ * Pure data leaf: yields `value` with every string interpolated. A string
+ * that is exactly one `{reference}` substitutes the referenced JSON value
+ * itself (type-preserving); any other string interpolates as text. No agent
+ * runs.
+ */
+export interface ValueNode extends BaseNode {
+  kind: "value";
+  value: unknown;
+}
+
 /**
  * Invoke a saved workflow by name. Expanded (inlined) at validation time with
  * cycle detection; inside the inlined body only `{params.*}` and its own
@@ -151,11 +184,13 @@ export type FlowNode =
   | ParallelNode
   | MapNode
   | LoopNode
+  | SwitchNode
+  | ValueNode
   | WorkflowRefNode;
 
 export type NodeKind = FlowNode["kind"];
 
-/** Condition language for `loop.until`. Paths are dot-paths into the body's JSON value; "" addresses the whole value. */
+/** Condition language for `loop.until` and `switch.cases[].when`. Paths are dot-paths into the subject JSON value; "" addresses the whole value. */
 export type Predicate =
   | { eq: [path: string, value: string | number | boolean | null] }
   | { ne: [path: string, value: string | number | boolean | null] }
@@ -232,8 +267,9 @@ export const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 export const BRANCH_KEY_RE = /^[A-Za-z0-9_-]+$/;
 
 // Node paths identify static positions in a flow tree, e.g.
-// "$.steps[1].branches.security.reduce". Dynamic multiplicity (map items,
-// loop iterations) is expressed by instance suffixes in run events, not here.
+// "$.steps[1].branches.security.reduce" or "$.cases[0].then". Dynamic
+// multiplicity (map items, loop iterations) is expressed by instance suffixes
+// in run events, not here.
 
 export function stepPath(parent: string, index: number): string {
   return `${parent}.steps[${index}]`;
@@ -249,4 +285,12 @@ export function bodyPath(parent: string): string {
 
 export function reducePath(parent: string): string {
   return `${parent}.reduce`;
+}
+
+export function casePath(parent: string, index: number): string {
+  return `${parent}.cases[${index}].then`;
+}
+
+export function elsePath(parent: string): string {
+  return `${parent}.else`;
 }

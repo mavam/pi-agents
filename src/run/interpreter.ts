@@ -13,6 +13,8 @@ import {
   type Budgets,
   bodyPath,
   branchPath,
+  casePath,
+  elsePath,
   type FlowNode,
   type LoopNode,
   type MapNode,
@@ -22,10 +24,13 @@ import {
   reducePath,
   type Scope,
   type SequenceNode,
+  type SwitchCase,
+  type SwitchNode,
   stepPath,
   type WorkflowRefNode,
 } from "../model/ast.js";
 import {
+  isSingleReference,
   type RootResolver,
   renderTemplate,
   resolvePath,
@@ -122,6 +127,49 @@ function envResolver(
           : { found: false };
     }
   };
+}
+
+/** Resolve a single-reference template (`map.over`, `switch.on`, …) to its value. */
+function resolveSingleRef(template: string, env: Env, what: string): unknown {
+  const ref = templateRefs(template)[0];
+  if (!ref) throw new Error(`${what} is not a reference: '${template}'`);
+  const root = envResolver(env)(ref.root);
+  if (!root.found) throw new Error(`${what}: unknown reference ${ref.raw}`);
+  const resolved =
+    ref.path.length === 0 ? root : resolvePath(root.value, ref.path);
+  if (!resolved.found) {
+    throw new Error(
+      `${what}: path '${ref.path.join(".")}' not found in {${ref.root}}`,
+    );
+  }
+  return resolved.value;
+}
+
+/**
+ * Deep-interpolate a value node's JSON: a string that is exactly one
+ * reference substitutes the referenced value itself (type-preserving); any
+ * other string renders as text.
+ */
+function interpolateValue(value: unknown, env: Env): unknown {
+  if (typeof value === "string") {
+    // `?? null`: an exact reference can resolve to undefined ({last} on
+    // iteration 0), which JSON cannot carry through event persistence.
+    return isSingleReference(value)
+      ? (resolveSingleRef(value, env, "value") ?? null)
+      : renderTemplate(value, envResolver(env));
+  }
+  if (Array.isArray(value)) {
+    return value.map((element) => interpolateValue(element, env));
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [
+        key,
+        interpolateValue(child, env),
+      ]),
+    );
+  }
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -374,6 +422,12 @@ class Interpreter {
         return {
           value: await this.evaluateLoop(node, path, instance, env, signal),
         };
+      case "switch":
+        return {
+          value: await this.evaluateSwitch(node, path, instance, env, signal),
+        };
+      case "value":
+        return { value: interpolateValue(node.value, env) };
       case "workflow":
         return {
           value: await this.evaluateWorkflow(node, path, instance, env, signal),
@@ -641,23 +695,12 @@ class Interpreter {
     env: Env,
     signal: AbortSignal,
   ): Promise<unknown> {
-    const ref = templateRefs(node.over)[0];
-    if (!ref) throw new Error(`map.over is not a reference: '${node.over}'`);
-    const root = envResolver(env)(ref.root);
-    if (!root.found) throw new Error(`map.over: unknown reference ${ref.raw}`);
-    const resolved =
-      ref.path.length === 0 ? root : resolvePath(root.value, ref.path);
-    if (!resolved.found) {
+    const items = resolveSingleRef(node.over, env, "map.over");
+    if (!Array.isArray(items)) {
       throw new Error(
-        `map.over: path '${ref.path.join(".")}' not found in {${ref.root}}`,
+        `map.over must resolve to a JSON array, got ${items === null ? "null" : typeof items}`,
       );
     }
-    if (!Array.isArray(resolved.value)) {
-      throw new Error(
-        `map.over must resolve to a JSON array, got ${resolved.value === null ? "null" : typeof resolved.value}`,
-      );
-    }
-    const items = resolved.value;
     const concurrency = this.budgets.parallelismLimit(node.concurrency);
 
     const outcomes = await runPool(
@@ -750,6 +793,24 @@ class Interpreter {
       if (node.until && evaluatePredicate(node.until, last)) break;
     }
     return last;
+  }
+
+  private async evaluateSwitch(
+    node: SwitchNode,
+    path: string,
+    instance: string,
+    env: Env,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    const subject = resolveSingleRef(node.on, env, "switch.on");
+    const index = node.cases.findIndex((arm) =>
+      evaluatePredicate(arm.when, subject),
+    );
+    const arm = index >= 0 ? (node.cases[index] as SwitchCase).then : node.else;
+    const armPath = index >= 0 ? casePath(path, index) : elsePath(path);
+    const armInstance =
+      index >= 0 ? casePath(instance, index) : elsePath(instance);
+    return await this.evaluate(arm, armPath, armInstance, env, signal);
   }
 
   private async evaluateWorkflow(

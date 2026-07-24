@@ -3,5 +3,12 @@
     "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2
+  },
+  "linter": {
+    "rules": {
+      "suspicious": {
+        "noThenProperty": "off"
+      }
+    }
   }
 }

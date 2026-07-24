@@ -91,7 +91,8 @@ export function fenced(text: string): string {
 
 /**
  * Short human name for a node instance path: `$.branches.bugs` → `bugs`,
- * `$.reduce` → `reduce`, `$.body@2` → `@2`, `$.steps[1].body#3` → `2#3`.
+ * `$.reduce` → `reduce`, `$.body@2` → `@2`, `$.steps[1].body#3` → `2#3`,
+ * `$.cases[0].then` → `case 1`, `$.else` → `else`.
  * A bare-agent root (`$`) falls back to the label, agent name, or kind.
  */
 export function nodeDisplayName(
@@ -101,6 +102,10 @@ export function nodeDisplayName(
     .replace(/^\$/, "")
     .replaceAll(".branches.", ".")
     .replaceAll(/\.steps\[(\d+)\]/g, (_, index) => `.${Number(index) + 1}`)
+    .replaceAll(
+      /\.cases\[(\d+)\]\.then/g,
+      (_, index) => `.case ${Number(index) + 1}`,
+    )
     .replaceAll(".body", "")
     .replace(/^\./, "");
   return name || (node.label ?? node.agent ?? node.kind);

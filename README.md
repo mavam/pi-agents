@@ -192,7 +192,12 @@ Workflows fire from four surfaces:
 
 1. **The model.** Saved workflows (name, description, `trigger`, params)
    are advertised in the system prompt; the model runs them — or composes
-   ad-hoc flows — through the single `workflow` tool. In interactive
+   ad-hoc flows — through the single `workflow` tool. The tool is
+   **opt-in**: the model may only reach for it when you affirmatively ask
+   for something to run — "run the review workflow", "delegate this", "do
+   these in parallel" — or for a saved workflow you asked for by name or by
+   its `trigger` situation. Merely saying *workflow* is not a request, and
+   neither is a task that looks big or parallelizable. In interactive
    sessions runs go to the background: the widget shows progress and the
    result arrives as a notification.
 2. **You.** Every saved workflow registers a slash command:
@@ -212,7 +217,21 @@ The model is a first-class workflow author, not just an invoker. The single
 flow expression**, and its tool description embeds the full algebra — node
 kinds, value semantics, binding rules, predicates — so the model can
 translate a request like *"review these three modules in parallel, then fix
-whatever the reviews agree on"* directly into a validated flow:
+whatever the reviews agree on"* directly into a validated flow.
+
+Authoring power is gated on your intent. The tool description opens with an
+explicit-request gate, repeated as prompt guidelines every turn: the model
+calls the tool when you affirmatively ask for something to run — delegate
+this, spawn agents for these, do these in parallel — or name a saved workflow
+to run. Mentioning *workflow* or *flow* does not count, nor does asking about
+a saved workflow or editing one; in a repository about workflows those words
+are everywhere. Everything else — a long task list, a multi-file refactor, an
+audit, a research question, anything the model privately judges
+parallelizable — it does itself, mentioning at most in one sentence that a
+workflow could take it. That is what makes the example above run: *"review
+these three modules in parallel"* is your request, not the model's inference.
+The tool also only ever starts runs: a live agent is corrected with `steer`,
+and an existing run is inspected or stopped with `/run`.
 
 ```json
 {

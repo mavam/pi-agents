@@ -83,7 +83,7 @@ export function buildSystemPromptAppendix(cwd: string, trusted = true): string {
     "The following reusable agent profiles are available to the `workflow` tool (optional: agent leaves without `name` run as anonymous ad-hoc agents):",
     agents.prompt,
     "",
-    "The following saved workflows can be invoked with `workflow({name, params})`:",
+    "The following saved workflows can be invoked with `workflow({name, params})` when the user asks for a workflow or for delegation. This catalog is a reference, not an invitation: a workflow existing for a task is never by itself a reason to run one.",
     workflows,
   ];
   if (!trusted) {

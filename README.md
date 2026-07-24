@@ -192,9 +192,13 @@ Workflows fire from four surfaces:
 
 1. **The model.** Saved workflows (name, description, `trigger`, params)
    are advertised in the system prompt; the model runs them — or composes
-   ad-hoc flows — through the single `workflow` tool. In interactive
-   sessions runs go to the background: the widget shows progress and the
-   result arrives as a notification.
+   ad-hoc flows — through the single `workflow` tool. The tool is
+   **opt-in**: the model may only reach for it when you ask for a workflow
+   or for delegation by name, when your request matches a saved workflow's
+   `trigger`, or when you refer to an existing run — never because a task
+   merely looks big or parallelizable. In interactive sessions runs go to
+   the background: the widget shows progress and the result arrives as a
+   notification.
 2. **You.** Every saved workflow registers a slash command:
    `/review src/core` runs the graph directly, with args bound to params —
    no model round-trip. Positional args and `key=value` pairs both work.
@@ -212,7 +216,17 @@ The model is a first-class workflow author, not just an invoker. The single
 flow expression**, and its tool description embeds the full algebra — node
 kinds, value semantics, binding rules, predicates — so the model can
 translate a request like *"review these three modules in parallel, then fix
-whatever the reviews agree on"* directly into a validated flow:
+whatever the reviews agree on"* directly into a validated flow.
+
+Authoring power is gated on your intent. The tool description opens with an
+explicit-request gate, repeated as prompt guidelines every turn: the model
+calls the tool when you say *workflow* or *flow*, ask it to delegate or to
+use parallel/background/sub agents, name a saved workflow (or describe its
+`trigger` situation), or point at an existing run. Everything else — a long
+task list, a multi-file refactor, an audit, a research question, anything the
+model privately judges parallelizable — it does itself, mentioning at most in
+one sentence that a workflow could take it. That is what makes the example
+above run: *"in parallel"* is your request, not the model's inference.
 
 ```json
 {

@@ -32,6 +32,17 @@ import { startTriggeredRun, type TriggerDeps } from "./start.js";
  * persistence keeps values uncropped). */
 const MAX_TOOL_RESULT_CHARS = 16_000;
 
+/**
+ * Delegation is expensive and surprising when unasked for, so the tool is
+ * opt-in: this gate leads the description and the prompt guidelines. It
+ * enumerates the admissible triggers positively and then names the plausible
+ * near-misses explicitly, because "would benefit from parallelism" is exactly
+ * the inference that produces unwanted runs.
+ */
+const USE_GATE = `USE ONLY ON EXPLICIT REQUEST — this tool is opt-in. Call it only when the user said "workflow" or "flow", asked you to delegate or to use parallel/background/sub agents, named a saved workflow from <workflows> (or described the situation its <trigger> declares), or referred to an existing run.
+
+Nothing else is a trigger: not a large multi-step task, a long list of independent items, a multi-file refactor, a review, an audit, a research question, or a task you judge parallelizable. Do that work yourself. If a workflow seems better but was not requested, do the work directly and say so in one sentence — do not call the tool to make the offer concrete.`;
+
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
 - {"kind":"agent","task":"...","name":"...","output":"text"|"json","model":"...","thinking":"..."} — one delegated agent (leaf; a bare agent node is a valid flow). Omit "name" for an anonymous ad-hoc agent; set it only to use a profile from <agents>.
 - {"kind":"sequence","steps":[node,...]} — steps in order; value = the last step's.
@@ -356,14 +367,19 @@ export function createWorkflowTool(
   return {
     name: "workflow",
     label: "Workflow",
-    description: `Run a multi-agent workflow of delegated pi agents. Pass EITHER "name" (+ "params") to run a saved workflow, OR "flow" for an inline expression. ${FLOW_REFERENCE}`,
+    description: `Run a multi-agent workflow of delegated pi agents.
+
+${USE_GATE}
+
+Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flow" for an inline expression. ${FLOW_REFERENCE}`,
     promptSnippet:
-      "workflow: delegate work to isolated agents — a single agent leaf, or a composition (sequence/parallel/map/loop/switch/value) of them",
+      "workflow: run a workflow of delegated agents — only when the user explicitly asks for a workflow or for delegation, never on your own initiative",
     promptGuidelines: [
-      "Prefer the `workflow` tool for delegation: a bare agent leaf for one isolated task, sequence/parallel/map/loop compositions for multi-agent work.",
+      'Do not call `workflow` unless the user explicitly asked for it — they said "workflow"/"flow", asked you to delegate or to use parallel/background/sub agents, named a saved workflow from <workflows> (or described the situation its <trigger> declares), or referred to an existing run. Otherwise do the task yourself.',
+      "Size, step count, parallelizability, and review/refactor/audit/research shape are not triggers. When a workflow looks like a good fit but was not requested, do the work directly and offer it in one sentence instead of calling the tool.",
+      "Once a workflow is requested: prefer a saved workflow via workflow({name, params}) when one in <workflows> matches; otherwise compose an inline flow — a bare agent leaf for one isolated task, sequence/parallel/map/loop for multi-agent work.",
       "Route deterministically with `switch` instead of asking an agent to decide: predicates over a JSON binding pick exactly one arm; use a `value` arm to yield data without spawning an agent.",
       "Omit the agent name for one-off delegation; it is only needed to select a reusable profile from <agents>. Never invent agent names or create agent-definition files merely to execute an ad-hoc flow.",
-      "Check <workflows> in the system prompt first; prefer a saved workflow via workflow({name, params}) when one matches the request.",
       'In flows, thread data explicitly: bind sequence steps with "as" and reference {name}/{previous} in later tasks; use output:"json" when downstream steps need structured access.',
     ],
     parameters: WorkflowToolParams,

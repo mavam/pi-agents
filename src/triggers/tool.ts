@@ -34,10 +34,14 @@ const MAX_TOOL_RESULT_CHARS = 16_000;
 
 /**
  * Delegation is expensive and surprising when unasked for, so the tool is
- * opt-in: this gate leads the description and the prompt guidelines. It
- * enumerates the admissible triggers positively and then names the plausible
- * near-misses explicitly, because "would benefit from parallelism" is exactly
- * the inference that produces unwanted runs.
+ * opt-in and this gate opens its description. It enumerates the admissible
+ * triggers positively and then names the plausible near-misses explicitly,
+ * because "would benefit from parallelism" is exactly the inference that
+ * produces unwanted runs.
+ *
+ * The first two promptGuidelines restate this rule for the system prompt's
+ * Guidelines section; they are worded separately rather than sharing this
+ * text, which is scoped to the tool schema. Keep the two in sync.
  */
 const USE_GATE = `USE ONLY ON EXPLICIT REQUEST — this tool is opt-in. Call it only when the user said "workflow" or "flow", asked you to delegate or to use parallel/background/sub agents, named a saved workflow from <workflows> (or described the situation its <trigger> declares), or referred to an existing run.
 

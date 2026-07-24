@@ -483,8 +483,9 @@ When
 [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) is installed,
 pi-agents also contributes two compact counters: `❖N` for active workflow
 executions and `✦A/T` for completed and total agents across those executions.
-Both widgets are **off by default** and can be enabled independently from
-`/fancy-footer`. They use the footer's event protocol directly, so pi-agents
+They appear as `workflows` and `agents` in `/fancy-footer`, matching the
+footer's own lowercase widget names. Both widgets are **off by default** and
+can be enabled independently. They use the footer's event protocol directly, so pi-agents
 has no package dependency on pi-fancy-footer. Snapshots are published only
 when run state changes and when the footer announces that it is ready; there
 is no polling interval.

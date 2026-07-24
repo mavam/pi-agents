@@ -126,6 +126,7 @@ describe("fancy footer run summary", () => {
         type: "upsert",
         widget: {
           id: "pi-agents.workflows",
+          label: "workflows",
           content: { type: "text", text: "1" },
           layout: { enabled: false, row: 1, position: 9 },
         },
@@ -138,6 +139,7 @@ describe("fancy footer run summary", () => {
         type: "upsert",
         widget: {
           id: "pi-agents.agents",
+          label: "agents",
           content: { type: "text", text: "1/2" },
           layout: { enabled: false, row: 1, position: 10 },
         },

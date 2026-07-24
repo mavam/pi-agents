@@ -1,0 +1,9 @@
+created: 2026-07-24
+title: Deterministic workflow control and execution budgets
+intro: >-
+  Build more predictable workflows with deterministic switch and value nodes, comprehensive
+  execution budgets, and richer live activity. Workflow results now render as Markdown,
+  while explicit opt-in prevents unintended delegation.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.4.0

@@ -354,10 +354,10 @@ Every run enforces limits (tool parameter `budgets`, all optional):
 | Budget             | Default | Meaning                                                     |
 | ------------------ | ------- | ----------------------------------------------------------- |
 | `maxAgents`        | 50      | Total agent spawns (reducers included).                      |
-| `maxParallelism`   | 4       | Simultaneously running agents, global across nested pools.   |
+| `maxParallelism`   | 8       | Simultaneously running agents, global across nested pools.   |
 | `maxIterations`    | 10      | Cap applied to every loop.                                   |
-| `maxDepth`         | 3       | Cross-process delegation depth.                              |
-| `maxTurns`         | 50      | Assistant turns a single delegated agent may take.           |
+| `maxDepth`         | 5       | Cross-process delegation depth.                              |
+| `maxTurns`         | 100     | Assistant turns a single delegated agent may take.           |
 | `maxAgentDuration` | —       | Wall-clock seconds a single delegated agent may run.         |
 | `maxDuration`      | —       | Wall-clock seconds the whole run may take.                   |
 | `maxTokens`        | —       | Input+output tokens (cache traffic excluded) a run may use.  |

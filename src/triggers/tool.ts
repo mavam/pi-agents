@@ -82,7 +82,7 @@ const WorkflowToolParams = Type.Object({
       },
       {
         description:
-          "Execution budgets: maxDepth, maxParallelism, maxIterations, maxAgents; maxTurns (assistant turns per agent, default 50), maxAgentDuration/maxDuration (seconds per agent/run), maxTokens (input+output per run), maxCost (USD per run). Breaches fail the agent or run with the partial result preserved.",
+          "Execution budgets: maxDepth, maxParallelism, maxIterations, maxAgents; maxTurns (assistant turns per agent, default 100), maxAgentDuration/maxDuration (seconds per agent/run), maxTokens (input+output per run), maxCost (USD per run). Breaches fail the agent or run with the partial result preserved.",
       },
     ),
   ),

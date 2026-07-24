@@ -202,11 +202,11 @@ export type EffectiveBudgets = Required<
   Pick<Budgets, "maxAgentDuration" | "maxDuration" | "maxTokens" | "maxCost">;
 
 export const DEFAULT_BUDGETS: EffectiveBudgets = {
-  maxDepth: 3,
-  maxParallelism: 4,
+  maxDepth: 5,
+  maxParallelism: 8,
   maxIterations: 10,
   maxAgents: 50,
-  maxTurns: 50,
+  maxTurns: 100,
 };
 
 export interface WorkflowParamDef {

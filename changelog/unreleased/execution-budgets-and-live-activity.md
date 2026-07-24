@@ -8,7 +8,7 @@ created: 2026-07-24T00:00:00Z
 ---
 
 Delegated agents are no longer unbounded. Five new budgets join the existing
-limits: `maxTurns` (assistant turns per agent, default 50), `maxAgentDuration`
+limits: `maxTurns` (assistant turns per agent, default 100), `maxAgentDuration`
 and `maxDuration` (wall-clock seconds per agent and per run), and `maxTokens`
 and `maxCost` (input+output tokens and USD per run, enforced at turn
 granularity). Exceeding a per-agent budget fails that agent with a clear error
@@ -24,6 +24,8 @@ token counter, and replaces the output excerpt with a `no output for …` stall
 hint once an agent has been silent for a minute. The `/runs` overlay shows
 each running agent's current tool and last-activity age.
 
-Note: the new `maxTurns` default (50 turns per agent) is a behavior change
+Note: the new `maxTurns` default (100 turns per agent) is a behavior change
 for workflows that previously let agents run indefinitely; raise it via the
-`budgets` tool parameter where longer investigations are intended.
+`budgets` tool parameter where longer investigations are intended. Two
+existing defaults also loosen: `maxParallelism` rises from 4 to 8 and
+`maxDepth` from 3 to 5.

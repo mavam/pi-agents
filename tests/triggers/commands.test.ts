@@ -12,6 +12,7 @@ import {
   completeRunArgs,
   findNodeInRun,
   formatNodeResultFull,
+  formatRunDetails,
   formatRunNodesList,
   steeringMarker,
 } from "../../src/triggers/commands.js";
@@ -210,6 +211,14 @@ describe("formatNodeResultFull", () => {
     expect(text).toContain("\n}\n```");
   });
 
+  test("puts truncation metadata before a split Markdown fence", async () => {
+    const run = await recordedRun(REVIEW_FLOW, () => "ok");
+    const target = workNodes(run)[0] as NodeView;
+    target.value = `\`\`\`ts\n${"x".repeat(64_100)}\n\`\`\``;
+    const text = formatNodeResultFull(run, target);
+    expect(text.indexOf("… truncated")).toBeLessThan(text.indexOf("```ts"));
+  });
+
   test("failed node shows the error", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
     const target = workNodes(run)[0] as NodeView;
@@ -264,6 +273,15 @@ describe("formatNodeResultFull", () => {
     expect(text).toContain("### Steering");
     expect(text).toContain("2026-07-23T12:00:00.000Z (rpc:dashboard)");
     expect(text).toContain("Focus on the retry path.");
+  });
+});
+
+describe("formatRunDetails", () => {
+  test("puts the full-result hint before a split preview fence", async () => {
+    const markdown = `\`\`\`ts\n${"x".repeat(500)}\n\`\`\``;
+    const run = await recordedRun(REVIEW_FLOW, () => markdown);
+    const text = formatRunDetails(run);
+    expect(text.indexOf("Full result:")).toBeLessThan(text.indexOf("```ts"));
   });
 });
 

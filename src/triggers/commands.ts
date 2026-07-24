@@ -868,9 +868,9 @@ function valueText(value: unknown): string | undefined {
 function fullValueLines(value: unknown, text: string): string[] {
   if (text.length > MAX_FULL_RESULT_CHARS) {
     return [
-      renderResultValue(value, text.slice(0, MAX_FULL_RESULT_CHARS)),
-      "",
       `… truncated ${text.length - MAX_FULL_RESULT_CHARS} characters.`,
+      "",
+      renderResultValue(value, text.slice(0, MAX_FULL_RESULT_CHARS)),
     ];
   }
   return [renderResultValue(value, text)];
@@ -1034,7 +1034,7 @@ export function completeRunArgs(
   return [];
 }
 
-function formatRunDetails(run: RunView, fullValue = false): string {
+export function formatRunDetails(run: RunView, fullValue = false): string {
   const lines = [
     `## Run ${shortId(run.header.id)} — ${run.status}`,
     "",
@@ -1064,9 +1064,10 @@ function formatRunDetails(run: RunView, fullValue = false): string {
         "",
         "### Result (preview)",
         "",
+        `Full result: \`/run ${shortId(run.header.id)} result\``,
+        "",
         renderResultValue(run.value, value),
       );
-      lines.push("", `Full result: \`/run ${shortId(run.header.id)} result\``);
     }
   }
   return lines.join("\n");

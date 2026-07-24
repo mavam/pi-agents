@@ -79,7 +79,10 @@ describe("NotificationManager", () => {
     const markdown = "## Change map\n\n- **AST and structural parsing**";
     notifications.handleRunEvent(completed("run-1", markdown));
     const content = sent[0]?.message.content ?? "";
-    expect(content).toContain(`\n\n${markdown}\n\nInspect with`);
+    expect(content.indexOf("Inspect with")).toBeLessThan(
+      content.indexOf(markdown),
+    );
+    expect(content.endsWith(markdown)).toBe(true);
     expect(content).not.toContain(`\`\`\`\n${markdown}`);
   });
 
@@ -92,8 +95,23 @@ describe("NotificationManager", () => {
       completed("run-1", { findings: ["one", "two"] }),
     );
     const content = sent[0]?.message.content ?? "";
-    expect(content).toContain('```\n{\n  "findings": [');
-    expect(content).toContain("\n}\n```\n\nInspect with");
+    expect(content.indexOf("Inspect with")).toBeLessThan(
+      content.indexOf('```\n{\n  "findings": ['),
+    );
+    expect(content).toContain("\n}\n```");
+  });
+
+  test("puts host controls before a split Markdown preview fence", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    notifications.track("run-1", "session.jsonl", true);
+    const markdown = `\`\`\`ts\n${"x".repeat(700)}\n\`\`\``;
+    notifications.handleRunEvent(completed("run-1", markdown));
+    const content = sent[0]?.message.content ?? "";
+    const resultStart = content.indexOf("```ts");
+    expect(content.indexOf("Inspect with")).toBeLessThan(resultStart);
+    expect(content.indexOf("Continue your task")).toBeLessThan(resultStart);
   });
 
   test("completion while busy queues; flush when idle triggers a turn", () => {

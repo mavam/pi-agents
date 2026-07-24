@@ -211,13 +211,37 @@ export interface Budgets {
   maxIterations?: number;
   /** Total number of agent spawns (reducers included) a run may consume. */
   maxAgents?: number;
+  /** Assistant turns a single delegated agent may take. */
+  maxTurns?: number;
+  /** Wall-clock seconds a single delegated agent may run. */
+  maxAgentDuration?: number;
+  /** Wall-clock seconds the whole run may take. */
+  maxDuration?: number;
+  /** Input+output tokens (cache traffic excluded) a run may consume,
+   * enforced at turn granularity. */
+  maxTokens?: number;
+  /** USD a run may spend, enforced at turn granularity. */
+  maxCost?: number;
 }
 
-export const DEFAULT_BUDGETS: Required<Budgets> = {
-  maxDepth: 3,
-  maxParallelism: 4,
+/**
+ * Resolved limits: counting budgets always have a value; duration, token,
+ * and cost caps stay optional — absent means unbounded.
+ */
+export type EffectiveBudgets = Required<
+  Pick<
+    Budgets,
+    "maxDepth" | "maxParallelism" | "maxIterations" | "maxAgents" | "maxTurns"
+  >
+> &
+  Pick<Budgets, "maxAgentDuration" | "maxDuration" | "maxTokens" | "maxCost">;
+
+export const DEFAULT_BUDGETS: EffectiveBudgets = {
+  maxDepth: 5,
+  maxParallelism: 8,
   maxIterations: 10,
   maxAgents: 50,
+  maxTurns: 100,
 };
 
 export interface WorkflowParamDef {

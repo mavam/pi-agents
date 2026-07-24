@@ -7,7 +7,12 @@
  * nothing is injected implicitly.
  */
 
-import { addUsage, emptyUsage, type SpawnUsage } from "../engine/types.js";
+import {
+  addUsage,
+  emptyUsage,
+  type SpawnProgress,
+  type SpawnUsage,
+} from "../engine/types.js";
 import {
   type AgentNode,
   type Budgets,
@@ -37,7 +42,7 @@ import {
   templateRefs,
 } from "../model/interpolate.js";
 import { evaluatePredicate } from "../model/predicate.js";
-import { BudgetActor, Semaphore } from "./budgets.js";
+import { BudgetActor, BudgetExceededError, Semaphore } from "./budgets.js";
 import type { CancelReason, RunEvent, RunSource, RunStatus } from "./events.js";
 import { CancelledError, type PoolOutcome, runPool } from "./scheduler.js";
 
@@ -58,7 +63,7 @@ export interface AgentCall {
   path: string;
   instance: string;
   signal: AbortSignal;
-  onProgress?: (text: string, usage?: SpawnUsage) => void;
+  onProgress?: (progress: SpawnProgress) => void;
 }
 
 export interface AgentResult {
@@ -244,6 +249,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The budget message carried by a "budget" cancellation, when present. */
+function cancelMessageOf(
+  error: unknown,
+  signal: AbortSignal,
+): string | undefined {
+  if (error instanceof CancelledError) return error.message;
+  if (signal.aborted && signal.reason instanceof CancelledError) {
+    return signal.reason.message;
+  }
+  return undefined;
+}
+
 class Interpreter {
   private readonly options: ExecuteOptions;
   private readonly budgets: BudgetActor;
@@ -251,6 +268,13 @@ class Interpreter {
   private readonly parallelism: Semaphore;
   private readonly usage: SpawnUsage = emptyUsage();
   private readonly depth: number;
+  /** The run's controller, for run-level budget aborts. */
+  private controller?: AbortController;
+  /** Last recorded token/cost snapshot per agent instance, for deltas. */
+  private readonly usageSnapshots = new Map<
+    string,
+    { tokens: number; cost: number }
+  >();
 
   constructor(options: ExecuteOptions) {
     this.options = options;
@@ -265,11 +289,28 @@ class Interpreter {
 
   async run(): Promise<RunOutcome> {
     const controller = new AbortController();
+    this.controller = controller;
     const external = this.options.signal;
     const onExternalAbort = () =>
       controller.abort(new CancelledError("stopped"));
     if (external?.aborted) onExternalAbort();
     else external?.addEventListener("abort", onExternalAbort, { once: true });
+
+    const maxDuration = this.budgets.limits.maxDuration;
+    let durationTimer: ReturnType<typeof setTimeout> | undefined;
+    if (maxDuration !== undefined) {
+      durationTimer = setTimeout(
+        () =>
+          controller.abort(
+            new CancelledError(
+              "budget",
+              `run duration budget exceeded (maxDuration: ${maxDuration}s)`,
+            ),
+          ),
+        maxDuration * 1000,
+      );
+      durationTimer.unref?.();
+    }
 
     this.emit({
       type: "run_created",
@@ -305,13 +346,20 @@ class Interpreter {
       };
     } catch (error) {
       const cancelled = cancelReasonOf(error, controller.signal);
+      // A budget cancellation is a clear terminal failure, not a user stop.
+      const budgetError =
+        cancelled === "budget"
+          ? (cancelMessageOf(error, controller.signal) ?? "budget exceeded")
+          : undefined;
       outcome = {
-        status: cancelled ? "stopped" : "failed",
-        error: cancelled ? "Run stopped." : errorMessage(error),
+        status: cancelled && !budgetError ? "stopped" : "failed",
+        error:
+          budgetError ?? (cancelled ? "Run stopped." : errorMessage(error)),
         usage: { ...this.usage },
         agents: await this.budgets.usedAgents(),
       };
     } finally {
+      if (durationTimer) clearTimeout(durationTimer);
       external?.removeEventListener("abort", onExternalAbort);
     }
 
@@ -391,6 +439,8 @@ class Interpreter {
         path,
         instance,
         error: errorMessage(error),
+        partialText:
+          error instanceof BudgetExceededError ? error.partialText : undefined,
       });
       throw error;
     }
@@ -435,6 +485,34 @@ class Interpreter {
     }
   }
 
+  /**
+   * Fold an agent's cumulative usage snapshot into the run-level token/cost
+   * budgets. Breaches abort the whole run — cancelling every node — instead
+   * of failing one agent, because these budgets are run-scoped.
+   */
+  private async recordUsageSnapshot(
+    instance: string,
+    usage: SpawnUsage,
+  ): Promise<void> {
+    const previous = this.usageSnapshots.get(instance) ?? {
+      tokens: 0,
+      cost: 0,
+    };
+    const snapshot = { tokens: usage.input + usage.output, cost: usage.cost };
+    const delta = {
+      tokens: snapshot.tokens - previous.tokens,
+      cost: snapshot.cost - previous.cost,
+    };
+    this.usageSnapshots.set(instance, snapshot);
+    if (delta.tokens === 0 && delta.cost === 0) return;
+    try {
+      await this.budgets.recordUsage(delta);
+    } catch (error) {
+      if (!(error instanceof BudgetExceededError)) throw error;
+      this.controller?.abort(new CancelledError("budget", error.message));
+    }
+  }
+
   private async callAgent(
     call: Omit<AgentCall, "signal"> & { signal: AbortSignal },
   ): Promise<{ value: unknown; usage?: SpawnUsage }> {
@@ -446,8 +524,24 @@ class Interpreter {
           ? call.signal.reason
           : new CancelledError("stopped");
       }
-      const result = await this.options.runAgent(call);
-      if (result.usage) addUsage(this.usage, result.usage);
+      const result = await this.options.runAgent({
+        ...call,
+        onProgress: (progress) => {
+          void this.recordUsageSnapshot(call.instance, progress.usage);
+          call.onProgress?.(progress);
+        },
+      });
+      if (result.usage) {
+        addUsage(this.usage, result.usage);
+        // Reconcile against the final numbers: engines without progress
+        // streaming report usage only here.
+        await this.recordUsageSnapshot(call.instance, result.usage);
+      }
+      if (call.signal.aborted) {
+        throw call.signal.reason instanceof CancelledError
+          ? call.signal.reason
+          : new CancelledError("stopped");
+      }
       const value =
         call.output === "json" ? parseJsonOutput(result.text) : result.text;
       return { value, usage: result.usage };
@@ -572,6 +666,8 @@ class Interpreter {
         path,
         instance,
         error: errorMessage(error),
+        partialText:
+          error instanceof BudgetExceededError ? error.partialText : undefined,
       });
       throw error;
     }

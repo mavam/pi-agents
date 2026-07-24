@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { emptyUsage } from "../../src/engine/types.js";
 import type { FlowNode, WorkflowLike } from "../../src/model/ast.js";
 import { validateFlow } from "../../src/model/validate.js";
+import { BudgetExceededError } from "../../src/run/budgets.js";
 import type { RunEvent } from "../../src/run/events.js";
 import {
   type AgentCall,
@@ -822,5 +823,142 @@ describe("event stream shape", () => {
     const last = events[events.length - 1] as { type: string; status: string };
     expect(last.type).toBe("run_completed");
     expect(last.status).toBe("completed");
+  });
+});
+
+describe("run-level execution budgets", () => {
+  test("maxDuration fails the run and cancels nodes with reason budget", async () => {
+    const { outcome, events } = await run(
+      agent("a", "t"),
+      (call) => hangUntilAbort(call.signal),
+      { budgets: { maxDuration: 0.02 } },
+    );
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain(
+      "run duration budget exceeded (maxDuration: 0.02s)",
+    );
+    const cancelled = events.find((e) => e.type === "node_cancelled") as {
+      reason: string;
+    };
+    expect(cancelled.reason).toBe("budget");
+  });
+
+  test("maxCost fails the run once cumulative cost exceeds it", async () => {
+    // Each fake agent completion costs $0.01 (see makeRunner).
+    const { outcome, calls } = await run(
+      seq(agent("a", "1"), agent("b", "2"), agent("c", "3")),
+      () => "ok",
+      { budgets: { maxCost: 0.015 } },
+    );
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("cost budget exceeded (maxCost: $0.015)");
+    expect(calls.length).toBe(2);
+  });
+
+  test("maxTokens aborts mid-agent at turn granularity", async () => {
+    const flow = validateFlow(agent("a", "t"), {});
+    const events: RunEvent[] = [];
+    const outcome = await executeFlow({
+      runId: "run-tokens",
+      flow,
+      budgets: { maxTokens: 500 },
+      emit: (event) => events.push(event),
+      runAgent: async (call) => {
+        const usage = emptyUsage();
+        usage.input = 400;
+        usage.output = 200;
+        call.onProgress?.({ text: "streaming half an answer", usage });
+        await hangUntilAbort(call.signal);
+        return { text: "unreachable" };
+      },
+    });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("token budget exceeded (maxTokens: 500)");
+    const cancelled = events.find((e) => e.type === "node_cancelled") as {
+      reason: string;
+    };
+    expect(cancelled.reason).toBe("budget");
+  });
+
+  test("a budget-cut agent's partial text lands in node_failed", async () => {
+    const { outcome, events } = await run(agent("a", "t"), () => {
+      throw new BudgetExceededError(
+        "agent turn budget exceeded (maxTurns: 2)",
+        "partial work",
+      );
+    });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("maxTurns: 2");
+    const failed = events.find((e) => e.type === "node_failed") as {
+      partialText?: string;
+    };
+    expect(failed.partialText).toBe("partial work");
+  });
+
+  test("collect mode keeps sibling results when one agent hits its budget", async () => {
+    const { outcome } = await run(
+      {
+        kind: "parallel",
+        branches: {
+          good: agent("a", "fine"),
+          greedy: agent("b", "over budget"),
+        },
+        onError: "collect",
+      },
+      (call) => {
+        if (call.task === "over budget") {
+          throw new BudgetExceededError(
+            "agent turn budget exceeded (maxTurns: 1)",
+            "half done",
+          );
+        }
+        return "ok";
+      },
+    );
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toEqual({
+      good: "ok",
+      greedy: { error: "agent turn budget exceeded (maxTurns: 1)" },
+    });
+  });
+});
+
+describe("budget cancellation reasons in pools", () => {
+  test("parallel children cancel with reason budget on a run-level breach", async () => {
+    const { outcome, events } = await run(
+      {
+        kind: "parallel",
+        branches: { a: agent("a", "1"), b: agent("b", "2") },
+      },
+      (call) => hangUntilAbort(call.signal),
+      { budgets: { maxDuration: 0.02 } },
+    );
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("run duration budget exceeded");
+    const reasons = events
+      .filter((e) => e.type === "node_cancelled")
+      .map((e) => (e as { reason: string }).reason);
+    expect(reasons.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(reasons)).toEqual(new Set(["budget"]));
+  });
+
+  test("map items cancel with reason budget on a run-level breach", async () => {
+    const { outcome, events } = await run(
+      {
+        kind: "sequence",
+        steps: [
+          agent("s", "list", { as: "targets", output: "json" }),
+          { kind: "map", over: "{targets}", body: agent("m", "work {item}") },
+        ],
+      },
+      (call) => (call.task === "list" ? "[1, 2]" : hangUntilAbort(call.signal)),
+      { budgets: { maxDuration: 0.05 } },
+    );
+    expect(outcome.status).toBe("failed");
+    const reasons = events
+      .filter((e) => e.type === "node_cancelled")
+      .map((e) => (e as { reason: string }).reason);
+    expect(reasons.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(reasons)).toEqual(new Set(["budget"]));
   });
 });

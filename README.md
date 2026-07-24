@@ -393,16 +393,38 @@ expanded tree.
 
 Every run enforces limits (tool parameter `budgets`, all optional):
 
-| Budget           | Default | Meaning                                                  |
-| ---------------- | ------- | -------------------------------------------------------- |
-| `maxAgents`      | 50      | Total agent spawns (reducers included).                   |
-| `maxParallelism` | 4       | Simultaneously running agents, global across nested pools. |
-| `maxIterations`  | 10      | Cap applied to every loop.                                |
-| `maxDepth`       | 3       | Cross-process delegation depth.                           |
+| Budget             | Default | Meaning                                                     |
+| ------------------ | ------- | ----------------------------------------------------------- |
+| `maxAgents`        | 50      | Total agent spawns (reducers included).                      |
+| `maxParallelism`   | 8       | Simultaneously running agents, global across nested pools.   |
+| `maxIterations`    | 10      | Cap applied to every loop.                                   |
+| `maxDepth`         | 5       | Cross-process delegation depth.                              |
+| `maxTurns`         | 100     | Assistant turns a single delegated agent may take.           |
+| `maxAgentDuration` | —       | Wall-clock seconds a single delegated agent may run.         |
+| `maxDuration`      | —       | Wall-clock seconds the whole run may take.                   |
+| `maxTokens`        | —       | Input+output tokens (cache traffic excluded) a run may use.  |
+| `maxCost`          | —       | USD a run may spend.                                         |
 
-Values must be positive integers. The effective limits are inherited by
-delegated pi processes (via `PI_AGENTS_BUDGETS`), so a child that runs
-pi-agents itself starts from the parent's limits rather than the defaults.
+Count budgets are positive integers; durations (seconds) and `maxCost` (USD)
+accept fractional values. Budgets without a default are unbounded unless set.
+The effective limits are inherited by delegated pi processes (via
+`PI_AGENTS_BUDGETS`), so a child that runs pi-agents itself starts from the
+parent's limits rather than the defaults; run-scoped limits apply per process,
+not aggregated across the delegation tree.
+
+Exceeding a per-agent budget (`maxTurns`, `maxAgentDuration`) fails that agent
+with a clear error and preserves its last streamed output as a partial result
+— visible under `/run <id>` and persisted with the run's events. The usual
+flow policies decide what happens next (`onError: "collect"` keeps sibling
+results). Exceeding a run-scoped budget (`maxDuration`, `maxTokens`,
+`maxCost`) fails the whole run and cancels still-running agents; token and
+cost budgets are enforced at turn granularity, the finest level providers
+report usage at.
+
+Turn budgets are enforced from streamed activity: the cap trips when an
+over-budget turn starts. An agent that has already settled successfully is
+never failed retroactively on its final usage alone, so engines that report
+usage only in their final outcome cannot be cut off mid-run.
 
 ## 🧭 Commands
 

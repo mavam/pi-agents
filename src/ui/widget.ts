@@ -1,12 +1,14 @@
 /**
  * The above-editor widget for live runs: two lines per run.
  *
- *   ⠸ ▰▰▰▰▰▰▰▱▱▱ 67%  review · c9e5799 · 1m32s · 15.5k tok
+ *   ⠸ ▰▰▰▰▰▰▰▱▱▱ 67%  review · c9e5799 · 1m32s · 15.5k · 14 turns · bash
  *      ● bugs→reviewer   ● clarity→reviewer   ◉ ⑂reduce→worker
  *
  * Line 1: braille spinner, parallelogram completion bar (done agents over
  * known agents — the denominator grows as map items are discovered), label,
- * dim id, elapsed, live token count (completed usage + streaming usage).
+ * dim id, elapsed, live token and turn counts (completed usage + streaming
+ * usage), the running agent's current tool, then the latest output excerpt —
+ * replaced by a "no output for …" stall hint when agents have been silent.
  * Line 2: one status-iconed segment per structural agent position.
  */
 
@@ -247,15 +249,19 @@ export function widgetProgress(run: RunView): { done: number; total: number } {
   return { done, total: agentNodes.length + unstarted };
 }
 
-function liveTokens(run: RunView): number {
-  let total = 0;
+function liveTokens(run: RunView): { tokens: number; turns: number } {
+  let tokens = 0;
+  let turns = 0;
   for (const node of run.nodes.values()) {
     const usage: SpawnUsage | undefined =
       node.usage ??
       (node.status === "running" ? node.progressUsage : undefined);
-    if (usage) total += usage.input + usage.output;
+    if (usage) {
+      tokens += usage.input + usage.output;
+      turns += usage.turns;
+    }
   }
-  return total;
+  return { tokens, turns };
 }
 
 export function formatElapsed(ms: number): string {
@@ -279,17 +285,43 @@ function segmentColor(status: SegmentStatus): Parameters<Colorize>[0] {
   }
 }
 
-/** Latest output line of the most recently started running agent. */
-function liveExcerpt(run: RunView): string | undefined {
-  let best: { startedAt: number; text: string } | undefined;
+/** A running agent counts as silent after this much time without updates. */
+export const STALL_AFTER_MS = 60_000;
+
+export interface LiveActivity {
+  /** Latest output line of the most recently started running agent. */
+  excerpt?: string;
+  /** Tool that agent is currently executing, when reported. */
+  tool?: string;
+  /** Most recent progress timestamp across all running agents. */
+  lastAt?: number;
+}
+
+export function liveActivity(run: RunView): LiveActivity {
+  let lastAt: number | undefined;
+  let bestText: { startedAt: number; text: string } | undefined;
+  let bestTool: { startedAt: number; tool: string } | undefined;
   for (const node of run.nodes.values()) {
-    if (node.status !== "running" || !node.progressText) continue;
-    if (!best || node.startedAt > best.startedAt) {
-      best = { startedAt: node.startedAt, text: node.progressText };
+    // Only work leaves report progress; structural nodes just wrap them.
+    if (node.kind !== "agent" && node.kind !== "reduce") continue;
+    if (node.status !== "running") continue;
+    const seen = node.lastProgressAt ?? node.startedAt;
+    if (lastAt === undefined || seen > lastAt) lastAt = seen;
+    if (
+      node.progressText &&
+      (!bestText || node.startedAt > bestText.startedAt)
+    ) {
+      bestText = { startedAt: node.startedAt, text: node.progressText };
+    }
+    if (
+      node.progressTool &&
+      (!bestTool || node.startedAt > bestTool.startedAt)
+    ) {
+      bestTool = { startedAt: node.startedAt, tool: node.progressTool };
     }
   }
-  const line = best?.text.split("\n").find((part) => part.trim());
-  return line?.trim();
+  const line = bestText?.text.split("\n").find((part) => part.trim());
+  return { excerpt: line?.trim(), tool: bestTool?.tool, lastAt };
 }
 
 /**
@@ -307,17 +339,28 @@ export function formatRunWidget(
   const ratio = total > 0 ? done / total : 0;
   const percent = `${Math.round(ratio * 100)}%`;
   const label = run.header.label ?? run.header.flow.kind;
-  const tokens = liveTokens(run);
+  const { tokens, turns } = liveTokens(run);
+  const activity = liveActivity(run);
   const dot = color("dim", " · ");
   const meta = [
     shortId(run.header.id),
     formatElapsed(now - run.createdAt),
     tokens > 0 ? formatTokens(tokens) : undefined,
+    turns > 0 ? `${turns} turn${turns === 1 ? "" : "s"}` : undefined,
+    activity.tool,
   ]
     .filter((part): part is string => part !== undefined)
     .map((part) => color("dim", part))
     .join(dot);
-  const excerpt = liveExcerpt(run);
+  // A long silence is more informative than a stale excerpt: surface it.
+  const stalledFor =
+    activity.lastAt !== undefined ? now - activity.lastAt : undefined;
+  const tail =
+    stalledFor !== undefined && stalledFor > STALL_AFTER_MS
+      ? color("warning", `no output for ${formatElapsed(stalledFor)}`)
+      : activity.excerpt
+        ? color("dim", activity.excerpt)
+        : undefined;
 
   const statuses = aggregateStatuses(run);
   const segments = widgetSegments(run.header.flow, statuses);
@@ -338,7 +381,7 @@ export function formatRunWidget(
     .join("   ");
 
   return [
-    `${color("accent", spinner)} ${percent}${dot}${label}${dot}${meta}${excerpt ? `${dot}${color("dim", excerpt)}` : ""}`,
+    `${color("accent", spinner)} ${percent}${dot}${label}${dot}${meta}${tail ? `${dot}${tail}` : ""}`,
     `  ${segmentText}${overflow > 0 ? color("dim", `   …+${overflow}`) : ""}`,
   ];
 }

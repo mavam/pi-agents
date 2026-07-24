@@ -10,8 +10,8 @@ import type { CancelReason } from "./events.js";
 export class CancelledError extends Error {
   readonly reason: CancelReason;
 
-  constructor(reason: CancelReason) {
-    super(`cancelled (${reason})`);
+  constructor(reason: CancelReason, message?: string) {
+    super(message ?? `cancelled (${reason})`);
     this.name = "CancelledError";
     this.reason = reason;
   }
@@ -72,9 +72,15 @@ export async function runPool<T>(
     }
   };
 
-  const onParentAbort = () => stop("stopped");
+  // Preserve the parent's cancellation reason (e.g. a run-level budget
+  // breach) instead of flattening every abort to "stopped".
+  const parentReason = (): CancelReason =>
+    options.signal.reason instanceof CancelledError
+      ? options.signal.reason.reason
+      : "stopped";
+  const onParentAbort = () => stop(parentReason());
   if (options.signal.aborted) {
-    stop("stopped");
+    stop(parentReason());
   } else {
     options.signal.addEventListener("abort", onParentAbort, { once: true });
   }

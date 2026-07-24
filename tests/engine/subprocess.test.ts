@@ -595,3 +595,72 @@ describe("turn and tool activity", () => {
     expect(seen).toEqual([1, 2]);
   });
 });
+
+describe("overlapping tools and streamed text", () => {
+  test("concurrent tool executions correlate by toolCallId", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const seen: Array<string | undefined> = [];
+    const reader = (async () => {
+      for await (const update of handle.updates) seen.push(update.currentTool);
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "1",
+      toolName: "bash",
+      args: {},
+    });
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "2",
+      toolName: "read",
+      args: {},
+    });
+    // Ending the FIRST tool must not clear the still-running second one.
+    proc.emitRecord({
+      type: "tool_execution_end",
+      toolCallId: "1",
+      toolName: "bash",
+      result: {},
+      isError: false,
+    });
+    proc.emitRecord({
+      type: "tool_execution_end",
+      toolCallId: "2",
+      toolName: "read",
+      result: {},
+      isError: false,
+    });
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    await reader;
+    expect(seen).toEqual(["bash", "read", "read", undefined]);
+  });
+
+  test("message_update streams in-flight text, throttled", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const seen: string[] = [];
+    const reader = (async () => {
+      for await (const update of handle.updates) seen.push(update.text);
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    const partial = (text: string) =>
+      proc.emitRecord({
+        type: "message_update",
+        message: { role: "assistant", content: [{ type: "text", text }] },
+        assistantMessageEvent: {},
+      });
+    partial("half an");
+    partial("half an answer"); // within the throttle window: not pushed
+    proc.emitAssistant("the full answer");
+    proc.settle();
+    proc.close(0);
+    const outcome = await handle.wait();
+    await reader;
+    expect(seen).toEqual(["half an", "the full answer"]);
+    expect(outcome.text).toBe("the full answer");
+  });
+});

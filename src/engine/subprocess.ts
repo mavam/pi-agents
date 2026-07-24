@@ -34,6 +34,8 @@ export const BUDGETS_ENV_VAR = "PI_AGENTS_BUDGETS";
 const CONTROL_RESPONSE_TIMEOUT_MS = 30_000;
 const TERMINATE_AFTER_MS = 1_000;
 const FORCE_KILL_AFTER_MS = 5_000;
+/** Minimum spacing between updates driven by streaming text deltas. */
+export const STREAM_PUSH_INTERVAL_MS = 250;
 
 class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -267,8 +269,10 @@ export function createSubprocessSpawnEngine(options?: {
 
       const usage: SpawnUsage = emptyUsage();
       let latestText = "";
-      let currentTool: string | undefined;
+      /** Tools currently executing, in start order (they can overlap). */
+      const activeTools = new Map<string, string>();
       let turnsStarted = 0;
+      let lastStreamPushAt = 0;
       let stopReason: string | undefined;
       let errorMessage: string | undefined;
       let resolvedModel = spec.model;
@@ -403,12 +407,44 @@ export function createSubprocessSpawnEngine(options?: {
       };
 
       const pushUpdate = () => {
+        lastStreamPushAt = Date.now();
+        let currentTool: string | undefined;
+        for (const name of activeTools.values()) currentTool = name;
         updates.push({
           text: latestText,
           usage: { ...usage },
           currentTool,
           turnsStarted,
         });
+      };
+
+      /**
+       * Capture in-flight assistant text (message_update fires per delta) so
+       * a mid-generation cutoff still preserves the newest partial output.
+       * Malformed partials are skipped rather than failing the protocol.
+       */
+      const recordPartialMessage = (record: Record<string, unknown>) => {
+        if (!isRecord(record.message)) return;
+        if (record.message.role !== "assistant") return;
+        const content = record.message.content;
+        if (!Array.isArray(content)) return;
+        const chunks: string[] = [];
+        for (const part of content) {
+          if (
+            isRecord(part) &&
+            part.type === "text" &&
+            typeof part.text === "string"
+          ) {
+            chunks.push(part.text);
+          }
+        }
+        const text = chunks.join("\n").trim();
+        if (!text || text === latestText) return;
+        latestText = text;
+        // Deltas arrive far faster than anyone can read; cap update fan-out.
+        if (Date.now() - lastStreamPushAt >= STREAM_PUSH_INTERVAL_MS) {
+          pushUpdate();
+        }
       };
 
       const recordAssistantMessage = (message: AssistantMessage) => {
@@ -506,15 +542,22 @@ export function createSubprocessSpawnEngine(options?: {
             turnsStarted += 1;
             pushUpdate();
           }
+          if (record.type === "message_update") {
+            recordPartialMessage(record);
+          }
           if (
             record.type === "tool_execution_start" &&
+            typeof record.toolCallId === "string" &&
             typeof record.toolName === "string"
           ) {
-            currentTool = record.toolName;
+            activeTools.set(record.toolCallId, record.toolName);
             pushUpdate();
           }
-          if (record.type === "tool_execution_end" && currentTool) {
-            currentTool = undefined;
+          if (
+            record.type === "tool_execution_end" &&
+            typeof record.toolCallId === "string" &&
+            activeTools.delete(record.toolCallId)
+          ) {
             pushUpdate();
           }
           if (record.type === "agent_start") agentStarted = true;

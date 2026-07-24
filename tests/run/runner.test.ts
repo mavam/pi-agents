@@ -205,3 +205,64 @@ describe("createAgentRunner budget watchdog", () => {
     await expect(pending).rejects.toBeInstanceOf(SpawnAborted);
   });
 });
+
+describe("createAgentRunner breach/settle races", () => {
+  test("a breach found while draining updates beats a completed outcome", async () => {
+    // wait() resolves before the pump ever sees the over-budget update; the
+    // drain must still turn the result into a budget failure.
+    const engine: SpawnEngine = {
+      spawn() {
+        return {
+          status: "completed",
+          updates: (async function* () {
+            yield progress(3, "late partial");
+          })(),
+          wait: async () => ({
+            text: "done",
+            exitCode: 0,
+            usage: emptyUsage(),
+          }),
+          abort: () => {},
+        };
+      },
+    };
+    const runner = createAgentRunner({
+      engine,
+      cwd: process.cwd(),
+      budgetLimits: { ...DEFAULT_BUDGETS, maxTurns: 2 },
+    });
+    const failure = await runner(call()).then(
+      () => undefined,
+      (error) => error,
+    );
+    expect(failure).toBeInstanceOf(BudgetExceededError);
+    expect((failure as BudgetExceededError).partialText).toBe("late partial");
+  });
+
+  test("final outcomes are not failed retroactively on usage alone", async () => {
+    // No streamed activity ever crossed the cap; a completed outcome whose
+    // final usage exceeds maxTurns stays a success (streaming engines are
+    // the enforcement point).
+    const over = emptyUsage();
+    over.turns = 5;
+    const engine: SpawnEngine = {
+      spawn() {
+        return {
+          status: "completed",
+          updates: (async function* () {})(),
+          wait: async () => ({ text: "done", exitCode: 0, usage: over }),
+          abort: () => {},
+        };
+      },
+    };
+    const runner = createAgentRunner({
+      engine,
+      cwd: process.cwd(),
+      budgetLimits: { ...DEFAULT_BUDGETS, maxTurns: 2 },
+    });
+    await expect(runner(call())).resolves.toEqual({
+      text: "done",
+      usage: over,
+    });
+  });
+});

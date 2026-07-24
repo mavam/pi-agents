@@ -624,3 +624,43 @@ describe("run-level execution budgets", () => {
     });
   });
 });
+
+describe("budget cancellation reasons in pools", () => {
+  test("parallel children cancel with reason budget on a run-level breach", async () => {
+    const { outcome, events } = await run(
+      {
+        kind: "parallel",
+        branches: { a: agent("a", "1"), b: agent("b", "2") },
+      },
+      (call) => hangUntilAbort(call.signal),
+      { budgets: { maxDuration: 0.02 } },
+    );
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("run duration budget exceeded");
+    const reasons = events
+      .filter((e) => e.type === "node_cancelled")
+      .map((e) => (e as { reason: string }).reason);
+    expect(reasons.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(reasons)).toEqual(new Set(["budget"]));
+  });
+
+  test("map items cancel with reason budget on a run-level breach", async () => {
+    const { outcome, events } = await run(
+      {
+        kind: "sequence",
+        steps: [
+          agent("s", "list", { as: "targets", output: "json" }),
+          { kind: "map", over: "{targets}", body: agent("m", "work {item}") },
+        ],
+      },
+      (call) => (call.task === "list" ? "[1, 2]" : hangUntilAbort(call.signal)),
+      { budgets: { maxDuration: 0.05 } },
+    );
+    expect(outcome.status).toBe("failed");
+    const reasons = events
+      .filter((e) => e.type === "node_cancelled")
+      .map((e) => (e as { reason: string }).reason);
+    expect(reasons.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(reasons)).toEqual(new Set(["budget"]));
+  });
+});

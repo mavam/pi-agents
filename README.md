@@ -379,6 +379,11 @@ results). Exceeding a run-scoped budget (`maxDuration`, `maxTokens`,
 cost budgets are enforced at turn granularity, the finest level providers
 report usage at.
 
+Turn budgets are enforced from streamed activity: the cap trips when an
+over-budget turn starts. An agent that has already settled successfully is
+never failed retroactively on its final usage alone, so engines that report
+usage only in their final outcome cannot be cut off mid-run.
+
 ## 🧭 Commands
 
 | Command               | Description                                          |

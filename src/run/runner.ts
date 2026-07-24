@@ -187,6 +187,12 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
 
     try {
       const outcome = await handle.wait();
+      // Drain remaining updates before judging the outcome: a breach found
+      // there must win regardless of stream timing. Completed outcomes are
+      // never failed retroactively on their final usage alone — turn
+      // enforcement relies on the engine streaming activity.
+      await progressPump.catch(() => {});
+      if (breach) throw breach;
       return { text: outcome.text, usage: outcome.usage };
     } catch (error) {
       if (breach && error instanceof SpawnAborted) throw breach;

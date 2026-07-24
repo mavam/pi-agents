@@ -76,8 +76,9 @@ export class FancyFooterRunReporter {
     this.publish(
       {
         id: FANCY_FOOTER_WORKFLOWS_WIDGET_ID,
-        label: "Active workflows",
-        description: "Number of active pi-agents workflow executions.",
+        label: "workflows",
+        description:
+          "Shows the number of active pi-agents workflow executions.",
         glyph: KIND_ICONS.workflow,
         color: "accent",
         position: 9,
@@ -88,8 +89,9 @@ export class FancyFooterRunReporter {
     this.publish(
       {
         id: FANCY_FOOTER_AGENTS_WIDGET_ID,
-        label: "Agent progress",
-        description: "Completed and total agents across active workflows.",
+        label: "agents",
+        description:
+          "Shows completed and total agents across active workflows.",
         glyph: KIND_ICONS.agent,
         color: "success",
         position: 10,

@@ -89,6 +89,11 @@ export function fenced(text: string): string {
   return `${fence}\n${text}\n${fence}`;
 }
 
+/** Let Pi render string results as Markdown; keep structured values literal. */
+export function renderResultValue(value: unknown, text: string): string {
+  return typeof value === "string" ? text : fenced(text);
+}
+
 /**
  * Short human name for a node instance path: `$.branches.bugs` → `bugs`,
  * `$.reduce` → `reduce`, `$.body@2` → `@2`, `$.steps[1].body#3` → `2#3`.

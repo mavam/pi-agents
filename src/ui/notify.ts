@@ -13,10 +13,10 @@ import type { RunEvent } from "../run/events.js";
 import { getSessionFile, isIdle } from "../run/persist.js";
 import type { RunManager } from "../run/runs.js";
 import {
-  fenced,
   formatUsage,
   formatValuePreview,
   NOTIFICATION_TYPE,
+  renderResultValue,
   shortId,
 } from "./render.js";
 
@@ -100,8 +100,6 @@ export class NotificationManager {
   ): RunNotification | undefined {
     if (event.type === "run_completed") {
       const run = this.manager.state.runs.get(event.runId);
-      // Fence the value preview: raw JSON/text would be reflowed (and
-      // mangled) by the markdown renderer.
       const preview =
         event.status === "completed"
           ? formatValuePreview(event.value, 600)
@@ -109,7 +107,7 @@ export class NotificationManager {
       const summary =
         event.status === "completed"
           ? preview
-            ? fenced(preview)
+            ? renderResultValue(event.value, preview)
             : "(no output)"
           : (event.error ?? "unknown error");
       const usage = formatUsage(event.usage);
@@ -122,10 +120,10 @@ export class NotificationManager {
         text: [
           `**Run \`${shortId(event.runId)}\`${run?.header.label ? ` (${run.header.label})` : ""} ${event.status}.**${usage ? ` ${usage}, ${event.agents} agent(s).` : ""}`,
           "",
-          summary,
-          "",
           `Inspect with \`/run ${shortId(event.runId)}\` · full result: \`/run ${shortId(event.runId)} result\` · per-agent: \`/run ${shortId(event.runId)} agents\`.`,
           ...(wake ? ["", "Continue your task using this result."] : []),
+          "",
+          summary,
         ].join("\n"),
       };
     }

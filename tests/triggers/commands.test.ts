@@ -12,6 +12,7 @@ import {
   completeRunArgs,
   findNodeInRun,
   formatNodeResultFull,
+  formatRunDetails,
   formatRunNodesList,
   steeringMarker,
 } from "../../src/triggers/commands.js";
@@ -179,24 +180,43 @@ describe("formatRunNodesList", () => {
 });
 
 describe("formatNodeResultFull", () => {
-  test("completed node shows the full fenced output", async () => {
-    const run = await recordedRun(REVIEW_FLOW, () => "full ``` output");
+  test("completed node renders its string output as Markdown", async () => {
+    const markdown = [
+      "## Change map",
+      "",
+      "- **AST and structural parsing**",
+      "",
+      "```ts",
+      "const ready = true;",
+      "```",
+    ].join("\n");
+    const run = await recordedRun(REVIEW_FLOW, () => markdown);
     const lookup = findNodeInRun(run, "bugs");
     if (lookup.kind !== "found") throw new Error("expected bugs node");
     const text = formatNodeResultFull(run, lookup.node);
     expect(text).toContain("## Run run-1234 — bugs (reviewer)");
     expect(text).toContain("- status: completed");
-    expect(text).toContain("full ``` output");
-    // The fence grew past the embedded backticks.
-    expect(text).toContain("````");
+    expect(text).toContain(`\n\n${markdown}`);
+    // The result's own code fence remains Markdown instead of forcing an
+    // outer fence around the entire result.
+    expect(text).not.toContain("````\n## Change map");
   });
 
-  test("non-string values are pretty-printed JSON", async () => {
+  test("non-string values remain fenced, pretty-printed JSON", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
     const target = workNodes(run)[0] as NodeView;
     target.value = { findings: [1, 2] };
     const text = formatNodeResultFull(run, target);
-    expect(text).toContain('"findings"');
+    expect(text).toContain('```\n{\n  "findings": [');
+    expect(text).toContain("\n}\n```");
+  });
+
+  test("puts truncation metadata before a split Markdown fence", async () => {
+    const run = await recordedRun(REVIEW_FLOW, () => "ok");
+    const target = workNodes(run)[0] as NodeView;
+    target.value = `\`\`\`ts\n${"x".repeat(64_100)}\n\`\`\``;
+    const text = formatNodeResultFull(run, target);
+    expect(text.indexOf("… truncated")).toBeLessThan(text.indexOf("```ts"));
   });
 
   test("failed node shows the error", async () => {
@@ -253,6 +273,15 @@ describe("formatNodeResultFull", () => {
     expect(text).toContain("### Steering");
     expect(text).toContain("2026-07-23T12:00:00.000Z (rpc:dashboard)");
     expect(text).toContain("Focus on the retry path.");
+  });
+});
+
+describe("formatRunDetails", () => {
+  test("puts the full-result hint before a split preview fence", async () => {
+    const markdown = `\`\`\`ts\n${"x".repeat(500)}\n\`\`\``;
+    const run = await recordedRun(REVIEW_FLOW, () => markdown);
+    const text = formatRunDetails(run);
+    expect(text.indexOf("Full result:")).toBeLessThan(text.indexOf("```ts"));
   });
 });
 

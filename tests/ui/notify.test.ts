@@ -32,13 +32,13 @@ function makeFakes(sessionFile = "session.jsonl") {
   return { sent, pi, manager, makeCtx };
 }
 
-function completed(runId: string): RunEvent {
+function completed(runId: string, value: unknown = "done"): RunEvent {
   return {
     type: "run_completed",
     at: 1,
     runId,
     status: "completed",
-    value: "done",
+    value,
     usage: emptyUsage(),
     agents: 1,
   };
@@ -69,6 +69,49 @@ describe("NotificationManager", () => {
     expect(sent[0]?.message.content).not.toContain(
       "Continue your task using this result.",
     );
+  });
+
+  test("renders string result previews as Markdown", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    notifications.track("run-1", "session.jsonl", false);
+    const markdown = "## Change map\n\n- **AST and structural parsing**";
+    notifications.handleRunEvent(completed("run-1", markdown));
+    const content = sent[0]?.message.content ?? "";
+    expect(content.indexOf("Inspect with")).toBeLessThan(
+      content.indexOf(markdown),
+    );
+    expect(content.endsWith(markdown)).toBe(true);
+    expect(content).not.toContain(`\`\`\`\n${markdown}`);
+  });
+
+  test("keeps structured result previews as fenced JSON", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    notifications.track("run-1", "session.jsonl", false);
+    notifications.handleRunEvent(
+      completed("run-1", { findings: ["one", "two"] }),
+    );
+    const content = sent[0]?.message.content ?? "";
+    expect(content.indexOf("Inspect with")).toBeLessThan(
+      content.indexOf('```\n{\n  "findings": ['),
+    );
+    expect(content).toContain("\n}\n```");
+  });
+
+  test("puts host controls before a split Markdown preview fence", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    notifications.track("run-1", "session.jsonl", true);
+    const markdown = `\`\`\`ts\n${"x".repeat(700)}\n\`\`\``;
+    notifications.handleRunEvent(completed("run-1", markdown));
+    const content = sent[0]?.message.content ?? "";
+    const resultStart = content.indexOf("```ts");
+    expect(content.indexOf("Inspect with")).toBeLessThan(resultStart);
+    expect(content.indexOf("Continue your task")).toBeLessThan(resultStart);
   });
 
   test("completion while busy queues; flush when idle triggers a turn", () => {

@@ -963,11 +963,21 @@ describe("workflow tool description", () => {
     expect(tool.description).toContain("opt-in");
     // The near-misses that produce unwanted runs must be named, not implied.
     expect(tool.description).toContain("Nothing else is a trigger");
+    // Mentioning the word is not a request — the hole that matters most in a
+    // repo whose every conversation says "workflow".
+    expect(tool.description).toContain(
+      'Mentioning "workflow" or "flow" is not',
+    );
+    // The tool cannot touch an existing run, so it must not invite the attempt.
+    expect(tool.description).toContain("never call this tool");
     expect(tool.promptSnippet).toContain("explicitly");
     const guidelines = tool.promptGuidelines ?? [];
     expect(guidelines[0]).toContain("Do not call `workflow` unless");
     expect(guidelines.some((line) => line.includes("are not triggers"))).toBe(
       true,
     );
+    expect(
+      guidelines.some((line) => line.includes("only starts new runs")),
+    ).toBe(true);
   });
 });

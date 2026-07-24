@@ -43,9 +43,11 @@ const MAX_TOOL_RESULT_CHARS = 16_000;
  * Guidelines section; they are worded separately rather than sharing this
  * text, which is scoped to the tool schema. Keep the two in sync.
  */
-const USE_GATE = `USE ONLY ON EXPLICIT REQUEST — this tool is opt-in. Call it only when the user said "workflow" or "flow", asked you to delegate or to use parallel/background/sub agents, named a saved workflow from <workflows> (or described the situation its <trigger> declares), or referred to an existing run.
+const USE_GATE = `USE ONLY ON EXPLICIT REQUEST — this tool is opt-in, and it only ever STARTS a new run. Call it only when the user affirmatively asked to run one: "run the review workflow", "delegate this", "spawn agents for these", "do these in parallel", "kick off <name>". A saved workflow from <workflows> qualifies only when the user asked for it to run — by name, or by describing the situation its <trigger> declares.
 
-Nothing else is a trigger: not a large multi-step task, a long list of independent items, a multi-file refactor, a review, an audit, a research question, or a task you judge parallelizable. Do that work yourself. If a workflow seems better but was not requested, do the work directly and say so in one sentence — do not call the tool to make the offer concrete.`;
+Mentioning "workflow" or "flow" is not a request; neither is asking about a saved workflow, reading one, editing one, or discussing this algebra — in a conversation about workflows those words appear constantly. Nothing else is a trigger either: not a large multi-step task, a long list of independent items, a multi-file refactor, a review, an audit, a research question, or a task you judge parallelizable. Do that work yourself. If a workflow seems better but was not requested, do the work directly and say so in one sentence — do not call the tool to make the offer concrete.
+
+For a run that already exists, never call this tool: steer a live agent with \`steer\`, and point the user at /run to inspect or stop one.`;
 
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
 - {"kind":"agent","task":"...","name":"...","output":"text"|"json","model":"...","thinking":"..."} — one delegated agent (leaf; a bare agent node is a valid flow). Omit "name" for an anonymous ad-hoc agent; set it only to use a profile from <agents>.
@@ -379,8 +381,9 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
     promptSnippet:
       "workflow: run a workflow of delegated agents — only when the user explicitly asks for a workflow or for delegation, never on your own initiative",
     promptGuidelines: [
-      'Do not call `workflow` unless the user explicitly asked for it — they said "workflow"/"flow", asked you to delegate or to use parallel/background/sub agents, named a saved workflow from <workflows> (or described the situation its <trigger> declares), or referred to an existing run. Otherwise do the task yourself.',
+      'Do not call `workflow` unless the user affirmatively asked to run one — "run the X workflow", "delegate this", "spawn agents", "do these in parallel", or a saved workflow they asked for by name or by its <trigger> situation. Merely mentioning "workflow"/"flow", or asking about a saved workflow, is not a request. Otherwise do the task yourself.',
       "Size, step count, parallelizability, and review/refactor/audit/research shape are not triggers. When a workflow looks like a good fit but was not requested, do the work directly and offer it in one sentence instead of calling the tool.",
+      "`workflow` only starts new runs. For a run that already exists, use `steer` for a live agent, or point the user at /run to inspect or stop it.",
       "Once a workflow is requested: prefer a saved workflow via workflow({name, params}) when one in <workflows> matches; otherwise compose an inline flow — a bare agent leaf for one isolated task, sequence/parallel/map/loop for multi-agent work.",
       "Route deterministically with `switch` instead of asking an agent to decide: predicates over a JSON binding pick exactly one arm; use a `value` arm to yield data without spawning an agent.",
       "Omit the agent name for one-off delegation; it is only needed to select a reusable profile from <agents>. Never invent agent names or create agent-definition files merely to execute an ad-hoc flow.",

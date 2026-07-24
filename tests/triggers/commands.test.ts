@@ -67,6 +67,9 @@ describe("nodeDisplayName", () => {
     ["$.steps[0]", "1"],
     ["$.steps[1].body#3", "2#3"],
     ["$.steps[0].branches.security.reduce", "1.security.reduce"],
+    ["$.cases[0].then", "case 1"],
+    ["$.else", "else"],
+    ["$.steps[1].cases[1].then", "2.case 2"],
   ])("%s → %s", (instance, expected) => {
     expect(nodeDisplayName(node(instance))).toBe(expected);
   });

@@ -1,7 +1,8 @@
 /**
- * Predicate algebra for `loop.until`: comparisons over dot-paths into a JSON
- * value, composed with and/or/not. Evaluation is total — a missing path never
- * throws, it just makes the leaf false (or true for `ne`/`empty`).
+ * Predicate algebra for `loop.until` and `switch.cases[].when`: comparisons
+ * over dot-paths into a JSON value, composed with and/or/not. Evaluation is
+ * total — a missing path never throws, it just makes the leaf false (or true
+ * for `ne`/`empty`).
  */
 
 import type { Predicate } from "./ast.js";

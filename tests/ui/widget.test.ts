@@ -127,6 +127,77 @@ describe("formatRunWidget", () => {
     expect(line1).toContain("100%");
   });
 
+  test("switch totals use the smallest arm and self-correct as instances appear", async () => {
+    const SWITCH_FLOW = {
+      kind: "sequence",
+      steps: [
+        {
+          kind: "agent",
+          name: "gate",
+          task: "inspect",
+          output: "json",
+          as: "gate",
+        },
+        {
+          kind: "switch",
+          on: "{gate}",
+          cases: [
+            {
+              when: { eq: ["status", "findings"] },
+              then: {
+                kind: "sequence",
+                steps: [
+                  { kind: "agent", name: "fixer", task: "fix" },
+                  { kind: "agent", name: "checker", task: "recheck" },
+                ],
+              },
+            },
+          ],
+          else: { kind: "agent", name: "reporter", task: "report" },
+        },
+      ],
+    };
+    // Before anything starts, the denominator counts gate + the smallest arm.
+    const pending = await recordedRun(
+      SWITCH_FLOW,
+      (agent) => (agent === "gate" ? '{"status": "findings"}' : "ok"),
+      (event) => event.type === "run_created",
+    );
+    expect(widgetProgress(pending)).toEqual({ done: 0, total: 2 });
+    // The larger arm ran: the total grows with the real instances and the
+    // finished run still reads 100% (min-arm undercounts, never overcounts).
+    const run = await recordedRun(SWITCH_FLOW, (agent) =>
+      agent === "gate" ? '{"status": "findings"}' : "ok",
+    );
+    expect(widgetProgress(run)).toEqual({ done: 3, total: 3 });
+    const [line1, line2] = formatRunWidget(run, run.createdAt, 0);
+    expect(line1).toContain("100%");
+    expect(line2).toContain("● ⎇ switch");
+  });
+
+  test("value nodes add no work: zero leaves, ≔ segment", async () => {
+    const run = await recordedRun(
+      {
+        kind: "sequence",
+        steps: [
+          {
+            kind: "agent",
+            name: "scout",
+            task: "scan",
+            output: "json",
+            as: "scout",
+          },
+          { kind: "value", value: { seen: "{scout.count}" } },
+        ],
+      },
+      () => '{"count": 3}',
+    );
+    expect(widgetProgress(run)).toEqual({ done: 1, total: 1 });
+    const [line1, line2] = formatRunWidget(run, run.createdAt, 0);
+    expect(line1).toContain("100%");
+    expect(line2).toContain("● ≔ value");
+  });
+
   test("failures color the segment with ✗", async () => {
     const flow = {
       kind: "parallel",

@@ -51,6 +51,47 @@ describe("toMermaid", () => {
     expect(first).toContain("-.->|repeat|");
   });
 
+  test("switch renders a decision head, labeled arm edges, and a join", () => {
+    const flow = validateFlow(
+      {
+        kind: "switch",
+        on: "{params.gate}",
+        cases: [
+          {
+            when: { eq: ["status", "approved"] },
+            then: { kind: "agent", name: "shipper", task: "ship" },
+          },
+          {
+            when: { or: [{ exists: "findings" }, { eq: ["retry", true] }] },
+            then: { kind: "agent", name: "fixer", task: "fix" },
+          },
+        ],
+        else: { kind: "value", value: "done", label: "outcome" },
+      },
+      { params: [{ name: "gate" }] },
+    );
+    const first = toMermaid(flow);
+    expect(first).toBe(toMermaid(flow));
+    expect(first).toBe(
+      [
+        "flowchart TD",
+        '  n0{"switch {params.gate}"}',
+        '  n1(("·"))',
+        '  n2["shipper"]',
+        "  n0 -->|when status == 'approved'| n2",
+        "  n2 --> n1",
+        '  n3["fixer"]',
+        "  n0 -->|when (exists(findings) ∣∣ retry == true)| n3",
+        "  n3 --> n1",
+        '  n4[/"outcome"/]',
+        "  n0 -->|else| n4",
+        "  n4 --> n1",
+      ].join("\n"),
+    );
+    // Pipes from or-predicates never leak into edge-label delimiters.
+    expect(first).not.toContain("||");
+  });
+
   test("anonymous leaves and reducers label as ad-hoc", () => {
     const flow = validateFlow({
       kind: "parallel",

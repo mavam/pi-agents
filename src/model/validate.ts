@@ -20,6 +20,8 @@ import {
   BRANCH_KEY_RE,
   bodyPath,
   branchPath,
+  casePath,
+  elsePath,
   type FlowNode,
   IDENTIFIER_RE,
   type LoopNode,
@@ -30,7 +32,10 @@ import {
   type Reduce,
   reducePath,
   type SequenceNode,
+  type SwitchCase,
+  type SwitchNode,
   stepPath,
+  type ValueNode,
   type WorkflowLike,
   type WorkflowParamDef,
   type WorkflowRefNode,
@@ -249,6 +254,8 @@ const NODE_KINDS = [
   "parallel",
   "map",
   "loop",
+  "switch",
+  "value",
   "workflow",
 ] as const;
 
@@ -279,6 +286,10 @@ export function parseFlowNode(
       return parseMap(obj, path, issues);
     case "loop":
       return parseLoop(obj, path, issues);
+    case "switch":
+      return parseSwitch(obj, path, issues);
+    case "value":
+      return parseValue(obj, path, issues);
     case "workflow":
       return parseWorkflowRef(obj, path, issues);
     default:
@@ -536,6 +547,116 @@ function parseLoop(
   };
 }
 
+function parseSwitch(
+  obj: Record<string, unknown>,
+  path: string,
+  issues: Issues,
+): SwitchNode {
+  checkKeys(obj, ["kind", "on", "cases", "else", "as", "label"], path, issues);
+  const on = requiredString(obj, "on", path, issues);
+  if (on && !isSingleReference(on)) {
+    issues.push({
+      path,
+      message: `'on' must be exactly one reference like "{gate}" or "{pr.state}" (got '${on}')`,
+    });
+  }
+  const cases: SwitchCase[] = [];
+  if (!Array.isArray(obj.cases) || obj.cases.length === 0) {
+    issues.push({
+      path,
+      message: "'cases' must be a non-empty array of {when, then} arms",
+    });
+  } else {
+    obj.cases.forEach((raw, index) => {
+      const armPath = `${path}.cases[${index}]`;
+      const arm = asRecord(raw, armPath, "a {when, then} arm", issues);
+      if (!arm) return;
+      checkKeys(arm, ["when", "then"], armPath, issues);
+      const when = parsePredicate(arm.when, `${armPath}.when`, issues);
+      const then = parseFlowNode(arm.then, casePath(path, index), issues);
+      if (when && then) cases.push({ when, then });
+    });
+  }
+  if (obj.else === undefined) {
+    issues.push({
+      path,
+      message: "'else' is required (a switch must be total)",
+    });
+  }
+  const elseNode =
+    obj.else === undefined
+      ? undefined
+      : parseFlowNode(obj.else, elsePath(path), issues);
+  return {
+    kind: "switch",
+    ...parseBase(obj, path, issues),
+    on,
+    cases,
+    else: elseNode ?? { kind: "sequence", steps: [] },
+  };
+}
+
+/**
+ * Reject anything JSON cannot carry: non-finite numbers (YAML `.nan`/`.inf`
+ * parse to NaN/Infinity and would silently persist as null) and non-plain
+ * objects like Date or Map from programmatic callers.
+ */
+function checkJsonValue(value: unknown, path: string, issues: Issues): void {
+  switch (typeof value) {
+    case "string":
+    case "boolean":
+      return;
+    case "number":
+      if (!Number.isFinite(value)) {
+        issues.push({
+          path,
+          message: `'value' must be JSON (got non-finite number ${value})`,
+        });
+      }
+      return;
+    case "object": {
+      if (value === null) return;
+      if (Array.isArray(value)) {
+        value.forEach((element, index) => {
+          checkJsonValue(element, `${path}[${index}]`, issues);
+        });
+        return;
+      }
+      const proto = Object.getPrototypeOf(value);
+      if (proto !== Object.prototype && proto !== null) {
+        issues.push({
+          path,
+          message: `'value' must be JSON (got ${value.constructor?.name ?? "exotic object"})`,
+        });
+        return;
+      }
+      for (const [key, child] of Object.entries(value)) {
+        checkJsonValue(child, `${path}.${key}`, issues);
+      }
+      return;
+    }
+    default:
+      issues.push({
+        path,
+        message: `'value' must be JSON (got ${typeof value})`,
+      });
+  }
+}
+
+function parseValue(
+  obj: Record<string, unknown>,
+  path: string,
+  issues: Issues,
+): ValueNode {
+  checkKeys(obj, ["kind", "value", "as", "label"], path, issues);
+  if ("value" in obj) {
+    checkJsonValue(obj.value, `${path}.value`, issues);
+  } else {
+    issues.push({ path, message: "'value' is required (any JSON value)" });
+  }
+  return { kind: "value", ...parseBase(obj, path, issues), value: obj.value };
+}
+
 function parseWorkflowRef(
   obj: Record<string, unknown>,
   path: string,
@@ -717,6 +838,7 @@ function expandNode(
 ): void {
   switch (node.kind) {
     case "agent":
+    case "value":
       return;
     case "sequence":
       node.steps.forEach((step, index) => {
@@ -731,6 +853,12 @@ function expandNode(
     case "map":
     case "loop":
       expandNode(node.body, bodyPath(path), stack, resolve, issues);
+      return;
+    case "switch":
+      node.cases.forEach((arm, index) => {
+        expandNode(arm.then, casePath(path, index), stack, resolve, issues);
+      });
+      expandNode(node.else, elsePath(path), stack, resolve, issues);
       return;
     case "workflow": {
       if (!resolve) {
@@ -889,6 +1017,26 @@ function checkTemplate(
   }
 }
 
+/** Deep-walk a value node's JSON, checking every string as a template. */
+function checkValueTemplates(
+  value: unknown,
+  path: string,
+  scope: ScopeState,
+  issues: Issues,
+): void {
+  if (typeof value === "string") {
+    checkTemplate(value, path, scope, undefined, issues);
+  } else if (Array.isArray(value)) {
+    value.forEach((element, index) => {
+      checkValueTemplates(element, `${path}[${index}]`, scope, issues);
+    });
+  } else if (typeof value === "object" && value !== null) {
+    for (const [key, child] of Object.entries(value)) {
+      checkValueTemplates(child, `${path}.${key}`, scope, issues);
+    }
+  }
+}
+
 function checkNode(
   node: FlowNode,
   path: string,
@@ -977,6 +1125,17 @@ function checkNode(
         false,
       );
       return;
+    case "switch": {
+      checkTemplate(node.on, `${path}.on`, scope, undefined, issues);
+      node.cases.forEach((arm, index) => {
+        checkNode(arm.then, casePath(path, index), scope, issues, false);
+      });
+      checkNode(node.else, elsePath(path), scope, issues, false);
+      return;
+    }
+    case "value":
+      checkValueTemplates(node.value, `${path}.value`, scope, issues);
+      return;
     case "workflow": {
       for (const [key, value] of Object.entries(node.params ?? {})) {
         checkTemplate(value, `${path}.params.${key}`, scope, undefined, issues);
@@ -1043,6 +1202,12 @@ export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
       case "loop":
         visit(current.body);
         return;
+      case "switch":
+        for (const arm of current.cases) visit(arm.then);
+        visit(current.else);
+        return;
+      case "value":
+        return;
       case "workflow":
         if (current.body) visit(current.body);
         return;
@@ -1075,6 +1240,12 @@ export function collectAgentNames(node: FlowNode): Set<string> {
         return;
       case "loop":
         visit(current.body);
+        return;
+      case "switch":
+        for (const arm of current.cases) visit(arm.then);
+        visit(current.else);
+        return;
+      case "value":
         return;
       case "workflow":
         if (current.body) visit(current.body);

@@ -158,6 +158,12 @@ export function widgetSegments(
       case "loop":
         push(path, `${prefix}↺ loop`);
         return;
+      case "switch":
+        push(path, `${prefix}⎇ ${node.label ?? "switch"}`);
+        return;
+      case "value":
+        push(path, `${prefix}≔ ${node.label ?? "value"}`);
+        return;
       case "workflow":
         push(path, `${prefix}❖ ${node.name}`);
         return;
@@ -217,6 +223,16 @@ function countStaticLeaves(node: FlowNode): number {
       return countStaticLeaves(node.body) + (node.reduce ? 1 : 0);
     case "loop":
       return countStaticLeaves(node.body);
+    case "switch":
+      // Exactly one arm runs; count the smallest so the total is an
+      // underestimate that self-corrects as real instances appear (an
+      // overestimate would leave finished runs looking incomplete).
+      return Math.min(
+        ...node.cases.map((arm) => countStaticLeaves(arm.then)),
+        countStaticLeaves(node.else),
+      );
+    case "value":
+      return 0;
     case "workflow":
       return node.body ? countStaticLeaves(node.body) : 1;
   }

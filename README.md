@@ -51,7 +51,7 @@ Three nouns carry the whole framework:
 
 ### The algebra
 
-A workflow is a tree of six node kinds. Composition is purely structural:
+A workflow is a tree of eight node kinds. Composition is purely structural:
 `parallel` fuses fork and join into one expression, loops are bounded fixpoints,
 and saved workflows inline like function calls.
 
@@ -62,6 +62,8 @@ and saved workflows inline like function calls.
 | `⑃`  | `parallel` | Run named branches concurrently, optionally `⑂` reduce.   | `{branch: value}`, or the reducer's value. |
 | `⇶`  | `map`      | Fan out a body per element of a runtime array.            | Array of body values, or the reducer's.    |
 | `↺`  | `loop`     | Repeat a body until a predicate holds or `max` is hit.    | The last iteration's value.                |
+| `⎇`  | `switch`   | Route to the first arm whose predicate matches a value.   | The chosen arm's value.                    |
+| `≔`  | `value`    | Yield a template-interpolated JSON value (no agent).      | The interpolated value.                    |
 | `❖`  | `workflow` | Invoke a saved workflow by name (inlined, cycle-checked). | The inlined flow's value.                  |
 
 The JSON/YAML form is what you author; the icons are how flows are *read*.
@@ -334,6 +336,46 @@ until: { eq: ["done", true] }
 Predicates address the body's JSON value by dot path (`""` is the whole
 value): `eq`, `ne`, `gt`, `lt`, `exists`, `empty`, composed with `and`,
 `or`, `not`.
+
+### `switch`
+
+```yaml
+kind: switch
+on: "{gate}"            # exactly one reference, like map's "over"
+cases:
+  - when: { eq: ["status", "approved"] }
+    then: { kind: agent, name: shipper, task: "Ship it" }
+  - when: { exists: "findings" }
+    then: { kind: agent, name: fixer, task: "Fix {gate.findings}" }
+else:                   # required — the switch always yields a value
+  kind: value
+  value: { outcome: "{gate.outcome}" }
+```
+
+Exclusive, ordered, total routing on data: `on` resolves to a JSON value,
+the cases' predicates (the same language as `loop.until`) are tried in
+definition order, and exactly one arm runs — the first match, or `else`.
+The switch yields the chosen arm's value directly, like a ternary, so an
+`as` binding on the switch never dangles. Arms see the enclosing scope
+unchanged — no new frame roots — and the switch itself spawns no agent.
+Missing predicate paths follow `evaluatePredicate` semantics: `eq`, `gt`,
+`lt`, and `exists` are false, while `ne` and `empty` are true.
+
+### `value`
+
+```yaml
+kind: value
+value:
+  files: "{scout.files}"        # a lone reference substitutes the JSON value
+  summary: "saw {scout.count}"  # mixed text interpolates as a string
+  reviewed: true                # non-strings pass through
+```
+
+A pure data leaf: yields `value` with every string interpolated, spawning
+no agent. A string that is exactly one `{reference}` substitutes the
+referenced JSON value itself, preserving its type; any other string
+interpolates as text. Useful for shaping outcomes and for switch arms that
+should return an existing binding instead of running an echo agent.
 
 ### `workflow`
 

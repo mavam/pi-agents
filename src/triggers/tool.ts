@@ -38,6 +38,8 @@ const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a va
 - {"kind":"parallel","branches":{"a":node,...},"mode":"all"|"any"|{"quorum":n},"onError":"fail"|"collect","concurrency":n,"reduce":{"task":"merge {branches}","agent":"..."}} — concurrent branches; value = {branch: value}, or the winner's value for "any".
 - {"kind":"map","over":"{binding}","body":node,"concurrency":n,"reduce":{"task":"merge {items}"}} — run body per element of the array {binding}; the body sees {item} and {index}; value = array of body values.
 - {"kind":"loop","body":node,"max":n,"until":predicate} — repeat body (it sees {iteration} and {last}) until the predicate holds over its JSON value. Predicates: {"eq":["path",value]}, "ne", "gt", "lt", {"exists":"path"}, {"empty":"path"}, "and", "or", "not".
+- {"kind":"switch","on":"{binding}","cases":[{"when":predicate,"then":node},...],"else":node} — exclusive routing: first case whose predicate holds over the JSON value {binding} runs; "else" is required; value = the chosen arm's.
+- {"kind":"value","value":json} — pure data leaf, no agent: strings are templates (a lone "{ref}" substitutes the JSON value itself; mixed text interpolates as a string); value = the interpolated JSON.
 - {"kind":"workflow","name":"...","params":{"k":"v"}} — invoke a saved workflow.
 
 Data flows ONLY through explicit references: "as":"x" names a step's value; later tasks reference {x} or {x.dot.path} (set "output":"json" upstream for structured access); {previous} is the preceding step's value. Nothing flows implicitly. Invalid nodes fail with exact node-path errors — fix and retry.`;
@@ -351,9 +353,10 @@ export function createWorkflowTool(
     label: "Workflow",
     description: `Run a multi-agent workflow of delegated pi agents. Pass EITHER "name" (+ "params") to run a saved workflow, OR "flow" for an inline expression. ${FLOW_REFERENCE}`,
     promptSnippet:
-      "workflow: delegate work to isolated agents — a single agent leaf, or a composition (sequence/parallel/map/loop) of them",
+      "workflow: delegate work to isolated agents — a single agent leaf, or a composition (sequence/parallel/map/loop/switch/value) of them",
     promptGuidelines: [
       "Prefer the `workflow` tool for delegation: a bare agent leaf for one isolated task, sequence/parallel/map/loop compositions for multi-agent work.",
+      "Route deterministically with `switch` instead of asking an agent to decide: predicates over a JSON binding pick exactly one arm; use a `value` arm to yield data without spawning an agent.",
       "Omit the agent name for one-off delegation; it is only needed to select a reusable profile from <agents>. Never invent agent names or create agent-definition files merely to execute an ad-hoc flow.",
       "Check <workflows> in the system prompt first; prefer a saved workflow via workflow({name, params}) when one matches the request.",
       'In flows, thread data explicitly: bind sequence steps with "as" and reference {name}/{previous} in later tasks; use output:"json" when downstream steps need structured access.',

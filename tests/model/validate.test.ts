@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import YAML from "yaml";
 import type { FlowNode, WorkflowLike } from "../../src/model/ast.js";
 import {
   collectAgentNames,
@@ -718,5 +719,271 @@ describe("collectAgentRequirements", () => {
       { params: [{ name: "files" }] },
     );
     expect(collectAgentRequirements(flow)).toEqual([]);
+  });
+});
+
+const gateSwitch = (extra: Record<string, unknown> = {}) =>
+  seq(agent("gatekeeper", "inspect", { as: "gate" }), {
+    kind: "switch",
+    on: "{gate}",
+    cases: [
+      { when: { eq: ["status", "approved"] }, then: agent("shipper", "ship") },
+      {
+        when: { exists: "findings" },
+        then: seq(agent("fixer", "fix"), agent("checker", "recheck")),
+      },
+    ],
+    else: agent("reporter", "report"),
+    ...extra,
+  });
+
+describe("switch validation", () => {
+  test("a well-formed switch validates", () => {
+    expectValid(gateSwitch());
+  });
+
+  test("on is required and must be a single reference", () => {
+    expectIssue(
+      gateSwitch({ on: undefined }),
+      "'on' must be a non-empty string",
+    );
+    expectIssue(
+      gateSwitch({ on: "gate" }),
+      `'on' must be exactly one reference like "{gate}" or "{pr.state}" (got 'gate')`,
+    );
+    expectIssue(
+      gateSwitch({ on: "check {gate} now" }),
+      "'on' must be exactly one reference",
+    );
+    expectValid(gateSwitch({ on: "{gate.pr.state}" }));
+  });
+
+  test("cases must be a non-empty array", () => {
+    expectIssue(
+      gateSwitch({ cases: [] }),
+      "'cases' must be a non-empty array of {when, then} arms",
+    );
+    expectIssue(gateSwitch({ cases: "nope" }), "'cases' must be a non-empty");
+  });
+
+  test("case arms allow exactly when and then", () => {
+    expectIssue(
+      gateSwitch({
+        cases: [
+          {
+            when: { eq: ["", "x"] },
+            then: agent("a", "t"),
+            label: "no",
+          },
+        ],
+      }),
+      "$.steps[1].cases[0]: unknown key 'label'",
+    );
+    expectIssue(
+      gateSwitch({ cases: [{ then: agent("a", "t") }] }),
+      "$.steps[1].cases[0].when: expected a predicate object, got undefined",
+    );
+    expectIssue(
+      gateSwitch({ cases: [{ when: { exists: "x" } }] }),
+      "$.steps[1].cases[0].then: expected a flow node object, got undefined",
+    );
+  });
+
+  test("bad predicates in when carry their path", () => {
+    expectIssue(
+      gateSwitch({ cases: [{ when: { near: 3 }, then: agent("a", "t") }] }),
+      "$.steps[1].cases[0].when: a predicate must have exactly one of",
+    );
+  });
+
+  test("else is required", () => {
+    expectIssue(
+      gateSwitch({ else: undefined }),
+      "$.steps[1]: 'else' is required (a switch must be total)",
+    );
+  });
+
+  test("unknown keys on the switch are rejected", () => {
+    expectIssue(
+      gateSwitch({ default: agent("a", "t") }),
+      "unknown key 'default'",
+    );
+  });
+
+  test("on is scope-checked", () => {
+    expectIssue(
+      {
+        kind: "switch",
+        on: "{gate}",
+        cases: [{ when: { exists: "x" }, then: agent("a", "t") }],
+        else: agent("b", "t"),
+      },
+      "$.on: unknown reference {gate}",
+    );
+  });
+
+  test("on may use frame roots like {item} only in their frames", () => {
+    expectIssue(
+      {
+        kind: "switch",
+        on: "{item}",
+        cases: [{ when: { exists: "x" }, then: agent("a", "t") }],
+        else: agent("b", "t"),
+      },
+      "$.on: {item} is only available inside a map body",
+    );
+    expectValid(
+      seq(agent("s", "list", { as: "files" }), {
+        kind: "map",
+        over: "{files}",
+        body: {
+          kind: "switch",
+          on: "{item}",
+          cases: [{ when: { exists: "x" }, then: agent("a", "t") }],
+          else: agent("b", "t"),
+        },
+      }),
+    );
+  });
+
+  test("as on an arm is rejected; arms see the enclosing scope", () => {
+    expectIssue(
+      gateSwitch({ else: agent("reporter", "report", { as: "out" }) }),
+      "$.steps[1].else: 'as' is only legal on direct steps of a sequence",
+    );
+    expectIssue(
+      gateSwitch({
+        cases: [{ when: { exists: "x" }, then: agent("a", "use {nope}") }],
+      }),
+      "$.steps[1].cases[0].then.task: unknown reference {nope}",
+    );
+    expectValid(
+      gateSwitch({ else: agent("reporter", "report on {gate.findings}") }),
+    );
+  });
+
+  test("binding the switch via as is visible to later steps", () => {
+    expectValid(
+      seq(
+        agent("gatekeeper", "inspect", { as: "gate" }),
+        {
+          kind: "switch",
+          on: "{gate}",
+          cases: [{ when: { exists: "x" }, then: agent("a", "t") }],
+          else: agent("b", "t"),
+          as: "outcome",
+        },
+        agent("closer", "wrap up {outcome}"),
+      ),
+    );
+  });
+
+  test("workflow refs inside arms inline and detect cycles", () => {
+    const inner: WorkflowLike = {
+      name: "inner",
+      params: [],
+      flow: { kind: "agent", name: "worker", task: "work" } as FlowNode,
+    };
+    const resolve = (name: string) =>
+      [inner, cyclic].find((def) => def.name === name);
+    const cyclic: WorkflowLike = {
+      name: "cyclic",
+      params: [],
+      flow: {
+        kind: "switch",
+        on: "{params.gate}",
+        cases: [
+          { when: { exists: "x" }, then: { kind: "workflow", name: "cyclic" } },
+        ],
+        else: { kind: "agent", task: "t" },
+      } as unknown as FlowNode,
+    };
+    const flow = validateFlow(
+      gateSwitch({ else: { kind: "workflow", name: "inner" } }),
+      { resolveWorkflow: resolve },
+    );
+    expect(collectAgentNames(flow)).toContain("worker");
+    expectIssue(
+      { kind: "workflow", name: "cyclic" },
+      "workflow cycle: cyclic → cyclic",
+      { resolveWorkflow: resolve },
+    );
+  });
+
+  test("agents in every arm are collected", () => {
+    const flow = validateFlow(gateSwitch());
+    const names = collectAgentNames(flow);
+    for (const name of ["shipper", "fixer", "checker", "reporter"]) {
+      expect(names).toContain(name);
+    }
+    expect(collectAgentRequirements(flow).map((req) => req.name)).toContain(
+      "reporter",
+    );
+  });
+
+  test("unquoted on: in YAML parses as a string key", () => {
+    const parsed = YAML.parse(
+      ["kind: switch", 'on: "{gate}"', "cases: []", "else: null"].join("\n"),
+    );
+    expect(Object.keys(parsed)).toContain("on");
+    expect(parsed.on).toBe("{gate}");
+  });
+});
+
+describe("value validation", () => {
+  test("a well-formed value node validates", () => {
+    expectValid(
+      seq(agent("scout", "look", { as: "report" }), {
+        kind: "value",
+        value: {
+          outcome: "{report.verdict}",
+          summary: "verdict: {report.verdict}",
+          fixed: true,
+          counts: [1, 2, "{report.total}"],
+        },
+      }),
+    );
+  });
+
+  test("value key is required; null is a legal value", () => {
+    expectIssue({ kind: "value" }, "$: 'value' is required (any JSON value)");
+    expectValid({ kind: "value", value: null });
+  });
+
+  test("unknown keys are rejected", () => {
+    expectIssue(
+      { kind: "value", value: 1, output: "json" },
+      "unknown key 'output'",
+    );
+  });
+
+  test("templates in nested strings are scope-checked with their path", () => {
+    expectIssue(
+      { kind: "value", value: { report: ["{missing}"] } },
+      "$.value.report[0]: unknown reference {missing}",
+    );
+  });
+
+  test("non-JSON values are rejected with their path", () => {
+    // YAML 1.2 core parses .nan/.inf to non-finite numbers, which JSON
+    // persistence would silently turn into null.
+    const fromYaml = YAML.parse(
+      ["kind: value", "value:", "  score: .nan", "  bound: .inf"].join("\n"),
+    );
+    expectIssue(fromYaml, "$.value.score: 'value' must be JSON");
+    expectIssue(fromYaml, "$.value.bound: 'value' must be JSON");
+    // Programmatic callers can hand validateFlow arbitrary JS objects.
+    expectIssue(
+      { kind: "value", value: { when: new Date(0) } },
+      "$.value.when: 'value' must be JSON (got Date)",
+    );
+    expectIssue(
+      { kind: "value", value: [() => 1] },
+      "$.value[0]: 'value' must be JSON (got function)",
+    );
+    expectValid({
+      kind: "value",
+      value: { nested: [1.5, "x", null, { deep: true }] },
+    });
   });
 });

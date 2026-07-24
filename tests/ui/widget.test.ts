@@ -3,7 +3,11 @@ import { validateFlow } from "../../src/model/validate.js";
 import type { RunEvent } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
 import { type RunView, rebuildRunState } from "../../src/run/state.js";
-import { formatRunWidget, widgetProgress } from "../../src/ui/widget.js";
+import {
+  formatRunWidget,
+  STALL_AFTER_MS,
+  widgetProgress,
+} from "../../src/ui/widget.js";
 
 const REVIEW_FLOW = {
   kind: "parallel",
@@ -249,5 +253,58 @@ describe("formatRunWidget", () => {
     );
     const [, line2] = formatRunWidget(run, run.createdAt, 0);
     expect(line2).toContain("…+3");
+  });
+});
+
+describe("live activity", () => {
+  const runningReduce = (event: RunEvent) => {
+    if (event.type === "run_completed") return false;
+    if (event.type !== "node_completed") return true;
+    return !event.instance.endsWith(".reduce") && event.instance !== "$";
+  };
+
+  test("turn count and current tool join line 1", async () => {
+    const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
+    for (const node of run.nodes.values()) {
+      if (node.status === "running" && node.kind === "reduce") {
+        node.progressTool = "bash";
+        node.progressUsage = {
+          input: 100,
+          output: 50,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          contextTokens: 0,
+          turns: 7,
+        };
+        node.lastProgressAt = run.createdAt;
+      }
+    }
+    const [line1] = formatRunWidget(run, run.createdAt + 1000, 0);
+    expect(line1).toContain("7 turns");
+    expect(line1).toContain("bash");
+  });
+
+  test("a long silence replaces the excerpt with a stall hint", async () => {
+    const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
+    for (const node of run.nodes.values()) {
+      if (node.status === "running" && node.kind === "reduce") {
+        node.progressText = "still merging";
+        node.lastProgressAt = run.createdAt;
+      }
+    }
+    const [fresh] = formatRunWidget(
+      run,
+      run.createdAt + STALL_AFTER_MS - 1000,
+      0,
+    );
+    expect(fresh).toContain("still merging");
+    const [stalled] = formatRunWidget(
+      run,
+      run.createdAt + STALL_AFTER_MS + 121_000,
+      0,
+    );
+    expect(stalled).toContain("no output for");
+    expect(stalled).not.toContain("still merging");
   });
 });

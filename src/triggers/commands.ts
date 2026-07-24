@@ -426,6 +426,13 @@ function buildRunsSpec(
                 (item.node.endedAt ?? Date.now()) - item.node.startedAt,
               ),
               formatUsage(item.node.usage) || undefined,
+              item.node.status === "running"
+                ? item.node.progressTool
+                : undefined,
+              item.node.status === "running" &&
+              item.node.lastProgressAt !== undefined
+                ? `active ${formatElapsed(Date.now() - item.node.lastProgressAt)} ago`
+                : undefined,
             ]
           : [
               shortId(item.run.header.id),
@@ -982,6 +989,13 @@ export function formatNodeResultFull(run: RunView, node: NodeView): string {
   if (node.status === "running") {
     lines.push("", "Still running — no output yet.");
     if (node.progressText) lines.push("", fenced(node.progressText));
+    return lines.join("\n");
+  }
+  // A budget-cut agent has no value, but its last output survives in the
+  // events (partialText) or, within this session, in the progress stream.
+  const partial = node.partialText ?? node.progressText;
+  if (node.status === "failed" && node.value === undefined && partial) {
+    lines.push("", "### Partial result", "", fenced(partial));
     return lines.join("\n");
   }
   const text = valueText(node.value);

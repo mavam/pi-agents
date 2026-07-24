@@ -114,3 +114,87 @@ describe("run state reducer", () => {
     ]);
   });
 });
+
+describe("budget events", () => {
+  test("node_failed preserves partialText; budget cancellations replay", () => {
+    const events: RunEvent[] = [
+      {
+        type: "run_created",
+        at: 1,
+        run: {
+          id: "run-b",
+          source: { kind: "tool" },
+          flow: {
+            kind: "parallel",
+            branches: {
+              a: { kind: "agent", task: "ta" },
+              b: { kind: "agent", task: "tb" },
+            },
+          },
+          depth: 0,
+        },
+      },
+      {
+        type: "node_started",
+        at: 2,
+        runId: "run-b",
+        path: "$.branches.a",
+        instance: "$.branches.a",
+        kind: "agent",
+      },
+      {
+        type: "node_started",
+        at: 2,
+        runId: "run-b",
+        path: "$.branches.b",
+        instance: "$.branches.b",
+        kind: "agent",
+      },
+      {
+        type: "node_failed",
+        at: 3,
+        runId: "run-b",
+        path: "$.branches.a",
+        instance: "$.branches.a",
+        error: "agent turn budget exceeded (maxTurns: 2)",
+        partialText: "half an answer",
+      },
+      {
+        type: "node_cancelled",
+        at: 3,
+        runId: "run-b",
+        path: "$.branches.b",
+        instance: "$.branches.b",
+        reason: "budget",
+      },
+      {
+        type: "run_completed",
+        at: 4,
+        runId: "run-b",
+        status: "failed",
+        error: "run duration budget exceeded (maxDuration: 600s)",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          contextTokens: 0,
+          turns: 0,
+        },
+        agents: 2,
+      },
+    ];
+    const state = rebuildRunState(events);
+    const run = state.runs.get("run-b");
+    expect(run?.status).toBe("failed");
+    expect(run?.nodes.get("$.branches.a")).toMatchObject({
+      status: "failed",
+      partialText: "half an answer",
+    });
+    expect(run?.nodes.get("$.branches.b")).toMatchObject({
+      status: "cancelled",
+      cancelReason: "budget",
+    });
+  });
+});

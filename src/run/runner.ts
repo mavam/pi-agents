@@ -13,14 +13,20 @@ import {
   resolveAgentByName,
 } from "../catalog/agents.js";
 import { BUDGETS_ENV_VAR, DEPTH_ENV_VAR } from "../engine/subprocess.js";
-import type { SpawnEngine, SpawnHandle } from "../engine/types.js";
+import {
+  SpawnAborted,
+  type SpawnEngine,
+  type SpawnHandle,
+} from "../engine/types.js";
 import {
   ADHOC_LABEL,
-  type Budgets,
+  DEFAULT_BUDGETS,
+  type EffectiveBudgets,
   effectiveScope,
   type OutputMode,
   type Scope,
 } from "../model/ast.js";
+import { BudgetExceededError } from "./budgets.js";
 import type { AgentCall, AgentRunner } from "./interpreter.js";
 
 /** Session-level fallbacks for agents without explicit frontmatter. */
@@ -42,7 +48,7 @@ export interface RunnerOptions {
   /** Active session model/thinking, used when the agent file sets none. */
   defaults?: SpawnDefaults;
   /** Effective budget limits, inherited by delegated processes. */
-  budgetLimits?: Required<Budgets>;
+  budgetLimits?: EffectiveBudgets;
   /** Observe a live handle; return a disposer that unregisters it. */
   onHandle?: (call: AgentCall, handle: SpawnHandle) => (() => void) | undefined;
 }
@@ -142,16 +148,51 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
     if (call.signal.aborted) onAbort();
     else call.signal.addEventListener("abort", onAbort, { once: true });
 
+    // Per-agent budget watchdog: the first breach aborts the spawn and is
+    // rethrown in place of the resulting SpawnAborted, carrying the agent's
+    // last streamed output as the preserved partial result.
+    const limits = options.budgetLimits ?? DEFAULT_BUDGETS;
+    let breach: BudgetExceededError | undefined;
+    let lastText = "";
+    const cutOff = (message: string) => {
+      if (breach) return;
+      breach = new BudgetExceededError(message, lastText || undefined);
+      handle.abort();
+    };
+
+    let agentTimer: ReturnType<typeof setTimeout> | undefined;
+    if (limits.maxAgentDuration !== undefined) {
+      agentTimer = setTimeout(
+        () =>
+          cutOff(
+            `agent duration budget exceeded (maxAgentDuration: ${limits.maxAgentDuration}s)`,
+          ),
+        limits.maxAgentDuration * 1000,
+      );
+      agentTimer.unref?.();
+    }
+
     const progressPump = (async () => {
       for await (const update of handle.updates) {
-        call.onProgress?.(update.text, update.usage);
+        if (update.text) lastText = update.text;
+        call.onProgress?.(update);
+        // turnsStarted trips the cap the moment an over-budget turn begins;
+        // completed-turn counts back it up for engines that don't report it.
+        const turns = Math.max(update.turnsStarted ?? 0, update.usage.turns);
+        if (turns > limits.maxTurns) {
+          cutOff(`agent turn budget exceeded (maxTurns: ${limits.maxTurns})`);
+        }
       }
     })();
 
     try {
       const outcome = await handle.wait();
       return { text: outcome.text, usage: outcome.usage };
+    } catch (error) {
+      if (breach && error instanceof SpawnAborted) throw breach;
+      throw error;
     } finally {
+      if (agentTimer) clearTimeout(agentTimer);
       call.signal.removeEventListener("abort", onAbort);
       await progressPump.catch(() => {});
       unregisterHandle?.();

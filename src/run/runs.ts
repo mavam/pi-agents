@@ -12,6 +12,7 @@ import type { SpawnEngine, SpawnHandle } from "../engine/types.js";
 import {
   type Budgets,
   DEFAULT_BUDGETS,
+  type EffectiveBudgets,
   effectiveScope as effectiveScopeFor,
   type FlowNode,
   type Scope,
@@ -171,7 +172,7 @@ export class RunManager {
       ...this.options.defaultBudgets,
       ...opts.budgets,
     };
-    const budgetLimits = { ...DEFAULT_BUDGETS, ...budgets };
+    const budgetLimits: EffectiveBudgets = { ...DEFAULT_BUDGETS, ...budgets };
 
     const runId = crypto.randomUUID();
     const controller = new AbortController();
@@ -208,11 +209,15 @@ export class RunManager {
     const runner: AgentRunner = (call) =>
       baseRunner({
         ...call,
-        onProgress: (text, usage) => {
+        onProgress: (progress) => {
+          // The interpreter's own listener (run-level budgets) comes first.
+          call.onProgress?.(progress);
           const node = this.state.runs.get(runId)?.nodes.get(call.instance);
           if (node) {
-            node.progressText = text;
-            if (usage) node.progressUsage = usage;
+            node.progressText = progress.text;
+            node.progressUsage = progress.usage;
+            node.progressTool = progress.currentTool;
+            node.lastProgressAt = Date.now();
           }
           this.options.onStateChanged?.(runId);
         },

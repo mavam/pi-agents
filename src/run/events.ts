@@ -14,7 +14,12 @@ export type RunStatus = "running" | "completed" | "failed" | "stopped";
 
 export type NodeStatus = "running" | "completed" | "failed" | "cancelled";
 
-export type CancelReason = "any" | "quorum" | "sibling_failed" | "stopped";
+export type CancelReason =
+  | "any"
+  | "quorum"
+  | "sibling_failed"
+  | "stopped"
+  | "budget";
 
 export type SteeringSource = "user" | "tool" | "rpc";
 
@@ -71,6 +76,9 @@ export type RunEvent =
       path: string;
       instance: string;
       error: string;
+      /** Last streamed output of a budget-cut agent, preserved as the
+       * partial result. */
+      partialText?: string;
     }
   | {
       type: "node_cancelled";

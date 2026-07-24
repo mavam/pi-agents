@@ -33,10 +33,16 @@ export interface NodeView {
   error?: string;
   cancelReason?: CancelReason;
   usage?: SpawnUsage;
+  /** Preserved partial output of a budget-cut agent (persisted via events). */
+  partialText?: string;
   /** Latest streamed output preview. In-memory only; never persisted. */
   progressText?: string;
   /** Latest streamed usage of a running agent. In-memory only. */
   progressUsage?: SpawnUsage;
+  /** Tool the running agent is currently executing. In-memory only. */
+  progressTool?: string;
+  /** When the running agent last reported any activity. In-memory only. */
+  lastProgressAt?: number;
   /** Accepted steering messages in delivery order. */
   steering: SteeringEntry[];
   startedAt: number;
@@ -116,6 +122,7 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
       if (!node) return;
       node.status = "failed";
       node.error = event.error;
+      node.partialText = event.partialText;
       node.endedAt = event.at;
       return;
     }

@@ -534,3 +534,64 @@ describe("failure formatting", () => {
     );
   });
 });
+
+describe("turn and tool activity", () => {
+  test("turn_start and tool execution events stream as updates", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const seen: Array<{ turnsStarted?: number; currentTool?: string }> = [];
+    const reader = (async () => {
+      for await (const update of handle.updates) {
+        seen.push({
+          turnsStarted: update.turnsStarted,
+          currentTool: update.currentTool,
+        });
+      }
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({ type: "turn_start" });
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "1",
+      toolName: "bash",
+      args: {},
+    });
+    proc.emitRecord({
+      type: "tool_execution_end",
+      toolCallId: "1",
+      toolName: "bash",
+      result: {},
+      isError: false,
+    });
+    proc.emitAssistant("worked");
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    await reader;
+    expect(seen).toEqual([
+      { turnsStarted: 1, currentTool: undefined },
+      { turnsStarted: 1, currentTool: "bash" },
+      { turnsStarted: 1, currentTool: undefined },
+      { turnsStarted: 1, currentTool: undefined },
+    ]);
+  });
+
+  test("completed turns back up turnsStarted for older engines", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const seen: number[] = [];
+    const reader = (async () => {
+      for await (const update of handle.updates) {
+        seen.push(update.turnsStarted ?? -1);
+      }
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitAssistant("one");
+    proc.emitAssistant("two");
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    await reader;
+    expect(seen).toEqual([1, 2]);
+  });
+});

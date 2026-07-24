@@ -267,6 +267,8 @@ export function createSubprocessSpawnEngine(options?: {
 
       const usage: SpawnUsage = emptyUsage();
       let latestText = "";
+      let currentTool: string | undefined;
+      let turnsStarted = 0;
       let stopReason: string | undefined;
       let errorMessage: string | undefined;
       let resolvedModel = spec.model;
@@ -400,9 +402,20 @@ export function createSubprocessSpawnEngine(options?: {
         });
       };
 
+      const pushUpdate = () => {
+        updates.push({
+          text: latestText,
+          usage: { ...usage },
+          currentTool,
+          turnsStarted,
+        });
+      };
+
       const recordAssistantMessage = (message: AssistantMessage) => {
         if (message.role === "assistant") {
           usage.turns += 1;
+          // Engines older than turn_start reporting still get a sane count.
+          turnsStarted = Math.max(turnsStarted, usage.turns);
           if (message.usage) {
             usage.input += message.usage.input || 0;
             usage.output += message.usage.output || 0;
@@ -420,7 +433,7 @@ export function createSubprocessSpawnEngine(options?: {
           const text = messageText(message);
           if (text) latestText = text;
         }
-        updates.push({ text: latestText, usage: { ...usage } });
+        pushUpdate();
       };
 
       const handleResponse = (response: RpcResponse) => {
@@ -487,6 +500,23 @@ export function createSubprocessSpawnEngine(options?: {
           }
           const message = assistantMessage(record);
           if (message) recordAssistantMessage(message);
+          // Turn and tool activity keep the caller's liveness view fresh
+          // between assistant messages (a thinking turn can run minutes).
+          if (record.type === "turn_start") {
+            turnsStarted += 1;
+            pushUpdate();
+          }
+          if (
+            record.type === "tool_execution_start" &&
+            typeof record.toolName === "string"
+          ) {
+            currentTool = record.toolName;
+            pushUpdate();
+          }
+          if (record.type === "tool_execution_end" && currentTool) {
+            currentTool = undefined;
+            pushUpdate();
+          }
           if (record.type === "agent_start") agentStarted = true;
           if (record.type === "agent_settled" && !agentSettled) {
             agentSettled = true;

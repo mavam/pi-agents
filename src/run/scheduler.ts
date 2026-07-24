@@ -10,8 +10,8 @@ import type { CancelReason } from "./events.js";
 export class CancelledError extends Error {
   readonly reason: CancelReason;
 
-  constructor(reason: CancelReason) {
-    super(`cancelled (${reason})`);
+  constructor(reason: CancelReason, message?: string) {
+    super(message ?? `cancelled (${reason})`);
     this.name = "CancelledError";
     this.reason = reason;
   }

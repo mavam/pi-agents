@@ -5,16 +5,25 @@
  * simultaneously running agents globally across nested pools.
  */
 
-import { type Budgets, DEFAULT_BUDGETS } from "../model/ast.js";
+import {
+  type Budgets,
+  DEFAULT_BUDGETS,
+  type EffectiveBudgets,
+} from "../model/ast.js";
 
 export class BudgetExceededError extends Error {
-  constructor(message: string) {
+  /** Last streamed output of the agent that was cut off, when one exists. */
+  readonly partialText?: string;
+
+  constructor(message: string, partialText?: string) {
     super(message);
     this.name = "BudgetExceededError";
+    this.partialText = partialText;
   }
 }
 
-/** Validate user-supplied budgets: every field a positive integer. */
+/** Validate user-supplied budgets: counts are positive integers, durations
+ * and cost positive finite numbers. */
 export function validateBudgets(budgets: Budgets | undefined): void {
   if (!budgets) return;
   for (const key of [
@@ -22,11 +31,20 @@ export function validateBudgets(budgets: Budgets | undefined): void {
     "maxParallelism",
     "maxIterations",
     "maxAgents",
+    "maxTurns",
+    "maxTokens",
   ] as const) {
     const value = budgets[key];
     if (value === undefined) continue;
     if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
       throw new Error(`budget '${key}' must be an integer >= 1 (got ${value})`);
+    }
+  }
+  for (const key of ["maxAgentDuration", "maxDuration", "maxCost"] as const) {
+    const value = budgets[key];
+    if (value === undefined) continue;
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      throw new Error(`budget '${key}' must be a number > 0 (got ${value})`);
     }
   }
 }
@@ -64,12 +82,18 @@ export class Semaphore {
 
 interface BudgetState {
   usedAgents: number;
+  usedTokens: number;
+  usedCost: number;
 }
 
 export class BudgetActor {
   /** Effective limits, immutable for the run's lifetime. */
-  readonly limits: Required<Budgets>;
-  private readonly state: BudgetState = { usedAgents: 0 };
+  readonly limits: EffectiveBudgets;
+  private readonly state: BudgetState = {
+    usedAgents: 0,
+    usedTokens: 0,
+    usedCost: 0,
+  };
   private mailbox: Promise<void> = Promise.resolve();
 
   constructor(limits?: Budgets) {
@@ -119,6 +143,29 @@ export class BudgetActor {
   /** Effective iteration cap for a loop node. */
   iterationLimit(requested: number): number {
     return Math.min(requested, this.limits.maxIterations);
+  }
+
+  /**
+   * Record streamed usage and assert the run-level token/cost budgets.
+   * Deltas accumulate as agents report turns, so breaches surface at turn
+   * granularity — the finest the providers report usage at.
+   */
+  recordUsage(delta: { tokens: number; cost: number }): Promise<void> {
+    return this.send((state) => {
+      state.usedTokens += delta.tokens;
+      state.usedCost += delta.cost;
+      const { maxTokens, maxCost } = this.limits;
+      if (maxTokens !== undefined && state.usedTokens > maxTokens) {
+        throw new BudgetExceededError(
+          `token budget exceeded (maxTokens: ${maxTokens})`,
+        );
+      }
+      if (maxCost !== undefined && state.usedCost > maxCost) {
+        throw new BudgetExceededError(
+          `cost budget exceeded (maxCost: $${maxCost})`,
+        );
+      }
+    });
   }
 
   /** Total agent spawns consumed so far. */

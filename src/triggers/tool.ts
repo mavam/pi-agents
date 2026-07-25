@@ -25,6 +25,7 @@ import type { RunOutcome } from "../run/interpreter.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { MAX_STEERING_MESSAGE_CHARS } from "../run/runs.js";
 import { formatUsage, shortId } from "../ui/render.js";
+import { STATUS_STYLES } from "../ui/status.js";
 import { KIND_ICONS, renderFlowTree } from "../ui/tree.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
@@ -379,10 +380,12 @@ export function formatResultPreview(
     return `\n${color("dim", `running in background · /workflow ${id}`)}`;
   }
   if (status === "completed") {
-    const head = `\n${color("success", "●")} completed ${color("dim", `· /workflow ${id} result`)}`;
+    const presentation = STATUS_STYLES.completed;
+    const head = `\n${color(presentation.color, presentation.icon)} completed ${color("dim", `· /workflow ${id} result`)}`;
     return expanded ? `${head}\n${result.text}` : head;
   }
-  const head = `\n${color("error", "✗")} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""} ${color("dim", `· /workflow ${id}`)}`;
+  const presentation = STATUS_STYLES[status];
+  const head = `\n${color(presentation.color, presentation.icon)} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""} ${color("dim", `· /workflow ${id}`)}`;
   return expanded ? `${head}\n${result.text}` : head;
 }
 

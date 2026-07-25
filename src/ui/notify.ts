@@ -13,21 +13,18 @@ import type { RunEvent } from "../run/events.js";
 import { getSessionFile, isIdle } from "../run/persist.js";
 import type { RunManager } from "../run/runs.js";
 import {
+  formatAgentCount,
+  formatRunNotificationControls,
   formatUsage,
   formatValuePreview,
   NOTIFICATION_TYPE,
+  type RunNotificationDetails,
   renderResultValue,
   shortId,
 } from "./render.js";
+import { STATUS_STYLES } from "./status.js";
 
-export interface RunNotification {
-  kind: "run_final";
-  runId: string;
-  label?: string;
-  status: string;
-  text: string;
-  at: number;
-}
+export type RunNotification = RunNotificationDetails;
 
 interface TrackedRun {
   originSessionFile?: string;
@@ -69,7 +66,7 @@ export class NotificationManager {
     if (event.type === "run_created" || !("runId" in event)) return;
     const tracked = this.tracked.get(event.runId);
     if (!tracked) return;
-    const notification = this.buildNotification(event, tracked.wake);
+    const notification = this.buildNotification(event);
     if (!notification) return;
     this.deliverOrQueue(event.runId, tracked, notification);
   }
@@ -94,40 +91,54 @@ export class NotificationManager {
     }
   }
 
-  private buildNotification(
-    event: RunEvent,
-    wake: boolean,
-  ): RunNotification | undefined {
-    if (event.type === "run_completed") {
-      const run = this.manager.state.runs.get(event.runId);
-      const preview =
-        event.status === "completed"
-          ? formatValuePreview(event.value, 600)
-          : "";
-      const summary =
-        event.status === "completed"
-          ? preview
-            ? renderResultValue(event.value, preview)
-            : "(no output)"
-          : (event.error ?? "unknown error");
-      const usage = formatUsage(event.usage);
+  private buildNotification(event: RunEvent): RunNotification | undefined {
+    if (event.type !== "run_completed") return undefined;
+
+    const run = this.manager.state.runs.get(event.runId);
+    const label = run
+      ? (run.header.label ?? run.header.source.workflow ?? run.header.flow.kind)
+      : undefined;
+    const usage = formatUsage(event.usage) || undefined;
+    if (event.status === "completed") {
+      const preview = formatValuePreview(event.value, 600);
       return {
         kind: "run_final",
+        version: 2,
         runId: event.runId,
-        label: run?.header.label,
+        label,
         status: event.status,
+        usage,
+        agents: event.agents,
+        bodyKind: "result",
+        body: preview ? renderResultValue(event.value, preview) : "(no output)",
         at: event.at,
-        text: [
-          `**Run \`${shortId(event.runId)}\`${run?.header.label ? ` (${run.header.label})` : ""} ${event.status}.**${usage ? ` ${usage}, ${event.agents} agent(s).` : ""}`,
-          "",
-          `Inspect with \`/workflow ${shortId(event.runId)}\` · full result: \`/workflow ${shortId(event.runId)} result\` · per-agent: \`/workflow ${shortId(event.runId)} agents\`.`,
-          ...(wake ? ["", "Continue your task using this result."] : []),
-          "",
-          summary,
-        ].join("\n"),
       };
     }
-    return undefined;
+    if (event.status === "failed") {
+      return {
+        kind: "run_final",
+        version: 2,
+        runId: event.runId,
+        label,
+        status: event.status,
+        usage,
+        agents: event.agents,
+        bodyKind: "error",
+        body: event.error ?? "unknown error",
+        at: event.at,
+      };
+    }
+    return {
+      kind: "run_final",
+      version: 2,
+      runId: event.runId,
+      label,
+      status: event.status,
+      usage,
+      agents: event.agents,
+      bodyKind: "none",
+      at: event.at,
+    };
   }
 
   private deliverOrQueue(
@@ -158,11 +169,39 @@ export class NotificationManager {
     this.pi.sendMessage(
       {
         customType: NOTIFICATION_TYPE,
-        content: notification.text,
+        content: this.content(notification, wake),
         display: true,
         details: notification,
       },
       wake ? { triggerTurn: true } : undefined,
     );
   }
+
+  /** Model-facing Markdown. The dedicated TUI renderer uses structured
+   * details and intentionally leaves out the continuation instruction. */
+  private content(notification: RunNotification, wake: boolean): string {
+    const id = shortId(notification.runId);
+    const status = STATUS_STYLES[notification.status];
+    const identity = notification.label
+      ? `**${escapeMarkdown(notification.label)}** · \`${id}\``
+      : `\`${id}\``;
+    const usage = notification.usage
+      ? ` · ${notification.usage} · ${formatAgentCount(notification.agents)}`
+      : "";
+    const lines = [
+      `❖ ${identity} · ${status.icon} ${notification.status}${usage}`,
+      "",
+      formatRunNotificationControls(notification.runId),
+    ];
+    if (wake) lines.push("", "Continue your task using this result.");
+    if (notification.bodyKind !== "none" && notification.body !== undefined) {
+      lines.push("", notification.body);
+    }
+    return lines.join("\n");
+  }
+}
+
+/** Keep a user-provided label inside the notification's bold Markdown span. */
+function escapeMarkdown(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("*", "\\*");
 }

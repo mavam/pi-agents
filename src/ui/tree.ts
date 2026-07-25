@@ -22,6 +22,7 @@ import {
 import { parseTemplate } from "../model/interpolate.js";
 import { formatPredicate } from "../model/predicate.js";
 import type { NodeView, RunView } from "../run/state.js";
+import { STATUS_STYLES } from "./status.js";
 
 export const KIND_ICONS = {
   agent: "✦",
@@ -34,26 +35,6 @@ export const KIND_ICONS = {
   value: "≔",
   workflow: "❖",
 } as const;
-
-export const STATUS_TREE_ICONS = {
-  pending: "○",
-  running: "◉",
-  completed: "●",
-  failed: "✗",
-  cancelled: "⊘",
-} as const;
-
-const STATUS_TREE_COLORS: Record<
-  keyof typeof STATUS_TREE_ICONS,
-  Parameters<TreeColorize>[0]
-> = {
-  // Traffic light: dim → yellow → green/red.
-  pending: "dim",
-  running: "warning",
-  completed: "success",
-  failed: "error",
-  cancelled: "dim",
-};
 
 const TASK_PREVIEW_CHARS = 56;
 
@@ -275,7 +256,7 @@ export function aggregateStatuses(run: RunView): Map<string, PathStatus> {
       nodes.length > 1 ? `${counts.completed}/${nodes.length}` : undefined;
     const error = nodes.find((node) => node.error)?.error;
     result.set(path, {
-      icon: STATUS_TREE_ICONS[status],
+      icon: STATUS_STYLES[status].icon,
       status,
       kind: (nodes[0] as NodeView).kind,
       completed: counts.completed,
@@ -309,8 +290,9 @@ function renderLines(
     // state, so they pair the glyph with a status icon instead.
     let icon: string | undefined;
     if (statuses) {
-      const tint = STATUS_TREE_COLORS[status?.status ?? "pending"];
-      const statusGlyph = status?.icon ?? STATUS_TREE_ICONS.pending;
+      const presentation = STATUS_STYLES[status?.status ?? "pending"];
+      const tint = presentation.color;
+      const statusGlyph = status?.icon ?? presentation.icon;
       icon = coloring
         ? color(tint, node.icon ?? statusGlyph)
         : [statusGlyph, node.icon].filter(Boolean).join(" ");

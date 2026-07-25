@@ -39,10 +39,10 @@ import {
   formatValuePreview,
   nodeDisplayName,
   renderResultValue,
-  STATUS_ICONS,
   sendInfo,
   shortId,
 } from "../ui/render.js";
+import { STATUS_STYLES } from "../ui/status.js";
 import { KIND_ICONS, renderFlowTree, renderRunTree } from "../ui/tree.js";
 import { type Colorize, formatElapsed } from "../ui/widget.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
@@ -319,14 +319,6 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
 // ---------------------------------------------------------------------------
 // Interactive overlays (TUI only; non-TUI modes keep the markdown output)
 
-const STATUS_COLORS: Record<string, Parameters<Colorize>[0]> = {
-  running: "warning",
-  completed: "success",
-  failed: "error",
-  cancelled: "dim",
-  stopped: "dim",
-};
-
 /** Overlay rows for the unified /workflows overlay: workflows and run groups
  * (tier 1), one group's runs (tier 2), one run's work nodes (tier 3). */
 export type WorkflowsItem =
@@ -349,10 +341,8 @@ export function steeringMarker(
 // overlay's drill levels.
 
 function nodeRow(node: NodeView, color: Colorize): string {
-  const icon = color(
-    STATUS_COLORS[node.status] ?? "dim",
-    STATUS_ICONS[node.status] ?? "?",
-  );
+  const presentation = STATUS_STYLES[node.status];
+  const icon = color(presentation.color, presentation.icon);
   const usage = formatUsage(
     node.usage ?? (node.status === "running" ? node.progressUsage : undefined),
   );
@@ -360,10 +350,8 @@ function nodeRow(node: NodeView, color: Colorize): string {
 }
 
 function runRow(run: RunView, color: Colorize, deps: CommandDeps): string {
-  const icon = color(
-    STATUS_COLORS[run.status] ?? "dim",
-    STATUS_ICONS[run.status] ?? "?",
-  );
+  const presentation = STATUS_STYLES[run.status];
+  const icon = color(presentation.color, presentation.icon);
   const label =
     run.header.label ?? run.header.source.workflow ?? run.header.flow.kind;
   const source = formatRunSource(run.header.source);
@@ -1069,7 +1057,7 @@ export function formatRunNodesList(run: RunView): string {
   );
   const rows: string[] = [];
   for (const node of nodes) {
-    const icon = STATUS_ICONS[node.status] ?? "?";
+    const icon = STATUS_STYLES[node.status].icon;
     const usage = formatUsage(node.usage);
     const elapsed = formatElapsed(
       (node.endedAt ?? Date.now()) - node.startedAt,

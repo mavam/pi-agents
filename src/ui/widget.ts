@@ -26,6 +26,7 @@ import {
 import type { RunManager } from "../run/runs.js";
 import { type RunView, workNodes } from "../run/state.js";
 import { formatTokens, shortId } from "./render.js";
+import { STATUS_STYLES } from "./status.js";
 import { aggregateStatuses, type PathStatus } from "./tree.js";
 
 const WIDGET_KEY = "pi-agents:runs";
@@ -40,14 +41,6 @@ type SegmentStatus =
   | "completed"
   | "failed"
   | "cancelled";
-
-const SEGMENT_ICONS: Record<SegmentStatus, string> = {
-  pending: "○",
-  running: "◉",
-  completed: "●",
-  failed: "✗",
-  cancelled: "⊘",
-};
 
 export interface WidgetSegment {
   text: string;
@@ -272,19 +265,6 @@ export function formatElapsed(ms: number): string {
   return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`;
 }
 
-function segmentColor(status: SegmentStatus): Parameters<Colorize>[0] {
-  switch (status) {
-    case "completed":
-      return "success";
-    case "running":
-      return "warning";
-    case "failed":
-      return "error";
-    default:
-      return "dim";
-  }
-}
-
 /** A running agent counts as silent after this much time without updates. */
 export const STALL_AFTER_MS = 60_000;
 
@@ -368,10 +348,8 @@ export function formatRunWidget(
   const overflow = segments.length - shown.length;
   const segmentText = shown
     .map((segment) => {
-      const icon = color(
-        segmentColor(segment.status),
-        SEGMENT_ICONS[segment.status],
-      );
+      const presentation = STATUS_STYLES[segment.status];
+      const icon = color(presentation.color, presentation.icon);
       const text =
         segment.status === "running"
           ? segment.text

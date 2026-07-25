@@ -1,0 +1,9 @@
+created: 2026-07-25
+title: One workflow command surface
+intro: >-
+  This release unifies workflow browsing and run inspection under the /workflow command
+  surface. It also improves overlay sizing, completion summaries, and safeguards for
+  pure-data workflow budgets.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.5.0

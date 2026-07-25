@@ -22,15 +22,26 @@ export class BudgetExceededError extends Error {
   }
 }
 
-/** Validate user-supplied budgets: counts are positive integers, durations
- * and cost positive finite numbers. */
+/** Validate user-supplied budgets: maxAgents is a non-negative integer,
+ * other counts are positive integers, and durations/cost are positive finite
+ * numbers. */
 export function validateBudgets(budgets: Budgets | undefined): void {
   if (!budgets) return;
+  const maxAgents = budgets.maxAgents;
+  if (
+    maxAgents !== undefined &&
+    (typeof maxAgents !== "number" ||
+      !Number.isInteger(maxAgents) ||
+      maxAgents < 0)
+  ) {
+    throw new Error(
+      `budget 'maxAgents' must be an integer >= 0 (got ${maxAgents})`,
+    );
+  }
   for (const key of [
     "maxDepth",
     "maxParallelism",
     "maxIterations",
-    "maxAgents",
     "maxTurns",
     "maxTokens",
   ] as const) {
@@ -123,12 +134,14 @@ export class BudgetActor {
           `delegation depth budget exceeded (maxDepth: ${this.limits.maxDepth})`,
         );
       }
-      state.usedAgents += 1;
-      if (state.usedAgents > this.limits.maxAgents) {
+      if (state.usedAgents >= this.limits.maxAgents) {
         throw new BudgetExceededError(
-          `agent budget exceeded (maxAgents: ${this.limits.maxAgents})`,
+          this.limits.maxAgents === 0
+            ? "agent execution prohibited (maxAgents: 0)"
+            : `agent budget exceeded (maxAgents: ${this.limits.maxAgents})`,
         );
       }
+      state.usedAgents += 1;
     });
   }
 

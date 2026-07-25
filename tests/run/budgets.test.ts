@@ -23,7 +23,14 @@ describe("validateBudgets", () => {
     ).not.toThrow();
   });
 
-  test("count budgets must be positive integers", () => {
+  test("maxAgents is non-negative; other counts are positive integers", () => {
+    expect(() => validateBudgets({ maxAgents: 0 })).not.toThrow();
+    expect(() => validateBudgets({ maxAgents: -1 })).toThrow(
+      "must be an integer >= 0",
+    );
+    expect(() => validateBudgets({ maxAgents: 1.5 })).toThrow(
+      "must be an integer >= 0",
+    );
     expect(() => validateBudgets({ maxTurns: 0 })).toThrow(
       "must be an integer >= 1",
     );
@@ -58,6 +65,22 @@ describe("BudgetActor", () => {
     expect(actor.limits.maxAgentDuration).toBeUndefined();
     expect(actor.limits.maxTokens).toBeUndefined();
     expect(actor.limits.maxCost).toBeUndefined();
+  });
+
+  test("denied agent acquisitions do not consume the budget", async () => {
+    const prohibited = new BudgetActor({ maxAgents: 0 });
+    await expect(prohibited.acquireAgent(0)).rejects.toThrow(
+      "agent execution prohibited (maxAgents: 0)",
+    );
+    expect(await prohibited.usedAgents()).toBe(0);
+
+    const capped = new BudgetActor({ maxAgents: 2 });
+    await capped.acquireAgent(0);
+    await capped.acquireAgent(0);
+    await expect(capped.acquireAgent(0)).rejects.toThrow(
+      "agent budget exceeded (maxAgents: 2)",
+    );
+    expect(await capped.usedAgents()).toBe(2);
   });
 
   test("recordUsage trips the token budget", async () => {

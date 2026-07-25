@@ -209,7 +209,8 @@ export interface Budgets {
   maxParallelism?: number;
   /** Cap applied to every loop's iterations. */
   maxIterations?: number;
-  /** Total number of agent spawns (reducers included) a run may consume. */
+  /** Total agent and reducer executions a run may consume. Zero prohibits
+   * agent execution; value and structural nodes consume none. */
   maxAgents?: number;
   /** Assistant turns a single delegated agent may take. */
   maxTurns?: number;
@@ -225,8 +226,9 @@ export interface Budgets {
 }
 
 /**
- * Resolved limits: counting budgets always have a value; duration, token,
- * and cost caps stay optional — absent means unbounded.
+ * Resolved limits: counting budgets always have a value; maxAgents is
+ * non-negative while the other counts are positive. Duration, token, and cost
+ * caps stay optional — absent means unbounded.
  */
 export type EffectiveBudgets = Required<
   Pick<

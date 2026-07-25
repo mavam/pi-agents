@@ -275,8 +275,10 @@ export class SplitPaneOverlay<T> implements Component {
     this.syncTimer();
     const index = this.currentIndex(items);
     this.select(items, index);
-    // Self-cap: the TUI clips overlays from the top, which would eat the
-    // footer — so never render more lines than fit the terminal.
+    // Self-cap: this is the overlay's only height limit (openOverlay sets no
+    // maxHeight), so it must fit the terminal — an overlay taller than the
+    // screen is clipped from the top, eating the title. The slack covers the
+    // fixed top row (2) plus two rows of breathing room at the bottom.
     const height = Math.max(8, this.tui.terminal.rows - 4);
     const item = items[index];
     if (item !== undefined) {
@@ -391,7 +393,11 @@ export async function openOverlay<T>(
       overlay: true,
       // A fixed top row (not a centered anchor): the box top and the table
       // stay put while the detail pane grows downward with the selection.
-      overlayOptions: { width: "85%", maxHeight: "85%", row: 2 },
+      // No maxHeight: the TUI would slice the rendered lines from the bottom,
+      // eating the footer and the detail tail. The component budgets its own
+      // height from terminal.rows, so the box is elastic — it grows with the
+      // content and everything it renders is shown.
+      overlayOptions: { width: "85%", row: 2 },
     },
   );
 }

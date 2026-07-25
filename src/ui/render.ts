@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
-import type { RunSource, RunStatus } from "../run/events.js";
+import type { RunSource } from "../run/events.js";
 import type { NodeView, RunView } from "../run/state.js";
 import { STATUS_STYLES } from "./status.js";
 
@@ -18,22 +18,24 @@ export const MESSAGE_TYPE = "pi-agents:message";
 
 export const NOTIFICATION_TYPE = "pi-agents:notification";
 
-export type FinalRunStatus = Exclude<RunStatus, "running">;
-
-/** Versioned display data for final-run notifications. Message content remains
- * the model-facing source of truth; these fields drive only the TUI card. */
-export interface RunNotificationDetails {
+interface RunNotificationBase {
   kind: "run_final";
   version: 2;
   runId: string;
   label?: string;
-  status: FinalRunStatus;
   usage?: string;
   agents: number;
-  bodyKind: "result" | "error" | "none";
-  body?: string;
   at: number;
 }
+
+/** Versioned display data for final-run notifications. Message content remains
+ * the model-facing source of truth; these fields drive only the TUI card. */
+export type RunNotificationDetails = RunNotificationBase &
+  (
+    | { status: "completed"; bodyKind: "result"; body: string }
+    | { status: "failed"; bodyKind: "error"; body: string }
+    | { status: "stopped"; bodyKind: "none"; body?: never }
+  );
 
 function messageText(message: { content: unknown }): string {
   return typeof message.content === "string"
@@ -48,22 +50,27 @@ function isRunNotificationDetails(
 ): value is RunNotificationDetails {
   if (typeof value !== "object" || value === null) return false;
   const details = value as Record<string, unknown>;
-  return (
-    details.kind === "run_final" &&
-    details.version === 2 &&
-    typeof details.runId === "string" &&
-    (details.label === undefined || typeof details.label === "string") &&
-    (details.status === "completed" ||
-      details.status === "failed" ||
-      details.status === "stopped") &&
-    (details.usage === undefined || typeof details.usage === "string") &&
-    typeof details.agents === "number" &&
-    (details.bodyKind === "result" ||
-      details.bodyKind === "error" ||
-      details.bodyKind === "none") &&
-    (details.body === undefined || typeof details.body === "string") &&
-    typeof details.at === "number"
-  );
+  if (
+    details.kind !== "run_final" ||
+    details.version !== 2 ||
+    typeof details.runId !== "string" ||
+    (details.label !== undefined && typeof details.label !== "string") ||
+    (details.usage !== undefined && typeof details.usage !== "string") ||
+    typeof details.agents !== "number" ||
+    typeof details.at !== "number"
+  ) {
+    return false;
+  }
+  switch (details.status) {
+    case "completed":
+      return details.bodyKind === "result" && typeof details.body === "string";
+    case "failed":
+      return details.bodyKind === "error" && typeof details.body === "string";
+    case "stopped":
+      return details.bodyKind === "none" && details.body === undefined;
+    default:
+      return false;
+  }
 }
 
 export function formatAgentCount(agents: number): string {

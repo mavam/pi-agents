@@ -12,9 +12,12 @@ const markerTheme = {
   bold: (text: string) => `<bold>${text}</bold>`,
 } as unknown as Theme;
 
-function details(
-  overrides: Partial<RunNotificationDetails> = {},
-): RunNotificationDetails {
+type CompletedDetails = Extract<
+  RunNotificationDetails,
+  { status: "completed" }
+>;
+
+function details(overrides: Partial<CompletedDetails> = {}): CompletedDetails {
   return {
     kind: "run_final",
     version: 2,
@@ -27,6 +30,27 @@ function details(
     at: 1,
     ...overrides,
   };
+}
+
+function finalDetails(
+  outcome: { status: "failed"; body: string } | { status: "stopped" },
+): RunNotificationDetails {
+  const base = {
+    kind: "run_final" as const,
+    version: 2 as const,
+    runId: "9a7eb000-full",
+    label: "dummy-node-exploration-2",
+    agents: 1,
+    at: 1,
+  };
+  return outcome.status === "failed"
+    ? {
+        ...base,
+        status: "failed",
+        bodyKind: "error",
+        body: outcome.body,
+      }
+    : { ...base, status: "stopped", bodyKind: "none" };
 }
 
 function render(
@@ -67,26 +91,31 @@ describe("run notification renderer", () => {
 
   test("renders failed and stopped cards without unreachable statuses", () => {
     const failed = render(
-      details({
-        status: "failed",
-        agents: 1,
-        bodyKind: "error",
-        body: "agent exploded",
-      }),
+      finalDetails({ status: "failed", body: "agent exploded" }),
     );
     expect(failed).toContain("<error>✗ failed</error>");
     expect(failed).toContain("agent exploded");
 
-    const stopped = render(
-      details({
-        status: "stopped",
-        bodyKind: "none",
-        body: undefined,
-      }),
-    );
+    const stopped = render(finalDetails({ status: "stopped" }));
     expect(stopped).toContain("<dim>⊘ stopped</dim>");
     expect(stopped).not.toContain("agent exploded");
     expect(stopped).not.toContain("Run stopped.");
+  });
+
+  test("rejects inconsistent version-2 details and falls back to content", () => {
+    const output = render(
+      {
+        ...details(),
+        status: "stopped",
+        bodyKind: "result",
+        body: "must not render",
+      },
+      "**Malformed details fallback.**",
+    );
+
+    expect(output).toContain("Malformed details fallback.");
+    expect(output).not.toContain("must not render");
+    expect(output).not.toContain("<muted>❖</muted>");
   });
 
   test("falls back to message Markdown for legacy persisted details", () => {

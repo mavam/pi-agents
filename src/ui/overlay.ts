@@ -1,9 +1,9 @@
 /**
- * Interactive split-pane overlay for /runs and /workflows: a keyboard-
+ * Interactive split-pane overlay for /workflows and /agents: a keyboard-
  * navigable table on top, the selected item's flow tree in a detail pane
- * below. One generic component; the two commands supply an OverlaySpec.
+ * below. One generic component; the commands supply an OverlaySpec.
  *
- *   ╭─ Runs (2/4) ───────────────────────────────────────╮
+ *   ╭─ Runs · /triage (2/4) ─────────────────────────────╮
  *   │   ● 1a2b3c4d  completed  review    3t ↑12k  $0.08  │
  *   │ ▸ ● c9e5799a  completed  triage    5t ↑33k  $0.21  │
  *   ├─ c9e5799a · triage (command) · 1m32s · 33k tok ────┤

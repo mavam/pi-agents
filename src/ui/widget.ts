@@ -401,7 +401,7 @@ export class RunWidget {
   private lastContext: ExtensionContext | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private frame = 0;
-  /** Run ids muted from the summary (session-scoped, via the /runs overlay `h`). */
+  /** Run ids muted from the summary (session-scoped, via the /workflows overlay `h`). */
   private readonly hidden = new Set<string>();
   private enabled = true;
 
@@ -461,7 +461,7 @@ export class RunWidget {
         .flatMap((run) => formatRunWidget(run, now, frame, color));
       if (running.length > MAX_RUNS) {
         lines.push(
-          color("dim", `…+${running.length - MAX_RUNS} more (see /runs)`),
+          color("dim", `…+${running.length - MAX_RUNS} more (see /workflows)`),
         );
       }
       return new TruncatedLines(lines);

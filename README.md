@@ -47,7 +47,7 @@ Three nouns carry the whole framework:
 | ------------ | ------------------------------------------------------------------------------------------------ |
 | **agent**    | A delegated pi subprocess: anonymous (ad-hoc, just a task) or a reusable persona defined in a markdown file (`.pi/agents/*.md`). |
 | **workflow** | A saved, named composition of agents (`.pi/workflows/*.yaml`) — or an inline expression.           |
-| **run**      | One persisted execution of a workflow. Browse with `/runs`, inspect with `/run <id>`.            |
+| **run**      | One persisted execution of a workflow. Browse with `/workflows`, inspect with `/workflow <id>`.  |
 
 ### The algebra
 
@@ -68,7 +68,8 @@ and saved workflows inline like function calls.
 
 The JSON/YAML form is what you author; the icons are how flows are *read*.
 Every surface that shows a flow — the tool call display, `/workflow <name>`,
-`/run <id>` — renders it as an icon tree. The review workflow, for example:
+`/workflow <run-id>` — renders it as an icon tree. The review workflow, for
+example:
 
 ```
 ⑃ parallel (all)
@@ -231,7 +232,7 @@ parallelizable — it does itself, mentioning at most in one sentence that a
 workflow could take it. That is what makes the example above run: *"review
 these three modules in parallel"* is your request, not the model's inference.
 The tool also only ever starts runs: a live agent is corrected with `steer`,
-and an existing run is inspected or stopped with `/run`.
+and an existing run is inspected or stopped with `/workflow <run-id>`.
 
 ```json
 {
@@ -433,7 +434,7 @@ not aggregated across the delegation tree.
 
 Exceeding a per-agent budget (`maxTurns`, `maxAgentDuration`) fails that agent
 with a clear error and preserves its last streamed output as a partial result
-— visible under `/run <id>` and persisted with the run's events. The usual
+— visible under `/workflow <id>` and persisted with the run's events. The usual
 flow policies decide what happens next (`onError: "collect"` keeps sibling
 results). Exceeding a run-scoped budget (`maxDuration`, `maxTokens`,
 `maxCost`) fails the whole run and cancels still-running agents; token and
@@ -451,52 +452,70 @@ usage only in their final outcome cannot be cut off mid-run.
 | --------------------- | ---------------------------------------------------- |
 | `/agents`             | Browse discovered agents interactively (`list` for plain text). |
 | `/agent <name>`       | Show one agent in full.                              |
-| `/workflows`          | Browse saved workflows interactively (`list` for the plain text version with validation diagnostics). |
+| `/workflows`          | Browse workflows, their runs, and each run's agents interactively (`list`/`runs` for plain text, `widget` to toggle the live summary). |
 | `/workflow <name>`    | Show one workflow: params, triggers, docs, flow.     |
 | `/<name> [args]`      | Run saved workflow `<name>` directly.                |
-| `/runs`               | Browse runs interactively (`list` for plain text, `widget` to toggle the live summary). |
-| `/run <id>`           | Inspect a run (unique id prefixes work).             |
-| `/run <id> result`    | The complete result value of a finished run.         |
-| `/run <id> watch`     | Snapshot now, final tree when the run settles.       |
-| `/run <id> mermaid`   | Deterministic Mermaid diagram of the run's flow.     |
-| `/run <id> stop`      | Abort a live run.                                    |
+| `/workflow <id>`      | Inspect a run (unique id prefixes work).             |
+| `/workflow <id> result` | The complete result value of a finished run.       |
+| `/workflow <id> agents` | Per-agent status and output previews.              |
+| `/workflow <id> watch`  | Snapshot now, final tree when the run settles.     |
+| `/workflow <id> mermaid`| Deterministic Mermaid diagram of the run's flow.   |
+| `/workflow <id> stop`   | Abort a live run.                                  |
+
+`/workflow` resolves a saved workflow name first, then a run id; run ids are
+hex, workflow names are slugs, so the two never collide in practice.
 
 ### Interactive browsing
 
-In the TUI, `/runs`, `/workflows`, and `/agents` open a split-pane overlay:
-a table on top, the selected item's flow tree (or agent details) below.
-Scrolling moves the detail pane with the selection, live runs refresh in
-place, and the overlay is pinned near the top of the screen — the table
-never moves; the detail pane only ever grows downward.
+In the TUI, `/workflows` and `/agents` open a split-pane overlay: a table on
+top, the selected item's flow tree (or agent details) below. Scrolling moves
+the detail pane with the selection, live runs refresh in place, and the
+overlay is pinned near the top of the screen — the table never moves; the
+detail pane only ever grows downward.
+
+The workflows overlay is three tiers deep, mirroring the framework's three
+nouns: workflows (with live run badges), one workflow's runs, and one run's
+agents. `⏎` drills in, `esc` backs out one tier. Synthetic rows cover runs
+that no saved workflow claims: `all runs` (the global, chronological view)
+and `(ad-hoc)` (inline and tool-started flows).
 
 ```
-╭─ Runs (2/4) ───────────────────────────────────────╮
-│   ● 1a2b3c4d  completed  review (command)   $0.08  │
-│ ▸ ● c9e5799a  completed  triage (command)   $0.21  │
-│   ◉ 77aa01bc  running    ship-it (command)  $0.01  │
-├─ c9e5799a · triage · 1m32s · 5 turns ↑33k ↓2k ─────┤
+╭─ Workflows (2/4) ──────────────────────────────────╮
+│   ◉ all runs           every run this session ◉1 ●3│
+│ ▸ ❖ /triage    user    Triage findings        ◉1 ●1│
+│   ❖ /review   project  Multi-lens code review    ●2│
+├─ /triage · user · 2 runs ──────────────────────────┤
+│ ✦ scout → {files} · List files to review           │
+│ ⇶ map {files}                                      │
+│ └─ ✦ reviewer · Review {item}                      │
+╰─ ⏎ runs · c compose · r run · n new · esc ─────────╯
+                         ⏎
+╭─ Runs · /triage (1/2) ─────────────────────────────╮
+│ ▸ ◉ 77aa01bc  running    triage (command)   $0.01  │
+│   ● c9e5799a  completed  triage (command)   $0.21  │
+├─ 77aa01bc · triage · 1m32s · 5 turns ↑33k ↓2k ─────┤
 │  ● scout → {files} · List files to review          │
 │  ⇶ map {files} (×4)                                │
-│     └─ ● reviewer · Review {item} [4/4]            │
-│  ● ⑂ reduce → syn · Merge {items}                  │
-╰─ ↑↓ move · ⏎ inspect · c cancel · r rerun · esc ───╯
+│     └─ ◉ reviewer · Review {item} [2/4]            │
+╰─ ⏎ inspect · a agents · c cancel · r rerun · esc ──╯
 ```
 
-Keys — all overlays: `↑`/`↓` (or `k`/`j`) move, `esc` closes. Runs:
-`⏎` posts the run details with the full result to the chat, `c` cancels a
-live run, `r` starts the same flow again, and `h` shows/hides that run in
-the live summary above the composer (useful for long-running flows). Press
-`a` to inspect a run's agents; on a running agent, `s` opens an inline
-composer for a steering message.
-Workflows: `⏎` puts `/<name> ` into the composer so you can add arguments,
-`r` runs it immediately (workflows with required parameters fall back to
-composing). Agents: `⏎` posts the full agent details. In the workflows and
-agents overlays, `n` starts a new workflow or agent: you name it and
-describe the intent, the model drafts the definition file.
+Keys — all overlays: `↑`/`↓` (or `k`/`j`) move, `esc` closes or backs out
+one tier. Workflow tier: `⏎` drills into the selected workflow's runs, `c`
+puts `/<name> ` into the composer so you can add arguments, `r` runs it
+immediately (workflows with required parameters fall back to composing),
+and `n` starts a new workflow or agent: you name it and describe the
+intent, the model drafts the definition file. Run tier: `⏎` posts the run
+details with the full result to the chat, `a` drills into the run's agents,
+`c` cancels a live run, `r` starts the same flow again, and `h` shows/hides
+that run in the live summary above the composer (useful for long-running
+flows). Agent tier: `⏎` posts the agent's full output; on a running agent,
+`s` opens an inline composer for a steering message. In the agents overlay,
+`⏎` posts the full agent details and `n` starts a new definition.
 
-The live summary widget can be toggled wholesale with `/runs widget`. There
-is no default keybinding for it; bind one via pi's keybindings if you want
-one-keystroke access.
+The live summary widget can be toggled wholesale with `/workflows widget`.
+There is no default keybinding for it; bind one via pi's keybindings if you
+want one-keystroke access.
 
 When
 [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) is installed,
@@ -543,7 +562,7 @@ the agent detail view and are persisted with their source (`user`, `tool`, or
 `rpc`). Steering-triggered assistant turns count toward the run's normal usage
 and turn totals.
 
-Besides the `/runs` overlay, the model can call the separate `steer` tool with
+Besides the `/workflows` overlay, the model can call the separate `steer` tool with
 a run ID (full or unique prefix), an optional exact node instance, and the
 message. The instance may be omitted only while exactly one agent in that run
 is steerable.

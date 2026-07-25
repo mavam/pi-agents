@@ -120,7 +120,7 @@ export class NotificationManager {
         text: [
           `**Run \`${shortId(event.runId)}\`${run?.header.label ? ` (${run.header.label})` : ""} ${event.status}.**${usage ? ` ${usage}, ${event.agents} agent(s).` : ""}`,
           "",
-          `Inspect with \`/run ${shortId(event.runId)}\` · full result: \`/run ${shortId(event.runId)} result\` · per-agent: \`/run ${shortId(event.runId)} agents\`.`,
+          `Inspect with \`/workflow ${shortId(event.runId)}\` · full result: \`/workflow ${shortId(event.runId)} result\` · per-agent: \`/workflow ${shortId(event.runId)} agents\`.`,
           ...(wake ? ["", "Continue your task using this result."] : []),
           "",
           summary,

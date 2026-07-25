@@ -169,7 +169,7 @@ describe("formatRunNodesList", () => {
     expect(text).toContain("worker");
     // Multi-line values collapse to one preview line.
     expect(text).toContain("merged findings");
-    expect(text).toContain("Full output: `/run run-1234 result <name>`");
+    expect(text).toContain("Full output: `/workflow run-1234 result <name>`");
   });
 
   test("empty run says so", async () => {

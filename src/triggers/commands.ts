@@ -1,8 +1,9 @@
 /**
- * Slash commands: the static catalog/run commands (/agents, /agent,
- * /workflows, /workflow, /runs, /run) plus dynamic per-workflow commands
- * (each saved workflow registers /<name>, running its graph directly with
- * args bound to params — no model round-trip).
+ * Slash commands: the static catalog commands (/agents, /agent, /workflows,
+ * /workflow) plus dynamic per-workflow commands (each saved workflow
+ * registers /<name>, running its graph directly with args bound to params —
+ * no model round-trip). Runs have no top-level command of their own: browse
+ * them via /workflows, inspect one via /workflow <run-id>.
  */
 
 import type {
@@ -25,7 +26,11 @@ import {
   workNodes,
 } from "../run/state.js";
 import { toMermaid } from "../ui/mermaid.js";
-import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
+import {
+  type OverlayAction,
+  type OverlaySpec,
+  openOverlay,
+} from "../ui/overlay.js";
 import {
   fenced,
   formatRunOverviewLine,
@@ -54,7 +59,7 @@ export const RESERVED_COMMAND_NAMES = new Set([
 
 export type CommandDeps = TriggerDeps;
 
-/** Verbs accepted by `/run <id> …`. */
+/** Run-inspection verbs accepted by `/workflow <run-id> …`. */
 const RUN_ACTIONS = ["result", "agents", "watch", "mermaid", "stop"];
 
 /** Discovery scope for a context: untrusted projects contribute nothing. */
@@ -127,13 +132,36 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
 
   pi.registerCommand("workflows", {
     description:
-      "Browse saved workflows (interactive in the TUI; `list` for text)",
+      "Browse workflows and their runs (interactive in the TUI; `list`/`runs` for text, `widget` to toggle the live summary)",
     getArgumentCompletions: (prefix) =>
-      ["list"]
+      ["list", "runs", "widget"]
         .filter((arg) => arg.startsWith(prefix))
         .map((arg) => ({ value: arg, label: arg })),
     handler: async (args, ctx) => {
-      if (ctx.hasUI && ctx.mode === "tui" && args.trim() !== "list") {
+      const arg = args.trim();
+      if (arg === "widget") {
+        const enabled = deps.widget.toggleEnabled();
+        ctx.ui.notify(
+          `Live run summary ${enabled ? "enabled" : "disabled"}.`,
+          "info",
+        );
+        return;
+      }
+      if (arg === "runs") {
+        const runs = [...deps.manager.state.runs.values()];
+        if (runs.length === 0) {
+          sendInfo(pi, "No runs yet.");
+          return;
+        }
+        const lines = ["## Runs", "", "```"];
+        for (const run of runs.slice(-30)) {
+          lines.push(formatRunOverviewLine(run));
+        }
+        lines.push("```", "", "Inspect one with `/workflow <id>`.");
+        sendInfo(pi, lines.join("\n"));
+        return;
+      }
+      if (ctx.hasUI && ctx.mode === "tui" && arg !== "list") {
         await openOverlay(ctx, buildWorkflowsSpec(pi, deps, ctx));
         return;
       }
@@ -162,95 +190,68 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   });
 
   pi.registerCommand("workflow", {
-    description: "Show details for one saved workflow",
+    description:
+      "Show a workflow, or inspect a run: /workflow <name>, /workflow <run-id> [result [node]|agents|watch|mermaid|stop]",
     getArgumentCompletions: (prefix) => {
+      const tokens = prefix.split(/\s+/);
       const { workflows } = discoverWorkflows(process.cwd(), "both");
-      return workflows
-        .filter((wf) => wf.name.startsWith(prefix))
-        .map((wf) => ({
-          value: wf.name,
-          label: wf.name,
-          description: wf.description,
-        }));
-    },
-    handler: async (args, ctx) => {
-      const name = args.trim();
-      if (!name) {
-        sendInfo(pi, "Usage: `/workflow <name>`");
-        return;
-      }
-      const { workflows } = discoverWorkflows(ctx.cwd, scopeFor(ctx));
-      const wf = resolveWorkflowByName(workflows, name);
-      if (!wf) {
-        sendInfo(pi, `Unknown workflow \`${name}\`. Try \`/workflows\`.`);
-        return;
-      }
-      sendInfo(pi, formatWorkflowDetails(wf));
-    },
-  });
-
-  pi.registerCommand("runs", {
-    description:
-      "Browse workflow runs (interactive in the TUI; `list` for text, `widget` to toggle the live summary)",
-    getArgumentCompletions: (prefix) =>
-      ["list", "widget"]
-        .filter((arg) => arg.startsWith(prefix))
-        .map((arg) => ({ value: arg, label: arg })),
-    handler: async (args, ctx) => {
-      const arg = args.trim();
-      if (arg === "widget") {
-        const enabled = deps.widget.toggleEnabled();
-        ctx.ui.notify(
-          `Live run summary ${enabled ? "enabled" : "disabled"}.`,
-          "info",
+      // Run verbs never follow a workflow name; they only follow a run id.
+      if (tokens.length > 1 && workflows.some((wf) => wf.name === tokens[0]))
+        return [];
+      const completions = completeRunArgs(prefix, [
+        ...deps.manager.state.runs.values(),
+      ]);
+      if (tokens.length <= 1) {
+        completions.unshift(
+          ...workflows
+            .filter((wf) => wf.name.startsWith(prefix))
+            .map((wf) => ({
+              value: wf.name,
+              label: wf.name,
+              description: wf.description,
+            })),
         );
-        return;
       }
-      if (ctx.hasUI && ctx.mode === "tui" && arg !== "list") {
-        await openOverlay(ctx, buildRunsSpec(pi, deps, ctx));
-        return;
-      }
-      const runs = [...deps.manager.state.runs.values()];
-      if (runs.length === 0) {
-        sendInfo(pi, "No runs yet.");
-        return;
-      }
-      const lines = ["## Runs", "", "```"];
-      for (const run of runs.slice(-30)) {
-        lines.push(formatRunOverviewLine(run));
-      }
-      lines.push("```", "", "Inspect one with `/run <id>`.");
-      sendInfo(pi, lines.join("\n"));
+      return completions;
     },
-  });
-
-  pi.registerCommand("run", {
-    description:
-      "Inspect a run: /run <id> [result [node]|agents|watch|mermaid|stop]",
-    getArgumentCompletions: (prefix) =>
-      completeRunArgs(prefix, [...deps.manager.state.runs.values()]),
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const tokens = args.trim().split(/\s+/).filter(Boolean);
       const action = tokens.find((t) => RUN_ACTIONS.includes(t));
-      const [idOrPrefix, nodeRef] = tokens.filter(
-        (t) => !RUN_ACTIONS.includes(t),
-      );
-      if (!idOrPrefix) {
+      const [target, nodeRef] = tokens.filter((t) => !RUN_ACTIONS.includes(t));
+      if (!target) {
         sendInfo(
           pi,
-          "Usage: `/run <id> [result [node]|agents|watch|mermaid|stop]`",
+          "Usage: `/workflow <name>` or `/workflow <run-id> [result [node]|agents|watch|mermaid|stop]`",
         );
         return;
       }
-      const lookup = deps.manager.find(idOrPrefix);
+      // A saved workflow name wins over a run-id prefix; names are slugs
+      // and run ids are hex, so collisions are implausible.
+      const { workflows } = discoverWorkflows(ctx.cwd, scopeFor(ctx));
+      const wf = resolveWorkflowByName(workflows, target);
+      if (wf) {
+        if (action) {
+          sendInfo(
+            pi,
+            `\`${action}\` applies to runs, not workflow definitions. Browse runs with \`/workflows\`.`,
+          );
+          return;
+        }
+        sendInfo(pi, formatWorkflowDetails(wf));
+        return;
+      }
+      const lookup = deps.manager.find(target);
       if (lookup.kind === "missing") {
-        sendInfo(pi, `No run matching \`${idOrPrefix}\`. Try \`/runs\`.`);
+        sendInfo(
+          pi,
+          `No workflow or run matching \`${target}\`. Try \`/workflows\`.`,
+        );
         return;
       }
       if (lookup.kind === "ambiguous") {
         sendInfo(
           pi,
-          `Ambiguous run id \`${idOrPrefix}\`: ${lookup.matches.map((run) => shortId(run.header.id)).join(", ")}`,
+          `Ambiguous run id \`${target}\`: ${lookup.matches.map((run) => shortId(run.header.id)).join(", ")}`,
         );
         return;
       }
@@ -326,12 +327,16 @@ const STATUS_COLORS: Record<string, Parameters<Colorize>[0]> = {
   stopped: "dim",
 };
 
-/** Overlay rows: top-level runs, or one run's work nodes when drilled in. */
-type RunsItem =
+/** Overlay rows for the unified /workflows overlay: workflows and run groups
+ * (tier 1), one group's runs (tier 2), one run's work nodes (tier 3). */
+export type WorkflowsItem =
+  | { kind: "all" }
+  | { kind: "workflow"; wf: WorkflowDef }
+  | { kind: "adhoc" }
   | { kind: "run"; run: RunView }
   | { kind: "node"; run: RunView; node: NodeView };
 
-/** Compact provenance marker for steering history in the runs overlay. */
+/** Compact provenance marker for steering history in the overlay. */
 export function steeringMarker(
   entry: Pick<SteeringEntry, "source" | "caller">,
 ): string {
@@ -340,36 +345,283 @@ export function steeringMarker(
   return entry.caller ? `⇢ ${entry.caller}:` : "⇢";
 }
 
-function buildRunsSpec(
+// Run- and node-tier rendering and actions, shared between the unified
+// overlay's drill levels.
+
+function nodeRow(node: NodeView, color: Colorize): string {
+  const icon = color(
+    STATUS_COLORS[node.status] ?? "dim",
+    STATUS_ICONS[node.status] ?? "?",
+  );
+  const usage = formatUsage(
+    node.usage ?? (node.status === "running" ? node.progressUsage : undefined),
+  );
+  return `${icon} ${nodeDisplayName(node).padEnd(12)}  ${(node.agent ?? "ad-hoc").padEnd(10)}  ${node.status.padEnd(9)}${usage ? `  ${color("dim", usage)}` : ""}`;
+}
+
+function runRow(run: RunView, color: Colorize, deps: CommandDeps): string {
+  const icon = color(
+    STATUS_COLORS[run.status] ?? "dim",
+    STATUS_ICONS[run.status] ?? "?",
+  );
+  const label =
+    run.header.label ?? run.header.source.workflow ?? run.header.flow.kind;
+  const source = formatRunSource(run.header.source);
+  const usage = formatUsage(run.usage);
+  const hidden = deps.widget.isHidden(run.header.id)
+    ? color("dim", "  ⊘ hidden")
+    : "";
+  return `${icon} ${color("dim", shortId(run.header.id))}  ${run.status.padEnd(9)}  ${`${label} (${source})`.padEnd(24)}${usage ? `  ${color("dim", usage)}` : ""}${hidden}`;
+}
+
+function nodeHeaderLine(run: RunView, node: NodeView, color: Colorize): string {
+  const parts = [
+    shortId(run.header.id),
+    nodeDisplayName(node),
+    node.agent ?? "ad-hoc",
+    formatElapsed((node.endedAt ?? Date.now()) - node.startedAt),
+    formatUsage(node.usage) || undefined,
+    node.status === "running" ? node.progressTool : undefined,
+    node.status === "running" && node.lastProgressAt !== undefined
+      ? `active ${formatElapsed(Date.now() - node.lastProgressAt)} ago`
+      : undefined,
+  ];
+  return parts
+    .filter((part): part is string => part !== undefined)
+    .join(color("dim", " · "));
+}
+
+function runHeaderLine(run: RunView, color: Colorize): string {
+  const parts = [
+    shortId(run.header.id),
+    run.header.label ?? run.header.flow.kind,
+    formatElapsed((run.endedAt ?? Date.now()) - run.createdAt),
+    formatUsage(run.usage) || undefined,
+  ];
+  return parts
+    .filter((part): part is string => part !== undefined)
+    .join(color("dim", " · "));
+}
+
+function nodeDetail(node: NodeView, color: Colorize): string[] {
+  const steering = (node.steering ?? []).flatMap((entry) =>
+    entry.message
+      .split("\n")
+      .map((line, index) =>
+        color(
+          "accent",
+          index === 0 ? `${steeringMarker(entry)} ${line}` : `  ${line}`,
+        ),
+      ),
+  );
+  if (node.error)
+    return [
+      ...steering,
+      ...(steering.length > 0 ? [""] : []),
+      color("error", `✗ ${node.error}`),
+    ];
+  if (node.status === "cancelled")
+    return [
+      ...steering,
+      ...(steering.length > 0 ? [""] : []),
+      color(
+        "dim",
+        `cancelled${node.cancelReason ? ` (${node.cancelReason})` : ""}`,
+      ),
+    ];
+  if (node.status === "running") {
+    const tail = (node.progressText ?? "")
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .slice(-3);
+    return tail.length > 0
+      ? [...steering, ...tail.map((line) => color("dim", line))]
+      : [...steering, color("dim", "running…")];
+  }
+  const preview = formatValuePreview(node.value, 600);
+  const lines = preview
+    ? preview.split("\n")
+    : [color("dim", "(no output value)")];
+  lines.push("", color("dim", "⏎ post full output"));
+  return [...steering, ...(steering.length > 0 ? [""] : []), ...lines];
+}
+
+function runDetail(run: RunView, color: Colorize): string[] {
+  const lines = (renderRunTree(run, color) || "(no nodes yet)").split("\n");
+  if (run.error) lines.push(color("error", `✗ ${run.error}`));
+  const value =
+    run.status !== "running" ? formatValuePreview(run.value, 300) : "";
+  if (value) lines.push("", ...value.split("\n"));
+  return lines;
+}
+
+/** Node-tier actions: post the full output, steer a live agent. */
+function nodeAction(
+  key: string,
+  run: RunView,
+  node: NodeView,
   pi: ExtensionAPI,
   deps: CommandDeps,
   ctx: ExtensionCommandContext,
-): OverlaySpec<RunsItem> {
+): OverlayAction {
+  if (key === "enter") {
+    sendInfo(pi, formatNodeResultFull(run, node));
+    return "close";
+  }
+  if (
+    key === "s" &&
+    deps.manager.steerableInstances(run.header.id).includes(node.instance)
+  ) {
+    return {
+      compose: {
+        label: "Steer",
+        submit: async (message) => {
+          const result = await deps.manager.steer(
+            run.header.id,
+            node.instance,
+            message,
+            "user",
+          );
+          ctx.ui.notify(
+            result.status === "queued"
+              ? "Steering queued — delivery follows the current tool-call batch."
+              : result.status === "rejected"
+                ? result.error
+                : "Agent is no longer steerable.",
+            result.status === "queued" ? "info" : "warning",
+          );
+        },
+      },
+    };
+  }
+  return undefined;
+}
+
+/** Run-tier actions: post details, cancel, hide from the widget, rerun. */
+function runAction(
+  key: string,
+  run: RunView,
+  pi: ExtensionAPI,
+  deps: CommandDeps,
+  ctx: ExtensionCommandContext,
+): OverlayAction {
+  if (key === "enter") {
+    sendInfo(pi, formatRunDetails(run, true));
+    return "close";
+  }
+  if (key === "c") {
+    const stopped = deps.manager.stop(run.header.id);
+    ctx.ui.notify(
+      stopped ? `Stopping run ${shortId(run.header.id)}…` : "Run is not live.",
+      stopped ? "info" : "warning",
+    );
+  }
+  if (key === "h") {
+    const hidden = deps.widget.toggleHidden(run.header.id);
+    ctx.ui.notify(
+      `Run ${shortId(run.header.id)} ${hidden ? "hidden from" : "shown in"} the live summary.`,
+      "info",
+    );
+  }
+  if (key === "r") {
+    deps.notifications.setContext(ctx);
+    try {
+      const started = startTriggeredRun(deps, {
+        flow: run.header.flow,
+        cwd: run.header.cwd ?? ctx.cwd,
+        scope: run.header.scope,
+        label: run.header.label,
+        budgets: run.header.budgets,
+        source: run.header.source,
+        ctx,
+        background: true,
+      });
+      ctx.ui.notify(`Started run ${shortId(started.runId)}.`, "info");
+    } catch (error) {
+      ctx.ui.notify(
+        error instanceof Error ? error.message : String(error),
+        "error",
+      );
+    }
+  }
+  return undefined;
+}
+
+export function buildWorkflowsSpec(
+  pi: ExtensionAPI,
+  deps: CommandDeps,
+  ctx: ExtensionCommandContext,
+): OverlaySpec<WorkflowsItem> {
   // Drill-down is a mode switch, not a nested overlay: ctx.ui.custom shows a
-  // single focused component, so items()/chrome/actions branch on this id.
+  // single focused component, so items()/chrome/actions branch on this state.
+  // Two levels: a workflow (or run group) drills into its runs, and a run
+  // drills into its work nodes. drillGroup.key remembers the tier-1 row to
+  // reselect when backing out.
+  let drillGroup: { group: string; key: string } | undefined;
   let drillRunId: string | undefined;
+  // Discover once per overlay open: with live() active the overlay re-renders
+  // every 500ms and must not hit the filesystem each render.
+  const workflows = discoverWorkflows(ctx.cwd, scopeFor(ctx)).workflows;
+
+  const allRuns = () => [...deps.manager.state.runs.values()];
+  const groupRuns = (group: string): RunView[] =>
+    allRuns().filter((run) =>
+      group === "all"
+        ? true
+        : group === "adhoc"
+          ? run.header.source.workflow === undefined
+          : run.header.source.workflow === group,
+    );
   const drilledRun = (): RunView | undefined =>
     drillRunId ? deps.manager.state.runs.get(drillRunId) : undefined;
   const nodeKey = (run: RunView, node: NodeView) =>
     `node:${run.header.id}:${node.instance}`;
+  const groupOf = (item: WorkflowsItem): string =>
+    item.kind === "workflow" ? item.wf.name : item.kind;
+  const badge = (runs: RunView[], color: Colorize): string => {
+    const running = runs.filter((run) => run.status === "running").length;
+    const settled = runs.length - running;
+    return [
+      running > 0 ? color("warning", `◉${running}`) : "",
+      settled > 0 ? color("dim", `●${settled}`) : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  };
+
   return {
     title: () => {
       const run = drilledRun();
-      return run ? `Run ${shortId(run.header.id)} · agents` : "Runs";
+      if (run) return `Run ${shortId(run.header.id)} · agents`;
+      if (!drillGroup) return "Workflows";
+      if (drillGroup.group === "all") return "Runs";
+      if (drillGroup.group === "adhoc") return "Runs · ad-hoc";
+      return `Runs · /${drillGroup.group}`;
     },
-    emptyText: () => (drillRunId ? "No agents started yet." : "No runs yet."),
+    emptyText: () =>
+      drillRunId
+        ? "No agents started yet."
+        : drillGroup
+          ? "No runs yet."
+          : "No workflows found. Create .pi/workflows/<name>.yaml or ~/.pi/agent/workflows/<name>.yaml.",
     footer: () =>
       drillRunId
         ? "↑↓ move · ⏎ post output · esc back"
-        : "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc close",
+        : drillGroup
+          ? "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc back"
+          : "↑↓ move · ⏎ runs · c compose · r run · n new · esc close",
     footerFor: (item) => {
-      if (item.kind !== "node") {
-        return "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc close";
+      if (item.kind === "node") {
+        const steerable = deps.manager
+          .steerableInstances(item.run.header.id)
+          .includes(item.node.instance);
+        return `↑↓ move · ⏎ post output${steerable ? " · s steer" : ""} · esc back`;
       }
-      const steerable = deps.manager
-        .steerableInstances(item.run.header.id)
-        .includes(item.node.instance);
-      return `↑↓ move · ⏎ post output${steerable ? " · s steer" : ""} · esc back`;
+      if (item.kind === "run")
+        return "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc back";
+      if (item.kind === "workflow")
+        return "↑↓ move · ⏎ runs · c compose · r run · n new · esc close";
+      return "↑↓ move · ⏎ runs · n new · esc close";
     },
     items: () => {
       const run = drilledRun();
@@ -380,311 +632,190 @@ function buildRunsSpec(
           node,
         }));
       drillRunId = undefined; // Drilled run evicted: back to the run list.
-      return [...deps.manager.state.runs.values()]
-        .reverse()
-        .map((r) => ({ kind: "run" as const, run: r }));
-    },
-    keyOf: (item) =>
-      item.kind === "run"
-        ? `run:${item.run.header.id}`
-        : nodeKey(item.run, item.node),
-    row: (item, color) => {
-      if (item.kind === "node") {
-        const { node } = item;
-        const icon = color(
-          STATUS_COLORS[node.status] ?? "dim",
-          STATUS_ICONS[node.status] ?? "?",
-        );
-        const usage = formatUsage(
-          node.usage ??
-            (node.status === "running" ? node.progressUsage : undefined),
-        );
-        return `${icon} ${nodeDisplayName(node).padEnd(12)}  ${(node.agent ?? "ad-hoc").padEnd(10)}  ${node.status.padEnd(9)}${usage ? `  ${color("dim", usage)}` : ""}`;
+      if (drillGroup) {
+        return groupRuns(drillGroup.group)
+          .reverse()
+          .map((r) => ({ kind: "run" as const, run: r }));
       }
-      const run = item.run;
-      const icon = color(
-        STATUS_COLORS[run.status] ?? "dim",
-        STATUS_ICONS[run.status] ?? "?",
-      );
-      const label =
-        run.header.label ?? run.header.source.workflow ?? run.header.flow.kind;
-      const source = formatRunSource(run.header.source);
-      const usage = formatUsage(run.usage);
-      const hidden = deps.widget.isHidden(run.header.id)
-        ? color("dim", "  ⊘ hidden")
-        : "";
-      return `${icon} ${color("dim", shortId(run.header.id))}  ${run.status.padEnd(9)}  ${`${label} (${source})`.padEnd(24)}${usage ? `  ${color("dim", usage)}` : ""}${hidden}`;
+      const items: WorkflowsItem[] = [];
+      if (allRuns().length > 0) items.push({ kind: "all" });
+      items.push(...workflows.map((wf) => ({ kind: "workflow" as const, wf })));
+      if (groupRuns("adhoc").length > 0) items.push({ kind: "adhoc" });
+      return items;
+    },
+    keyOf: (item) => {
+      if (item.kind === "workflow")
+        return `wf:${item.wf.source}:${item.wf.name}`;
+      if (item.kind === "run") return `run:${item.run.header.id}`;
+      if (item.kind === "node") return nodeKey(item.run, item.node);
+      return item.kind;
+    },
+    row: (item, color) => {
+      if (item.kind === "node") return nodeRow(item.node, color);
+      if (item.kind === "run") return runRow(item.run, color, deps);
+      if (item.kind === "workflow") {
+        const { wf } = item;
+        const triggers =
+          wf.on && wf.on.length > 0
+            ? color("dim", `  on: ${wf.on.join(", ")}`)
+            : "";
+        const runs = badge(groupRuns(wf.name), color);
+        return `${color("muted", KIND_ICONS.workflow)} ${`/${wf.name}`.padEnd(16)}  ${color("dim", wf.source.padEnd(7))}  ${wf.description}${triggers}${runs ? `  ${runs}` : ""}`;
+      }
+      const runs = groupRuns(item.kind);
+      const running = runs.some((run) => run.status === "running");
+      const icon = running ? color("warning", "◉") : color("dim", "●");
+      const label = item.kind === "all" ? "all runs" : "(ad-hoc)";
+      const description =
+        item.kind === "all"
+          ? "every run this session"
+          : "runs without a saved workflow";
+      return `${icon} ${label.padEnd(16)}  ${" ".repeat(7)}  ${color("dim", description)}  ${badge(runs, color)}`;
     },
     headerLine: (item, color) => {
+      if (item.kind === "node")
+        return nodeHeaderLine(item.run, item.node, color);
+      if (item.kind === "run") return runHeaderLine(item.run, color);
+      const runs = groupRuns(groupOf(item));
+      const count = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
       const parts =
-        item.kind === "node"
+        item.kind === "workflow"
           ? [
-              shortId(item.run.header.id),
-              nodeDisplayName(item.node),
-              item.node.agent ?? "ad-hoc",
-              formatElapsed(
-                (item.node.endedAt ?? Date.now()) - item.node.startedAt,
-              ),
-              formatUsage(item.node.usage) || undefined,
-              item.node.status === "running"
-                ? item.node.progressTool
-                : undefined,
-              item.node.status === "running" &&
-              item.node.lastProgressAt !== undefined
-                ? `active ${formatElapsed(Date.now() - item.node.lastProgressAt)} ago`
-                : undefined,
+              `/${item.wf.name}`,
+              item.wf.source,
+              ...(runs.length > 0 ? [count] : []),
             ]
-          : [
-              shortId(item.run.header.id),
-              item.run.header.label ?? item.run.header.flow.kind,
-              formatElapsed(
-                (item.run.endedAt ?? Date.now()) - item.run.createdAt,
-              ),
-              formatUsage(item.run.usage) || undefined,
-            ];
-      return parts
-        .filter((part): part is string => part !== undefined)
-        .join(color("dim", " · "));
+          : [item.kind === "all" ? "all runs" : "ad-hoc", count];
+      return parts.join(color("dim", " · "));
     },
     detail: (item, color) => {
-      if (item.kind === "node") {
-        const { node } = item;
-        const steering = (node.steering ?? []).flatMap((entry) =>
-          entry.message
-            .split("\n")
-            .map((line, index) =>
-              color(
-                "accent",
-                index === 0 ? `${steeringMarker(entry)} ${line}` : `  ${line}`,
-              ),
-            ),
+      if (item.kind === "node") return nodeDetail(item.node, color);
+      if (item.kind === "run") return runDetail(item.run, color);
+      if (item.kind === "workflow") {
+        const { wf } = item;
+        const meta = (key: string, value: string) =>
+          `${color("dim", `${key}:`)} ${value}`;
+        const fallback = (text: string) => color("dim", `(${text})`);
+        const lines = [
+          color("dim", wf.description),
+          "",
+          meta("file", wf.filePath),
+        ];
+        if (wf.trigger) lines.push(meta("trigger", wf.trigger));
+        lines.push(
+          meta(
+            "on",
+            wf.on && wf.on.length > 0
+              ? wf.on.join(", ") +
+                  (wf.debounce !== undefined
+                    ? ` (debounce ${wf.debounce}ms)`
+                    : "")
+              : fallback("manual only"),
+          ),
         );
-        if (node.error)
-          return [
-            ...steering,
-            ...(steering.length > 0 ? [""] : []),
-            color("error", `✗ ${node.error}`),
-          ];
-        if (node.status === "cancelled")
-          return [
-            ...steering,
-            ...(steering.length > 0 ? [""] : []),
-            color(
-              "dim",
-              `cancelled${node.cancelReason ? ` (${node.cancelReason})` : ""}`,
-            ),
-          ];
-        if (node.status === "running") {
-          const tail = (node.progressText ?? "")
-            .split("\n")
-            .filter((line) => line.trim() !== "")
-            .slice(-3);
-          return tail.length > 0
-            ? [...steering, ...tail.map((line) => color("dim", line))]
-            : [...steering, color("dim", "running…")];
+        const runs = groupRuns(wf.name);
+        lines.push(
+          meta(
+            "runs",
+            runs.length > 0
+              ? `${badge(runs, color)} ${color("dim", "— ⏎ to browse")}`
+              : fallback("none yet"),
+          ),
+        );
+        if (wf.params.length === 0) {
+          lines.push(meta("params", fallback("none")));
+        } else {
+          lines.push(meta("params", ""));
+          for (const param of wf.params) {
+            const flags = [
+              param.required ? "required" : undefined,
+              param.default !== undefined
+                ? `default: ${param.default}`
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(", ");
+            lines.push(
+              `  ${param.name}${flags ? color("dim", ` (${flags})`) : ""}${param.description ? color("dim", ` — ${param.description}`) : ""}`,
+            );
+          }
         }
-        const preview = formatValuePreview(node.value, 600);
-        const lines = preview
-          ? preview.split("\n")
-          : [color("dim", "(no output value)")];
-        lines.push("", color("dim", "⏎ post full output"));
-        return [...steering, ...(steering.length > 0 ? [""] : []), ...lines];
+        lines.push("", ...renderFlowTree(wf.flow, color).split("\n"));
+        return lines;
       }
-      const run = item.run;
-      const lines = (renderRunTree(run, color) || "(no nodes yet)").split("\n");
-      if (run.error) lines.push(color("error", `✗ ${run.error}`));
-      const value =
-        run.status !== "running" ? formatValuePreview(run.value, 300) : "";
-      if (value) lines.push("", ...value.split("\n"));
-      return lines;
+      const recent = groupRuns(item.kind).reverse().slice(0, 8);
+      return recent.length > 0
+        ? recent.map((run) => formatRunOverviewLine(run))
+        : [color("dim", "(no runs yet)")];
     },
     onAction: (key, item) => {
-      if (item.kind === "node") {
-        if (key === "enter") {
-          sendInfo(pi, formatNodeResultFull(item.run, item.node));
-          return "close";
+      if (item.kind === "node")
+        return nodeAction(key, item.run, item.node, pi, deps, ctx);
+      if (item.kind === "run") {
+        if (key === "a") {
+          drillRunId = item.run.header.id;
+          const first = workNodes(item.run)[0];
+          return first ? { selectKey: nodeKey(item.run, first) } : undefined;
         }
-        if (
-          key === "s" &&
-          deps.manager
-            .steerableInstances(item.run.header.id)
-            .includes(item.node.instance)
-        ) {
-          return {
-            compose: {
-              label: "Steer",
-              submit: async (message) => {
-                const result = await deps.manager.steer(
-                  item.run.header.id,
-                  item.node.instance,
-                  message,
-                  "user",
-                );
-                ctx.ui.notify(
-                  result.status === "queued"
-                    ? "Steering queued — delivery follows the current tool-call batch."
-                    : result.status === "rejected"
-                      ? result.error
-                      : "Agent is no longer steerable.",
-                  result.status === "queued" ? "info" : "warning",
-                );
-              },
-            },
-          };
-        }
-        return undefined;
+        return runAction(key, item.run, pi, deps, ctx);
       }
-      const run = item.run;
+      // Tier 1: workflows and run groups.
       if (key === "enter") {
-        sendInfo(pi, formatRunDetails(run, true));
-        return "close";
-      }
-      if (key === "a") {
-        drillRunId = run.header.id;
-        const first = workNodes(run)[0];
-        return first ? { selectKey: nodeKey(run, first) } : undefined;
-      }
-      if (key === "c") {
-        const stopped = deps.manager.stop(run.header.id);
-        ctx.ui.notify(
-          stopped
-            ? `Stopping run ${shortId(run.header.id)}…`
-            : "Run is not live.",
-          stopped ? "info" : "warning",
-        );
-      }
-      if (key === "h") {
-        const hidden = deps.widget.toggleHidden(run.header.id);
-        ctx.ui.notify(
-          `Run ${shortId(run.header.id)} ${hidden ? "hidden from" : "shown in"} the live summary.`,
-          "info",
-        );
-      }
-      if (key === "r") {
-        deps.notifications.setContext(ctx);
-        try {
-          const started = startTriggeredRun(deps, {
-            flow: run.header.flow,
-            cwd: run.header.cwd ?? ctx.cwd,
-            scope: run.header.scope,
-            label: run.header.label,
-            budgets: run.header.budgets,
-            source: run.header.source,
-            ctx,
-            background: true,
-          });
-          ctx.ui.notify(`Started run ${shortId(started.runId)}.`, "info");
-        } catch (error) {
-          ctx.ui.notify(
-            error instanceof Error ? error.message : String(error),
-            "error",
-          );
-        }
-      }
-    },
-    onCancel: () => {
-      if (!drillRunId) return "close";
-      const id = drillRunId;
-      drillRunId = undefined;
-      return { selectKey: `run:${id}` };
-    },
-    live: () =>
-      [...deps.manager.state.runs.values()].some(
-        (run) => run.status === "running",
-      ),
-  };
-}
-
-function buildWorkflowsSpec(
-  pi: ExtensionAPI,
-  deps: CommandDeps,
-  ctx: ExtensionCommandContext,
-): OverlaySpec<WorkflowDef> {
-  return {
-    title: "Workflows",
-    emptyText:
-      "No workflows found. Create .pi/workflows/<name>.yaml or ~/.pi/agent/workflows/<name>.yaml.",
-    footer: "↑↓ move · ⏎ compose · r run · n new · esc close",
-    items: () => discoverWorkflows(ctx.cwd, scopeFor(ctx)).workflows,
-    keyOf: (wf) => `${wf.source}:${wf.name}`,
-    row: (wf, color) => {
-      const triggers =
-        wf.on && wf.on.length > 0
-          ? color("dim", `  on: ${wf.on.join(", ")}`)
-          : "";
-      return `${color("muted", KIND_ICONS.workflow)} ${`/${wf.name}`.padEnd(16)}  ${color("dim", wf.source.padEnd(7))}  ${wf.description}${triggers}`;
-    },
-    headerLine: (wf, color) => {
-      return [`/${wf.name}`, wf.source].join(color("dim", " · "));
-    },
-    detail: (wf, color) => {
-      const meta = (key: string, value: string) =>
-        `${color("dim", `${key}:`)} ${value}`;
-      const fallback = (text: string) => color("dim", `(${text})`);
-      const lines = [
-        color("dim", wf.description),
-        "",
-        meta("file", wf.filePath),
-      ];
-      if (wf.trigger) lines.push(meta("trigger", wf.trigger));
-      lines.push(
-        meta(
-          "on",
-          wf.on && wf.on.length > 0
-            ? wf.on.join(", ") +
-                (wf.debounce !== undefined
-                  ? ` (debounce ${wf.debounce}ms)`
-                  : "")
-            : fallback("manual only"),
-        ),
-      );
-      if (wf.params.length === 0) {
-        lines.push(meta("params", fallback("none")));
-      } else {
-        lines.push(meta("params", ""));
-        for (const param of wf.params) {
-          const flags = [
-            param.required ? "required" : undefined,
-            param.default !== undefined
-              ? `default: ${param.default}`
-              : undefined,
-          ]
-            .filter(Boolean)
-            .join(", ");
-          lines.push(
-            `  ${param.name}${flags ? color("dim", ` (${flags})`) : ""}${param.description ? color("dim", ` — ${param.description}`) : ""}`,
-          );
-        }
-      }
-      lines.push("", ...renderFlowTree(wf.flow, color).split("\n"));
-      return lines;
-    },
-    onAction: (key, wf) => {
-      if (key === "enter") {
-        ctx.ui.setEditorText(`/${wf.name} `);
-        return "close";
-      }
-      if (key === "r") {
-        const missing = wf.params.filter(
-          (param) => param.required && param.default === undefined,
-        );
-        if (missing.length > 0) {
-          ctx.ui.setEditorText(`/${wf.name} `);
-          ctx.ui.notify(
-            `/${wf.name} needs: ${missing.map((param) => param.name).join(", ")}`,
-            "warning",
-          );
-          return "close";
-        }
-        void runWorkflowCommand(pi, wf.name, "", ctx, deps);
-        return "close";
+        const group = groupOf(item);
+        const newest = groupRuns(group).at(-1);
+        drillGroup = {
+          group,
+          key:
+            item.kind === "workflow"
+              ? `wf:${item.wf.source}:${item.wf.name}`
+              : item.kind,
+        };
+        return newest ? { selectKey: `run:${newest.header.id}` } : undefined;
       }
       if (key === "n") {
         // Defer past the overlay teardown so the input dialogs get focus.
         setTimeout(() => void newDefinitionWizard(pi, ctx), 0);
         return "close";
       }
+      if (item.kind !== "workflow") return undefined;
+      if (key === "c") {
+        ctx.ui.setEditorText(`/${item.wf.name} `);
+        return "close";
+      }
+      if (key === "r") {
+        const missing = item.wf.params.filter(
+          (param) => param.required && param.default === undefined,
+        );
+        if (missing.length > 0) {
+          ctx.ui.setEditorText(`/${item.wf.name} `);
+          ctx.ui.notify(
+            `/${item.wf.name} needs: ${missing.map((param) => param.name).join(", ")}`,
+            "warning",
+          );
+          return "close";
+        }
+        void runWorkflowCommand(pi, item.wf.name, "", ctx, deps);
+        return "close";
+      }
+      return undefined;
     },
+    onCancel: () => {
+      if (drillRunId) {
+        const id = drillRunId;
+        drillRunId = undefined;
+        return { selectKey: `run:${id}` };
+      }
+      if (drillGroup) {
+        const key = drillGroup.key;
+        drillGroup = undefined;
+        return { selectKey: key };
+      }
+      return "close";
+    },
+    live: () =>
+      [...deps.manager.state.runs.values()].some(
+        (run) => run.status === "running",
+      ),
   };
 }
 
@@ -957,7 +1088,7 @@ export function formatRunNodesList(run: RunView): string {
     if (preview) rows.push(`    ${preview}`);
   }
   lines.push(fenced(rows.join("\n")));
-  lines.push("", `Full output: \`/run ${id} result <name>\``);
+  lines.push("", `Full output: \`/workflow ${id} result <name>\``);
   return lines.join("\n");
 }
 
@@ -1007,7 +1138,7 @@ export function formatNodeResultFull(run: RunView, node: NodeView): string {
   return lines.join("\n");
 }
 
-/** Argument completion for `/run`: id, then verb, then node name after `result`. */
+/** Run-argument completion for `/workflow`: id, then verb, then node name after `result`. */
 export function completeRunArgs(
   prefix: string,
   runs: RunView[],
@@ -1065,7 +1196,7 @@ export function formatRunDetails(run: RunView, fullValue = false): string {
   if (workNodes(run).length > 0)
     lines.push(
       "",
-      `Per-agent output: \`/run ${shortId(run.header.id)} agents\``,
+      `Per-agent output: \`/workflow ${shortId(run.header.id)} agents\``,
     );
   if (fullValue) {
     const text = valueText(run.value);
@@ -1078,7 +1209,7 @@ export function formatRunDetails(run: RunView, fullValue = false): string {
         "",
         "### Result (preview)",
         "",
-        `Full result: \`/run ${shortId(run.header.id)} result\``,
+        `Full result: \`/workflow ${shortId(run.header.id)} result\``,
         "",
         renderResultValue(run.value, value),
       );
@@ -1229,7 +1360,7 @@ async function runWorkflowCommand(
     });
     sendInfo(
       pi,
-      `Started run \`${shortId(started.runId)}\` (${wf.name}). Inspect with \`/run ${shortId(started.runId)}\`.`,
+      `Started run \`${shortId(started.runId)}\` (${wf.name}). Inspect with \`/workflow ${shortId(started.runId)}\`.`,
     );
   } catch (error) {
     sendInfo(pi, `⚠ ${error instanceof Error ? error.message : String(error)}`);

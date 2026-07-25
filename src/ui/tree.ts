@@ -1,7 +1,7 @@
 /**
  * Icon-based flow trees: the human-readable rendering of the algebra. The
  * JSON/YAML form stays canonical for authoring; this is how flows are shown —
- * in the tool call display, /workflow details, and /run inspection (where
+ * in the tool call display, /workflow details, and run inspection (where
  * kind icons are replaced by live status icons).
  *
  *   ✦ agent   ≡ sequence (transparent)   ⑃ parallel   ⑂ reduce   ⇶ map   ↺ loop
@@ -239,7 +239,7 @@ function build(
   }
 }
 
-/** Per-path status aggregation for the /run overlay and the live widget. */
+/** Per-path status aggregation for the run tiers of /workflows and the live widget. */
 export interface PathStatus {
   icon: string;
   status: "running" | "completed" | "failed" | "cancelled";

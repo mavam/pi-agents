@@ -1,9 +1,9 @@
 /**
- * Interactive split-pane overlay for /runs and /workflows: a keyboard-
+ * Interactive split-pane overlay for /workflows and /agents: a keyboard-
  * navigable table on top, the selected item's flow tree in a detail pane
- * below. One generic component; the two commands supply an OverlaySpec.
+ * below. One generic component; the commands supply an OverlaySpec.
  *
- *   ╭─ Runs (2/4) ───────────────────────────────────────╮
+ *   ╭─ Runs · /triage (2/4) ─────────────────────────────╮
  *   │   ● 1a2b3c4d  completed  review    3t ↑12k  $0.08  │
  *   │ ▸ ● c9e5799a  completed  triage    5t ↑33k  $0.21  │
  *   ├─ c9e5799a · triage (command) · 1m32s · 33k tok ────┤
@@ -275,8 +275,10 @@ export class SplitPaneOverlay<T> implements Component {
     this.syncTimer();
     const index = this.currentIndex(items);
     this.select(items, index);
-    // Self-cap: the TUI clips overlays from the top, which would eat the
-    // footer — so never render more lines than fit the terminal.
+    // Self-cap: this is the overlay's only height limit (openOverlay sets no
+    // maxHeight), so it must fit the terminal — an overlay taller than the
+    // screen is clipped from the top, eating the title. The slack covers the
+    // fixed top row (2) plus two rows of breathing room at the bottom.
     const height = Math.max(8, this.tui.terminal.rows - 4);
     const item = items[index];
     if (item !== undefined) {
@@ -391,7 +393,11 @@ export async function openOverlay<T>(
       overlay: true,
       // A fixed top row (not a centered anchor): the box top and the table
       // stay put while the detail pane grows downward with the selection.
-      overlayOptions: { width: "85%", maxHeight: "85%", row: 2 },
+      // No maxHeight: the TUI would slice the rendered lines from the bottom,
+      // eating the footer and the detail tail. The component budgets its own
+      // height from terminal.rows, so the box is elastic — it grows with the
+      // content and everything it renders is shown.
+      overlayOptions: { width: "85%", row: 2 },
     },
   );
 }

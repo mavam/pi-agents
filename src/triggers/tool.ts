@@ -47,7 +47,7 @@ const USE_GATE = `USE ONLY ON EXPLICIT REQUEST — this tool is opt-in, and it o
 
 Mentioning "workflow" or "flow" is not a request; neither is asking about a saved workflow, reading one, editing one, or discussing this algebra — in a conversation about workflows those words appear constantly. Nothing else is a trigger either: not a large multi-step task, a long list of independent items, a multi-file refactor, a review, an audit, a research question, or a task you judge parallelizable. Do that work yourself. If a workflow seems better but was not requested, do the work directly and say so in one sentence — do not call the tool to make the offer concrete.
 
-For a run that already exists, never call this tool: steer a live agent with \`steer\`, and point the user at /run to inspect or stop one.`;
+For a run that already exists, never call this tool: steer a live agent with \`steer\`, and point the user at /workflow <run-id> to inspect or stop one.`;
 
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
 - {"kind":"agent","task":"...","name":"...","output":"text"|"json","model":"...","thinking":"..."} — one delegated agent (leaf; a bare agent node is a valid flow). Omit "name" for an anonymous ad-hoc agent; set it only to use a profile from <agents>.
@@ -153,7 +153,7 @@ export function createSteerTool(
     name: "steer",
     label: "Steer",
     description:
-      "Queue a course correction for one agent in a live background workflow run. The message is delivered after the agent's current assistant turn finishes its tool calls. If several agents are running, pass an exact instance returned by the error message or /run inspection.",
+      "Queue a course correction for one agent in a live background workflow run. The message is delivered after the agent's current assistant turn finishes its tool calls. If several agents are running, pass an exact instance returned by the error message or /workflow <run-id> inspection.",
     promptSnippet:
       "steer: correct the course of one agent in a live background workflow run",
     promptGuidelines: [
@@ -322,13 +322,13 @@ export function formatResultPreview(
   const { runId, status, error } = result.details;
   const id = shortId(runId);
   if (status === "running") {
-    return `\n${color("dim", `running in background · /run ${id}`)}`;
+    return `\n${color("dim", `running in background · /workflow ${id}`)}`;
   }
   if (status === "completed") {
-    const head = `\n${color("success", "●")} completed ${color("dim", `· /run ${id} result`)}`;
+    const head = `\n${color("success", "●")} completed ${color("dim", `· /workflow ${id} result`)}`;
     return expanded ? `${head}\n${result.text}` : head;
   }
-  const head = `\n${color("error", "✗")} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""} ${color("dim", `· /run ${id}`)}`;
+  const head = `\n${color("error", "✗")} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""} ${color("dim", `· /workflow ${id}`)}`;
   return expanded ? `${head}\n${result.text}` : head;
 }
 
@@ -350,10 +350,10 @@ export function formatRunResult(
         ? outcome.value
         : (JSON.stringify(outcome.value, null, 2) ?? "");
     // Bound what flows back into the model's context; the full value stays
-    // retrievable via /run <id> result.
+    // retrievable via /workflow <run-id> result.
     const value =
       full.length > MAX_TOOL_RESULT_CHARS
-        ? `${full.slice(0, MAX_TOOL_RESULT_CHARS)}\n… [truncated ${full.length - MAX_TOOL_RESULT_CHARS} characters; full result: /run ${shortId(runId)} result]`
+        ? `${full.slice(0, MAX_TOOL_RESULT_CHARS)}\n… [truncated ${full.length - MAX_TOOL_RESULT_CHARS} characters; full result: /workflow ${shortId(runId)} result]`
         : full;
     lines.push("<value>", value, "</value>");
   } else {
@@ -383,7 +383,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
     promptGuidelines: [
       'Do not call `workflow` unless the user affirmatively asked to run one — "run the X workflow", "delegate this", "spawn agents", "do these in parallel", or a saved workflow they asked for by name or by its <trigger> situation. Merely mentioning "workflow"/"flow", or asking about a saved workflow, is not a request. Otherwise do the task yourself.',
       "Size, step count, parallelizability, and review/refactor/audit/research shape are not triggers. When a workflow looks like a good fit but was not requested, do the work directly and offer it in one sentence instead of calling the tool.",
-      "`workflow` only starts new runs. For a run that already exists, use `steer` for a live agent, or point the user at /run to inspect or stop it.",
+      "`workflow` only starts new runs. For a run that already exists, use `steer` for a live agent, or point the user at /workflow <run-id> to inspect or stop it.",
       "Once a workflow is requested: prefer a saved workflow via workflow({name, params}) when one in <workflows> matches; otherwise compose an inline flow — a bare agent leaf for one isolated task, sequence/parallel/map/loop for multi-agent work.",
       "Route deterministically with `switch` instead of asking an agent to decide: predicates over a JSON binding pick exactly one arm; use a `value` arm to yield data without spawning an agent.",
       "Omit the agent name for one-off delegation; it is only needed to select a reusable profile from <agents>. Never invent agent names or create agent-definition files merely to execute an ad-hoc flow.",
@@ -507,7 +507,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
           content: [
             {
               type: "text",
-              text: `Started workflow run ${id}${label ? ` (${label})` : ""} in the background. End your turn now — do not wait for it. When the run finishes you will be re-invoked with its result to continue; the user can inspect it with /run ${id}.`,
+              text: `Started workflow run ${id}${label ? ` (${label})` : ""} in the background. End your turn now — do not wait for it. When the run finishes you will be re-invoked with its result to continue; the user can inspect it with /workflow ${id}.`,
             },
           ],
           details: { runId, status: "running", label },

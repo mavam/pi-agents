@@ -3,6 +3,7 @@ import { type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunView } from "../../src/run/state.js";
 import {
   type OverlaySpec,
+  openOverlay,
   renderOverlay,
   SplitPaneOverlay,
 } from "../../src/ui/overlay.js";
@@ -136,6 +137,51 @@ describe("renderOverlay", () => {
     ).toBe(true);
     expect(lines.at(-1)).toContain("enter send · esc cancel");
     expect(lines.length).toBeLessThanOrEqual(14);
+  });
+
+  test("height is elastic: grows with the detail up to the terminal budget", () => {
+    const tui = {
+      terminal: { rows: 50 },
+      requestRender: () => {},
+    } as unknown as TUI;
+    const small = new SplitPaneOverlay(
+      tui,
+      (_color, text) => text,
+      spec(["a"], () => ["one", "two"]),
+      () => {},
+    );
+    expect(small.render(60)).toHaveLength(6);
+    small.dispose();
+
+    const big = new SplitPaneOverlay(
+      tui,
+      (_color, text) => text,
+      spec(["a"], () => Array.from({ length: 100 }, (_, i) => `line ${i}`)),
+      () => {},
+    );
+    const lines = big.render(60);
+    // Fills the whole budget (rows - 4) — no line pi-tui would slice off.
+    expect(lines).toHaveLength(46);
+    expect(lines.at(-1)).toContain("hints");
+    expect(lines.some((line) => line.includes("more lines"))).toBe(true);
+    big.dispose();
+  });
+
+  test("openOverlay sets no maxHeight — the component owns its height", async () => {
+    let captured: { overlayOptions?: Record<string, unknown> } | undefined;
+    const ctx = {
+      ui: {
+        custom: async (
+          _factory: unknown,
+          options: { overlayOptions?: Record<string, unknown> },
+        ) => {
+          captured = options;
+        },
+      },
+    };
+    await openOverlay(ctx as never, spec(["a"]));
+    expect(captured?.overlayOptions?.maxHeight).toBeUndefined();
+    expect(captured?.overlayOptions?.row).toBe(2);
   });
 
   test("composer captures text and submits without closing the overlay", async () => {

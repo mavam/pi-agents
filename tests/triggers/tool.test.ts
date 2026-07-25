@@ -941,6 +941,55 @@ describe("workflow tool description", () => {
     );
   });
 
+  test("the budget schema advertises ranges, defaults, and units", () => {
+    const tool = createWorkflowTool(makeDeps(inertEngine));
+    const schema = tool.parameters as unknown as {
+      properties: {
+        budgets: {
+          properties: Record<
+            string,
+            {
+              type: string;
+              minimum?: number;
+              exclusiveMinimum?: number;
+              description?: string;
+            }
+          >;
+        };
+      };
+    };
+    const budgets = schema.properties.budgets.properties;
+    expect(budgets.maxAgents).toMatchObject({ type: "integer", minimum: 0 });
+    expect(budgets.maxAgents?.description).toContain(
+      "Zero prohibits agent execution",
+    );
+    expect(budgets.maxAgents?.description).toContain("default 50");
+
+    for (const [name, defaultValue] of [
+      ["maxDepth", 5],
+      ["maxParallelism", 8],
+      ["maxIterations", 10],
+      ["maxTurns", 100],
+    ] as const) {
+      expect(budgets[name]).toMatchObject({ type: "integer", minimum: 1 });
+      expect(budgets[name]?.description).toContain(`default ${defaultValue}`);
+    }
+    expect(budgets.maxTokens).toMatchObject({
+      type: "integer",
+      minimum: 1,
+    });
+    for (const name of [
+      "maxAgentDuration",
+      "maxDuration",
+      "maxCost",
+    ] as const) {
+      expect(budgets[name]).toMatchObject({
+        type: "number",
+        exclusiveMinimum: 0,
+      });
+    }
+  });
+
   test("the description covers every node kind and the binding rules", () => {
     const tool = createWorkflowTool(makeDeps(inertEngine));
     for (const kind of [

@@ -89,19 +89,73 @@ const WorkflowToolParams = Type.Object({
   budgets: Type.Optional(
     Type.Object(
       {
-        maxDepth: Type.Optional(Type.Number()),
-        maxParallelism: Type.Optional(Type.Number()),
-        maxIterations: Type.Optional(Type.Number()),
-        maxAgents: Type.Optional(Type.Number()),
-        maxTurns: Type.Optional(Type.Number()),
-        maxAgentDuration: Type.Optional(Type.Number()),
-        maxDuration: Type.Optional(Type.Number()),
-        maxTokens: Type.Optional(Type.Number()),
-        maxCost: Type.Optional(Type.Number()),
+        maxDepth: Type.Optional(
+          Type.Integer({
+            minimum: 1,
+            description:
+              "Maximum cross-process delegation depth. Integer >= 1; default 5.",
+          }),
+        ),
+        maxParallelism: Type.Optional(
+          Type.Integer({
+            minimum: 1,
+            description:
+              "Maximum simultaneously running agents. Integer >= 1; default 8.",
+          }),
+        ),
+        maxIterations: Type.Optional(
+          Type.Integer({
+            minimum: 1,
+            description:
+              "Maximum iterations allowed for each loop. Integer >= 1; default 10.",
+          }),
+        ),
+        maxAgents: Type.Optional(
+          Type.Integer({
+            minimum: 0,
+            description:
+              "Total agent and reducer executions. Integer >= 0; default 50. Zero prohibits agent execution. Value and structural nodes do not consume this budget.",
+          }),
+        ),
+        maxTurns: Type.Optional(
+          Type.Integer({
+            minimum: 1,
+            description:
+              "Maximum assistant turns per agent. Integer >= 1; default 100.",
+          }),
+        ),
+        maxAgentDuration: Type.Optional(
+          Type.Number({
+            exclusiveMinimum: 0,
+            description:
+              "Maximum wall-clock seconds per agent. Must be > 0; unbounded when omitted.",
+          }),
+        ),
+        maxDuration: Type.Optional(
+          Type.Number({
+            exclusiveMinimum: 0,
+            description:
+              "Maximum wall-clock seconds for the run. Must be > 0; unbounded when omitted.",
+          }),
+        ),
+        maxTokens: Type.Optional(
+          Type.Integer({
+            minimum: 1,
+            description:
+              "Maximum input and output tokens for the run, excluding cache traffic. Integer >= 1; unbounded when omitted.",
+          }),
+        ),
+        maxCost: Type.Optional(
+          Type.Number({
+            exclusiveMinimum: 0,
+            description:
+              "Maximum run cost in USD. Must be > 0; unbounded when omitted.",
+          }),
+        ),
       },
       {
         description:
-          "Execution budgets: maxDepth, maxParallelism, maxIterations, maxAgents; maxTurns (assistant turns per agent, default 100), maxAgentDuration/maxDuration (seconds per agent/run), maxTokens (input+output per run), maxCost (USD per run). Breaches fail the agent or run with the partial result preserved.",
+          "Optional execution limits. Omitted counting limits use their defaults; omitted duration, token, and cost limits are unbounded. Breaches fail the agent or run with the partial result preserved.",
       },
     ),
   ),

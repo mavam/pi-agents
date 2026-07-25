@@ -182,15 +182,20 @@ describe("preflight diagnostics", () => {
 });
 
 describe("budgets", () => {
-  test("rejects non-positive or fractional budget values", () => {
+  test("rejects invalid count budget values", () => {
     const { engine } = fakeEngine();
     const manager = new RunManager({ engine });
     const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
-    for (const budgets of [
-      { maxAgents: -1 },
-      { maxParallelism: 0 },
-      { maxIterations: 1.5 },
-    ]) {
+    expect(() =>
+      manager.start({
+        flow,
+        cwd: projectDir,
+        scope: "project",
+        source: { kind: "tool" },
+        budgets: { maxAgents: -1 },
+      }),
+    ).toThrow("must be an integer >= 0");
+    for (const budgets of [{ maxParallelism: 0 }, { maxIterations: 1.5 }]) {
       expect(() =>
         manager.start({
           flow,
@@ -201,6 +206,50 @@ describe("budgets", () => {
         }),
       ).toThrow("must be an integer >= 1");
     }
+  });
+
+  test("maxAgents zero permits value flows without spawning", async () => {
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        { kind: "value", value: "start" },
+        { kind: "value", value: "done" },
+      ],
+    });
+    const { done } = manager.start({
+      flow,
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+      budgets: { maxAgents: 0 },
+    });
+    const outcome = await done;
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toBe("done");
+    expect(outcome.agents).toBe(0);
+    expect(specs).toHaveLength(0);
+  });
+
+  test("maxAgents zero rejects an agent before spawning", async () => {
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
+    const { done } = manager.start({
+      flow,
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+      budgets: { maxAgents: 0 },
+    });
+    const outcome = await done;
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain(
+      "agent execution prohibited (maxAgents: 0)",
+    );
+    expect(outcome.agents).toBe(0);
+    expect(specs).toHaveLength(0);
   });
 
   test("maxParallelism caps agents globally across nested pools", async () => {

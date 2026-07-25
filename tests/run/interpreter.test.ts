@@ -455,14 +455,28 @@ describe("workflow refs", () => {
 });
 
 describe("budgets and aborts", () => {
-  test("maxAgents budget fails the run", async () => {
-    const { outcome } = await run(
+  test("maxAgents budget fails without counting the denied execution", async () => {
+    const { outcome, calls } = await run(
       seq(agent("a", "1"), agent("a", "2"), agent("a", "3")),
       () => "ok",
       { budgets: { maxAgents: 2 } },
     );
     expect(outcome.status).toBe("failed");
     expect(outcome.error).toContain("agent budget exceeded (maxAgents: 2)");
+    expect(outcome.agents).toBe(2);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("maxAgents zero prohibits execution before calling the runner", async () => {
+    const { outcome, calls } = await run(agent("a", "work"), () => "unused", {
+      budgets: { maxAgents: 0 },
+    });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain(
+      "agent execution prohibited (maxAgents: 0)",
+    );
+    expect(outcome.agents).toBe(0);
+    expect(calls).toHaveLength(0);
   });
 
   test("maxDepth rejects runs spawned too deep", async () => {
@@ -721,6 +735,61 @@ describe("switch", () => {
 });
 
 describe("value", () => {
+  test("node-heavy value flows run with maxAgents zero", async () => {
+    const { outcome, calls } = await run(
+      {
+        kind: "parallel",
+        branches: {
+          left: seq(
+            { kind: "value", value: "l1" },
+            { kind: "value", value: "l2" },
+          ),
+          right: seq(
+            { kind: "value", value: "r1" },
+            { kind: "value", value: "r2" },
+          ),
+        },
+      },
+      () => "unused",
+      { budgets: { maxAgents: 0 } },
+    );
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toEqual({ left: "l2", right: "r2" });
+    expect(outcome.agents).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("dynamically unreachable agents are legal with maxAgents zero", async () => {
+    const { outcome, calls } = await run(
+      seq(
+        { kind: "value", value: { run: false }, as: "gate" },
+        {
+          kind: "switch",
+          on: "{gate}",
+          cases: [
+            {
+              when: { eq: ["run", true] },
+              then: agent("worker", "work"),
+            },
+          ],
+          else: { kind: "value", value: "skipped" },
+        },
+        { kind: "value", value: [], as: "worklist" },
+        {
+          kind: "map",
+          over: "{worklist}",
+          body: agent("worker", "work on {item}"),
+        },
+      ),
+      () => "unused",
+      { budgets: { maxAgents: 0 } },
+    );
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toEqual([]);
+    expect(outcome.agents).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
   test("a literal value passes through and spawns no agents", async () => {
     const { outcome, calls, events } = await run(
       { kind: "value", value: { a: 1, b: [true, null] } },

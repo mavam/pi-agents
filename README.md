@@ -415,7 +415,7 @@ Every run enforces limits (tool parameter `budgets`, all optional):
 
 | Budget             | Default | Meaning                                                     |
 | ------------------ | ------- | ----------------------------------------------------------- |
-| `maxAgents`        | 50      | Total agent spawns (reducers included).                      |
+| `maxAgents`        | 50      | Total agent and reducer executions; `0` prohibits them.      |
 | `maxParallelism`   | 8       | Simultaneously running agents, global across nested pools.   |
 | `maxIterations`    | 10      | Cap applied to every loop.                                   |
 | `maxDepth`         | 5       | Cross-process delegation depth.                              |
@@ -425,12 +425,32 @@ Every run enforces limits (tool parameter `budgets`, all optional):
 | `maxTokens`        | —       | Input+output tokens (cache traffic excluded) a run may use.  |
 | `maxCost`          | —       | USD a run may spend.                                         |
 
-Count budgets are positive integers; durations (seconds) and `maxCost` (USD)
-accept fractional values. Budgets without a default are unbounded unless set.
-The effective limits are inherited by delegated pi processes (via
-`PI_AGENTS_BUDGETS`), so a child that runs pi-agents itself starts from the
-parent's limits rather than the defaults; run-scoped limits apply per process,
-not aggregated across the delegation tree.
+`maxAgents` is a non-negative integer. The other count budgets are positive
+integers; in particular, `maxDepth` starts at `1`. Durations (seconds) and
+`maxCost` (USD) accept fractional values. Budgets without a default are
+unbounded unless set. The effective limits are inherited by delegated pi
+processes (via `PI_AGENTS_BUDGETS`), so a child that runs pi-agents itself starts
+from the parent's limits rather than the defaults; run-scoped limits apply per
+process, not aggregated across the delegation tree.
+
+Set `maxAgents: 0` when a workflow must remain data-only:
+
+```json
+{
+  "flow": {
+    "kind": "sequence",
+    "steps": [
+      { "kind": "value", "value": "start" },
+      { "kind": "value", "value": "done" }
+    ]
+  },
+  "budgets": { "maxAgents": 0 }
+}
+```
+
+Only executed `agent` nodes and reducers consume this budget. Structural and
+`value` nodes do not, and agent nodes in unchosen `switch` arms or empty `map`
+bodies remain unexecuted.
 
 Exceeding a per-agent budget (`maxTurns`, `maxAgentDuration`) fails that agent
 with a clear error and preserves its last streamed output as a partial result

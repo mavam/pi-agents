@@ -180,7 +180,7 @@ describe("NotificationManager", () => {
     expect(sent[1]?.message.details?.body).toBeUndefined();
   });
 
-  test("renders string result previews as Markdown", () => {
+  test("renders complete string results as Markdown", () => {
     const { sent, pi, manager, makeCtx } = makeFakes();
     const notifications = new NotificationManager(pi, manager);
     notifications.setContext(makeCtx(true));
@@ -193,7 +193,7 @@ describe("NotificationManager", () => {
     expect(content).not.toContain(`\`\`\`\n${markdown}`);
   });
 
-  test("keeps structured result previews as fenced JSON", () => {
+  test("keeps complete structured results as fenced JSON", () => {
     const { sent, pi, manager, makeCtx } = makeFakes();
     const notifications = new NotificationManager(pi, manager);
     notifications.setContext(makeCtx(true));
@@ -208,17 +208,19 @@ describe("NotificationManager", () => {
     expect(content).toContain("\n}\n```");
   });
 
-  test("puts host controls before a split Markdown preview fence", () => {
+  test("delivers complete long results after the host controls", () => {
     const { sent, pi, manager, makeCtx } = makeFakes();
     const notifications = new NotificationManager(pi, manager);
     notifications.setContext(makeCtx(true));
     notifications.track("run-1", "session.jsonl", true);
-    const markdown = `\`\`\`ts\n${"x".repeat(700)}\n\`\`\``;
+    const markdown = `\`\`\`ts\n${"x".repeat(700)}\ncomplete-tail\n\`\`\``;
     notifications.handleRunEvent(completed("run-1", markdown));
     const content = sent[0]?.message.content ?? "";
     const resultStart = content.indexOf("```ts");
     expect(content.indexOf("Inspect:")).toBeLessThan(resultStart);
     expect(content.indexOf("Continue your task")).toBeLessThan(resultStart);
+    expect(content.endsWith(markdown)).toBe(true);
+    expect(sent[0]?.message.details?.body).toBe(`${markdown.slice(0, 600)}…`);
   });
 
   test("completion while busy queues; flush when idle triggers a turn", () => {

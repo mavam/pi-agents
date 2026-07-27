@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
+import { valueText } from "../model/value.js";
 import type { RunSource } from "../run/events.js";
 import type { NodeView, RunView } from "../run/state.js";
 import { STATUS_STYLES } from "./status.js";
@@ -168,11 +169,7 @@ export function formatTokens(count: number): string {
 }
 
 export function formatValuePreview(value: unknown, maxChars = 400): string {
-  if (value === undefined) return "";
-  const text =
-    typeof value === "string"
-      ? value
-      : (JSON.stringify(value, null, 2) ?? String(value));
+  const text = valueText(value) ?? "";
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}…`;
 }

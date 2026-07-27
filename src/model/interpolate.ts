@@ -8,11 +8,13 @@
  * for text that would otherwise parse as a reference.
  */
 
+import { MAX_MODEL_RESULT_CHARS, valueText } from "./value.js";
+
 /** Matches reference content: a root identifier plus an optional dot path. */
 const REFERENCE_RE = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
 
 /** Per-reference cap on interpolated text. */
-export const MAX_INTERPOLATION_CHARS = 32_000;
+export const MAX_INTERPOLATION_CHARS = MAX_MODEL_RESULT_CHARS;
 
 export interface TemplateRef {
   /** Root name, e.g. "review" in "{review.issues}". */
@@ -111,10 +113,7 @@ export function resolvePath(value: unknown, path: string[]): Resolution {
 /** Render a JSON value as prompt text, capped per reference. */
 export function stringifyValue(value: unknown): string {
   if (value === undefined || value === null) return "";
-  const text =
-    typeof value === "string"
-      ? value
-      : (JSON.stringify(value, null, 2) ?? String(value));
+  const text = valueText(value) ?? "";
   if (text.length <= MAX_INTERPOLATION_CHARS) return text;
   const overflow = text.length - MAX_INTERPOLATION_CHARS;
   return `${text.slice(0, MAX_INTERPOLATION_CHARS)}\n… [truncated ${overflow} characters]`;

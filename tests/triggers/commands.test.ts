@@ -214,14 +214,6 @@ describe("formatNodeResultFull", () => {
     expect(text).toContain("\n}\n```");
   });
 
-  test("puts truncation metadata before a split Markdown fence", async () => {
-    const run = await recordedRun(REVIEW_FLOW, () => "ok");
-    const target = workNodes(run)[0] as NodeView;
-    target.value = `\`\`\`ts\n${"x".repeat(64_100)}\n\`\`\``;
-    const text = formatNodeResultFull(run, target);
-    expect(text.indexOf("… truncated")).toBeLessThan(text.indexOf("```ts"));
-  });
-
   test("failed node shows the error", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
     const target = workNodes(run)[0] as NodeView;

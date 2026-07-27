@@ -485,6 +485,12 @@ usage only in their final outcome cannot be cut off mid-run.
 `/workflow` resolves a saved workflow name first, then a run id; run ids are
 hex, workflow names are slugs, so the two never collide in practice.
 
+A completed workflow can send up to 200,000 characters to the calling model.
+Larger values include a truncation notice and remain available in full through
+`/workflow <id> result`. Completion cards show a compact preview to keep the
+transcript responsive, and step-to-step interpolation uses the same
+200,000-character ceiling.
+
 ### Interactive browsing
 
 In the TUI, `/workflows` and `/agents` open a split-pane overlay: a table on

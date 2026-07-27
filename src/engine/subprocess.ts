@@ -122,12 +122,22 @@ interface ActivityTailEntry {
  * place while completed entries stay in chronological order. */
 class ActivityTail {
   private readonly entries: ActivityTailEntry[] = [];
+  private readonly entriesByKey = new Map<string, ActivityTailEntry>();
+  /** Length of snapshot(), including the blank lines between entries. */
+  private snapshotLength = 0;
 
   upsert(key: string, text: string): void {
-    const index = this.entries.findIndex((entry) => entry.key === key);
-    const entry = { key, text };
-    if (index >= 0) this.entries[index] = entry;
-    else this.entries.push(entry);
+    const existing = this.entriesByKey.get(key);
+    if (existing) {
+      this.snapshotLength += text.length - existing.text.length;
+      existing.text = text;
+    } else {
+      const entry = { key, text };
+      if (this.entries.length > 0) this.snapshotLength += 2;
+      this.entries.push(entry);
+      this.entriesByKey.set(key, entry);
+      this.snapshotLength += text.length;
+    }
     this.trim();
   }
 
@@ -139,16 +149,21 @@ class ActivityTail {
   private trim(): void {
     while (
       this.entries.length > 1 &&
-      (this.snapshot()?.length ?? 0) > MAX_ACTIVITY_TAIL_CHARS
+      this.snapshotLength > MAX_ACTIVITY_TAIL_CHARS
     ) {
-      this.entries.shift();
+      const removed = this.entries.shift();
+      if (!removed) break;
+      this.entriesByKey.delete(removed.key);
+      this.snapshotLength -= removed.text.length + 2;
     }
     const only = this.entries[0];
     if (only && only.text.length > MAX_ACTIVITY_TAIL_CHARS) {
       const marker = "… earlier activity omitted …\n";
-      only.text = `${marker}${only.text.slice(
+      const truncated = `${marker}${only.text.slice(
         -(MAX_ACTIVITY_TAIL_CHARS - marker.length),
       )}`;
+      this.snapshotLength += truncated.length - only.text.length;
+      only.text = truncated;
     }
   }
 }
@@ -534,10 +549,11 @@ export function createSubprocessSpawnEngine(options?: {
         const startsNewEntry = currentAssistantEntry === undefined;
         if (text === latestText && !startsNewEntry) return;
         latestText = text;
-        // Deltas arrive far faster than anyone can read; cap both tail
-        // snapshots and update fan-out.
+        updateAssistantTail(text);
+        // Deltas arrive far faster than anyone can read; cap intermediate
+        // tail snapshots and update fan-out. The close path flushes the last
+        // delta when no message_end arrives.
         if (Date.now() - lastStreamPushAt >= STREAM_PUSH_INTERVAL_MS) {
-          updateAssistantTail(text);
           pushUpdate();
         }
       };
@@ -754,6 +770,10 @@ export function createSubprocessSpawnEngine(options?: {
             const finalLine = buffered;
             buffered = "";
             parseLine(finalLine);
+          }
+          if (currentAssistantEntry !== undefined) {
+            updateAssistantTail(latestText);
+            pushUpdate();
           }
           settled = true;
           const closedError = new Error(

@@ -729,4 +729,30 @@ describe("overlapping tools and streamed text", () => {
     expect(seen).toEqual(["half an", "the full answer"]);
     expect(outcome.text).toBe("the full answer");
   });
+
+  test("flushes the newest assistant tail when the stream is cut off", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const tails: string[] = [];
+    const reader = (async () => {
+      for await (const update of handle.updates) {
+        if (update.tail) tails.push(update.tail);
+      }
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({ type: "turn_start" }); // starts the throttle window
+    const partial = (text: string) =>
+      proc.emitRecord({
+        type: "message_update",
+        message: { role: "assistant", content: [{ type: "text", text }] },
+        assistantMessageEvent: {},
+      });
+    partial("half an");
+    partial("half an answer"); // throttled, then flushed by close
+    proc.close(2);
+
+    await expect(handle.wait()).rejects.toThrow(SpawnFailure);
+    await reader;
+    expect(tails.at(-1)).toContain("assistant · turn 1\nhalf an answer");
+  });
 });

@@ -238,9 +238,10 @@ describe("buildWorkflowsSpec", () => {
     if (!node) throw new Error("expected live node");
     node.progressTail = [
       "assistant · turn 1",
-      "Inspecting the code.",
+      "✓ reported by the test runner",
       "",
       "✓ read: src/index.ts",
+      "assistant · literal tool output",
     ].join("\n");
 
     const wf = spec.items().find((item) => item.kind === "workflow");
@@ -258,8 +259,15 @@ describe("buildWorkflowsSpec", () => {
     expect(spec.items()).toHaveLength(1);
     expect((spec.title as () => string)()).toContain("Live tail");
     expect(spec.detail(nodeItem, color).join("\n")).toContain(
-      "Inspecting the code.",
+      "✓ reported by the test runner",
     );
+    const colored = spec.detail(nodeItem, (tone, text) => `<${tone}>${text}`);
+    expect(colored).toContain("<muted>assistant · turn 1");
+    expect(colored).toContain("<success>✓ read: src/index.ts");
+    expect(colored).toContain("✓ reported by the test runner");
+    expect(colored).toContain("assistant · literal tool output");
+    expect(colored).not.toContain("<success>✓ reported by the test runner");
+    expect(colored).not.toContain("<muted>assistant · literal tool output");
     expect(spec.detailWindow?.(nodeItem)).toBe("tail");
     expect(spec.footerFor?.(nodeItem)).toContain("t agents");
 

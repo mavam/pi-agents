@@ -473,12 +473,15 @@ function nodeTailDetail(node: NodeView, color: Colorize): string[] {
     );
     return lines;
   }
-  for (const line of tail.split("\n")) {
-    if (line.startsWith("assistant ·")) lines.push(color("muted", line));
-    else if (line.startsWith("✗ ")) lines.push(color("error", line));
-    else if (line.startsWith("✓ ")) lines.push(color("success", line));
-    else if (line.startsWith("› ")) lines.push(color("warning", line));
-    else lines.push(line);
+  for (const [index, entry] of tail.split("\n\n").entries()) {
+    if (index > 0) lines.push("");
+    const [header = "", ...body] = entry.split("\n");
+    if (header.startsWith("assistant ·")) lines.push(color("muted", header));
+    else if (header.startsWith("✗ ")) lines.push(color("error", header));
+    else if (header.startsWith("✓ ")) lines.push(color("success", header));
+    else if (header.startsWith("› ")) lines.push(color("warning", header));
+    else lines.push(header);
+    lines.push(...body);
   }
   return lines;
 }
@@ -642,13 +645,11 @@ export function buildWorkflowsSpec(
       return `Runs · /${drillGroup.group}`;
     },
     emptyText: () =>
-      tailNodeInstance
-        ? "Agent activity is no longer available."
-        : drillRunId
-          ? "No agents started yet."
-          : drillGroup
-            ? "No runs yet."
-            : "No workflows found. Create .pi/workflows/<name>.yaml or ~/.pi/agent/workflows/<name>.yaml.",
+      drillRunId
+        ? "No agents started yet."
+        : drillGroup
+          ? "No runs yet."
+          : "No workflows found. Create .pi/workflows/<name>.yaml or ~/.pi/agent/workflows/<name>.yaml.",
     footer: () =>
       tailNodeInstance
         ? "⏎ post output · t agents · esc back"

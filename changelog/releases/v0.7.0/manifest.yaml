@@ -1,0 +1,9 @@
+created: 2026-07-27
+title: Live workflow visibility and complete results
+intro: "Pi Agents now lets you watch a delegated agent\u2019s live activity and assistant\
+  \ output from the workflows overlay, and steer it without leaving the run view.\
+  \ It also delivers complete workflow results up to 200,000 characters, so longer\
+  \ outputs remain available when a run finishes."
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.6.0

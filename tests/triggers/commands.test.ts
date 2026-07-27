@@ -288,6 +288,14 @@ describe("formatRunDetails", () => {
     const text = formatRunDetails(run);
     expect(text.indexOf("Full result:")).toBeLessThan(text.indexOf("```ts"));
   });
+
+  test("returns the complete long run result when requested", async () => {
+    const markdown = `\`\`\`ts\n${"x".repeat(64_100)}\ncomplete-tail\n\`\`\``;
+    const run = await recordedRun(REVIEW_FLOW, () => markdown);
+    const text = formatRunDetails(run, true);
+    expect(text.endsWith(markdown)).toBe(true);
+    expect(text).not.toContain("… truncated");
+  });
 });
 
 describe("completeRunArgs", () => {

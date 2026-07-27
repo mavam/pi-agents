@@ -1,6 +1,6 @@
 ---
-title: Complete workflow results
-type: bugfix
+title: Expanded workflow result delivery
+type: change
 authors:
   - mavam
   - codex
@@ -9,4 +9,4 @@ prs:
 created: 2026-07-27T16:15:23.461876Z
 ---
 
-Workflow results now reach the calling model and completion message in full. Long reviews and other delegated output no longer stop mid-sentence, so the parent agent can use every finding without requiring manual result retrieval.
+Workflow results now send up to 200,000 characters to the calling model, replacing the previous 600-character background and 16,000-character foreground limits. Step-to-step interpolation uses the same ceiling, and oversized results point to `/workflow <id> result` for complete retrieval. Completion cards retain a compact preview, while explicit run and per-agent result inspection returns the complete persisted value.

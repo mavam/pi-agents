@@ -9,6 +9,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { truncateModelResult, valueText } from "../model/value.js";
 import type { RunEvent } from "../run/events.js";
 import { getSessionFile, isIdle } from "../run/persist.js";
 import type { RunManager } from "../run/runs.js";
@@ -16,6 +17,7 @@ import {
   formatAgentCount,
   formatRunNotificationControls,
   formatUsage,
+  formatValuePreview,
   NOTIFICATION_TYPE,
   type RunNotificationDetails,
   renderResultValue,
@@ -23,7 +25,10 @@ import {
 } from "./render.js";
 import { STATUS_STYLES } from "./status.js";
 
-export type RunNotification = RunNotificationDetails;
+export type RunNotification = RunNotificationDetails & {
+  /** Model-facing body, kept separate from the bounded TUI preview. */
+  modelBody?: string;
+};
 
 interface TrackedRun {
   originSessionFile?: string;
@@ -99,12 +104,8 @@ export class NotificationManager {
       : undefined;
     const usage = formatUsage(event.usage) || undefined;
     if (event.status === "completed") {
-      const result =
-        event.value === undefined
-          ? ""
-          : typeof event.value === "string"
-            ? event.value
-            : (JSON.stringify(event.value, null, 2) ?? String(event.value));
+      const result = valueText(event.value) ?? "";
+      const preview = formatValuePreview(event.value, 600);
       return {
         kind: "run_final",
         version: 2,
@@ -114,7 +115,16 @@ export class NotificationManager {
         usage,
         agents: event.agents,
         bodyKind: "result",
-        body: result ? renderResultValue(event.value, result) : "(no output)",
+        body: preview ? renderResultValue(event.value, preview) : "(no output)",
+        modelBody: result
+          ? renderResultValue(
+              event.value,
+              truncateModelResult(
+                result,
+                `/workflow ${shortId(event.runId)} result`,
+              ),
+            )
+          : undefined,
         at: event.at,
       };
     }
@@ -170,12 +180,13 @@ export class NotificationManager {
   // Delivery is gated on an idle session, so `triggerTurn` always hits the
   // "not streaming → start new turn" branch of the host API.
   private send(notification: RunNotification, wake: boolean): void {
+    const { modelBody: _modelBody, ...details } = notification;
     this.pi.sendMessage(
       {
         customType: NOTIFICATION_TYPE,
         content: this.content(notification, wake),
         display: true,
-        details: notification,
+        details,
       },
       wake ? { triggerTurn: true } : undefined,
     );
@@ -199,7 +210,7 @@ export class NotificationManager {
     ];
     if (wake) lines.push("", "Continue your task using this result.");
     if (notification.bodyKind !== "none" && notification.body !== undefined) {
-      lines.push("", notification.body);
+      lines.push("", notification.modelBody ?? notification.body);
     }
     return lines.join("\n");
   }

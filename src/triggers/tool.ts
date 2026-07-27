@@ -20,6 +20,7 @@ import {
 } from "../catalog/workflows.js";
 import { type Budgets, effectiveScope, type Scope } from "../model/ast.js";
 import { parseFlowNode, validateFlow } from "../model/validate.js";
+import { truncateModelResult, valueText } from "../model/value.js";
 import type { RunStatus } from "../run/events.js";
 import type { RunOutcome } from "../run/interpreter.js";
 import { isProjectTrusted } from "../run/persist.js";
@@ -398,10 +399,10 @@ export function formatRunResult(
     }>`,
   );
   if (outcome.status === "completed") {
-    const value =
-      typeof outcome.value === "string"
-        ? outcome.value
-        : (JSON.stringify(outcome.value, null, 2) ?? "");
+    const value = truncateModelResult(
+      valueText(outcome.value) ?? "",
+      `/workflow ${shortId(runId)} result`,
+    );
     lines.push("<value>", value, "</value>");
   } else {
     lines.push("<error>", outcome.error ?? "unknown error", "</error>");

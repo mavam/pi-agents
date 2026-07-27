@@ -15,6 +15,7 @@ import type {
 } from "../../src/engine/types.js";
 import { emptyUsage } from "../../src/engine/types.js";
 import { validateFlow } from "../../src/model/validate.js";
+import { MAX_MODEL_RESULT_CHARS } from "../../src/model/value.js";
 import { RunManager } from "../../src/run/runs.js";
 import { parseCommandArgs } from "../../src/triggers/commands.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
@@ -22,6 +23,7 @@ import {
   createSteerTool,
   createWorkflowTool,
   FLOW_PARAM_DESCRIPTION,
+  formatRunResult,
   type WorkflowToolParamsType,
   type WorkflowToolRenderState,
 } from "../../src/triggers/tool.js";
@@ -391,6 +393,22 @@ describe("workflow tool", () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain(full);
     expect(text).not.toContain("[truncated");
+  });
+
+  test("bounds oversized structured results entering model context", () => {
+    const text = formatRunResult("run-structured", "review", {
+      status: "completed",
+      value: {
+        branches: {
+          review: `${"x".repeat(MAX_MODEL_RESULT_CHARS + 100)}complete-tail`,
+        },
+      },
+      usage: emptyUsage(),
+      agents: 2,
+    });
+    expect(text).toContain("[truncated");
+    expect(text).toContain("full result: /workflow run-stru result");
+    expect(text).not.toContain("complete-tail");
   });
 
   test("RPC mode stays foreground even though pi exposes a UI bridge", async () => {

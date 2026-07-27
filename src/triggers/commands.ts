@@ -18,6 +18,7 @@ import {
 } from "../catalog/workflows.js";
 import type { Scope, WorkflowDef, WorkflowParamDef } from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
+import { valueText } from "../model/value.js";
 import { isProjectTrusted } from "../run/persist.js";
 import {
   type NodeView,
@@ -981,18 +982,6 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
   return lines.join("\n");
 }
 
-function valueText(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  return typeof value === "string"
-    ? value
-    : (JSON.stringify(value, null, 2) ?? String(value));
-}
-
-/** Render the complete value as Markdown or fenced structured data. */
-function fullValueLines(value: unknown, text: string): string[] {
-  return [renderResultValue(value, text)];
-}
-
 /** The complete run value (bounded only by what persistence retained). */
 function formatRunResultFull(run: RunView): string {
   const lines = [`## Run ${shortId(run.header.id)} — result`, ""];
@@ -1006,7 +995,7 @@ function formatRunResultFull(run: RunView): string {
     lines.push("(no result value)");
     return lines.join("\n");
   }
-  lines.push(...fullValueLines(run.value, text));
+  lines.push(renderResultValue(run.value, text));
   return lines.join("\n");
 }
 
@@ -1113,7 +1102,7 @@ export function formatNodeResultFull(run: RunView, node: NodeView): string {
     if (!node.error) lines.push("", "(no output value)");
     return lines.join("\n");
   }
-  lines.push("", ...fullValueLines(node.value, text));
+  lines.push("", renderResultValue(node.value, text));
   return lines.join("\n");
 }
 
@@ -1180,7 +1169,7 @@ export function formatRunDetails(run: RunView, fullValue = false): string {
   if (fullValue) {
     const text = valueText(run.value);
     if (text)
-      lines.push("", "### Result", "", ...fullValueLines(run.value, text));
+      lines.push("", "### Result", "", renderResultValue(run.value, text));
   } else {
     const value = formatValuePreview(run.value);
     if (value) {

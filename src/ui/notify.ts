@@ -16,7 +16,6 @@ import {
   formatAgentCount,
   formatRunNotificationControls,
   formatUsage,
-  formatValuePreview,
   NOTIFICATION_TYPE,
   type RunNotificationDetails,
   renderResultValue,
@@ -100,7 +99,12 @@ export class NotificationManager {
       : undefined;
     const usage = formatUsage(event.usage) || undefined;
     if (event.status === "completed") {
-      const preview = formatValuePreview(event.value, 600);
+      const result =
+        event.value === undefined
+          ? ""
+          : typeof event.value === "string"
+            ? event.value
+            : (JSON.stringify(event.value, null, 2) ?? String(event.value));
       return {
         kind: "run_final",
         version: 2,
@@ -110,7 +114,7 @@ export class NotificationManager {
         usage,
         agents: event.agents,
         bodyKind: "result",
-        body: preview ? renderResultValue(event.value, preview) : "(no output)",
+        body: result ? renderResultValue(event.value, result) : "(no output)",
         at: event.at,
       };
     }

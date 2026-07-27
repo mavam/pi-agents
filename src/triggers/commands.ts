@@ -981,8 +981,6 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
   return lines.join("\n");
 }
 
-const MAX_FULL_RESULT_CHARS = 64_000;
-
 function valueText(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   return typeof value === "string"
@@ -990,15 +988,8 @@ function valueText(value: unknown): string | undefined {
     : (JSON.stringify(value, null, 2) ?? String(value));
 }
 
-/** Markdown string or fenced structured value, bounded by MAX_FULL_RESULT_CHARS. */
+/** Render the complete value as Markdown or fenced structured data. */
 function fullValueLines(value: unknown, text: string): string[] {
-  if (text.length > MAX_FULL_RESULT_CHARS) {
-    return [
-      `… truncated ${text.length - MAX_FULL_RESULT_CHARS} characters.`,
-      "",
-      renderResultValue(value, text.slice(0, MAX_FULL_RESULT_CHARS)),
-    ];
-  }
   return [renderResultValue(value, text)];
 }
 

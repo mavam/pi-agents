@@ -377,6 +377,22 @@ describe("workflow tool", () => {
     expect(text).toContain("exploded");
   });
 
+  test("returns complete long results to the model", async () => {
+    const full = `${"x".repeat(20_000)}complete-tail`;
+    const { engine } = fakeEngine(() => full);
+    const tool = createWorkflowTool(makeDeps(engine));
+    const result = await tool.execute(
+      "t-full",
+      { flow: { kind: "agent", name: "echo", task: "long" } },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain(full);
+    expect(text).not.toContain("[truncated");
+  });
+
   test("RPC mode stays foreground even though pi exposes a UI bridge", async () => {
     const { engine } = fakeEngine(() => "nested result");
     const tool = createWorkflowTool(makeDeps(engine));

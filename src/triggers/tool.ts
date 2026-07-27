@@ -29,10 +29,6 @@ import { STATUS_STYLES } from "../ui/status.js";
 import { KIND_ICONS, renderFlowTree } from "../ui/tree.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
-/** Cap on the value text embedded in a tool result (context budget only —
- * persistence keeps values uncropped). */
-const MAX_TOOL_RESULT_CHARS = 16_000;
-
 /**
  * Delegation is expensive and surprising when unasked for, so the tool is
  * opt-in and this gate opens its description. It enumerates the admissible
@@ -402,16 +398,10 @@ export function formatRunResult(
     }>`,
   );
   if (outcome.status === "completed") {
-    const full =
+    const value =
       typeof outcome.value === "string"
         ? outcome.value
         : (JSON.stringify(outcome.value, null, 2) ?? "");
-    // Bound what flows back into the model's context; the full value stays
-    // retrievable via /workflow <run-id> result.
-    const value =
-      full.length > MAX_TOOL_RESULT_CHARS
-        ? `${full.slice(0, MAX_TOOL_RESULT_CHARS)}\n… [truncated ${full.length - MAX_TOOL_RESULT_CHARS} characters; full result: /workflow ${shortId(runId)} result]`
-        : full;
     lines.push("<value>", value, "</value>");
   } else {
     lines.push("<error>", outcome.error ?? "unknown error", "</error>");

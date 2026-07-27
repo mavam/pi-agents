@@ -37,6 +37,9 @@ export interface NodeView {
   partialText?: string;
   /** Latest streamed output preview. In-memory only; never persisted. */
   progressText?: string;
+  /** Bounded chronological assistant/tool activity. In-memory only; never
+   * persisted, so delegated agents still have a single durable artifact. */
+  progressTail?: string;
   /** Latest streamed usage of a running agent. In-memory only. */
   progressUsage?: SpawnUsage;
   /** Tool the running agent is currently executing. In-memory only. */

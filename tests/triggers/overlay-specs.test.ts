@@ -232,6 +232,43 @@ describe("buildWorkflowsSpec", () => {
     expect(spec.onCancel?.()).toBe("close");
   });
 
+  test("t opens an auto-following agent tail and esc returns to agents", async () => {
+    const { spec, live } = await fixture();
+    const node = live.nodes.get("$");
+    if (!node) throw new Error("expected live node");
+    node.progressTail = [
+      "assistant · turn 1",
+      "Inspecting the code.",
+      "",
+      "✓ read: src/index.ts",
+    ].join("\n");
+
+    const wf = spec.items().find((item) => item.kind === "workflow");
+    if (!wf) throw new Error("expected workflow row");
+    spec.onAction("enter", wf);
+    const runItem = spec.items()[0];
+    if (runItem?.kind !== "run") throw new Error("expected run row");
+    spec.onAction("a", runItem);
+    const nodeItem = spec.items()[0];
+    if (nodeItem?.kind !== "node") throw new Error("expected node row");
+
+    expect(spec.onAction("t", nodeItem)).toEqual({
+      selectKey: `node:${live.header.id}:$`,
+    });
+    expect(spec.items()).toHaveLength(1);
+    expect((spec.title as () => string)()).toContain("Live tail");
+    expect(spec.detail(nodeItem, color).join("\n")).toContain(
+      "Inspecting the code.",
+    );
+    expect(spec.detailWindow?.(nodeItem)).toBe("tail");
+    expect(spec.footerFor?.(nodeItem)).toContain("t agents");
+
+    expect(spec.onCancel?.()).toEqual({
+      selectKey: `node:${live.header.id}:$`,
+    });
+    expect((spec.title as () => string)()).toContain("agents");
+  });
+
   test("keyOf namespaces are distinct per tier", async () => {
     const { spec, done } = await fixture();
     const tier1 = spec.items().map((item) => spec.keyOf(item));

@@ -5,6 +5,7 @@ import {
   createSubprocessSpawnEngine,
   formatFailureReason,
   isChildProcessRunning,
+  MAX_ACTIVITY_TAIL_CHARS,
   type SpawnProcess,
 } from "../../src/engine/subprocess.js";
 import { SpawnAborted, SpawnFailure } from "../../src/engine/types.js";
@@ -444,6 +445,71 @@ describe("subprocess spawn engine", () => {
     await handle.wait();
     await reader;
     expect(seen).toEqual(["first", "second"]);
+  });
+
+  test("keeps a bounded chronological tail of assistant and tool activity", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const tails: string[] = [];
+    const reader = (async () => {
+      for await (const update of handle.updates) {
+        if (update.tail) tails.push(update.tail);
+      }
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({ type: "turn_start" });
+    proc.emitAssistant("I will inspect the tests.");
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "1",
+      toolName: "bash",
+      args: { command: "bun test" },
+    });
+    proc.emitRecord({
+      type: "tool_execution_update",
+      toolCallId: "1",
+      toolName: "bash",
+      partialResult: {
+        content: [{ type: "text", text: "running tests…" }],
+      },
+    });
+    proc.emitRecord({
+      type: "tool_execution_end",
+      toolCallId: "1",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "455 pass" }] },
+      isError: false,
+    });
+    proc.emitRecord({ type: "turn_start" });
+    proc.emitAssistant("Everything passes.");
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    await reader;
+
+    const tail = tails.at(-1) ?? "";
+    expect(tail).toContain("assistant · turn 1\nI will inspect the tests.");
+    expect(tail).toContain("✓ bash: bun test\n455 pass");
+    expect(tail).toContain("assistant · turn 2\nEverything passes.");
+    expect(tail.length).toBeLessThanOrEqual(MAX_ACTIVITY_TAIL_CHARS);
+  });
+
+  test("bounds a single oversized activity entry", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    let tail = "";
+    const reader = (async () => {
+      for await (const update of handle.updates) tail = update.tail ?? tail;
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({ type: "turn_start" });
+    proc.emitAssistant("x".repeat(MAX_ACTIVITY_TAIL_CHARS + 1_000));
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    await reader;
+    expect(tail.length).toBe(MAX_ACTIVITY_TAIL_CHARS);
+    expect(tail).toStartWith("… earlier activity omitted …\n");
   });
 
   test("strict JSONL preserves chunking, CRLF, and Unicode separators", async () => {

@@ -62,6 +62,8 @@ export interface OverlaySpec<T> {
   headerLine: (item: T, color: Colorize) => string;
   /** Detail pane lines (typically the flow tree). */
   detail: (item: T, color: Colorize) => string[];
+  /** Show the beginning by default; live tails opt into the newest lines. */
+  detailWindow?: (item: T) => "head" | "tail";
   /** Handle enter or a single-letter shortcut. */
   onAction: (key: string, item: T) => OverlayAction;
   /** Intercept esc (e.g. to back out of a drill-down); default closes. */
@@ -184,16 +186,25 @@ export function renderOverlay<T>(
   lines.push(edgeLine(["├", "┤"], spec.headerLine(item, color), width, color));
 
   const detail = spec.detail(item, color);
-  const shown =
-    detail.length > detailRows
-      ? [
-          ...detail.slice(0, Math.max(0, detailRows - 1)),
-          color(
-            "dim",
-            `… +${detail.length - Math.max(0, detailRows - 1)} more lines`,
-          ),
-        ]
-      : detail;
+  const detailWindow = spec.detailWindow?.(item) ?? "head";
+  let shown: string[];
+  if (detailRows === 0) {
+    shown = [];
+  } else if (detail.length > detailRows) {
+    const contentRows = Math.max(0, detailRows - 1);
+    shown =
+      detailWindow === "tail"
+        ? [
+            color("dim", `… ${detail.length - contentRows} earlier lines`),
+            ...(contentRows > 0 ? detail.slice(-contentRows) : []),
+          ]
+        : [
+            ...detail.slice(0, contentRows),
+            color("dim", `… +${detail.length - contentRows} more lines`),
+          ];
+  } else {
+    shown = detail;
+  }
   // Pad to the floor so the pane never shrinks while browsing (no layout
   // shift on the rows above; the box only ever grows downward).
   const floor = clamp(minDetailRows, 0, detailRows);

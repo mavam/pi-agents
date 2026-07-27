@@ -434,6 +434,55 @@ function nodeDetail(node: NodeView, color: Colorize): string[] {
   return [...steering, ...(steering.length > 0 ? [""] : []), ...lines];
 }
 
+function canTailNode(node: NodeView): boolean {
+  return (
+    node.status === "running" ||
+    node.progressTail !== undefined ||
+    node.progressText !== undefined
+  );
+}
+
+function nodeTailDetail(node: NodeView, color: Colorize): string[] {
+  const lines: string[] = [];
+  if (node.steering.length > 0) {
+    lines.push(color("accent", "steering"));
+    for (const entry of node.steering) {
+      lines.push(
+        ...entry.message
+          .split("\n")
+          .map((line, index) =>
+            color(
+              "accent",
+              index === 0 ? `${steeringMarker(entry)} ${line}` : `  ${line}`,
+            ),
+          ),
+      );
+    }
+    lines.push("");
+  }
+
+  const tail = node.progressTail ?? node.progressText;
+  if (!tail) {
+    lines.push(
+      color(
+        "dim",
+        node.status === "running"
+          ? "waiting for output…"
+          : "(no live activity retained)",
+      ),
+    );
+    return lines;
+  }
+  for (const line of tail.split("\n")) {
+    if (line.startsWith("assistant ·")) lines.push(color("muted", line));
+    else if (line.startsWith("✗ ")) lines.push(color("error", line));
+    else if (line.startsWith("✓ ")) lines.push(color("success", line));
+    else if (line.startsWith("› ")) lines.push(color("warning", line));
+    else lines.push(line);
+  }
+  return lines;
+}
+
 function runDetail(run: RunView, color: Colorize): string[] {
   const lines = (renderRunTree(run, color) || "(no nodes yet)").split("\n");
   if (run.error) lines.push(color("error", `✗ ${run.error}`));
@@ -547,6 +596,7 @@ export function buildWorkflowsSpec(
   // reselect when backing out.
   let drillGroup: { group: string; key: string } | undefined;
   let drillRunId: string | undefined;
+  let tailNodeInstance: string | undefined;
   // Discover once per overlay open: with live() active the overlay re-renders
   // every 500ms and must not hit the filesystem each render.
   const workflows = discoverWorkflows(ctx.cwd, scopeFor(ctx)).workflows;
@@ -562,6 +612,8 @@ export function buildWorkflowsSpec(
     );
   const drilledRun = (): RunView | undefined =>
     drillRunId ? deps.manager.state.runs.get(drillRunId) : undefined;
+  const tailedNode = (): NodeView | undefined =>
+    tailNodeInstance ? drilledRun()?.nodes.get(tailNodeInstance) : undefined;
   const nodeKey = (run: RunView, node: NodeView) =>
     `node:${run.header.id}:${node.instance}`;
   const groupOf = (item: WorkflowsItem): string =>
@@ -580,6 +632,9 @@ export function buildWorkflowsSpec(
   return {
     title: () => {
       const run = drilledRun();
+      const node = tailedNode();
+      if (run && node)
+        return `${node.status === "running" ? "Live tail" : "Tail"} · ${shortId(run.header.id)} · ${nodeDisplayName(node)}`;
       if (run) return `Run ${shortId(run.header.id)} · agents`;
       if (!drillGroup) return "Workflows";
       if (drillGroup.group === "all") return "Runs";
@@ -587,23 +642,30 @@ export function buildWorkflowsSpec(
       return `Runs · /${drillGroup.group}`;
     },
     emptyText: () =>
-      drillRunId
-        ? "No agents started yet."
-        : drillGroup
-          ? "No runs yet."
-          : "No workflows found. Create .pi/workflows/<name>.yaml or ~/.pi/agent/workflows/<name>.yaml.",
+      tailNodeInstance
+        ? "Agent activity is no longer available."
+        : drillRunId
+          ? "No agents started yet."
+          : drillGroup
+            ? "No runs yet."
+            : "No workflows found. Create .pi/workflows/<name>.yaml or ~/.pi/agent/workflows/<name>.yaml.",
     footer: () =>
-      drillRunId
-        ? "↑↓ move · ⏎ post output · esc back"
-        : drillGroup
-          ? "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc back"
-          : "↑↓ move · ⏎ runs · c compose · r run · n new · esc close",
+      tailNodeInstance
+        ? "⏎ post output · t agents · esc back"
+        : drillRunId
+          ? "↑↓ move · ⏎ post output · t tail · esc back"
+          : drillGroup
+            ? "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc back"
+            : "↑↓ move · ⏎ runs · c compose · r run · n new · esc close",
     footerFor: (item) => {
       if (item.kind === "node") {
         const steerable = deps.manager
           .steerableInstances(item.run.header.id)
           .includes(item.node.instance);
-        return `↑↓ move · ⏎ post output${steerable ? " · s steer" : ""} · esc back`;
+        const tailing = tailNodeInstance === item.node.instance;
+        return tailing
+          ? `⏎ post output${steerable ? " · s steer" : ""} · t agents · esc back`
+          : `↑↓ move · ⏎ post output${canTailNode(item.node) ? " · t tail" : ""}${steerable ? " · s steer" : ""} · esc back`;
       }
       if (item.kind === "run")
         return "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc back";
@@ -613,12 +675,22 @@ export function buildWorkflowsSpec(
     },
     items: () => {
       const run = drilledRun();
-      if (run)
-        return workNodes(run).map((node) => ({
+      if (run) {
+        const nodes = workNodes(run);
+        if (tailNodeInstance) {
+          const node = nodes.find(
+            (candidate) => candidate.instance === tailNodeInstance,
+          );
+          if (node) return [{ kind: "node" as const, run, node }];
+          tailNodeInstance = undefined;
+        }
+        return nodes.map((node) => ({
           kind: "node" as const,
           run,
           node,
         }));
+      }
+      tailNodeInstance = undefined;
       drillRunId = undefined; // Drilled run evicted: back to the run list.
       if (drillGroup) {
         return groupRuns(drillGroup.group)
@@ -677,7 +749,10 @@ export function buildWorkflowsSpec(
       return parts.join(color("dim", " · "));
     },
     detail: (item, color) => {
-      if (item.kind === "node") return nodeDetail(item.node, color);
+      if (item.kind === "node")
+        return tailNodeInstance === item.node.instance
+          ? nodeTailDetail(item.node, color)
+          : nodeDetail(item.node, color);
       if (item.kind === "run") return runDetail(item.run, color);
       if (item.kind === "workflow") {
         const { wf } = item;
@@ -736,9 +811,24 @@ export function buildWorkflowsSpec(
         ? recent.map((run) => formatRunOverviewLine(run))
         : [color("dim", "(no runs yet)")];
     },
+    detailWindow: (item) =>
+      item.kind === "node" && tailNodeInstance === item.node.instance
+        ? "tail"
+        : "head",
     onAction: (key, item) => {
-      if (item.kind === "node")
+      if (item.kind === "node") {
+        if (key === "t") {
+          if (tailNodeInstance === item.node.instance) {
+            tailNodeInstance = undefined;
+          } else if (canTailNode(item.node)) {
+            tailNodeInstance = item.node.instance;
+          } else {
+            return undefined;
+          }
+          return { selectKey: nodeKey(item.run, item.node) };
+        }
         return nodeAction(key, item.run, item.node, pi, deps, ctx);
+      }
       if (item.kind === "run") {
         if (key === "a") {
           drillRunId = item.run.header.id;
@@ -788,6 +878,12 @@ export function buildWorkflowsSpec(
       return undefined;
     },
     onCancel: () => {
+      if (tailNodeInstance) {
+        const run = drilledRun();
+        const node = tailedNode();
+        tailNodeInstance = undefined;
+        return run && node ? { selectKey: nodeKey(run, node) } : undefined;
+      }
       if (drillRunId) {
         const id = drillRunId;
         drillRunId = undefined;

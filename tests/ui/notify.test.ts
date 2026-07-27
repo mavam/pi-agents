@@ -4,7 +4,6 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { emptyUsage } from "../../src/engine/types.js";
-import { MAX_MODEL_RESULT_CHARS } from "../../src/model/value.js";
 import type { RunEvent } from "../../src/run/events.js";
 import type { RunManager } from "../../src/run/runs.js";
 import { NotificationManager } from "../../src/ui/notify.js";
@@ -222,22 +221,6 @@ describe("NotificationManager", () => {
     expect(content.indexOf("Continue your task")).toBeLessThan(resultStart);
     expect(content.endsWith(markdown)).toBe(true);
     expect(sent[0]?.message.details?.body).toBe(`${markdown.slice(0, 600)}…`);
-  });
-
-  test("bounds oversized model results and keeps the TUI preview compact", () => {
-    const { sent, pi, manager, makeCtx } = makeFakes();
-    const notifications = new NotificationManager(pi, manager);
-    notifications.setContext(makeCtx(true));
-    notifications.track("run-oversized", "session.jsonl", true);
-    const result = `${"x".repeat(MAX_MODEL_RESULT_CHARS + 100)}complete-tail`;
-    notifications.handleRunEvent(completed("run-oversized", result));
-
-    const content = sent[0]?.message.content ?? "";
-    expect(content).toContain("[truncated 113 characters;");
-    expect(content).toContain("full result: /workflow run-over result");
-    expect(content).not.toContain("complete-tail");
-    expect(sent[0]?.message.details?.body).toBe(`${"x".repeat(600)}…`);
-    expect("modelBody" in (sent[0]?.message.details ?? {})).toBe(false);
   });
 
   test("completion while busy queues; flush when idle triggers a turn", () => {

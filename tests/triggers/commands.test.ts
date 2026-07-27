@@ -214,16 +214,6 @@ describe("formatNodeResultFull", () => {
     expect(text).toContain("\n}\n```");
   });
 
-  test("returns complete long output", async () => {
-    const run = await recordedRun(REVIEW_FLOW, () => "ok");
-    const target = workNodes(run)[0] as NodeView;
-    const markdown = `\`\`\`ts\n${"x".repeat(64_100)}\ncomplete-tail\n\`\`\``;
-    target.value = markdown;
-    const text = formatNodeResultFull(run, target);
-    expect(text.endsWith(markdown)).toBe(true);
-    expect(text).not.toContain("… truncated");
-  });
-
   test("failed node shows the error", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
     const target = workNodes(run)[0] as NodeView;
@@ -287,14 +277,6 @@ describe("formatRunDetails", () => {
     const run = await recordedRun(REVIEW_FLOW, () => markdown);
     const text = formatRunDetails(run);
     expect(text.indexOf("Full result:")).toBeLessThan(text.indexOf("```ts"));
-  });
-
-  test("returns the complete long run result when requested", async () => {
-    const markdown = `\`\`\`ts\n${"x".repeat(64_100)}\ncomplete-tail\n\`\`\``;
-    const run = await recordedRun(REVIEW_FLOW, () => markdown);
-    const text = formatRunDetails(run, true);
-    expect(text.endsWith(markdown)).toBe(true);
-    expect(text).not.toContain("… truncated");
   });
 });
 

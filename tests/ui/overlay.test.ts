@@ -84,6 +84,18 @@ describe("renderOverlay", () => {
     expect(truncated.some((line) => line.includes("more lines"))).toBe(true);
   });
 
+  test("tail detail keeps the newest lines visible", () => {
+    const detail = Array.from({ length: 50 }, (_, i) => `line ${i}`);
+    const tailSpec: OverlaySpec<string> = {
+      ...spec(["a"], () => detail),
+      detailWindow: () => "tail",
+    };
+    const lines = renderOverlay(tailSpec, ["a"], 0, 60, 12);
+    expect(lines.some((line) => line.includes("earlier lines"))).toBe(true);
+    expect(lines.some((line) => line.includes("line 49"))).toBe(true);
+    expect(lines.some((line) => line.includes("line 0 "))).toBe(false);
+  });
+
   test("detail pane pads to the floor so rows above never shift", () => {
     // 1 table row + 1 detail line, but a floor of 8 detail rows:
     // top border + table + separator + 8 detail rows + bottom border.

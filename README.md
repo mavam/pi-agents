@@ -529,9 +529,13 @@ intent, the model drafts the definition file. Run tier: `⏎` posts the run
 details with the full result to the chat, `a` drills into the run's agents,
 `c` cancels a live run, `r` starts the same flow again, and `h` shows/hides
 that run in the live summary above the composer (useful for long-running
-flows). Agent tier: `⏎` posts the agent's full output; on a running agent,
-`s` opens an inline composer for a steering message. In the agents overlay,
-`⏎` posts the full agent details and `n` starts a new definition.
+flows). Agent tier: `⏎` posts the agent's full output, while `t` opens a live,
+auto-following tail of its assistant output and tool activity. The tail is a
+bounded in-memory peek and is not persisted as another agent artifact. On a
+running agent, `s` opens an inline composer for a steering message from either
+the agent list or its tail, so you can observe, correct course, and keep
+watching. In the agents overlay, `⏎` posts the full agent details and `n` starts
+a new definition.
 
 The live summary widget can be toggled wholesale with `/workflows widget`.
 There is no default keybinding for it; bind one via pi's keybindings if you

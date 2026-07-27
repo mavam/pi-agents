@@ -55,6 +55,9 @@ export interface SpawnSpec {
 export interface SpawnProgress {
   /** Latest assistant text so far. */
   text: string;
+  /** Bounded, chronological activity tail for live observation. Engines may
+   * omit this when they only support latest-text progress. */
+  tail?: string;
   usage: SpawnUsage;
   /** Tool currently executing, when the engine reports tool activity. */
   currentTool?: string;

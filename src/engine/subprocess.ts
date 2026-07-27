@@ -36,6 +36,11 @@ const TERMINATE_AFTER_MS = 1_000;
 const FORCE_KILL_AFTER_MS = 5_000;
 /** Minimum spacing between updates driven by streaming text deltas. */
 export const STREAM_PUSH_INTERVAL_MS = 250;
+/** Live tails are deliberately ephemeral and bounded: the final assistant
+ * message remains the delegated agent's only durable artifact. */
+export const MAX_ACTIVITY_TAIL_CHARS = 64_000;
+const MAX_TOOL_OUTPUT_CHARS = 12_000;
+const MAX_TOOL_LABEL_CHARS = 240;
 
 class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -106,6 +111,93 @@ interface PendingCommand {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+interface ActivityTailEntry {
+  key: string;
+  text: string;
+}
+
+/** Mutable entries let streaming assistant messages and tool output update in
+ * place while completed entries stay in chronological order. */
+class ActivityTail {
+  private readonly entries: ActivityTailEntry[] = [];
+  private readonly entriesByKey = new Map<string, ActivityTailEntry>();
+  /** Length of snapshot(), including the blank lines between entries. */
+  private snapshotLength = 0;
+
+  upsert(key: string, text: string): void {
+    const existing = this.entriesByKey.get(key);
+    if (existing) {
+      this.snapshotLength += text.length - existing.text.length;
+      existing.text = text;
+    } else {
+      const entry = { key, text };
+      if (this.entries.length > 0) this.snapshotLength += 2;
+      this.entries.push(entry);
+      this.entriesByKey.set(key, entry);
+      this.snapshotLength += text.length;
+    }
+    this.trim();
+  }
+
+  snapshot(): string | undefined {
+    const text = this.entries.map((entry) => entry.text).join("\n\n");
+    return text || undefined;
+  }
+
+  private trim(): void {
+    while (
+      this.entries.length > 1 &&
+      this.snapshotLength > MAX_ACTIVITY_TAIL_CHARS
+    ) {
+      const removed = this.entries.shift();
+      if (!removed) break;
+      this.entriesByKey.delete(removed.key);
+      this.snapshotLength -= removed.text.length + 2;
+    }
+    const only = this.entries[0];
+    if (only && only.text.length > MAX_ACTIVITY_TAIL_CHARS) {
+      const marker = "… earlier activity omitted …\n";
+      const truncated = `${marker}${only.text.slice(
+        -(MAX_ACTIVITY_TAIL_CHARS - marker.length),
+      )}`;
+      this.snapshotLength += truncated.length - only.text.length;
+      only.text = truncated;
+    }
+  }
+}
+
+function clippedLine(value: string, max = MAX_TOOL_LABEL_CHARS): string {
+  const line = value.replaceAll(/\s+/g, " ").trim();
+  return line.length <= max ? line : `${line.slice(0, max - 1)}…`;
+}
+
+function toolLabel(name: string, args: unknown): string {
+  if (!isRecord(args)) return name;
+  for (const key of ["command", "path", "query", "url"]) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) {
+      return `${name}: ${clippedLine(value)}`;
+    }
+  }
+  return name;
+}
+
+function toolOutput(value: unknown): string | undefined {
+  if (!isRecord(value) || !Array.isArray(value.content)) return undefined;
+  const text = value.content
+    .flatMap((part) =>
+      isRecord(part) && part.type === "text" && typeof part.text === "string"
+        ? [part.text]
+        : [],
+    )
+    .join("\n")
+    .trim();
+  if (!text) return undefined;
+  return text.length <= MAX_TOOL_OUTPUT_CHARS
+    ? text
+    : `… output truncated …\n${text.slice(-MAX_TOOL_OUTPUT_CHARS)}`;
 }
 
 function assistantMessage(value: unknown): AssistantMessage | undefined {
@@ -271,6 +363,10 @@ export function createSubprocessSpawnEngine(options?: {
       let latestText = "";
       /** Tools currently executing, in start order (they can overlap). */
       const activeTools = new Map<string, string>();
+      const activityTail = new ActivityTail();
+      const toolTailEntries = new Map<string, { key: string; label: string }>();
+      let activitySequence = 0;
+      let currentAssistantEntry: string | undefined;
       let turnsStarted = 0;
       let lastStreamPushAt = 0;
       let stopReason: string | undefined;
@@ -412,10 +508,20 @@ export function createSubprocessSpawnEngine(options?: {
         for (const name of activeTools.values()) currentTool = name;
         updates.push({
           text: latestText,
+          tail: activityTail.snapshot(),
           usage: { ...usage },
           currentTool,
           turnsStarted,
         });
+      };
+
+      const updateAssistantTail = (text: string) => {
+        if (!text) return;
+        currentAssistantEntry ??= `assistant:${++activitySequence}`;
+        activityTail.upsert(
+          currentAssistantEntry,
+          `assistant · turn ${Math.max(1, turnsStarted)}\n${text}`,
+        );
       };
 
       /**
@@ -439,9 +545,14 @@ export function createSubprocessSpawnEngine(options?: {
           }
         }
         const text = chunks.join("\n").trim();
-        if (!text || text === latestText) return;
+        if (!text) return;
+        const startsNewEntry = currentAssistantEntry === undefined;
+        if (text === latestText && !startsNewEntry) return;
         latestText = text;
-        // Deltas arrive far faster than anyone can read; cap update fan-out.
+        updateAssistantTail(text);
+        // Deltas arrive far faster than anyone can read; cap intermediate
+        // tail snapshots and update fan-out. The close path flushes the last
+        // delta when no message_end arrives.
         if (Date.now() - lastStreamPushAt >= STREAM_PUSH_INTERVAL_MS) {
           pushUpdate();
         }
@@ -467,7 +578,11 @@ export function createSubprocessSpawnEngine(options?: {
           if (message.stopReason) stopReason = message.stopReason;
           if (message.errorMessage) errorMessage = message.errorMessage;
           const text = messageText(message);
-          if (text) latestText = text;
+          if (text) {
+            latestText = text;
+            updateAssistantTail(text);
+          }
+          currentAssistantEntry = undefined;
         }
         pushUpdate();
       };
@@ -540,6 +655,7 @@ export function createSubprocessSpawnEngine(options?: {
           // between assistant messages (a thinking turn can run minutes).
           if (record.type === "turn_start") {
             turnsStarted += 1;
+            currentAssistantEntry = undefined;
             pushUpdate();
           }
           if (record.type === "message_update") {
@@ -551,13 +667,43 @@ export function createSubprocessSpawnEngine(options?: {
             typeof record.toolName === "string"
           ) {
             activeTools.set(record.toolCallId, record.toolName);
+            const entry = {
+              key: `tool:${++activitySequence}`,
+              label: toolLabel(record.toolName, record.args),
+            };
+            toolTailEntries.set(record.toolCallId, entry);
+            activityTail.upsert(entry.key, `› ${entry.label}`);
             pushUpdate();
           }
           if (
-            record.type === "tool_execution_end" &&
-            typeof record.toolCallId === "string" &&
-            activeTools.delete(record.toolCallId)
+            record.type === "tool_execution_update" &&
+            typeof record.toolCallId === "string"
           ) {
+            const entry = toolTailEntries.get(record.toolCallId);
+            const output = toolOutput(record.partialResult);
+            if (
+              entry &&
+              output &&
+              Date.now() - lastStreamPushAt >= STREAM_PUSH_INTERVAL_MS
+            ) {
+              activityTail.upsert(entry.key, `› ${entry.label}\n${output}`);
+              pushUpdate();
+            }
+          }
+          if (
+            record.type === "tool_execution_end" &&
+            typeof record.toolCallId === "string"
+          ) {
+            activeTools.delete(record.toolCallId);
+            const entry = toolTailEntries.get(record.toolCallId);
+            if (entry) {
+              const output = toolOutput(record.result);
+              activityTail.upsert(
+                entry.key,
+                `${record.isError === true ? "✗" : "✓"} ${entry.label}${output ? `\n${output}` : ""}`,
+              );
+              toolTailEntries.delete(record.toolCallId);
+            }
             pushUpdate();
           }
           if (record.type === "agent_start") agentStarted = true;
@@ -624,6 +770,10 @@ export function createSubprocessSpawnEngine(options?: {
             const finalLine = buffered;
             buffered = "";
             parseLine(finalLine);
+          }
+          if (currentAssistantEntry !== undefined) {
+            updateAssistantTail(latestText);
+            pushUpdate();
           }
           settled = true;
           const closedError = new Error(

@@ -358,13 +358,19 @@ describe("workflows panel actions", () => {
     expect(spec.onAction("r", workflowItem())).toBeUndefined();
   });
 
-  test("composing and missing parameters close, since both need the composer", () => {
+  test("composing prefills only after the panel restores the editor", async () => {
     const { spec, editorText } = harness();
     expect(spec.onAction("c", workflowItem())).toBe("close");
+    // ctx.ui.custom() restores its captured editor text during teardown. The
+    // prefill must run later or that restore overwrites it.
+    expect(editorText).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(editorText).toEqual(["/deep-test "]);
 
     const required = [{ name: "target", required: true }];
     expect(spec.onAction("r", workflowItem(required))).toBe("close");
-    expect(editorText.at(-1)).toBe("/deep-test ");
+    expect(editorText).toEqual(["/deep-test "]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(editorText).toEqual(["/deep-test ", "/deep-test "]);
   });
 });

@@ -81,7 +81,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         .map((arg) => ({ value: arg, label: arg })),
     handler: async (args, ctx) => {
       if (ctx.hasUI && ctx.mode === "tui" && args.trim() !== "list") {
-        await openOverlay(ctx, buildAgentsSpec(pi, ctx), deps.widget);
+        await openOverlay(ctx, buildAgentsSpec(pi, ctx));
         return;
       }
       const discovery = discoverAgents(ctx.cwd, scopeFor(ctx));
@@ -858,21 +858,24 @@ export function buildWorkflowsSpec(
         return "close";
       }
       if (item.kind !== "workflow") return undefined;
-      if (key === "c") {
-        ctx.ui.setEditorText(`/${item.wf.name} `);
+      const compose = (): "close" => {
+        // Non-overlay custom UI restores the editor text it captured when the
+        // panel opened. Defer the prefill until after that teardown so the
+        // restored snapshot does not overwrite the workflow command.
+        setTimeout(() => ctx.ui.setEditorText(`/${item.wf.name} `), 0);
         return "close";
-      }
+      };
+      if (key === "c") return compose();
       if (key === "r") {
         const missing = item.wf.params.filter(
           (param) => param.required && param.default === undefined,
         );
         if (missing.length > 0) {
-          ctx.ui.setEditorText(`/${item.wf.name} `);
           ctx.ui.notify(
             `/${item.wf.name} needs: ${missing.map((param) => param.name).join(", ")}`,
             "warning",
           );
-          return "close";
+          return compose();
         }
         void runWorkflowCommand(pi, item.wf.name, "", ctx, deps);
         // Stay open, like the run tier's rerun: live() is true while the run

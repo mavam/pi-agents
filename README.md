@@ -549,10 +549,11 @@ a new definition.
 
 The live summary widget can be toggled wholesale with `/workflows widget`.
 There is no default keybinding for it; bind one via pi's keybindings if you
-want one-keystroke access. While a browser panel is open the summary hides
+want one-keystroke access. While the workflows panel is open the summary hides
 itself — the panel sits directly below it and reports the same run state — and
 returns when you close the panel, leaving the toggle and any per-run `h`
-choices untouched.
+choices untouched. It remains visible in the agents panel, which doesn't show
+run state.
 
 When
 [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) is installed,

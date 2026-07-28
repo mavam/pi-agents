@@ -91,11 +91,13 @@ function fakePi(): FakePi {
 interface FakeDeps {
   deps: CommandDeps;
   toggles: string[];
+  suppressions: boolean[];
 }
 
 function fakeDeps(runs: RunView[]): FakeDeps {
   const state = { runs: new Map(runs.map((run) => [run.header.id, run])) };
   const toggles: string[] = [];
+  const suppressions: boolean[] = [];
   const deps = {
     manager: {
       state,
@@ -119,10 +121,11 @@ function fakeDeps(runs: RunView[]): FakeDeps {
         toggles.push("widget");
         return true;
       },
+      setSuppressed: (value: boolean) => suppressions.push(value),
     },
     notifications: { setContext: () => {} },
   } as unknown as CommandDeps;
-  return { deps, toggles };
+  return { deps, toggles, suppressions };
 }
 
 function fakeCtx(): ExtensionCommandContext {
@@ -132,6 +135,19 @@ function fakeCtx(): ExtensionCommandContext {
     mode: "rpc",
     isProjectTrusted: () => true,
     ui: { notify: () => {}, setEditorText: () => {} },
+  } as unknown as ExtensionCommandContext;
+}
+
+function fakeTuiCtx(): ExtensionCommandContext {
+  return {
+    ...fakeCtx(),
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      notify: () => {},
+      setEditorText: () => {},
+      custom: async () => undefined,
+    },
   } as unknown as ExtensionCommandContext;
 }
 
@@ -363,6 +379,18 @@ describe("command registration", () => {
     await commands.get("workflows")?.handler("runs", fakeCtx());
     expect(messages.at(-1)).toContain("## Runs");
     expect(messages.at(-1)).toContain("Inspect one with `/workflow <id>`");
+  });
+
+  test("only the workflows browser suppresses the live run summary", async () => {
+    const { pi, commands } = fakePi();
+    const { deps, suppressions } = fakeDeps([]);
+    registerCommands(pi, deps);
+
+    await commands.get("agents")?.handler("", fakeTuiCtx());
+    expect(suppressions).toEqual([]);
+
+    await commands.get("workflows")?.handler("", fakeTuiCtx());
+    expect(suppressions).toEqual([true, false]);
   });
 
   test("/workflows widget toggles the live summary", async () => {

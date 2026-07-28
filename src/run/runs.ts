@@ -3,11 +3,6 @@
  * events out to sinks (UI refresh, persistence).
  */
 
-import {
-  discoverAgents,
-  formatAgentList,
-  resolveAgentByName,
-} from "../catalog/agents.js";
 import type { SpawnEngine, SpawnHandle } from "../engine/types.js";
 import {
   type Budgets,
@@ -17,7 +12,7 @@ import {
   type FlowNode,
   type Scope,
 } from "../model/ast.js";
-import { collectAgentRequirements } from "../model/validate.js";
+import { collectInvocations } from "../model/validate.js";
 import { validateBudgets } from "./budgets.js";
 import type { RunEvent, RunSource, SteeringSource } from "./events.js";
 import {
@@ -25,6 +20,7 @@ import {
   executeFlow,
   type RunOutcome,
 } from "./interpreter.js";
+import { CatalogCache, resolveInvocation } from "./invocation.js";
 import { createAgentRunner, type SpawnDefaults } from "./runner.js";
 import {
   applyRunEvent,
@@ -116,47 +112,31 @@ export class RunManager {
   }
 
   /**
-   * Verify every agent the flow can spawn resolves — using each node's
-   * effective cwd/scope overrides, exactly as the runner will — before
-   * anything runs.
+   * Verify every invocation the flow can spawn resolves — profiles and skills
+   * alike, under each node's own cwd/scope overrides — before anything runs.
+   *
+   * The resolver owns cwd, scope, and message text; preflight only names the
+   * node and accumulates, so a flow reports all of its problems at once and
+   * reports them exactly as the runner would.
    */
-  preflight(flow: FlowNode, cwd: string, scope: Scope, trusted = true): void {
+  preflight(
+    flow: FlowNode,
+    cwd: string,
+    scope: Scope,
+    trusted = true,
+    catalogs: CatalogCache = new CatalogCache(),
+  ): void {
     const problems: string[] = [];
-    const discoveries = new Map<string, ReturnType<typeof discoverAgents>>();
-    for (const requirement of collectAgentRequirements(flow)) {
-      const effectiveCwd = requirement.cwd ?? cwd;
-      const effectiveScope = effectiveScopeFor(
-        requirement.scope as Scope | undefined,
-        trusted,
+    for (const requirement of collectInvocations(flow)) {
+      const resolution = resolveInvocation(requirement, {
+        cwd,
         scope,
-      );
-      const key = `${effectiveCwd}|${effectiveScope}`;
-      let discovery = discoveries.get(key);
-      if (!discovery) {
-        discovery = discoverAgents(effectiveCwd, effectiveScope);
-        discoveries.set(key, discovery);
-      }
-      const resolution = resolveAgentByName(discovery.agents, requirement.name);
-      const where =
-        requirement.cwd || requirement.scope
-          ? ` (cwd: ${effectiveCwd}, scope: ${effectiveScope})`
-          : "";
-      if (resolution.kind === "missing") {
-        // A same-named file that failed to parse is the likely culprit —
-        // surface its diagnostic instead of a bare "unknown".
-        const related = discovery.diagnostics.filter((diagnostic) =>
-          diagnostic.filePath.includes(`/${requirement.name}.`),
-        );
-        const hint = related.length
-          ? ` (${related.map((d) => `${d.filePath}: ${d.message}`).join("; ")})`
-          : "";
-        problems.push(
-          `unknown agent '${requirement.name}'${where}. Available: ${formatAgentList(discovery.agents)}${hint}`,
-        );
-      } else if (resolution.kind === "ambiguous")
-        problems.push(
-          `ambiguous agent '${requirement.name}'${where} (${resolution.matches.map((a) => a.name).join(", ")})`,
-        );
+        trusted,
+        catalogs,
+      });
+      if (resolution.ok) continue;
+      for (const problem of resolution.problems)
+        problems.push(`at ${requirement.path}, ${problem}`);
     }
     if (problems.length > 0) {
       throw new Error(`cannot start run: ${problems.join("; ")}`);
@@ -167,7 +147,10 @@ export class RunManager {
     const trusted = opts.trusted ?? true;
     const scope = effectiveScopeFor(opts.scope, trusted);
     validateBudgets(opts.budgets);
-    this.preflight(opts.flow, opts.cwd, scope, trusted);
+    // One cache for the whole run: preflight's profile and skill reads serve
+    // every later spawn, so nothing is discovered or read twice.
+    const catalogs = new CatalogCache();
+    this.preflight(opts.flow, opts.cwd, scope, trusted, catalogs);
     const budgets: Budgets = {
       ...this.options.defaultBudgets,
       ...opts.budgets,
@@ -189,6 +172,7 @@ export class RunManager {
       depth: this.options.depth,
       defaults: opts.defaults,
       budgetLimits,
+      catalogs,
       onHandle: (call, handle) => {
         let handles = this.liveHandles.get(runId);
         if (!handles) {

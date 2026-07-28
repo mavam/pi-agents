@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   emptyUsage,
   SpawnAborted,
@@ -70,6 +72,75 @@ describe("createAgentRunner system prompt", () => {
     });
     await runner(call({ output: "json" }));
     expect(specs[0]?.systemPrompt).toContain("single JSON value");
+  });
+
+  test("an anonymous call renders the skills it asked for", async () => {
+    const skillsDir = path.join(
+      process.env.PI_CODING_AGENT_DIR as string,
+      "skills",
+      "runner-skill",
+    );
+    fs.mkdirSync(skillsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillsDir, "SKILL.md"),
+      "---\nname: runner-skill\ndescription: d\n---\nFollow the runner rules.\n",
+    );
+    try {
+      const specs: SpawnSpec[] = [];
+      const runner = createAgentRunner({
+        engine: captureEngine(specs),
+        cwd: process.cwd(),
+      });
+      await runner(call({ skills: ["runner-skill"] }));
+      const prompt = specs[0]?.systemPrompt ?? "";
+      expect(prompt).toContain('<skill name="runner-skill"');
+      expect(prompt).toContain("Follow the runner rules.");
+      // Order: skills first, result contract last; no profile persona exists.
+      expect(prompt.indexOf("runner-skill")).toBeLessThan(
+        prompt.indexOf(delegationPreamble("text")),
+      );
+      expect(specs[0]?.agent).toBe("ad-hoc");
+    } finally {
+      fs.rmSync(skillsDir, { recursive: true, force: true });
+    }
+  });
+
+  test("an unresolvable skill fails the call instead of degrading the prompt", async () => {
+    const specs: SpawnSpec[] = [];
+    const runner = createAgentRunner({
+      engine: captureEngine(specs),
+      cwd: process.cwd(),
+    });
+    await expect(runner(call({ skills: ["no-such-skill"] }))).rejects.toThrow(
+      /unknown skill 'no-such-skill'/,
+    );
+    expect(specs).toHaveLength(0);
+  });
+
+  test("tool allowlists reach the engine, empty list included", async () => {
+    const specs: SpawnSpec[] = [];
+    const runner = createAgentRunner({
+      engine: captureEngine(specs),
+      cwd: process.cwd(),
+    });
+    await runner(call({ tools: ["read", "grep"] }));
+    await runner(call({ tools: [] }));
+    await runner(call());
+    expect(specs[0]?.tools).toEqual(["read", "grep"]);
+    expect(specs[1]?.tools).toEqual([]);
+    expect(specs[2]?.tools).toBeUndefined();
+  });
+
+  test("model and thinking overrides win over session defaults", async () => {
+    const specs: SpawnSpec[] = [];
+    const runner = createAgentRunner({
+      engine: captureEngine(specs),
+      cwd: process.cwd(),
+      defaults: { model: "session-model", thinking: "low" },
+    });
+    await runner(call({ model: "call-model" }));
+    expect(specs[0]?.model).toBe("call-model");
+    expect(specs[0]?.thinking).toBe("low");
   });
 });
 

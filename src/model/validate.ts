@@ -16,6 +16,7 @@
  */
 
 import {
+  type AgentExecutionOptions,
   type AgentNode,
   BRANCH_KEY_RE,
   bodyPath,
@@ -31,10 +32,12 @@ import {
   RESERVED_ROOTS,
   type Reduce,
   reducePath,
+  type Scope,
   type SequenceNode,
   type SwitchCase,
   type SwitchNode,
   stepPath,
+  THINKING_LEVELS,
   type ValueNode,
   type WorkflowLike,
   type WorkflowParamDef,
@@ -157,6 +160,40 @@ function optionalString(
     return undefined;
   }
   return value;
+}
+
+/**
+ * A list of non-empty strings, deduplicated with stable order. Absent stays
+ * absent (inherit); `[]` is legal and means "explicitly empty" (clear).
+ */
+function optionalStringList(
+  obj: Record<string, unknown>,
+  key: string,
+  path: string,
+  issues: Issues,
+): string[] | undefined {
+  const value = obj[key];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    issues.push({
+      path,
+      message: `'${key}' must be an array of strings, got ${describeType(value)}`,
+    });
+    return undefined;
+  }
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      issues.push({
+        path,
+        message: `'${key}' entries must be non-empty strings, got ${describeType(entry)}`,
+      });
+      return undefined;
+    }
+    const trimmed = entry.trim();
+    if (!out.includes(trimmed)) out.push(trimmed);
+  }
+  return out;
 }
 
 function requiredString(
@@ -301,6 +338,41 @@ export function parseFlowNode(
   }
 }
 
+/** Keys every agent invocation accepts, node or reducer. */
+const EXECUTION_OPTION_KEYS = [
+  "model",
+  "thinking",
+  "skills",
+  "tools",
+  "cwd",
+  "scope",
+];
+
+/**
+ * The execution-option surface shared by agent nodes and reducers. Purely
+ * structural: names are not resolved and the filesystem is never touched.
+ */
+function parseAgentExecutionOptions(
+  obj: Record<string, unknown>,
+  path: string,
+  issues: Issues,
+): AgentExecutionOptions {
+  return {
+    model: optionalString(obj, "model", path, issues),
+    thinking: optionalEnum(obj, "thinking", THINKING_LEVELS, path, issues),
+    skills: optionalStringList(obj, "skills", path, issues),
+    tools: optionalStringList(obj, "tools", path, issues),
+    cwd: optionalString(obj, "cwd", path, issues),
+    scope: optionalEnum(
+      obj,
+      "scope",
+      ["user", "project", "both"] as const,
+      path,
+      issues,
+    ),
+  };
+}
+
 function parseAgent(
   obj: Record<string, unknown>,
   path: string,
@@ -308,18 +380,7 @@ function parseAgent(
 ): AgentNode {
   checkKeys(
     obj,
-    [
-      "kind",
-      "name",
-      "task",
-      "output",
-      "model",
-      "thinking",
-      "cwd",
-      "scope",
-      "as",
-      "label",
-    ],
+    ["kind", "name", "task", "output", ...EXECUTION_OPTION_KEYS, "as", "label"],
     path,
     issues,
   );
@@ -335,16 +396,7 @@ function parseAgent(
       path,
       issues,
     ),
-    model: optionalString(obj, "model", path, issues),
-    thinking: optionalString(obj, "thinking", path, issues),
-    cwd: optionalString(obj, "cwd", path, issues),
-    scope: optionalEnum(
-      obj,
-      "scope",
-      ["user", "project", "both"] as const,
-      path,
-      issues,
-    ),
+    ...parseAgentExecutionOptions(obj, path, issues),
   };
 }
 
@@ -376,7 +428,12 @@ function parseReduce(
 ): Reduce | undefined {
   const obj = asRecord(raw, path, "a reduce spec", issues);
   if (!obj) return undefined;
-  checkKeys(obj, ["agent", "task", "output"], path, issues);
+  checkKeys(
+    obj,
+    ["agent", "task", "output", ...EXECUTION_OPTION_KEYS],
+    path,
+    issues,
+  );
   return {
     agent: optionalNonEmptyString(obj, "agent", path, issues),
     task: requiredString(obj, "task", path, issues),
@@ -387,6 +444,7 @@ function parseReduce(
       path,
       issues,
     ),
+    ...parseAgentExecutionOptions(obj, path, issues),
   };
 }
 
@@ -1158,62 +1216,96 @@ function checkNode(
 // ---------------------------------------------------------------------------
 // Utilities over expanded trees
 
-/** One agent an expanded flow can spawn, with its effective discovery overrides. */
-export interface AgentRequirement {
-  name: string;
+/**
+ * One agent invocation an expanded flow can spawn, with the flow path that
+ * identifies it and the call-site options that will apply at spawn time.
+ */
+export interface InvocationRequirement {
+  /** Static flow path, e.g. "$.steps[1]" or "$.branches.security.reduce". */
+  path: string;
+  /** Profile name; absent for anonymous (ad-hoc) calls. */
+  agent?: string;
+  skills?: string[];
   cwd?: string;
-  scope?: string;
+  scope?: Scope;
 }
 
 /**
- * All named agents an expanded flow can spawn (reduce agents included), each
- * with the node-level cwd/scope overrides that will apply at spawn time — so
- * preflight resolves every agent exactly the way the runner will. Anonymous
- * (ad-hoc) calls need no resolution and are not collected.
+ * Every invocation an expanded flow can spawn that needs resolving before the
+ * run starts: named calls (a profile must exist) and anonymous calls that
+ * request skills. Reducers carry their own cwd/scope overrides, so they are
+ * collected exactly like agent nodes. Identical invocations collapse, keeping
+ * the first path as the representative one for error messages.
  */
-export function collectAgentRequirements(node: FlowNode): AgentRequirement[] {
+export function collectInvocations(
+  node: FlowNode,
+  root = "$",
+): InvocationRequirement[] {
   const seen = new Set<string>();
-  const requirements: AgentRequirement[] = [];
-  const add = (requirement: AgentRequirement): void => {
-    const key = `${requirement.name}|${requirement.cwd ?? ""}|${requirement.scope ?? ""}`;
+  const requirements: InvocationRequirement[] = [];
+  const add = (requirement: InvocationRequirement): void => {
+    if (requirement.agent === undefined && requirement.skills === undefined)
+      return;
+    const key = [
+      requirement.agent ?? "",
+      (requirement.skills ?? []).join(","),
+      requirement.cwd ?? "",
+      requirement.scope ?? "",
+    ].join("|");
     if (seen.has(key)) return;
     seen.add(key);
     requirements.push(requirement);
   };
-  const visit = (current: FlowNode): void => {
+  const addReduce = (reduce: Reduce, path: string): void =>
+    add({
+      path: reducePath(path),
+      agent: reduce.agent,
+      skills: reduce.skills,
+      cwd: reduce.cwd,
+      scope: reduce.scope,
+    });
+  const visit = (current: FlowNode, path: string): void => {
     switch (current.kind) {
       case "agent":
-        if (current.name !== undefined)
-          add({ name: current.name, cwd: current.cwd, scope: current.scope });
+        add({
+          path,
+          agent: current.name,
+          skills: current.skills,
+          cwd: current.cwd,
+          scope: current.scope,
+        });
         return;
       case "sequence":
-        for (const step of current.steps) visit(step);
+        current.steps.forEach((step, index) => {
+          visit(step, stepPath(path, index));
+        });
         return;
       case "parallel":
-        for (const branch of Object.values(current.branches)) visit(branch);
-        if (current.reduce?.agent !== undefined)
-          add({ name: current.reduce.agent });
+        for (const [key, branch] of Object.entries(current.branches))
+          visit(branch, branchPath(path, key));
+        if (current.reduce) addReduce(current.reduce, path);
         return;
       case "map":
-        visit(current.body);
-        if (current.reduce?.agent !== undefined)
-          add({ name: current.reduce.agent });
+        visit(current.body, bodyPath(path));
+        if (current.reduce) addReduce(current.reduce, path);
         return;
       case "loop":
-        visit(current.body);
+        visit(current.body, bodyPath(path));
         return;
       case "switch":
-        for (const arm of current.cases) visit(arm.then);
-        visit(current.else);
+        current.cases.forEach((arm, index) => {
+          visit(arm.then, casePath(path, index));
+        });
+        visit(current.else, elsePath(path));
         return;
       case "value":
         return;
       case "workflow":
-        if (current.body) visit(current.body);
+        if (current.body) visit(current.body, bodyPath(path));
         return;
     }
   };
-  visit(node);
+  visit(node, root);
   return requirements;
 }
 

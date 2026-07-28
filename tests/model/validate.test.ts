@@ -3,7 +3,7 @@ import YAML from "yaml";
 import type { FlowNode, WorkflowLike } from "../../src/model/ast.js";
 import {
   collectAgentNames,
-  collectAgentRequirements,
+  collectInvocations,
   FlowValidationError,
   validateFlow,
 } from "../../src/model/validate.js";
@@ -690,12 +690,83 @@ describe("collectAgentNames", () => {
   });
 });
 
-describe("collectAgentRequirements", () => {
-  test("excludes anonymous calls but retains named ones with overrides", () => {
+describe("execution options", () => {
+  test("skills and tools accept lists, dedupe, and allow an explicit empty", () => {
+    const flow = validateFlow({
+      kind: "agent",
+      task: "t",
+      skills: ["code-review", " gh ", "code-review"],
+      tools: [],
+    });
+    expect(flow).toMatchObject({
+      skills: ["code-review", "gh"],
+      tools: [],
+    });
+  });
+
+  test("list fields reject non-arrays and empty entries", () => {
+    expectIssue(
+      { kind: "agent", task: "t", skills: "code-review" },
+      "'skills' must be an array of strings, got string",
+    );
+    expectIssue(
+      { kind: "agent", task: "t", tools: ["read", "  "] },
+      "'tools' entries must be non-empty strings",
+    );
+  });
+
+  test("thinking is checked against the known levels", () => {
+    expectValid({ kind: "agent", task: "t", thinking: "xhigh" });
+    expectIssue(
+      { kind: "agent", task: "t", thinking: "very-high" },
+      "'thinking' must be one of",
+    );
+  });
+
+  test("agent nodes and reducers share one option surface", () => {
+    const options = {
+      model: "m",
+      thinking: "low",
+      skills: ["code-review"],
+      tools: ["read"],
+      cwd: "/elsewhere",
+      scope: "user",
+    };
+    const flow = validateFlow({
+      kind: "parallel",
+      branches: { a: { kind: "agent", task: "t", ...options } },
+      reduce: { task: "merge {branches}", ...options },
+    }) as {
+      branches: { a: Record<string, unknown> };
+      reduce: Record<string, unknown>;
+    };
+    for (const [key, value] of Object.entries(options)) {
+      expect(flow.branches.a[key]).toEqual(value);
+      expect(flow.reduce[key]).toEqual(value);
+    }
+  });
+
+  test("reducers reject the same bad values agent nodes do", () => {
+    expectIssue(
+      {
+        kind: "map",
+        over: "{params.files}",
+        body: { kind: "agent", task: "t" },
+        reduce: { task: "merge {items}", skills: "gh" },
+      },
+      "'skills' must be an array of strings",
+      { params: [{ name: "files" }] },
+    );
+  });
+});
+
+describe("collectInvocations", () => {
+  test("named calls and skill-bearing anonymous calls are collected with paths", () => {
     const flow = validateFlow(
       seq(
         { kind: "agent", task: "anonymous step" },
         agent("scout", "t", { cwd: "/elsewhere", scope: "user" }),
+        { kind: "agent", task: "review", skills: ["code-review"] },
         {
           kind: "parallel",
           branches: { a: { kind: "agent", task: "review" } },
@@ -703,12 +774,52 @@ describe("collectAgentRequirements", () => {
         },
       ),
     );
-    expect(collectAgentRequirements(flow)).toEqual([
-      { name: "scout", cwd: "/elsewhere", scope: "user" },
+    expect(collectInvocations(flow)).toEqual([
+      {
+        path: "$.steps[1]",
+        agent: "scout",
+        skills: undefined,
+        cwd: "/elsewhere",
+        scope: "user",
+      },
+      {
+        path: "$.steps[2]",
+        agent: undefined,
+        skills: ["code-review"],
+        cwd: undefined,
+        scope: undefined,
+      },
     ]);
   });
 
-  test("an entirely anonymous flow yields no requirements", () => {
+  test("reducers carry their own overrides and a reduce path", () => {
+    const flow = validateFlow(
+      {
+        kind: "map",
+        over: "{params.files}",
+        body: { kind: "agent", task: "review {item}" },
+        reduce: {
+          task: "merge {items}",
+          agent: "synthesizer",
+          skills: ["gh"],
+          cwd: "/elsewhere",
+          scope: "project",
+        },
+      },
+      { params: [{ name: "files" }] },
+    );
+    expect(collectInvocations(flow)).toEqual([
+      {
+        path: "$.reduce",
+        agent: "synthesizer",
+        skills: ["gh"],
+        cwd: "/elsewhere",
+        scope: "project",
+      },
+    ]);
+  });
+
+  test("a flow with nothing to resolve yields no requirements", () => {
     const flow = validateFlow(
       {
         kind: "map",
@@ -718,7 +829,7 @@ describe("collectAgentRequirements", () => {
       },
       { params: [{ name: "files" }] },
     );
-    expect(collectAgentRequirements(flow)).toEqual([]);
+    expect(collectInvocations(flow)).toEqual([]);
   });
 });
 
@@ -916,7 +1027,7 @@ describe("switch validation", () => {
     for (const name of ["shipper", "fixer", "checker", "reporter"]) {
       expect(names).toContain(name);
     }
-    expect(collectAgentRequirements(flow).map((req) => req.name)).toContain(
+    expect(collectInvocations(flow).map((req) => req.agent)).toContain(
       "reporter",
     );
   });

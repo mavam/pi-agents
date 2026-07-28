@@ -8,8 +8,15 @@
  * failure instead of degrading. Rendering is pure: it performs no I/O, so a
  * skill that resolves during preflight cannot fail at spawn time.
  *
- * Scope selects the directories, exactly as it does for agent profiles, so an
- * untrusted project (clamped to user scope) can never contribute a skill.
+ * The catalog mirrors the locations and precedence pi itself advertises in
+ * `<available_skills>`, so a name the model picked up there resolves here to
+ * the same file: `.pi/skills` and `.agents/skills` for the project, then
+ * `~/.pi/agent/skills` and `~/.agents/skills` for the user, with the first
+ * directory that defines a name winning.
+ *
+ * Scope selects which of those directories apply, exactly as it does for agent
+ * profiles, so an untrusted project (clamped to user scope) can never
+ * contribute a skill.
  */
 
 import * as fs from "node:fs";
@@ -20,7 +27,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { Scope, Source } from "../model/ast.js";
-import { findProjectResourceDir, userResourceDir } from "./paths.js";
+import { projectSkillDirs, userSkillDirs } from "./paths.js";
 
 /** A skill with its instructions already loaded. */
 export interface ResolvedSkill {
@@ -36,6 +43,13 @@ export type SkillFailure =
   | { name: string; reason: "unknown" }
   | { name: string; reason: "unreadable"; message: string };
 
+/** A name defined by more than one directory; the first definition won. */
+export interface SkillCollision {
+  name: string;
+  winner: string;
+  loser: string;
+}
+
 /**
  * What one (cwd, scope) pair offers. Holds metadata plus a lazily filled cache
  * of stripped bodies, so preflight's read serves the later spawn and a wide
@@ -45,32 +59,53 @@ export interface SkillCatalog {
   readonly cwd: string;
   readonly scope: Scope;
   readonly skills: ReadonlyMap<string, Skill>;
+  readonly collisions: readonly SkillCollision[];
   readonly bodies: Map<string, string>;
 }
 
-function loadFrom(dir: string | null, source: Source): Skill[] {
-  if (dir === null) return [];
-  return loadSkillsFromDir({ dir, source }).skills;
+/**
+ * The directories a scope contributes, in precedence order. Project entries
+ * precede user ones because that is the order pi resolves them in, and the
+ * first definition of a name wins.
+ */
+function skillDirs(cwd: string, scope: Scope): Array<[string, Source]> {
+  const dirs: Array<[string, Source]> = [];
+  if (scope !== "user")
+    for (const dir of projectSkillDirs(cwd)) dirs.push([dir, "project"]);
+  if (scope !== "project")
+    for (const dir of userSkillDirs()) dirs.push([dir, "user"]);
+  return dirs;
 }
 
 /**
- * List the skills available for a cwd and scope. Project skills come from the
- * one project root shared with profiles and workflows; on name conflicts the
- * project wins, mirroring `discoverAgents`.
+ * List the skills available for a cwd and scope, first definition winning.
+ * Collisions are recorded rather than hidden: two directories defining one name
+ * is a configuration smell worth surfacing, not a silent substitution.
  */
 export function discoverSkills(cwd: string, scope: Scope): SkillCatalog {
-  const user =
-    scope !== "project" ? loadFrom(userResourceDir("skills"), "user") : [];
-  const project =
-    scope !== "user"
-      ? loadFrom(findProjectResourceDir(cwd, "skills"), "project")
-      : [];
-
   const skills = new Map<string, Skill>();
-  for (const skill of user) skills.set(skill.name, skill);
-  for (const skill of project) skills.set(skill.name, skill);
+  const collisions: SkillCollision[] = [];
+  const seenPaths = new Set<string>();
 
-  return { cwd, scope, skills, bodies: new Map() };
+  for (const [dir, source] of skillDirs(cwd, scope)) {
+    for (const skill of loadSkillsFromDir({ dir, source }).skills) {
+      // The same directory can be reachable twice (symlinks, nested walks).
+      if (seenPaths.has(skill.filePath)) continue;
+      seenPaths.add(skill.filePath);
+      const existing = skills.get(skill.name);
+      if (existing) {
+        collisions.push({
+          name: skill.name,
+          winner: existing.filePath,
+          loser: skill.filePath,
+        });
+        continue;
+      }
+      skills.set(skill.name, skill);
+    }
+  }
+
+  return { cwd, scope, skills, collisions, bodies: new Map() };
 }
 
 /** Skill names a catalog offers, sorted for stable error messages. */

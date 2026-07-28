@@ -91,6 +91,8 @@ export class CatalogCache {
     { agents: Agent[]; diagnostics: Diagnostic[] }
   >();
   private readonly skills = new Map<string, SkillCatalog>();
+  /** Skill directory scans performed; observable so tests can prove elision. */
+  skillScans = 0;
 
   agentsFor(cwd: string, scope: Scope) {
     const key = `${cwd}|${scope}`;
@@ -108,6 +110,7 @@ export class CatalogCache {
     if (!catalog) {
       catalog = discoverSkills(cwd, scope);
       this.skills.set(key, catalog);
+      this.skillScans += 1;
     }
     return catalog;
   }
@@ -175,16 +178,22 @@ export function resolveInvocation(
   // Presence, not truthiness: `[]` is an explicit "none", not "inherit".
   const requested =
     call.skills !== undefined ? call.skills : (profile?.skills ?? []);
-  const catalog = context.catalogs.skillsFor(cwd, scope);
-  const { resolved, failures } = resolveSkills(requested, catalog);
-  for (const failure of failures) {
-    problems.push(
-      failure.reason === "unknown"
-        ? `unknown skill '${failure.name}' ${where(cwd, scope)}. Available: ${
-            skillNames(catalog).join(", ") || "none"
-          }`
-        : `unreadable skill '${failure.name}' ${where(cwd, scope)}: ${failure.message}`,
-    );
+  // The common case asks for no skills. Scanning the catalog then would walk
+  // and read skill directories for nothing.
+  let resolved: ResolvedSkill[] = [];
+  if (requested.length > 0) {
+    const catalog = context.catalogs.skillsFor(cwd, scope);
+    const outcome = resolveSkills(requested, catalog);
+    resolved = outcome.resolved;
+    for (const failure of outcome.failures) {
+      problems.push(
+        failure.reason === "unknown"
+          ? `unknown skill '${failure.name}' ${where(cwd, scope)}. Available: ${
+              skillNames(catalog).join(", ") || "none"
+            }`
+          : `unreadable skill '${failure.name}' ${where(cwd, scope)}: ${failure.message}`,
+      );
+    }
   }
 
   if (problems.length > 0) return { ok: false, cwd, scope, problems };

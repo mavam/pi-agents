@@ -24,4 +24,6 @@ cannot start run: at $.steps[1], unknown skill 'code-reveiw'
 (cwd: /repo, scope: project). Available: code-review, gh
 ```
 
-Skill discovery follows `scope` exactly as profile discovery does, so an untrusted project — clamped to user scope — can no longer contribute skills. All project resources now resolve from one project root, the nearest ancestor of the cwd holding a `.pi` directory; profiles, skills, and workflows previously walked up independently, which let a run combine a parent project's profile with a nested project's skills.
+Skills resolve from the same catalog pi advertises in `<available_skills>`, in the same precedence order: `<project>/.pi/skills` and `.agents/skills` from the cwd up to the git root, then `~/.pi/agent/skills` and `~/.agents/skills`, with the first definition of a name winning. Discovery follows `scope` exactly as profile discovery does, so an untrusted project — clamped to user scope — contributes no skills.
+
+All project resources now resolve from one project root, the nearest ancestor of the cwd holding a `.pi` directory; profiles, skills, and workflows previously walked up independently, which let a run combine a parent project's profile with a nested project's skills.

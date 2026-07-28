@@ -47,6 +47,11 @@ function userSkills(): string {
   return path.join(process.env.PI_CODING_AGENT_DIR as string, "skills");
 }
 
+/** `~/.agents/skills` under the suite's temp HOME (see tests/setup.ts). */
+function homeAgentsSkills(): string {
+  return path.join(process.env.HOME as string, ".agents", "skills");
+}
+
 /** Resolve against `projectDir` with project trust, or fail the test. */
 function resolve(call: InvocationCall, trusted = true) {
   const resolution = resolveInvocation(call, {
@@ -328,7 +333,114 @@ describe("one project root per cwd", () => {
   });
 });
 
+describe("pi's skill locations", () => {
+  // pi advertises skills from .pi/skills and .agents/skills, user and project
+  // alike. A name taken from <available_skills> must resolve here.
+  test("user .agents/skills is part of the catalog", () => {
+    const dir = homeAgentsSkills();
+    writeSkill(dir, "home-agents-skill");
+    try {
+      const invocation = resolveOk({ skills: ["home-agents-skill"] });
+      expect(invocation.skills[0]?.filePath).toContain(
+        path.join(".agents", "skills", "home-agents-skill"),
+      );
+    } finally {
+      fs.rmSync(path.join(dir, "home-agents-skill"), {
+        recursive: true,
+        force: true,
+      });
+    }
+  });
+
+  test("project .agents/skills is found from the cwd up to the git root", () => {
+    // Git root at the top, cwd two levels below it, skill in between.
+    fs.mkdirSync(path.join(projectDir, ".git"), { recursive: true });
+    const middle = path.join(projectDir, "pkg");
+    const deep = path.join(middle, "src");
+    fs.mkdirSync(deep, { recursive: true });
+    writeSkill(path.join(middle, ".agents", "skills"), "ancestor-skill");
+
+    const invocation = resolveOk({ skills: ["ancestor-skill"], cwd: deep });
+    expect(invocation.skills[0]?.filePath).toContain(
+      path.join("pkg", ".agents", "skills", "ancestor-skill"),
+    );
+  });
+
+  test("the walk stops at the git root", () => {
+    // A .agents/skills above the repo root must not leak into the project.
+    const outer = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agents-outer-"));
+    try {
+      const repo = path.join(outer, "repo");
+      fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+      writeSkill(path.join(outer, ".agents", "skills"), "too-far");
+      const resolution = resolveInvocation(
+        { skills: ["too-far"] },
+        {
+          cwd: repo,
+          scope: "both",
+          trusted: true,
+          catalogs: new CatalogCache(),
+        },
+      );
+      expect(resolution.ok).toBe(false);
+    } finally {
+      fs.rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  test("an untrusted project contributes no .agents skills either", () => {
+    writeSkill(path.join(projectDir, ".agents", "skills"), "project-agents");
+    expect(resolve({ skills: ["project-agents"] }, false).ok).toBe(false);
+    expect(resolveOk({ skills: ["project-agents"] }, true).skills).toHaveLength(
+      1,
+    );
+  });
+
+  test("the first directory defining a name wins, project before user", () => {
+    // Same order pi resolves in, so a name means the same file here as in
+    // <available_skills>.
+    writeSkill(projectSkills(projectDir), "shared", "Project instructions.");
+    writeSkill(userSkills(), "shared", "User instructions.");
+    expect(resolveOk({ skills: ["shared"] }).skills[0]?.instructions).toBe(
+      "Project instructions.",
+    );
+    // Under user scope the project copy is out of reach entirely.
+    expect(
+      resolveOk({ skills: ["shared"], scope: "user" }).skills[0]?.instructions,
+    ).toBe("User instructions.");
+  });
+
+  test("collisions are recorded rather than hidden", () => {
+    writeSkill(projectSkills(projectDir), "shared", "Project instructions.");
+    writeSkill(userSkills(), "shared", "User instructions.");
+    const catalogs = new CatalogCache();
+    catalogs.skillsFor(projectDir, "both");
+    const catalog = catalogs.skillsFor(projectDir, "both");
+    expect(catalog.collisions).toHaveLength(1);
+    expect(catalog.collisions[0]).toMatchObject({ name: "shared" });
+    expect(catalog.collisions[0]?.winner).toContain(".pi");
+  });
+});
+
 describe("catalog cache", () => {
+  test("invocations without skills never scan the catalog", () => {
+    const catalogs = new CatalogCache();
+    const context = {
+      cwd: projectDir,
+      scope: "both" as const,
+      trusted: true,
+      catalogs,
+    };
+    writeAgent(projectDir, "plain");
+    resolveInvocation({}, context);
+    resolveInvocation({ agent: "plain" }, context);
+    resolveInvocation({ skills: [] }, context);
+    expect(catalogs.skillScans).toBe(0);
+
+    resolveInvocation({ skills: ["code-review"] }, context);
+    expect(catalogs.skillScans).toBe(1);
+  });
+
   test("a shared cache reads each skill body once", () => {
     const catalogs = new CatalogCache();
     const context = {

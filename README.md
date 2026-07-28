@@ -303,11 +303,19 @@ the profile's list wholesale and `skills: []` clears it; omit the key to
 inherit. `tools` behaves identically, and `tools: []` leaves the agent no way
 to read the files a skill references — pair the two deliberately.
 
-Skills are named, not inlined: `skills: [code-review]` resolves against
-`~/.pi/agent/skills` and `<project>/.pi/skills` under the same `scope` that
-governs profile discovery, and the instructions are injected into the
-delegated agent's system prompt. A name that does not resolve fails the run
-during preflight, before anything spawns.
+Skills are named, not inlined: `skills: [code-review]` resolves against the
+same catalog pi advertises in `<available_skills>`, so a name you see there
+works here. In precedence order, first match winning:
+
+| Scope   | Locations                                                            |
+| ------- | -------------------------------------------------------------------- |
+| project | `<project>/.pi/skills`, then `.agents/skills` from the cwd up to the git root |
+| user    | `~/.pi/agent/skills`, then `~/.agents/skills`                        |
+
+The same `scope` that governs profile discovery selects which rows apply, so an
+untrusted project contributes no skills at all. Resolved instructions are
+injected into the delegated agent's system prompt; a name that does not resolve
+fails the run during preflight, before anything spawns.
 
 **Value contract.** An agent's value is the text of its *last* assistant
 message — nothing else. Thinking, tool calls, tool output, and earlier

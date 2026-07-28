@@ -4,6 +4,8 @@ type: change
 authors:
   - mavam
   - claude
+prs:
+  - 23
 created: 2026-07-28T11:37:11.413947Z
 ---
 

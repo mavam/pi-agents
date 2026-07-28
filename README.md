@@ -493,13 +493,16 @@ transcript responsive, and step-to-step interpolation uses the same
 
 ### Interactive browsing
 
-In the TUI, `/workflows` and `/agents` open a split-pane overlay: a table on
+In the TUI, `/workflows` and `/agents` open a split-pane panel: a table on
 top, the selected item's flow tree (or agent details) below. Scrolling moves
-the detail pane with the selection, live runs refresh in place, and the
-overlay is pinned near the top of the screen — the table never moves; the
-detail pane only ever grows downward.
+the detail pane with the selection and live runs refresh in place. The panel
+opens in place of the composer — where pi shows `/settings` and `/model` — so
+it appears right where you were typing instead of a screenful away on tall
+terminals. It caps itself at roughly 60% of the terminal height to keep the
+conversation visible above, the table never moves, and the detail pane only
+ever grows downward.
 
-The workflows overlay is three tiers deep, mirroring the framework's three
+The workflows panel is three tiers deep, mirroring the framework's three
 nouns: workflows (with live run badges), one workflow's runs, and one run's
 agents. `⏎` drills in, `esc` backs out one tier. Synthetic rows cover runs
 that no saved workflow claims: `all runs` (the global, chronological view)
@@ -526,7 +529,7 @@ and `(ad-hoc)` (inline and tool-started flows).
 ╰─ ⏎ inspect · a agents · c cancel · r rerun · esc ──╯
 ```
 
-Keys — all overlays: `↑`/`↓` (or `k`/`j`) move, `esc` closes or backs out
+Keys — all tiers: `↑`/`↓` (or `k`/`j`) move, `esc` closes or backs out
 one tier. Workflow tier: `⏎` drills into the selected workflow's runs, `c`
 puts `/<name> ` into the composer so you can add arguments, `r` runs it
 immediately (workflows with required parameters fall back to composing),
@@ -540,7 +543,7 @@ auto-following tail of its assistant output and tool activity. The tail is a
 bounded in-memory peek and is not persisted as another agent artifact. On a
 running agent, `s` opens an inline composer for a steering message from either
 the agent list or its tail, so you can observe, correct course, and keep
-watching. In the agents overlay, `⏎` posts the full agent details and `n` starts
+watching. In the agents panel, `⏎` posts the full agent details and `n` starts
 a new definition.
 
 The live summary widget can be toggled wholesale with `/workflows widget`.
@@ -592,7 +595,7 @@ the agent detail view and are persisted with their source (`user`, `tool`, or
 `rpc`). Steering-triggered assistant turns count toward the run's normal usage
 and turn totals.
 
-Besides the `/workflows` overlay, the model can call the separate `steer` tool with
+Besides the `/workflows` panel, the model can call the separate `steer` tool with
 a run ID (full or unique prefix), an optional exact node instance, and the
 message. The instance may be omitted only while exactly one agent in that run
 is steerable.

@@ -172,28 +172,52 @@ describe("renderOverlay", () => {
       () => {},
     );
     const lines = big.render(60);
-    // Fills the whole budget (rows - 4) — no line pi-tui would slice off.
-    expect(lines).toHaveLength(46);
+    // Fills the budget (~60% of rows), leaving the transcript above visible.
+    expect(lines).toHaveLength(30);
     expect(lines.at(-1)).toContain("hints");
     expect(lines.some((line) => line.includes("more lines"))).toBe(true);
     big.dispose();
   });
 
-  test("openOverlay sets no maxHeight — the component owns its height", async () => {
-    let captured: { overlayOptions?: Record<string, unknown> } | undefined;
+  test("short terminals keep the 8-row floor and every line fits", () => {
+    const tui = {
+      terminal: { rows: 12 },
+      requestRender: () => {},
+    } as unknown as TUI;
+    const panel = new SplitPaneOverlay(
+      tui,
+      (_color, text) => text,
+      spec(["a"], () => Array.from({ length: 100 }, (_, i) => `line ${i}`)),
+      () => {},
+    );
+    const lines = panel.render(60);
+    expect(lines.length).toBeGreaterThanOrEqual(5);
+    expect(lines.length).toBeLessThanOrEqual(8);
+    expect(lines.at(-1)).toContain("hints");
+    for (const line of lines) expect(visibleWidth(line)).toBe(60);
+    panel.dispose();
+  });
+
+  test("openOverlay mounts in the editor slot, not as a floating overlay", async () => {
+    let captured: Record<string, unknown> | undefined;
+    let called = false;
     const ctx = {
       ui: {
         custom: async (
           _factory: unknown,
-          options: { overlayOptions?: Record<string, unknown> },
+          options?: Record<string, unknown>,
         ) => {
+          called = true;
           captured = options;
         },
       },
     };
     await openOverlay(ctx as never, spec(["a"]));
-    expect(captured?.overlayOptions?.maxHeight).toBeUndefined();
-    expect(captured?.overlayOptions?.row).toBe(2);
+    expect(called).toBe(true);
+    // Composer-replacement placement: the host only mounts into the editor
+    // container when `overlay` is falsy, so these must stay unset.
+    expect(captured?.overlay).toBeUndefined();
+    expect(captured?.overlayOptions).toBeUndefined();
   });
 
   test("composer captures text and submits without closing the overlay", async () => {

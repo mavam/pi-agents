@@ -9,6 +9,7 @@ import {
   workNodes,
 } from "../../src/run/state.js";
 import {
+  buildWorkflowsSpec,
   completeRunArgs,
   findNodeInRun,
   formatNodeResultFull,
@@ -315,5 +316,61 @@ describe("completeRunArgs", () => {
   test("no completions after other verbs or unknown runs", async () => {
     expect(completeRunArgs("run-1234 watch ", await runs())).toEqual([]);
     expect(completeRunArgs("zzz result ", await runs())).toEqual([]);
+  });
+});
+
+describe("workflows panel actions", () => {
+  function harness() {
+    const notices: string[] = [];
+    const editorText: string[] = [];
+    const ctx = {
+      cwd: "/tmp/pi-agents-nonexistent",
+      mode: "tui",
+      hasUI: true,
+      ui: {
+        notify: (text: string) => notices.push(text),
+        setEditorText: (text: string) => editorText.push(text),
+      },
+    };
+    const deps = {
+      manager: { state: { runs: new Map() } },
+      notifications: { setContext: () => {} },
+      widget: { isHidden: () => false, setSuppressed: () => {} },
+    };
+    const messages: string[] = [];
+    const pi = {
+      sendMessage: (m: { content: string }) => messages.push(m.content),
+    };
+    const spec = buildWorkflowsSpec(pi as never, deps as never, ctx as never);
+    return { spec, notices, editorText, messages };
+  }
+
+  const workflowItem = (params: unknown[] = []) =>
+    ({
+      kind: "workflow",
+      wf: { name: "deep-test", source: "user", params },
+    }) as never;
+
+  test("running a workflow keeps the panel open to watch it", () => {
+    const { spec } = harness();
+    // Closing would strand the user at the composer with only the live
+    // summary — the panel already reports the run it just started.
+    expect(spec.onAction("r", workflowItem())).toBeUndefined();
+  });
+
+  test("composing prefills only after the panel restores the editor", async () => {
+    const { spec, editorText } = harness();
+    expect(spec.onAction("c", workflowItem())).toBe("close");
+    // ctx.ui.custom() restores its captured editor text during teardown. The
+    // prefill must run later or that restore overwrites it.
+    expect(editorText).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(editorText).toEqual(["/deep-test "]);
+
+    const required = [{ name: "target", required: true }];
+    expect(spec.onAction("r", workflowItem(required))).toBe("close");
+    expect(editorText).toEqual(["/deep-test "]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(editorText).toEqual(["/deep-test ", "/deep-test "]);
   });
 });

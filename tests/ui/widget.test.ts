@@ -5,6 +5,7 @@ import { executeFlow } from "../../src/run/interpreter.js";
 import { type RunView, rebuildRunState } from "../../src/run/state.js";
 import {
   formatRunWidget,
+  RunWidget,
   STALL_AFTER_MS,
   widgetProgress,
 } from "../../src/ui/widget.js";
@@ -377,5 +378,56 @@ describe("live activity", () => {
     );
     expect(stalled).toContain("no output for");
     expect(stalled).not.toContain("still merging");
+  });
+});
+
+describe("RunWidget suppression", () => {
+  function harness() {
+    const runs = new Map<string, RunView>();
+    runs.set("a", {
+      status: "running",
+      header: { id: "a", source: { kind: "command" } },
+    } as unknown as RunView);
+    const widget = new RunWidget({ state: { runs } } as never);
+    const shown: unknown[] = [];
+    const ctx = {
+      mode: "tui",
+      ui: { setWidget: (_key: string, value: unknown) => shown.push(value) },
+    } as never;
+    widget.update(ctx);
+    return { widget, shown, last: () => shown.at(-1) };
+  }
+
+  test("a live run renders the summary until it is suppressed", () => {
+    const { widget, last } = harness();
+    expect(typeof last()).toBe("function");
+
+    widget.setSuppressed(true);
+    expect(last()).toBeUndefined();
+
+    widget.setSuppressed(false);
+    expect(typeof last()).toBe("function");
+    widget.dispose();
+  });
+
+  test("suppression is orthogonal to the enabled preference", () => {
+    const { widget, last } = harness();
+    // Summary explicitly disabled, then a panel opens and closes: the
+    // preference must survive, so the summary stays hidden afterwards.
+    expect(widget.toggleEnabled()).toBe(false);
+    widget.setSuppressed(true);
+    widget.setSuppressed(false);
+    expect(widget.isEnabled()).toBe(false);
+    expect(last()).toBeUndefined();
+    widget.dispose();
+  });
+
+  test("redundant suppression toggles do not re-render", () => {
+    const { widget, shown } = harness();
+    widget.setSuppressed(true);
+    const count = shown.length;
+    widget.setSuppressed(true);
+    expect(shown.length).toBe(count);
+    widget.dispose();
   });
 });

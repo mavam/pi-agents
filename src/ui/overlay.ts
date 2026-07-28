@@ -1,7 +1,11 @@
 /**
- * Interactive split-pane overlay for /workflows and /agents: a keyboard-
+ * Interactive split-pane panel for /workflows and /agents: a keyboard-
  * navigable table on top, the selected item's flow tree in a detail pane
  * below. One generic component; the commands supply an OverlaySpec.
+ *
+ * The panel replaces the composer in the editor slot (like pi's /settings and
+ * /model selectors) rather than floating over the transcript, so it opens next
+ * to where the user is looking.
  *
  *   ╭─ Runs · /triage (2/4) ─────────────────────────────╮
  *   │   ● 1a2b3c4d  completed  review    3t ↑12k  $0.08  │
@@ -22,7 +26,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { type Colorize, plainColorize } from "./widget.js";
+import { type Colorize, plainColorize, type RunWidget } from "./widget.js";
 
 const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
@@ -286,11 +290,18 @@ export class SplitPaneOverlay<T> implements Component {
     this.syncTimer();
     const index = this.currentIndex(items);
     this.select(items, index);
-    // Self-cap: this is the overlay's only height limit (openOverlay sets no
-    // maxHeight), so it must fit the terminal — an overlay taller than the
-    // screen is clipped from the top, eating the title. The slack covers the
-    // fixed top row (2) plus two rows of breathing room at the bottom.
-    const height = Math.max(8, this.tui.terminal.rows - 4);
+    // Self-cap: the panel mounts in the editor slot, so every row it renders
+    // pushes the transcript up. Stay under ~60% of the terminal to keep the
+    // conversation visible above, with an 8-row floor so the split pane is
+    // still usable on short terminals (it always fits: the floor only wins
+    // when the terminal is tiny, where there is nothing to preserve anyway).
+    const height = Math.max(
+      8,
+      Math.min(
+        this.tui.terminal.rows - 6,
+        Math.floor(this.tui.terminal.rows * 0.6),
+      ),
+    );
     const item = items[index];
     if (item !== undefined) {
       const { detailRows } = paneRows(
@@ -390,25 +401,32 @@ export class SplitPaneOverlay<T> implements Component {
   }
 }
 
-/** Open a split-pane overlay and resolve when the user dismisses it. */
+/**
+ * Open the split-pane panel and resolve when the user dismisses it.
+ *
+ * Pass the run widget to mute the live summary for as long as the panel is
+ * open: it renders directly above the composer slot the panel occupies and
+ * repeats the run state the panel already shows.
+ */
 export async function openOverlay<T>(
   ctx: Pick<ExtensionContext, "ui">,
   spec: OverlaySpec<T>,
+  widget?: Pick<RunWidget, "setSuppressed">,
 ): Promise<void> {
-  await ctx.ui.custom<void>(
-    (tui, theme, _keybindings, done) => {
+  widget?.setSuppressed(true);
+  try {
+    // No `overlay: true`: the panel mounts in the editor slot where the
+    // composer was — the same placement pi uses for /settings and /model — so
+    // it appears exactly where the user was typing instead of floating at the
+    // top of a tall terminal. The host restores the editor and its focus when
+    // done() fires. The component budgets its own height from terminal.rows.
+    await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
       const color: Colorize = (name, text) => theme.fg(name, text);
       return new SplitPaneOverlay(tui, color, spec, () => done(undefined));
-    },
-    {
-      overlay: true,
-      // A fixed top row (not a centered anchor): the box top and the table
-      // stay put while the detail pane grows downward with the selection.
-      // No maxHeight: the TUI would slice the rendered lines from the bottom,
-      // eating the footer and the detail tail. The component budgets its own
-      // height from terminal.rows, so the box is elastic — it grows with the
-      // content and everything it renders is shown.
-      overlayOptions: { width: "85%", row: 2 },
-    },
-  );
+    });
+  } finally {
+    // finally: a throwing panel must not leave the summary muted for the
+    // rest of the session.
+    widget?.setSuppressed(false);
+  }
 }

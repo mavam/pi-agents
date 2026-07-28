@@ -220,6 +220,37 @@ describe("renderOverlay", () => {
     expect(captured?.overlayOptions).toBeUndefined();
   });
 
+  test("the live run summary is muted for exactly as long as the panel is open", async () => {
+    const calls: boolean[] = [];
+    const widget = { setSuppressed: (value: boolean) => calls.push(value) };
+    const ctx = {
+      ui: {
+        custom: async () => {
+          // The panel is mounted at this point: the summary must be muted.
+          expect(calls).toEqual([true]);
+        },
+      },
+    };
+    await openOverlay(ctx as never, spec(["a"]), widget);
+    expect(calls).toEqual([true, false]);
+  });
+
+  test("a failing panel still restores the live run summary", async () => {
+    const calls: boolean[] = [];
+    const widget = { setSuppressed: (value: boolean) => calls.push(value) };
+    const ctx = {
+      ui: {
+        custom: async () => {
+          throw new Error("panel exploded");
+        },
+      },
+    };
+    await expect(
+      openOverlay(ctx as never, spec(["a"]), widget),
+    ).rejects.toThrow("panel exploded");
+    expect(calls).toEqual([true, false]);
+  });
+
   test("composer captures text and submits without closing the overlay", async () => {
     let submitted: string | undefined;
     let closed = false;

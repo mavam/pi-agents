@@ -26,7 +26,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { type Colorize, plainColorize } from "./widget.js";
+import { type Colorize, plainColorize, type RunWidget } from "./widget.js";
 
 const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
@@ -401,18 +401,32 @@ export class SplitPaneOverlay<T> implements Component {
   }
 }
 
-/** Open the split-pane panel and resolve when the user dismisses it. */
+/**
+ * Open the split-pane panel and resolve when the user dismisses it.
+ *
+ * Pass the run widget to mute the live summary for as long as the panel is
+ * open: it renders directly above the composer slot the panel occupies and
+ * repeats the run state the panel already shows.
+ */
 export async function openOverlay<T>(
   ctx: Pick<ExtensionContext, "ui">,
   spec: OverlaySpec<T>,
+  widget?: Pick<RunWidget, "setSuppressed">,
 ): Promise<void> {
-  // No `overlay: true`: the panel mounts in the editor slot where the composer
-  // was — the same placement pi uses for /settings and /model — so it appears
-  // exactly where the user was typing instead of floating at the top of a tall
-  // terminal. The host restores the editor and its focus when done() fires.
-  // The component budgets its own height from terminal.rows.
-  await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
-    const color: Colorize = (name, text) => theme.fg(name, text);
-    return new SplitPaneOverlay(tui, color, spec, () => done(undefined));
-  });
+  widget?.setSuppressed(true);
+  try {
+    // No `overlay: true`: the panel mounts in the editor slot where the
+    // composer was — the same placement pi uses for /settings and /model — so
+    // it appears exactly where the user was typing instead of floating at the
+    // top of a tall terminal. The host restores the editor and its focus when
+    // done() fires. The component budgets its own height from terminal.rows.
+    await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+      const color: Colorize = (name, text) => theme.fg(name, text);
+      return new SplitPaneOverlay(tui, color, spec, () => done(undefined));
+    });
+  } finally {
+    // finally: a throwing panel must not leave the summary muted for the
+    // rest of the session.
+    widget?.setSuppressed(false);
+  }
 }

@@ -81,7 +81,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         .map((arg) => ({ value: arg, label: arg })),
     handler: async (args, ctx) => {
       if (ctx.hasUI && ctx.mode === "tui" && args.trim() !== "list") {
-        await openOverlay(ctx, buildAgentsSpec(pi, ctx));
+        await openOverlay(ctx, buildAgentsSpec(pi, ctx), deps.widget);
         return;
       }
       const discovery = discoverAgents(ctx.cwd, scopeFor(ctx));
@@ -163,7 +163,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         return;
       }
       if (ctx.hasUI && ctx.mode === "tui" && arg !== "list") {
-        await openOverlay(ctx, buildWorkflowsSpec(pi, deps, ctx));
+        await openOverlay(ctx, buildWorkflowsSpec(pi, deps, ctx), deps.widget);
         return;
       }
       const { workflows, diagnostics } = discoverWorkflows(

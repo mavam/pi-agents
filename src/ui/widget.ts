@@ -382,6 +382,8 @@ export class RunWidget {
   /** Run ids muted from the summary (session-scoped, via the /workflows overlay `h`). */
   private readonly hidden = new Set<string>();
   private enabled = true;
+  /** True while a browser panel owns the composer slot. */
+  private suppressed = false;
 
   constructor(manager: RunManager) {
     this.manager = manager;
@@ -411,6 +413,18 @@ export class RunWidget {
     return this.enabled;
   }
 
+  /**
+   * Hide the summary while a browser panel is open: the panel sits in the
+   * composer slot right below it and reports the same run state, so the widget
+   * is pure duplication there. Orthogonal to the `enabled` preference and the
+   * per-run `hidden` set — both survive being suppressed.
+   */
+  setSuppressed(value: boolean): void {
+    if (this.suppressed === value) return;
+    this.suppressed = value;
+    this.update();
+  }
+
   /** Turn the whole live summary on/off. Returns the new state. */
   toggleEnabled(): boolean {
     this.enabled = !this.enabled;
@@ -423,7 +437,7 @@ export class RunWidget {
   }
 
   private render(context: ExtensionContext): void {
-    const running = this.enabled ? this.running() : [];
+    const running = this.enabled && !this.suppressed ? this.running() : [];
     if (running.length === 0) {
       this.stopTicking();
       context.ui.setWidget(WIDGET_KEY, undefined);

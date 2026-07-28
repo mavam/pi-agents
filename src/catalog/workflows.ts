@@ -11,7 +11,6 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import YAML from "yaml";
 import type {
   FlowNode,
@@ -27,6 +26,7 @@ import {
   validateFlow,
 } from "../model/validate.js";
 import type { Diagnostic } from "./agents.js";
+import { findProjectResourceDir, userResourceDir } from "./paths.js";
 
 export interface WorkflowDiscoveryResult {
   workflows: WorkflowDef[];
@@ -51,6 +51,23 @@ export const HOOKABLE_EVENTS = [
 
 const HOOKABLE_EVENT_SET: ReadonlySet<string> = new Set(HOOKABLE_EVENTS);
 
+/**
+ * Keys that only exist in the flat single-unit form. Each maps to a field on
+ * the normalized `AgentNode` ('agent' becomes 'name'), and each is rejected
+ * alongside `flow:`.
+ */
+const FLAT_ONLY_KEYS = [
+  "agent",
+  "task",
+  "model",
+  "thinking",
+  "skills",
+  "tools",
+  "cwd",
+  "scope",
+  "output",
+];
+
 const ALLOWED_KEYS = new Set([
   "name",
   "description",
@@ -61,14 +78,14 @@ const ALLOWED_KEYS = new Set([
   "doc",
   "flow",
   // Flat single-unit form (sugar for flow: {kind: agent, …}):
-  "agent",
-  "task",
-  "model",
-  "thinking",
+  ...FLAT_ONLY_KEYS,
 ]);
 
 /** The file extension decides the parser. */
 const WORKFLOW_EXTENSIONS = [".yaml", ".yml", ".json"];
+
+/** Flat-form keys that carry list values; everything else is a string. */
+const FLAT_LIST_KEYS = new Set(["skills", "tools"]);
 
 const WORKFLOW_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
@@ -76,36 +93,12 @@ function toErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-function getUserWorkflowsDir(): string {
-  return path.join(getAgentDir(), "workflows");
-}
-
-function isDirectory(p: string): boolean {
-  try {
-    return fs.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function findNearestProjectWorkflowsDir(cwd: string): string | null {
-  const userDir = path.resolve(getUserWorkflowsDir());
-  let dir = path.resolve(cwd);
-  while (true) {
-    const candidate = path.join(dir, ".pi", "workflows");
-    if (isDirectory(candidate) && path.resolve(candidate) !== userDir)
-      return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-
 /**
  * The flow expression: either an explicit `flow:` tree or the flat
- * single-unit form (`task:` + optional agent/model/thinking), which
- * normalizes to a bare agent leaf. Without `agent:` the leaf is anonymous
- * and runs as an ad-hoc agent.
+ * single-unit form (`task:` plus any agent-call option), which normalizes to a
+ * bare agent leaf. Without `agent:` the leaf is anonymous and runs as an
+ * ad-hoc agent. The flat form is pure sugar: it must produce exactly the
+ * `AgentNode` the equivalent `flow:` tree would.
  */
 function extractRawFlow(
   fm: Record<string, unknown>,
@@ -119,7 +112,9 @@ function extractRawFlow(
     };
   }
   if (hasFlow) {
-    for (const key of ["model", "thinking"]) {
+    // Every flat-form key belongs on the agent node once 'flow:' is in play;
+    // silently dropping one would make the sugar and the tree disagree.
+    for (const key of FLAT_ONLY_KEYS) {
       if (fm[key] !== undefined) {
         return {
           ok: false,
@@ -141,21 +136,25 @@ function extractRawFlow(
     if (fm.task === undefined) {
       return { ok: false, error: "The flat agent form requires 'task:'" };
     }
-    for (const key of ["task", "model", "thinking"]) {
-      if (fm[key] !== undefined && typeof fm[key] !== "string") {
+    const node: Record<string, unknown> = { kind: "agent" };
+    for (const key of FLAT_ONLY_KEYS) {
+      const value = fm[key];
+      if (value === undefined) continue;
+      if (FLAT_LIST_KEYS.has(key)) {
+        if (!Array.isArray(value) || value.some((e) => typeof e !== "string")) {
+          return {
+            ok: false,
+            error: `Invalid '${key}' (must be an array of strings)`,
+          };
+        }
+      } else if (typeof value !== "string") {
         return { ok: false, error: `Invalid '${key}' (must be a string)` };
       }
+      // 'agent' is the flat spelling of the node's 'name'.
+      if (key === "agent") node.name = (value as string).trim();
+      else node[key] = value;
     }
-    return {
-      ok: true,
-      flow: {
-        kind: "agent",
-        ...(typeof fm.agent === "string" ? { name: fm.agent.trim() } : {}),
-        ...(fm.task !== undefined ? { task: fm.task } : {}),
-        ...(fm.model !== undefined ? { model: fm.model } : {}),
-        ...(fm.thinking !== undefined ? { thinking: fm.thinking } : {}),
-      },
-    };
+    return { ok: true, flow: node };
   }
   return {
     ok: false,
@@ -398,10 +397,10 @@ export function discoverWorkflows(
   cwd: string,
   scope: Scope,
 ): WorkflowDiscoveryResult {
-  const projectWorkflowsDir = findNearestProjectWorkflowsDir(cwd);
+  const projectWorkflowsDir = findProjectResourceDir(cwd, "workflows");
   const user =
     scope !== "project"
-      ? loadWorkflowsFromDir(getUserWorkflowsDir(), "user")
+      ? loadWorkflowsFromDir(userResourceDir("workflows"), "user")
       : { workflows: [], diagnostics: [] };
   const project =
     scope !== "user" && projectWorkflowsDir

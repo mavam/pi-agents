@@ -130,6 +130,55 @@ describe("seq and bindings", () => {
   });
 });
 
+describe("execution option forwarding", () => {
+  const options = {
+    model: "m",
+    thinking: "low",
+    skills: ["code-review"],
+    tools: ["read"],
+    cwd: "/elsewhere",
+    scope: "user",
+  } as const;
+
+  test("agent nodes forward every option to the call", async () => {
+    const { calls } = await run(
+      { kind: "agent", task: "t", ...options },
+      () => "ok",
+      { cwd: "/run", scope: "both" },
+    );
+    expect(calls[0]).toMatchObject(options);
+  });
+
+  test("reducers forward every option to the call", async () => {
+    const { calls } = await run(
+      {
+        kind: "parallel",
+        branches: { a: { kind: "agent", task: "a" } },
+        reduce: { task: "merge {branches}", agent: "synth", ...options },
+      },
+      () => "ok",
+      { cwd: "/run", scope: "both" },
+    );
+    expect(calls.at(-1)).toMatchObject({ agent: "synth", ...options });
+  });
+
+  test("a reducer without overrides inherits the run's cwd and scope", async () => {
+    const { calls } = await run(
+      {
+        kind: "map",
+        over: "{params.files}",
+        body: { kind: "agent", task: "review {item}" },
+        reduce: { task: "merge {items}" },
+      },
+      () => "ok",
+      { cwd: "/run", scope: "project", params: { files: ["a"] } },
+    );
+    expect(calls.at(-1)).toMatchObject({ cwd: "/run", scope: "project" });
+    expect(calls.at(-1)?.skills).toBeUndefined();
+    expect(calls.at(-1)?.tools).toBeUndefined();
+  });
+});
+
 describe("parallel", () => {
   test("mode all collects branch values by name", async () => {
     const { outcome } = await run(

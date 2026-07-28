@@ -32,6 +32,7 @@ import {
   type SwitchCase,
   type SwitchNode,
   stepPath,
+  type ThinkingLevel,
   type WorkflowRefNode,
 } from "../model/ast.js";
 import {
@@ -57,7 +58,11 @@ export interface AgentCall {
   /** Node-level model override (wins over the agent file). */
   model?: string;
   /** Node-level thinking override (wins over the agent file). */
-  thinking?: string;
+  thinking?: ThinkingLevel;
+  /** Node-level skills; replaces the profile's list, `[]` forces none. */
+  skills?: string[];
+  /** Node-level tool allowlist; replaces the profile's, `[]` means no tools. */
+  tools?: string[];
   cwd?: string;
   scope?: Scope;
   path: string;
@@ -564,6 +569,8 @@ class Interpreter {
       output: node.output ?? "text",
       model: node.model,
       thinking: node.thinking,
+      skills: node.skills,
+      tools: node.tools,
       cwd: node.cwd ?? this.options.cwd,
       scope: node.scope ?? this.options.scope,
       path,
@@ -624,12 +631,18 @@ class Interpreter {
     });
     try {
       const task = renderTemplate(reduce.task, envResolver(env, reduceRoot));
+      // A reducer is an agent call like any other: same overrides, with the
+      // run's cwd and scope as the fallback.
       const result = await this.callAgent({
         agent: reduce.agent,
         task,
         output: reduce.output ?? "text",
-        cwd: this.options.cwd,
-        scope: this.options.scope,
+        model: reduce.model,
+        thinking: reduce.thinking,
+        skills: reduce.skills,
+        tools: reduce.tools,
+        cwd: reduce.cwd ?? this.options.cwd,
+        scope: reduce.scope ?? this.options.scope,
         path,
         instance,
         signal,

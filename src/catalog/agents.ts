@@ -1,27 +1,19 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import {
-  getAgentDir,
-  loadSkills,
-  parseFrontmatter,
-  stripFrontmatter,
-} from "@earendil-works/pi-coding-agent";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 // --- Types ---
 
-import type { Scope, Source } from "../model/ast.js";
+import {
+  type Scope,
+  type Source,
+  THINKING_LEVELS,
+  type ThinkingLevel,
+} from "../model/ast.js";
+import { findProjectResourceDir, userResourceDir } from "./paths.js";
 
 export type { Scope, Source };
 
-const THINKING_LEVELS: ThinkingLevel[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-];
 export type Thinking = ThinkingLevel;
 
 export interface Agent {
@@ -63,25 +55,6 @@ const ALLOWED_FRONTMATTER_KEYS = new Set([
 
 function toErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
-}
-
-// User-scope resources live inside pi's agent dir (~/.pi/agent), matching
-// pi's own conventions for skills, prompts, and tools — and inheriting the
-// PI_CODING_AGENT_DIR override wholesale.
-function getUserAgentsDir(): string {
-  return path.join(getAgentDir(), "agents");
-}
-
-function getUserSkillsDir(): string {
-  return path.join(getAgentDir(), "skills");
-}
-
-function isDirectory(p: string): boolean {
-  try {
-    return fs.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 // --- Parsing & Validation ---
@@ -218,47 +191,17 @@ function loadAgentsFromDir(
 
 // --- Discovery ---
 
-function findNearestProjectAgentsDir(cwd: string): string | null {
-  const userAgentsDir = path.resolve(getUserAgentsDir());
-  let dir = path.resolve(cwd);
-
-  while (true) {
-    const candidate = path.join(dir, ".pi", "agents");
-    if (isDirectory(candidate) && path.resolve(candidate) !== userAgentsDir)
-      return candidate;
-
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-
-function findNearestProjectSkillsCwd(cwd: string): string | null {
-  const userSkillsDir = path.resolve(getUserSkillsDir());
-  let dir = path.resolve(cwd);
-
-  while (true) {
-    const candidate = path.join(dir, ".pi", "skills");
-    if (isDirectory(candidate) && path.resolve(candidate) !== userSkillsDir)
-      return dir;
-
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-
 const EMPTY_LOAD_RESULT = {
   agents: [] as Agent[],
   diagnostics: [] as Diagnostic[],
 };
 
 export function discoverAgents(cwd: string, scope: Scope): DiscoveryResult {
-  const projectAgentsDir = findNearestProjectAgentsDir(cwd);
+  const projectAgentsDir = findProjectResourceDir(cwd, "agents");
 
   const user =
     scope !== "project"
-      ? loadAgentsFromDir(getUserAgentsDir(), "user")
+      ? loadAgentsFromDir(userResourceDir("agents"), "user")
       : EMPTY_LOAD_RESULT;
   const project =
     scope !== "user" && projectAgentsDir
@@ -309,7 +252,7 @@ export function resolveAgentByName(
   return { kind: "missing" };
 }
 
-// --- Skills ---
+// --- Formatting helpers ---
 
 function escapeXmlText(value: string): string {
   return value
@@ -322,57 +265,6 @@ function escapeXmlAttribute(value: string): string {
   return escapeXmlText(value)
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
-}
-
-export function buildSkillsPrompt(
-  skillNames: string[],
-  cwd: string,
-): { prompt: string; missingSkills: string[] } {
-  const normalized = [
-    ...new Set(skillNames.map((s) => s.trim()).filter(Boolean)),
-  ];
-  if (normalized.length === 0) return { prompt: "", missingSkills: [] };
-
-  const skillsCwd = findNearestProjectSkillsCwd(cwd) ?? cwd;
-  const { skills } = loadSkills({
-    cwd: skillsCwd,
-    agentDir: getAgentDir(),
-    skillPaths: [],
-    includeDefaults: true,
-  });
-  const byName = new Map(skills.map((s) => [s.name, s]));
-
-  const blocks: string[] = [];
-  const missingSkills: string[] = [];
-
-  for (const name of normalized) {
-    const skill = byName.get(name);
-    if (!skill) {
-      missingSkills.push(name);
-      continue;
-    }
-    try {
-      const content = fs.readFileSync(skill.filePath, "utf-8");
-      const body = stripFrontmatter(content).trim();
-      blocks.push(
-        `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`,
-      );
-    } catch {
-      missingSkills.push(name);
-    }
-  }
-
-  const parts: string[] = [];
-  if (blocks.length > 0)
-    parts.push(
-      "Apply the following skills when working on this task:",
-      "",
-      ...blocks,
-    );
-  if (missingSkills.length > 0)
-    parts.push("", `Missing skills (not found): ${missingSkills.join(", ")}`);
-
-  return { prompt: parts.join("\n").trim(), missingSkills };
 }
 
 // Model agent injection after skill injection: provide a structured XML block

@@ -110,9 +110,11 @@ steps need dot-path access or predicates. Escape literal braces as `{{`/`}}`.
 
 ### 1. (Optional) Define an agent profile
 
-Agent files exist for *reuse*: a persona, tool allowlist, skills, and model
-defaults you want to apply consistently across flows. Don't create one for a
-one-off delegation — omit `name` and let an ad-hoc agent do it.
+Agent files exist for *reuse*: a persona plus the defaults you want applied
+consistently across flows. Every one of those defaults — skills, tools, model,
+thinking — is also available per call, so a profile is worth writing only for
+the persona and the repetition. For a one-off delegation, omit `name` and
+configure the node directly.
 
 `.pi/agents/reviewer.md`:
 
@@ -130,11 +132,13 @@ You are a review agent. Review code through exactly the lens given in your
 task. Return concrete findings with file paths.
 ```
 
-Agents are discovered from `~/.pi/agent/agents` (user) and the nearest `.pi/agents`
-walking up from the cwd (project); project wins on name conflicts. An agent
-is purely a persona — the *who*. The *what* (a task) always comes from the
-flow that references it; for a named, reusable agent+task unit, use a flat
-workflow (below).
+Agents are discovered from `~/.pi/agent/agents` (user) and `<project>/.pi/agents`
+(project); project wins on name conflicts. The project is the nearest ancestor
+of the cwd holding a `.pi` directory, and *all* project resources come from that
+one root — profiles, skills, and workflows alike — so a nested `.pi` shadows an
+outer one completely. An agent is purely a persona — the *who*. The *what* (a
+task) always comes from the flow that references it; for a named, reusable
+agent+task unit, use a flat workflow (below).
 
 ### 2. Define a workflow
 
@@ -172,7 +176,13 @@ description: Summarize a target
 params: [{ name: target, required: true }]
 task: "Summarize {params.target}"
 thinking: high
+skills: [tenzir-technical-writing]
 ```
+
+The flat form accepts every agent-node option (`model`, `thinking`, `skills`,
+`tools`, `cwd`, `scope`, `output`) and normalizes to exactly the node the
+equivalent `flow:` tree would produce. Mixing the two is an error: with `flow:`
+present, put the options on the agent node.
 
 ```yaml
 name: bug-hunt
@@ -276,16 +286,36 @@ name: reviewer          # optional; must match a discovered agent profile
 output: text            # or "json": parse the result (fences tolerated)
 model: some-model       # optional override (wins over the agent file)
 thinking: low           # optional override (wins over the agent file)
+skills: [code-review]   # optional skills to inject; [] forces none
+tools: [read, grep]     # optional allowlist; [] means NO tools at all
 as: findings            # binding name; only legal on direct sequence steps
 cwd: /path/override     # optional
-scope: both             # agent discovery: user|project|both
+scope: both             # profile and skill discovery: user|project|both
 ```
 
 A bare `agent` node is a complete workflow — single delegation needs nothing
 more. Without `name` the node runs as an anonymous ad-hoc agent (rendered as
-`ad-hoc`): no profile prompt, default tools, session model/thinking.
-Precedence for model/thinking: flow node → agent file (named only) → active
-session.
+`ad-hoc`): no profile prompt, but every execution option above still applies.
+
+**Precedence** is uniform: flow node → agent file (named only) → active
+session. Lists *replace* rather than merge, so `skills` on a named call swaps
+the profile's list wholesale and `skills: []` clears it; omit the key to
+inherit. `tools` behaves identically, and `tools: []` leaves the agent no way
+to read the files a skill references — pair the two deliberately.
+
+Skills are named, not inlined: `skills: [code-review]` resolves against the
+same catalog pi advertises in `<available_skills>`, so a name you see there
+works here. In precedence order, first match winning:
+
+| Scope   | Locations                                                            |
+| ------- | -------------------------------------------------------------------- |
+| project | `<project>/.pi/skills`, then `.agents/skills` from the cwd up to the git root |
+| user    | `~/.pi/agent/skills`, then `~/.agents/skills`                        |
+
+The same `scope` that governs profile discovery selects which rows apply, so an
+untrusted project contributes no skills at all. Resolved instructions are
+injected into the delegated agent's system prompt; a name that does not resolve
+fails the run during preflight, before anything spawns.
 
 **Value contract.** An agent's value is the text of its *last* assistant
 message — nothing else. Thinking, tool calls, tool output, and earlier
@@ -322,7 +352,13 @@ concurrency: 4          # cap on simultaneous branches
 reduce:                 # optional fold over the collected value
   task: "Merge {branches}"
   agent: synthesizer    # optional; omit to reduce with an ad-hoc agent
+  skills: [code-review] # reducers take every agent-node execution option:
+  model: some-model     # model, thinking, skills, tools, cwd, scope, output
 ```
+
+A reducer is an ordinary agent call whose task sees the collected value; only
+the profile selector is spelled differently (`agent`, not `name`). Omitted
+`cwd` and `scope` fall back to the run's.
 
 Value: `all`/`quorum` yield `{branch: value}`; `any` yields the winner's
 value and cancels the rest. With `onError: collect`, failed branches appear

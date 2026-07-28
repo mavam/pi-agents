@@ -27,6 +27,42 @@ export function effectiveScope(
 
 export type OutputMode = "text" | "json";
 
+/**
+ * Thinking levels, in ascending order. Lives here (not in the catalog) so
+ * structural validation can check a level without importing anything from pi.
+ */
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+/**
+ * Execution settings any agent invocation may override, whether it names a
+ * profile or not. Precedence is always call site → named profile → session
+ * default. List fields replace rather than merge: an explicit list wins
+ * whole, and `[]` clears what the profile declared.
+ */
+export interface AgentExecutionOptions {
+  /** Model override (wins over the agent file). */
+  model?: string;
+  /** Thinking-level override (wins over the agent file). */
+  thinking?: ThinkingLevel;
+  /** Skills to inject; replaces the profile's list. `[]` forces none. */
+  skills?: string[];
+  /** Tool allowlist for the delegated process; `[]` means no tools at all. */
+  tools?: string[];
+  /** Working directory override for the delegated process. */
+  cwd?: string;
+  /** Profile and skill discovery scope override. */
+  scope?: Scope;
+}
+
 /** Fields shared by every node kind. */
 export interface BaseNode {
   /**
@@ -45,26 +81,19 @@ export interface BaseNode {
 export const ADHOC_LABEL = "ad-hoc";
 
 /** Leaf node: run one delegated agent on a task. */
-export interface AgentNode extends BaseNode {
+export interface AgentNode extends BaseNode, AgentExecutionOptions {
   kind: "agent";
   /**
    * Agent name (matches a discovered agent's frontmatter `name`). When
-   * absent, the task runs as an anonymous ad-hoc agent: no catalog lookup,
-   * no profile system prompt, default tools, session model/thinking.
+   * absent, the task runs as an anonymous ad-hoc agent: no catalog lookup and
+   * no profile system prompt. Every execution option — skills and tools
+   * included — remains available per call.
    */
   name?: string;
   /** Task prompt; may interpolate `{bindings}`. */
   task: string;
   /** How to interpret the agent's final output. Default: "text". */
   output?: OutputMode;
-  /** Model override for this node (wins over the agent file). */
-  model?: string;
-  /** Thinking-level override for this node (wins over the agent file). */
-  thinking?: string;
-  /** Working directory override for the delegated process. */
-  cwd?: string;
-  /** Agent discovery scope override. */
-  scope?: Scope;
 }
 
 /** Run steps in order; the sequence's value is the last step's value. */
@@ -75,8 +104,12 @@ export interface SequenceNode extends BaseNode {
 
 export type ParMode = "all" | "any" | { quorum: number };
 
-/** Reducer: a synthetic agent call that folds collected results into one value. */
-export interface Reduce {
+/**
+ * Reducer: a synthetic agent call that folds collected results into one value.
+ * Carries the same execution options as an agent node; omitted cwd and scope
+ * fall back to the run's.
+ */
+export interface Reduce extends AgentExecutionOptions {
   /** Agent name; absent runs the reducer as an anonymous ad-hoc agent. */
   agent?: string;
   /** Task prompt; interpolates `{branches}` (parallel) or `{items}` (map). */

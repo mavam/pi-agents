@@ -1,17 +1,13 @@
 /**
- * The AgentRunner implementation over the spawn engine: resolves named agents
- * from the catalog and assembles their system prompt (body + skills), or
- * spawns anonymous ad-hoc calls as plain delegated pi processes, then streams
- * progress.
+ * The AgentRunner implementation over the spawn engine: turns a resolved
+ * invocation into a delegated pi process and streams its progress.
+ *
+ * All configuration decisions — profile lookup, skills, tools, model,
+ * thinking, cwd, scope — belong to `resolveInvocation`, which preflight ran
+ * first. This module only assembles the system prompt and spawns.
  */
 
-import {
-  type Agent,
-  buildSkillsPrompt,
-  discoverAgents,
-  formatAgentList,
-  resolveAgentByName,
-} from "../catalog/agents.js";
+import { renderSkillsPrompt } from "../catalog/skills.js";
 import { BUDGETS_ENV_VAR, DEPTH_ENV_VAR } from "../engine/subprocess.js";
 import {
   SpawnAborted,
@@ -22,18 +18,18 @@ import {
   ADHOC_LABEL,
   DEFAULT_BUDGETS,
   type EffectiveBudgets,
-  effectiveScope,
   type OutputMode,
   type Scope,
 } from "../model/ast.js";
 import { BudgetExceededError } from "./budgets.js";
 import type { AgentCall, AgentRunner } from "./interpreter.js";
+import {
+  CatalogCache,
+  resolveInvocationOrThrow,
+  type SpawnDefaults,
+} from "./invocation.js";
 
-/** Session-level fallbacks for agents without explicit frontmatter. */
-export interface SpawnDefaults {
-  model?: string;
-  thinking?: string;
-}
+export type { SpawnDefaults };
 
 export interface RunnerOptions {
   engine: SpawnEngine;
@@ -49,31 +45,10 @@ export interface RunnerOptions {
   defaults?: SpawnDefaults;
   /** Effective budget limits, inherited by delegated processes. */
   budgetLimits?: EffectiveBudgets;
+  /** Discovery caches shared with preflight, so resolution happens once. */
+  catalogs?: CatalogCache;
   /** Observe a live handle; return a disposer that unregisters it. */
   onHandle?: (call: AgentCall, handle: SpawnHandle) => (() => void) | undefined;
-}
-
-/** Resolve one agent by name or throw with an actionable message. */
-export function resolveAgentOrThrow(
-  name: string,
-  cwd: string,
-  scope: Scope,
-): Agent {
-  const discovery = discoverAgents(cwd, scope);
-  const resolution = resolveAgentByName(discovery.agents, name);
-  switch (resolution.kind) {
-    case "exact":
-    case "case_insensitive":
-      return resolution.agent;
-    case "ambiguous":
-      throw new Error(
-        `agent name '${name}' is ambiguous: ${resolution.matches.map((a) => a.name).join(", ")}`,
-      );
-    case "missing":
-      throw new Error(
-        `unknown agent '${name}' (scope: ${scope}). Available: ${formatAgentList(discovery.agents)}`,
-      );
-  }
 }
 
 /**
@@ -104,23 +79,22 @@ export function delegationPreamble(output: OutputMode): string {
 export function createAgentRunner(options: RunnerOptions): AgentRunner {
   const depth = options.depth ?? 0;
   const trusted = options.trusted ?? true;
+  const catalogs = options.catalogs ?? new CatalogCache();
   return async (call: AgentCall) => {
-    const cwd = call.cwd ?? options.cwd;
-    const scope = effectiveScope(call.scope, trusted, options.scope ?? "both");
-    // Named calls resolve a catalog profile; anonymous (ad-hoc) calls skip
-    // discovery entirely and spawn a plain delegated pi process.
-    const agent =
-      call.agent !== undefined
-        ? resolveAgentOrThrow(call.agent, cwd, scope)
-        : undefined;
+    const resolved = resolveInvocationOrThrow(call, {
+      cwd: options.cwd,
+      scope: options.scope ?? "both",
+      trusted,
+      defaults: options.defaults,
+      catalogs,
+    });
+    const { cwd, profile } = resolved;
 
-    // Persona and skills first (named agents only), then the result
-    // contract every delegated agent gets — ad-hoc ones included.
+    // Persona (named calls only), then skills, then the result contract every
+    // delegated agent gets — ad-hoc ones included.
     const parts: string[] = [];
-    if (agent) {
-      const { prompt: skillsPrompt } = buildSkillsPrompt(agent.skills, cwd);
-      parts.push(agent.systemPrompt, skillsPrompt);
-    }
+    if (profile) parts.push(profile.systemPrompt);
+    parts.push(renderSkillsPrompt(resolved.skills));
     parts.push(delegationPreamble(call.output));
     const systemPrompt = parts.filter(Boolean).join("\n\n");
 
@@ -132,14 +106,14 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
     }
 
     const handle = options.engine.spawn({
-      agent: agent?.name ?? ADHOC_LABEL,
+      agent: profile?.name ?? ADHOC_LABEL,
       task: call.task,
       cwd,
       systemPrompt,
-      // Precedence: flow node override > agent file > active session default.
-      model: call.model ?? agent?.model ?? options.defaults?.model,
-      thinking: call.thinking ?? agent?.thinking ?? options.defaults?.thinking,
-      tools: agent?.tools,
+      model: resolved.model,
+      thinking: resolved.thinking,
+      // Preserved exactly: `[]` makes the engine emit --no-tools.
+      tools: resolved.tools,
       env,
     });
     const unregisterHandle = options.onHandle?.(call, handle);

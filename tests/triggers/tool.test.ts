@@ -230,6 +230,103 @@ describe("workflow tool", () => {
     expect(specs[0]?.tools).toEqual(["read", "grep"]);
   });
 
+  test("an anonymous inline node loads a skill and can drop its tools", async () => {
+    writeFile(
+      ".pi/skills/code-review/SKILL.md",
+      "---\nname: code-review\ndescription: review code\n---\nRate findings by severity.\n",
+    );
+    const { engine, specs } = fakeEngine(() => "ok");
+    const tool = createWorkflowTool(makeDeps(engine));
+    const result = await tool.execute(
+      "t3-skills",
+      {
+        flow: {
+          kind: "agent",
+          task: "review the diff",
+          skills: ["code-review"],
+          tools: [],
+        },
+        scope: "project",
+      },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(result.details.status).toBe("completed");
+    expect(specs[0]?.agent).toBe("ad-hoc");
+    expect(specs[0]?.systemPrompt).toContain("Rate findings by severity.");
+    expect(specs[0]?.tools).toEqual([]);
+  });
+
+  test("a named node replaces its profile's tools and skills", async () => {
+    writeFile(
+      ".pi/skills/code-review/SKILL.md",
+      "---\nname: code-review\ndescription: review code\n---\nRate findings by severity.\n",
+    );
+    const { engine, specs } = fakeEngine(() => "ok");
+    const tool = createWorkflowTool(makeDeps(engine));
+    await tool.execute(
+      "t3-replace",
+      {
+        flow: {
+          kind: "agent",
+          name: "reviewer",
+          task: "review",
+          skills: ["code-review"],
+          tools: ["find"],
+        },
+        scope: "project",
+      },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(specs[0]?.tools).toEqual(["find"]);
+    expect(specs[0]?.systemPrompt).toContain("Review.");
+    expect(specs[0]?.systemPrompt).toContain("Rate findings by severity.");
+  });
+
+  test("an unknown skill fails the run before anything spawns", async () => {
+    const { engine, specs } = fakeEngine(() => "ok");
+    const tool = createWorkflowTool(makeDeps(engine));
+    expect(
+      tool.execute(
+        "t3-missing",
+        {
+          flow: { kind: "agent", task: "t", skills: ["code-reveiw"] },
+          scope: "project",
+        },
+        undefined,
+        undefined,
+        ctx(),
+      ),
+    ).rejects.toThrow(/unknown skill 'code-reveiw'/);
+    expect(specs).toHaveLength(0);
+  });
+
+  test("a saved flat workflow expresses the same skill selection", async () => {
+    writeFile(
+      ".pi/skills/code-review/SKILL.md",
+      "---\nname: code-review\ndescription: review code\n---\nRate findings by severity.\n",
+    );
+    writeFile(
+      ".pi/workflows/audit.yaml",
+      'name: audit\ndescription: audits a target\ntask: "audit it"\nskills: [code-review]\ntools: []\n',
+    );
+    const { engine, specs } = fakeEngine(() => "ok");
+    const tool = createWorkflowTool(makeDeps(engine));
+    const result = await tool.execute(
+      "t3-flat",
+      { name: "audit", scope: "project" },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(result.details.status).toBe("completed");
+    expect(specs[0]?.systemPrompt).toContain("Rate findings by severity.");
+    expect(specs[0]?.tools).toEqual([]);
+  });
+
   test("rejects passing both name and flow", async () => {
     const { engine } = fakeEngine(() => "ok");
     const tool = createWorkflowTool(makeDeps(engine));

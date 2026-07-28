@@ -159,6 +159,104 @@ describe("preflight with node overrides", () => {
   });
 });
 
+describe("preflight over skills", () => {
+  function writeSkill(dir: string, name: string): void {
+    const skillDir = path.join(dir, ".pi", "skills", name);
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      `---\nname: ${name}\ndescription: d\n---\nInstructions.\n`,
+    );
+  }
+
+  test("an unknown skill fails before any spawn, naming the node", () => {
+    writeSkill(projectDir, "code-review");
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        { kind: "agent", name: "echo", task: "first" },
+        { kind: "agent", task: "second", skills: ["code-reveiw"] },
+      ],
+    });
+    expect(() =>
+      manager.start({
+        flow,
+        cwd: projectDir,
+        scope: "project",
+        source: { kind: "tool" },
+      }),
+    ).toThrow(
+      /at \$\.steps\[1\], unknown skill 'code-reveiw' \(cwd: .*scope: project\)\. Available: code-review/,
+    );
+    expect(specs).toHaveLength(0);
+  });
+
+  test("a project skill reaches an anonymous node's prompt", async () => {
+    writeSkill(projectDir, "code-review");
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "agent",
+      task: "t",
+      skills: ["code-review"],
+    });
+    const { done } = manager.start({
+      flow,
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+    });
+    expect((await done).status).toBe("completed");
+    expect(specs[0]?.systemPrompt).toContain('<skill name="code-review"');
+  });
+
+  test("an untrusted project cannot load project skills", () => {
+    writeSkill(projectDir, "code-review");
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "agent",
+      task: "t",
+      skills: ["code-review"],
+    });
+    expect(() =>
+      manager.start({
+        flow,
+        cwd: projectDir,
+        trusted: false,
+        source: { kind: "tool" },
+      }),
+    ).toThrow(/unknown skill 'code-review' \(cwd: .*scope: user\)/);
+    expect(specs).toHaveLength(0);
+  });
+
+  test("a reducer's skills are preflighted under its own cwd", () => {
+    writeSkill(projectDir, "code-review");
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "parallel",
+      branches: { a: { kind: "agent", task: "a" } },
+      reduce: {
+        task: "merge {branches}",
+        skills: ["code-review"],
+        cwd: otherDir,
+      },
+    });
+    expect(() =>
+      manager.start({
+        flow,
+        cwd: projectDir,
+        scope: "project",
+        source: { kind: "tool" },
+      }),
+    ).toThrow(/at \$\.reduce, unknown skill 'code-review'/);
+    expect(specs).toHaveLength(0);
+  });
+});
+
 describe("preflight diagnostics", () => {
   test("a same-named agent file that fails to parse is surfaced", () => {
     fs.writeFileSync(

@@ -101,6 +101,66 @@ thinking: low
     });
   });
 
+  test("the flat form and the explicit tree yield the same agent node", () => {
+    const options = `agent: reviewer
+task: t
+model: cheap-model
+thinking: low
+skills: [code-review, gh]
+tools: []
+cwd: /elsewhere
+scope: user
+output: json
+`;
+    const flat = parseWorkflowFile(
+      writeWorkflow(
+        "flat-full.yaml",
+        `name: flat-full\ndescription: d\n${options}`,
+      ),
+      "project",
+    );
+    const explicit = parseWorkflowFile(
+      writeWorkflow(
+        "tree-full.yaml",
+        `name: tree-full
+description: d
+flow:
+  kind: agent
+  name: reviewer
+  task: t
+  model: cheap-model
+  thinking: low
+  skills: [code-review, gh]
+  tools: []
+  cwd: /elsewhere
+  scope: user
+  output: json
+`,
+      ),
+      "project",
+    );
+    if (typeof flat === "string") throw new Error(flat);
+    if (typeof explicit === "string") throw new Error(explicit);
+    expect(flat.flow).toEqual(explicit.flow);
+    // Explicit empty lists survive normalization: [] is not "absent".
+    expect(flat.flow).toMatchObject({
+      skills: ["code-review", "gh"],
+      tools: [],
+    });
+  });
+
+  test("rejects a flat list key with a scalar value", () => {
+    expect(
+      parseWorkflowFile(
+        writeWorkflow(
+          "scalar-skills.yaml",
+          "name: scalar-skills\ndescription: d\ntask: t\nskills: code-review\n",
+        ),
+        "project",
+      ),
+    ).toContain("Invalid 'skills' (must be an array of strings)");
+  });
+
   test("flat form requires a task", () => {
     const filePath = writeWorkflow(
       "just-agent.yaml",
@@ -148,6 +208,17 @@ thinking: low
         "project",
       ),
     ).toContain("'model' belongs to the flat agent form");
+    // Every flat-only key is gated, not just model/thinking: silently
+    // dropping skills would make the sugar and the tree disagree.
+    expect(
+      parseWorkflowFile(
+        writeWorkflow(
+          "stray-skills.yaml",
+          "name: stray-skills\ndescription: d\nskills: [code-review]\nflow: { kind: agent, name: reviewer, task: t }\n",
+        ),
+        "project",
+      ),
+    ).toContain("'skills' belongs to the flat agent form");
   });
 
   test("task-only flat form yields an anonymous leaf", () => {

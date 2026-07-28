@@ -1,0 +1,9 @@
+created: 2026-07-28
+title: Per-call agent execution configuration
+intro: >-
+  Agent invocations can now select their own skills and tools, making one-off delegation
+  fully configurable without creating profiles. Workflow and agent browsers also open
+  directly above the composer for easier access and monitoring.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.7.0

@@ -9,6 +9,7 @@ import {
   workNodes,
 } from "../../src/run/state.js";
 import {
+  buildWorkflowsSpec,
   completeRunArgs,
   findNodeInRun,
   formatNodeResultFull,
@@ -315,5 +316,55 @@ describe("completeRunArgs", () => {
   test("no completions after other verbs or unknown runs", async () => {
     expect(completeRunArgs("run-1234 watch ", await runs())).toEqual([]);
     expect(completeRunArgs("zzz result ", await runs())).toEqual([]);
+  });
+});
+
+describe("workflows panel actions", () => {
+  function harness() {
+    const notices: string[] = [];
+    const editorText: string[] = [];
+    const ctx = {
+      cwd: "/tmp/pi-agents-nonexistent",
+      mode: "tui",
+      hasUI: true,
+      ui: {
+        notify: (text: string) => notices.push(text),
+        setEditorText: (text: string) => editorText.push(text),
+      },
+    };
+    const deps = {
+      manager: { state: { runs: new Map() } },
+      notifications: { setContext: () => {} },
+      widget: { isHidden: () => false, setSuppressed: () => {} },
+    };
+    const messages: string[] = [];
+    const pi = {
+      sendMessage: (m: { content: string }) => messages.push(m.content),
+    };
+    const spec = buildWorkflowsSpec(pi as never, deps as never, ctx as never);
+    return { spec, notices, editorText, messages };
+  }
+
+  const workflowItem = (params: unknown[] = []) =>
+    ({
+      kind: "workflow",
+      wf: { name: "deep-test", source: "user", params },
+    }) as never;
+
+  test("running a workflow keeps the panel open to watch it", () => {
+    const { spec } = harness();
+    // Closing would strand the user at the composer with only the live
+    // summary — the panel already reports the run it just started.
+    expect(spec.onAction("r", workflowItem())).toBeUndefined();
+  });
+
+  test("composing and missing parameters close, since both need the composer", () => {
+    const { spec, editorText } = harness();
+    expect(spec.onAction("c", workflowItem())).toBe("close");
+    expect(editorText).toEqual(["/deep-test "]);
+
+    const required = [{ name: "target", required: true }];
+    expect(spec.onAction("r", workflowItem(required))).toBe("close");
+    expect(editorText.at(-1)).toBe("/deep-test ");
   });
 });

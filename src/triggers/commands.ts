@@ -875,7 +875,11 @@ export function buildWorkflowsSpec(
           return "close";
         }
         void runWorkflowCommand(pi, item.wf.name, "", ctx, deps);
-        return "close";
+        // Stay open, like the run tier's rerun: live() is true while the run
+        // is running, so the row's badge tracks it here and `enter` drills in
+        // to watch the tree. Closing would drop the user at the composer with
+        // only the live summary — which this panel supersedes.
+        return undefined;
       }
       return undefined;
     },

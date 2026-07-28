@@ -532,7 +532,8 @@ and `(ad-hoc)` (inline and tool-started flows).
 Keys — all tiers: `↑`/`↓` (or `k`/`j`) move, `esc` closes or backs out
 one tier. Workflow tier: `⏎` drills into the selected workflow's runs, `c`
 puts `/<name> ` into the composer so you can add arguments, `r` runs it
-immediately (workflows with required parameters fall back to composing),
+immediately and keeps the panel open so you can watch it start (workflows
+with required parameters fall back to composing),
 and `n` starts a new workflow or agent: you name it and describe the
 intent, the model drafts the definition file. Run tier: `⏎` posts the run
 details with the full result to the chat, `a` drills into the run's agents,

@@ -68,14 +68,19 @@ and saved workflows inline like function calls.
 
 The JSON/YAML form is what you author; the icons are how flows are *read*.
 Every surface that shows a flow — the tool call display, `/workflow <name>`,
-`/workflow <run-id>` — renders it as an icon tree. The review workflow, for
-example:
+`/workflow <run-id>` — renders it as an icon tree. This repository's
+`review-fix` workflow has the following shape (abridged):
 
 ```
-⑃ parallel (all)
-├─ bugs → ✦ reviewer · Review {params.target} strictly for correctness bug…
-├─ clarity → ✦ reviewer · Review {params.target} for readability, duplicat…
-└─ ⑂ reduce → worker · Merge these code review findings into one prioriti…
+❖ review → {initial_review}
+⎇ switch {initial_review} → {cycle_result}
+├─ approved/cannot_proceed → ≔ value
+└─ actionable → ↺ loop ≤3
+   ├─ ✦ ad-hoc → {implementation}
+   ├─ ❖ review → {verified_review}
+   └─ ⎇ switch {verified_review}
+⎇ switch {cycle_result}
+└─ changes remain → ≔ exhausted
 ```
 
 Sequences are transparent — their steps appear at the parent level without
@@ -85,7 +90,7 @@ status icons (`○` pending, `◉` running, `●` completed, `✗` failed,
 
 ```
 ● scout → {files} · List files to review
-◉ reviewer · Review {item} [3/5]
+◉ ad-hoc · Review {item} [3/5]
 ○ reduce → synthesizer · Merge {items}
 ```
 
@@ -116,20 +121,20 @@ thinking — is also available per call, so a profile is worth writing only for
 the persona and the repetition. For a one-off delegation, omit `name` and
 configure the node directly.
 
-`.pi/agents/reviewer.md`:
+`.pi/agents/planner.md`:
 
 ```md
 ---
-name: reviewer
-description: Focused code review from a single lens
+name: planner
+description: Maps a codebase and proposes implementation plans
 model: openai-codex/gpt-5.6-terra  # optional; defaults to the active session model
 thinking: medium           # optional: off|minimal|low|medium|high|xhigh
 skills: []                 # optional pi skills to inject
 tools: [read, grep, find]  # optional allowlist; [] means NO tools at all
 ---
 
-You are a review agent. Review code through exactly the lens given in your
-task. Return concrete findings with file paths.
+You are a planning agent. Map the relevant code and return a concrete plan with
+file paths. Do not edit files.
 ```
 
 Agents are discovered from `~/.pi/agent/agents` (user) and `<project>/.pi/agents`
@@ -142,55 +147,59 @@ agent+task unit, use a flat workflow (below).
 
 ### 2. Define a workflow
 
-Workflows are pure data: one YAML or JSON object per file, the extension
-decides the parser (`.yaml`, `.yml`, `.json`). `.pi/workflows/review.yaml`:
+Workflows are pure data: one YAML or JSON object per file, and the extension
+decides the parser (`.yaml`, `.yml`, `.json`). A reusable agent-plus-task unit
+uses the flat form. For example, `.pi/workflows/review.yaml` starts an
+anonymous reviewer without requiring a named profile:
 
 ```yaml
 name: review
-description: Multi-lens code review with a synthesis pass
-trigger: when the user asks for a thorough review
-doc: >-
-  Optional prose documentation lives here.
+description: Review a target with structured findings
+trigger: when the user asks for a read-only code review
 params:
-  - name: target
-    required: true
-flow:
-  kind: parallel
-  branches:
-    bugs:    { kind: agent, name: reviewer, task: "Find bugs in {params.target}" }
-    clarity: { kind: agent, name: reviewer, task: "Review {params.target} for clarity" }
-  reduce:
-    agent: worker
-    task: "Merge and prioritize:\n{branches}"
-```
-
-For a single-unit workflow — one task, no graph — skip `flow:` entirely and
-use the flat form, which normalizes to a bare agent leaf but keeps full
-workflow powers (params, `/name` command, `on:` hooks, and
-`{kind: workflow, name: …}` references from other flows). `agent:` is
-optional; without it the task runs as an ad-hoc agent:
-
-```yaml
-name: summarize
-description: Summarize a target
-params: [{ name: target, required: true }]
-task: "Summarize {params.target}"
+  - { name: target, required: true }
+  - { name: focus, default: "Apply normal risk-based lens selection." }
+  - { name: context, default: "No prior round context." }
+task: |-
+  Review {params.target}.
+  Focus: {params.focus}
+  Context: {params.context}
+  Return the structured review JSON contract.
 thinking: high
-skills: [tenzir-technical-writing]
+skills: [code-review]
+scope: user
+output: json
 ```
 
-The flat form accepts every agent-node option (`model`, `thinking`, `skills`,
-`tools`, `cwd`, `scope`, `output`) and normalizes to exactly the node the
-equivalent `flow:` tree would produce. Mixing the two is an error: with `flow:`
-present, put the options on the agent node.
+The flat form normalizes to a bare agent leaf while retaining workflow powers:
+parameters, a slash command, event hooks, and composition through a `workflow`
+node. `agent:` is optional; omitting it runs an ad-hoc agent. The flat form
+accepts every agent-node option (`model`, `thinking`, `skills`, `tools`, `cwd`,
+`scope`, `output`). Mixing the flat form with `flow:` is an error; put execution
+options on the relevant agent node when `flow:` is present.
+
+Saved workflows compose like functions. This focused workflow reuses the
+canonical review contract instead of defining a reviewer profile:
 
 ```yaml
 name: bug-hunt
 description: Hunt correctness bugs in a target
 params: [{ name: target, required: true }]
-agent: reviewer # optional: use the reviewer profile
-task: "Review {params.target} strictly for bugs."
+flow:
+  kind: workflow
+  name: review
+  params:
+    target: "{params.target}"
+    focus: "Review strictly for concrete correctness bugs."
 ```
+
+This repository also includes `/review-fix`, an explicitly mutating workflow
+for the current checkout. It invokes the saved `review` workflow, sends
+validated P1–P3 findings to an anonymous Implementer, and ends every
+implementation round with a fresh review. It stops when the change is approved, cannot proceed, or reaches three
+complete implementation-and-review rounds. The maximum run executes seven
+agents: one initial Reviewer and three Implementer/Reviewer pairs. Its final
+structured outcome is `approved`, `cannot_proceed`, or `exhausted`.
 
 Workflows live in `~/.pi/agent/workflows` and `.pi/workflows`, discovered like
 agents. Every definition is fully validated at discovery (references, cycles,
@@ -212,8 +221,10 @@ Workflows fire from four surfaces:
    sessions runs go to the background: the widget shows progress and the
    result arrives as a notification.
 2. **You.** Every saved workflow registers a slash command:
-   `/review src/core` runs the graph directly, with args bound to params —
-   no model round-trip. Positional args and `key=value` pairs both work.
+   `/review src/core` runs the read-only review directly, with args bound to
+   parameters and no model round-trip. `/review-fix local-changes` explicitly
+   opts into modifying the current checkout. Positional args and `key=value`
+   pairs both work.
 3. **Events.** Add `on: [turn_end]` (plus optional `debounce:` milliseconds)
    and the workflow fires on those pi events, always in the background,
    with the event payload bound as `{params.event}`. Hooks run only in the
@@ -252,12 +263,12 @@ and an existing run is inspected or stopped with `/workflow <run-id>`.
       { "kind": "parallel",
         "as": "reviews",
         "branches": {
-          "core":  { "kind": "agent", "name": "reviewer", "task": "Review src/core" },
-          "run":   { "kind": "agent", "name": "reviewer", "task": "Review src/run" },
-          "ui":    { "kind": "agent", "name": "reviewer", "task": "Review src/ui" }
+          "core": { "kind": "workflow", "name": "review", "params": { "target": "src/core" } },
+          "run":  { "kind": "workflow", "name": "review", "params": { "target": "src/run" } },
+          "ui":   { "kind": "workflow", "name": "review", "params": { "target": "src/ui" } }
         },
-        "reduce": { "agent": "worker", "task": "List findings all reviews agree on:\n{branches}", "output": "json" } },
-      { "kind": "agent", "name": "worker", "task": "Fix these agreed findings: {previous}" }
+        "reduce": { "task": "List findings all reviews agree on:\n{branches}", "output": "json" } },
+      { "kind": "agent", "task": "Fix these agreed findings: {previous}" }
     ]
   },
   "label": "review three modules, fix consensus",
@@ -281,8 +292,8 @@ saved profile).
 
 ```yaml
 kind: agent
-task: "Review {previous}"
-name: reviewer          # optional; must match a discovered agent profile
+task: "Analyze {previous}"
+name: specialist        # optional; must match a discovered agent profile
 output: text            # or "json": parse the result (fences tolerated)
 model: some-model       # optional override (wins over the agent file)
 thinking: low           # optional override (wins over the agent file)
@@ -371,7 +382,7 @@ kind: map
 over: "{scout.files}"   # must resolve to a JSON array at runtime
 body:
   kind: agent
-  name: reviewer
+  name: auditor
   task: "Review {item} (#{index})"
 concurrency: 4
 reduce: { agent: synthesizer, task: "Combine {items}" }
@@ -548,7 +559,7 @@ and `(ad-hoc)` (inline and tool-started flows).
 ╭─ Workflows (2/4) ──────────────────────────────────╮
 │   ◉ all runs           every run this session ◉1 ●3│
 │ ▸ ❖ /triage    user    Triage findings        ◉1 ●1│
-│   ❖ /review   project  Multi-lens code review    ●2│
+│   ❖ /review   project  Structured code review   ●2│
 ├─ /triage · user · 2 runs ──────────────────────────┤
 │ ✦ scout → {files} · List files to review           │
 │ ⇶ map {files}                                      │

@@ -1,24 +1,68 @@
 name: review
-description: Multi-lens code review with a synthesis pass
-trigger: when the user asks for a thorough review of a directory, change, or subsystem
+description: Review a target with risk-selected lenses and structured findings
+trigger: when the user asks for a read-only code review of a change, pull request, path, or subsystem
 doc: >-
-  Reviews the target from two independent lenses concurrently, then merges
-  the findings into one prioritized report.
+  Runs one anonymous high-thinking reviewer with the personal code-review
+  skill. Returns machine-readable review state together with the complete
+  Markdown report and never modifies the target.
 params:
   - name: target
-    description: What to review (a path, diff, or description)
+    description: What to review (a pull request, local change, path, or description)
     required: true
-flow:
-  kind: parallel
-  branches:
-    bugs:
-      kind: agent
-      name: reviewer
-      task: "Review {params.target} strictly for correctness bugs: logic errors, edge cases, races, resource leaks."
-    clarity:
-      kind: agent
-      name: reviewer
-      task: "Review {params.target} for readability, duplication, and simplification opportunities."
-  reduce:
-    agent: worker
-    task: "Merge these code review findings into one prioritized list. Deduplicate overlapping findings and rank by severity:\n\n{branches}"
+  - name: focus
+    description: Optional review emphasis
+    default: Apply the code-review skill's normal risk-based lens selection.
+  - name: context
+    description: Optional prior findings and implementation summary for verification
+    default: No prior review or implementation context.
+task: |-
+  Review {params.target}.
+
+  Review focus:
+  {params.focus}
+
+  Prior round context:
+  {params.context}
+
+  This is a read-only review. Do not modify files, create commits, push, reply
+  to review comments, or resolve review threads. Follow the code-review skill,
+  including its severity, confidence, actionability, and report requirements.
+  Treat P1, P2, and P3 findings as actionable. Keep P4 observations in the
+  report, but exclude them from the actionable array.
+
+  When prior round context is present, verify the actual current code rather
+  than trusting the implementation summary. Set stalled to true only when the
+  same material actionable finding remains after an attempted implementation
+  with no meaningful progress. Set cannot_proceed to true when the review
+  cannot be completed safely or required context or prerequisites are missing.
+  Otherwise set both flags to false.
+
+  End with exactly one raw JSON object using this contract:
+  {
+    "counts": {"p1": 0, "p2": 0, "p3": 0, "p4": 0},
+    "actionable": [
+      {
+        "id": "BUG-1",
+        "severity": "P1 | P2 | P3",
+        "category": "correctness",
+        "title": "Imperative fix title",
+        "fix": "Specific implementation action",
+        "locations": ["src/file.ts:10-20"]
+      }
+    ],
+    "stalled": false,
+    "cannot_proceed": false,
+    "reason": null,
+    "lower_confidence_observations": [],
+    "report": "Complete Markdown report following the skill's report structure"
+  }
+
+  Keep counts consistent with the full report. Include every P1-P3 finding in
+  actionable and no P4 findings there. Use a non-empty reason when stalled or
+  cannot_proceed is true. Put the complete human-readable Markdown review in
+  report despite returning JSON.
+thinking: high
+skills:
+  - code-review
+scope: user
+output: json

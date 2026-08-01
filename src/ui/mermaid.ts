@@ -98,6 +98,16 @@ export function toMermaid(flow: FlowNode): string {
         lines.push(`  ${body.exit} -.->|repeat| ${head}`);
         return { entry: head, exit: head };
       }
+      case "while": {
+        const head = nextId();
+        lines.push(
+          `  ${head}{"while ${escapeLabel(formatPredicate(node.condition))} on ${escapeLabel(node.on)} ≤${node.max}"}`,
+        );
+        const body = visit(node.body);
+        lines.push(`  ${head} -->|true| ${body.entry}`);
+        lines.push(`  ${body.exit} -.->|next| ${head}`);
+        return { entry: head, exit: head };
+      }
       case "switch": {
         const head = nextId();
         lines.push(`  ${head}{"switch ${escapeLabel(node.on)}"}`);

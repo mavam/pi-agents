@@ -153,7 +153,7 @@ export class BudgetActor {
       : Math.max(1, Math.min(requested, cap));
   }
 
-  /** Effective iteration cap for a loop node. */
+  /** Effective iteration cap for a loop or while node. */
   iterationLimit(requested: number): number {
     return Math.min(requested, this.limits.maxIterations);
   }

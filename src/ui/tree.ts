@@ -4,7 +4,8 @@
  * in the tool call display, /workflow details, and run inspection (where
  * kind icons are replaced by live status icons).
  *
- *   ✦ agent   ≡ sequence (transparent)   ⑃ parallel   ⑂ reduce   ⇶ map   ↺ loop
+ *   ✦ agent   ≡ sequence (transparent)   ⑃ parallel   ⑂ reduce   ⇶ map
+ *   ↺ loop/while
  *   ⎇ switch   ≔ value   ❖ workflow
  */
 
@@ -31,6 +32,7 @@ export const KIND_ICONS = {
   reduce: "⑂",
   map: "⇶",
   loop: "↺",
+  while: "↺",
   switch: "⎇",
   value: "≔",
   workflow: "❖",
@@ -169,6 +171,15 @@ function build(
         },
       ];
     }
+    case "while":
+      return [
+        {
+          icon: KIND_ICONS.while,
+          text: `while ${formatPredicate(node.condition)} on ${color("accent", node.on)} ≤${node.max}${binding(node, color)}`,
+          path,
+          children: build(node.body, bodyPath(path), color),
+        },
+      ];
     case "switch": {
       const arm = (
         key: string,
@@ -228,7 +239,7 @@ export interface PathStatus {
   kind: NodeView["kind"];
   completed: number;
   total: number;
-  /** e.g. "3/5" for map items, "#2" for loop iterations. */
+  /** e.g. "3/5" for map items, "#2" for loop or while iterations. */
   detail?: string;
   error?: string;
 }

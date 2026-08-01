@@ -100,6 +100,7 @@ export type RunEvent =
       caller?: string;
     }
   | {
+      /** Emitted before a loop or while body iteration starts. */
       type: "loop_iteration";
       at: number;
       runId: string;

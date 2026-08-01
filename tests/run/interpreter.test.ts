@@ -460,6 +460,156 @@ describe("loop", () => {
   });
 });
 
+describe("while", () => {
+  test("returns the initial value when the condition is false", async () => {
+    const { outcome, calls, events } = await run(
+      seq(agent("seed", "state", { as: "state", output: "json" }), {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["continue", true] },
+        max: 3,
+        body: agent("worker", "use {current}", { output: "json" }),
+      }),
+      (call) =>
+        call.agent === "seed"
+          ? '{"continue": false, "round": null}'
+          : '{"continue": false, "round": 0}',
+    );
+    expect(outcome.value).toEqual({ continue: false, round: null });
+    expect(calls.map((call) => call.agent)).toEqual(["seed"]);
+    expect(eventTypes(events, "loop_iteration")).toHaveLength(0);
+  });
+
+  test("carries body values through {current} until the condition is false", async () => {
+    let round = 0;
+    const { outcome, calls, events } = await run(
+      seq(agent("seed", "state", { as: "state", output: "json" }), {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["continue", true] },
+        max: 5,
+        body: agent("worker", "round {iteration}, current: {current}", {
+          output: "json",
+        }),
+      }),
+      (call) => {
+        if (call.agent === "seed") return '{"continue": true, "round": -1}';
+        round += 1;
+        return JSON.stringify({ continue: round < 3, round: round - 1 });
+      },
+    );
+    expect(outcome.value).toEqual({ continue: false, round: 2 });
+    expect(calls[1]?.task).toContain("round 0");
+    expect(calls[1]?.task).toContain('"round": -1');
+    expect(calls[2]?.task).toContain('"round": 0');
+    expect(eventTypes(events, "loop_iteration")).toHaveLength(3);
+    const instances = eventTypes(events, "node_started").map(
+      (event) => (event as { instance: string }).instance,
+    );
+    expect(instances).toContain("$.steps[1].body#0");
+    expect(instances).toContain("$.steps[1].body#2");
+  });
+
+  test("returns a still-matching value when the effective cap is reached", async () => {
+    const { outcome, calls } = await run(
+      seq(agent("seed", "state", { as: "state", output: "json" }), {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["continue", true] },
+        max: 9,
+        body: agent("worker", "round {iteration}", { output: "json" }),
+      }),
+      (call) =>
+        call.agent === "seed"
+          ? '{"continue": true, "round": -1}'
+          : '{"continue": true, "round": 0}',
+      { budgets: { maxIterations: 2 } },
+    );
+    expect(outcome.value).toEqual({ continue: true, round: 0 });
+    expect(calls.filter((call) => call.agent === "worker")).toHaveLength(2);
+  });
+
+  test("an inner on resolves outer {current} before its body shadows it", async () => {
+    const { outcome, calls } = await run(
+      seq(agent("seed", "state", { as: "state", output: "json" }), {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["outer", true] },
+        max: 1,
+        body: {
+          kind: "while",
+          on: "{current}",
+          condition: { eq: ["inner", true] },
+          max: 1,
+          body: agent("worker", "inner {iteration}: {current}", {
+            output: "json",
+          }),
+        },
+      }),
+      (call) =>
+        call.agent === "seed"
+          ? '{"outer": true, "inner": true, "label": "outer"}'
+          : '{"outer": false, "inner": false, "label": "inner"}',
+    );
+    expect(calls[1]?.task).toContain('"label": "outer"');
+    expect(calls[1]?.task).toContain("inner 0");
+    expect(outcome.value).toEqual({
+      outer: false,
+      inner: false,
+      label: "inner",
+    });
+  });
+
+  test("preserves enclosing map item and index roots", async () => {
+    const { calls } = await run(
+      seq(agent("seed", "items", { as: "list", output: "json" }), {
+        kind: "map",
+        over: "{list}",
+        body: {
+          kind: "while",
+          on: "{item}",
+          condition: { eq: ["continue", true] },
+          max: 1,
+          body: agent("worker", "item {index}: {item}; current: {current}", {
+            output: "json",
+          }),
+        },
+      }),
+      (call) =>
+        call.agent === "seed"
+          ? '[{"continue": true, "name": "a"}]'
+          : '{"continue": false}',
+    );
+    expect(calls[1]?.task).toContain("item 0");
+    expect(calls[1]?.task).toContain('"name": "a"');
+  });
+
+  test("cancellation stops a running while body", async () => {
+    const controller = new AbortController();
+    const { outcome, events } = await run(
+      seq(agent("seed", "state", { as: "state", output: "json" }), {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["continue", true] },
+        max: 3,
+        body: agent("worker", "work"),
+      }),
+      (call) => {
+        if (call.agent === "seed") return '{"continue": true}';
+        queueMicrotask(() => controller.abort());
+        return hangUntilAbort(call.signal);
+      },
+      { signal: controller.signal },
+    );
+    expect(outcome.status).toBe("stopped");
+    const cancelled = eventTypes(events, "node_cancelled").map(
+      (event) => (event as { path: string }).path,
+    );
+    expect(cancelled).toContain("$.steps[1].body");
+    expect(cancelled).toContain("$.steps[1]");
+  });
+});
+
 describe("workflow refs", () => {
   const reviewDef: WorkflowLike = {
     name: "review",

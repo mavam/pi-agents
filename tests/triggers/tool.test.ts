@@ -1113,11 +1113,15 @@ describe("workflow tool description", () => {
       "parallel",
       "map",
       "loop",
+      "while",
+      "switch",
+      "value",
       "workflow",
     ]) {
       expect(tool.description).toContain(`"kind":"${kind}"`);
     }
     expect(tool.description).toContain("{previous}");
+    expect(tool.description).toContain("{current}");
     expect(tool.description).toContain('"as"');
   });
 

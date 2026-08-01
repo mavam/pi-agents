@@ -153,6 +153,9 @@ export function widgetSegments(
       case "loop":
         push(path, `${prefix}↺ loop`);
         return;
+      case "while":
+        push(path, `${prefix}↺ while`);
+        return;
       case "switch":
         push(path, `${prefix}⎇ ${node.label ?? "switch"}`);
         return;
@@ -200,7 +203,7 @@ export function widgetSegments(
   return segments;
 }
 
-/** Count agent-bearing leaves in the static skeleton (map/loop bodies once). */
+/** Count agent-bearing leaves in the static skeleton (iterative bodies once). */
 function countStaticLeaves(node: FlowNode): number {
   switch (node.kind) {
     case "agent":
@@ -217,6 +220,7 @@ function countStaticLeaves(node: FlowNode): number {
     case "map":
       return countStaticLeaves(node.body) + (node.reduce ? 1 : 0);
     case "loop":
+    case "while":
       return countStaticLeaves(node.body);
     case "switch":
       // Exactly one arm runs; count the smallest so the total is an

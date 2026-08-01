@@ -43,6 +43,9 @@ flow:
               review: "{initial_review}"
               implementation: null
 
+        # Approved: both flags explicitly false, no P1-P3 findings, and a
+        # report present. Anything shy of that falls through to the
+        # malformed catch-all in `else`.
         - when:
             and:
               - eq: [cannot_proceed, false]
@@ -50,9 +53,6 @@ flow:
               - eq: [counts.p1, 0]
               - eq: [counts.p2, 0]
               - eq: [counts.p3, 0]
-              - or:
-                  - eq: [counts.p4, 0]
-                  - gt: [counts.p4, 0]
               - empty: actionable
               - not:
                   empty: report
@@ -64,23 +64,14 @@ flow:
               review: "{initial_review}"
               implementation: null
 
-        # Only a review with validated routing fields may reach the mutating branch.
+        # Actionable: both flags explicitly false and the findings
+        # consistent — a non-empty actionable array backed by a positive
+        # P1-P3 count. Only such a review may reach the mutating branch;
+        # anything else is malformed and falls through to `else`.
         - when:
             and:
               - eq: [cannot_proceed, false]
               - eq: [stalled, false]
-              - or:
-                  - eq: [counts.p1, 0]
-                  - gt: [counts.p1, 0]
-              - or:
-                  - eq: [counts.p2, 0]
-                  - gt: [counts.p2, 0]
-              - or:
-                  - eq: [counts.p3, 0]
-                  - gt: [counts.p3, 0]
-              - or:
-                  - eq: [counts.p4, 0]
-                  - gt: [counts.p4, 0]
               - or:
                   - gt: [counts.p1, 0]
                   - gt: [counts.p2, 0]
@@ -182,6 +173,7 @@ flow:
                           review: "{verified_review}"
                           implementation: "{implementation}"
 
+                    # Approved: same contract check as the initial switch.
                     - when:
                         and:
                           - eq: [cannot_proceed, false]
@@ -189,9 +181,6 @@ flow:
                           - eq: [counts.p1, 0]
                           - eq: [counts.p2, 0]
                           - eq: [counts.p3, 0]
-                          - or:
-                              - eq: [counts.p4, 0]
-                              - gt: [counts.p4, 0]
                           - empty: actionable
                           - not:
                               empty: report
@@ -203,22 +192,12 @@ flow:
                           review: "{verified_review}"
                           implementation: "{implementation}"
 
+                    # Actionable: same consistency check as the initial
+                    # switch; keeps the loop going as changes_required.
                     - when:
                         and:
                           - eq: [cannot_proceed, false]
                           - eq: [stalled, false]
-                          - or:
-                              - eq: [counts.p1, 0]
-                              - gt: [counts.p1, 0]
-                          - or:
-                              - eq: [counts.p2, 0]
-                              - gt: [counts.p2, 0]
-                          - or:
-                              - eq: [counts.p3, 0]
-                              - gt: [counts.p3, 0]
-                          - or:
-                              - eq: [counts.p4, 0]
-                              - gt: [counts.p4, 0]
                           - or:
                               - gt: [counts.p1, 0]
                               - gt: [counts.p2, 0]

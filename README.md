@@ -51,8 +51,8 @@ Three nouns carry the whole framework:
 
 ### The algebra
 
-A workflow is a tree of eight node kinds. Composition is purely structural:
-`parallel` fuses fork and join into one expression, loops are bounded fixpoints,
+A workflow is a tree of nine node kinds. Composition is purely structural:
+`parallel` fuses fork and join into one expression, iterative nodes are bounded,
 and saved workflows inline like function calls.
 
 | Icon | Node       | Meaning                                                   | Value                                      |
@@ -61,7 +61,8 @@ and saved workflows inline like function calls.
 | `≡`  | `sequence` | Run steps in order.                                       | The last step's value.                     |
 | `⑃`  | `parallel` | Run named branches concurrently, optionally `⑂` reduce.   | `{branch: value}`, or the reducer's value. |
 | `⇶`  | `map`      | Fan out a body per element of a runtime array.            | Array of body values, or the reducer's.    |
-| `↺`  | `loop`     | Repeat a body until a predicate holds or `max` is hit.    | The last iteration's value.                |
+| `↺`  | `loop`     | Run a body, then repeat until a predicate holds.          | The last iteration's value.                |
+| `↺`  | `while`    | Carry a value through a body while a predicate holds.     | The final carried value.                   |
 | `⎇`  | `switch`   | Route to the first arm whose predicate matches a value.   | The chosen arm's value.                    |
 | `≔`  | `value`    | Yield a template-interpolated JSON value (no agent).      | The interpolated value.                    |
 | `❖`  | `workflow` | Invoke a saved workflow by name (inlined, cycle-checked). | The inlined flow's value.                  |
@@ -73,12 +74,11 @@ Every surface that shows a flow — the tool call display, `/workflow <name>`,
 
 ```
 ❖ review → {initial_review}
-⎇ switch {initial_review} → {cycle_result}
-├─ approved/cannot_proceed → ≔ value
-└─ actionable → ↺ loop ≤3
-   ├─ ✦ ad-hoc → {implementation}
-   ├─ ❖ review → {verified_review}
-   └─ ⎇ switch {verified_review}
+⎇ switch {initial_review} → {initial_state}
+↺ while outcome == "changes_required" on {initial_state} ≤3 → {cycle_result}
+├─ ✦ ad-hoc → {implementation}
+├─ ❖ review → {verified_review}
+└─ ⎇ switch {verified_review}
 ⎇ switch {cycle_result}
 └─ changes remain → ≔ exhausted
 ```
@@ -101,8 +101,10 @@ Nothing flows between nodes implicitly. To pass data:
 - Mark a `sequence` step with `as: name`, then reference `{name}` (or a dot path
   like `{name.files.0}`) in any later step of that sequence.
 - `{previous}` is the immediately preceding step's value.
-- A `map` body sees `{item}` and `{index}`; a `loop` body sees `{iteration}`
-  and `{last}` (empty on the first iteration).
+- A `map` body sees `{item}` and `{index}`. A `loop` body sees `{iteration}`
+  and `{last}` (empty on the first iteration); a `while` body sees
+  `{iteration}` and `{current}`. Nested iterative nodes expose only their own
+  control roots, while enclosing map roots remain visible.
 - Reduce tasks see `{branches}` (parallel) or `{items}` (map).
 - Saved workflows see only their declared `{params.*}` — caller bindings are
   invisible, and param values are interpolated in the caller's scope.
@@ -196,10 +198,14 @@ flow:
 This repository also includes `/review-fix`, an explicitly mutating workflow
 for the current checkout. It invokes the saved `review` workflow, sends
 validated P1–P3 findings to an anonymous Implementer, and ends every
-implementation round with a fresh review. It stops when the change is approved, cannot proceed, or reaches three
-complete implementation-and-review rounds. The maximum run executes seven
-agents: one initial Reviewer and three Implementer/Reviewer pairs. Its final
-structured outcome is `approved`, `cannot_proceed`, or `exhausted`.
+implementation round with a fresh review. It stops when the change is approved,
+cannot proceed, or reaches three complete implementation-and-review rounds.
+The maximum run executes seven agents: one initial Reviewer and three
+Implementer/Reviewer pairs. Its flat final result includes `outcome`, `reason`,
+`round_index`, `report`, `actionable`, and `implementation`; `outcome` is
+`approved`, `cannot_proceed`, or `exhausted`. Implementer messages remain
+Markdown because only reviewer output controls routing: forcing strict JSON
+there would turn a malformed status report into a mid-cycle hard failure.
 
 Workflows live in `~/.pi/agent/workflows` and `.pi/workflows`, discovered like
 agents. Every definition is fully validated at discovery (references, cycles,
@@ -400,9 +406,37 @@ max: 3
 until: { eq: ["done", true] }
 ```
 
-Predicates address the body's JSON value by dot path (`""` is the whole
-value): `eq`, `ne`, `gt`, `lt`, `exists`, `empty`, composed with `and`,
-`or`, `not`.
+`loop` is a bounded do-until: its body executes at least once, `{last}` is
+empty for that first iteration, and `until` is evaluated against each body
+result. The node returns the last result when the predicate matches or `max`
+is reached.
+
+### `while`
+
+```yaml
+kind: while
+on: "{initial_state}"       # exactly one reference, resolved before the loop
+condition: { eq: ["outcome", "changes_required"] }
+max: 3
+body:
+  kind: agent
+  task: "Round {iteration}; fix {current.actionable}"
+  output: json
+```
+
+`while` is a bounded, pre-checked fold. It resolves `on` once in the enclosing
+scope, evaluates `condition` against that value, and runs the body only while
+the predicate matches. The body sees the zero-based `{iteration}` and the
+carried `{current}` value; its result becomes the next carried value. If the
+initial condition is false, the node runs zero iterations and returns `on`
+unchanged. If `max` is reached, it returns the current value without adding a
+termination flag, so callers that distinguish convergence from exhaustion
+must encode that state in the carried value.
+
+Predicates address their subject's JSON value by dot path (`""` is the whole
+value): `eq`, `ne`, `gt`, `lt`, `exists`, `empty`, composed with `and`, `or`,
+`not`. The same language is used by `loop.until`, `while.condition`, and
+`switch.cases[].when`.
 
 ### `switch`
 
@@ -420,7 +454,7 @@ else:                   # required — the switch always yields a value
 ```
 
 Exclusive, ordered, total routing on data: `on` resolves to a JSON value,
-the cases' predicates (the same language as `loop.until`) are tried in
+the cases' predicates are tried in
 definition order, and exactly one arm runs — the first match, or `else`.
 The switch yields the chosen arm's value directly, like a ternary, so an
 `as` binding on the switch never dangles. Arms see the enclosing scope
@@ -464,7 +498,7 @@ Every run enforces limits (tool parameter `budgets`, all optional):
 | ------------------ | ------- | ----------------------------------------------------------- |
 | `maxAgents`        | 50      | Total agent and reducer executions; `0` prohibits them.      |
 | `maxParallelism`   | 8       | Simultaneously running agents, global across nested pools.   |
-| `maxIterations`    | 10      | Cap applied to every loop.                                   |
+| `maxIterations`    | 10      | Cap applied to every `loop` and `while`.                     |
 | `maxDepth`         | 5       | Cross-process delegation depth.                              |
 | `maxTurns`         | 100     | Assistant turns a single delegated agent may take.           |
 | `maxAgentDuration` | —       | Wall-clock seconds a single delegated agent may run.         |
@@ -666,7 +700,7 @@ typed client is exported from `pi-agents/api`.
 | `pi-agents:rpc:reply:<id>` | Correlated success or error reply |
 
 The run channel carries `run_created`, node lifecycle (including
-`node_steered` after queue acceptance), loop iteration, `run_backgrounded`,
+`node_steered` after queue acceptance), loop/while iteration, `run_backgrounded`,
 and `run_completed` events. These are detached, deeply frozen snapshots:
 subscribers cannot mutate pi-agents' internal run state or the event seen by
 later subscribers. Only new live events are published; use RPC `list` for the

@@ -33,7 +33,9 @@ const finding = {
   severity: "P2",
   category: "correctness",
   title: "Fix the bug",
+  problem: "The current behavior is incorrect.",
   fix: "Apply the fix.",
+  context: "The implementation demonstrates the incorrect behavior.",
   locations: ["src/file.ts:10-20"],
 };
 
@@ -56,7 +58,10 @@ function reviewResult(
     actionable: options.actionable ?? (p1 + p2 + p3 > 0 ? [finding] : []),
     stalled: options.stalled ?? false,
     cannot_proceed: options.cannotProceed ?? false,
-    reason: null,
+    reason:
+      options.stalled || options.cannotProceed
+        ? "The review cannot continue safely."
+        : null,
     lower_confidence_observations: [],
     report: "# Code Review\n\nReview report.",
   });
@@ -102,8 +107,13 @@ describe("project review workflows", () => {
     expect(outcome.status).toBe("completed");
     expect(outcome.value).toMatchObject({
       outcome: "approved",
+      reason: null,
+      round_index: null,
+      report: "# Code Review\n\nReview report.",
+      actionable: [],
       implementation: null,
     });
+    expect(outcome.value).not.toHaveProperty("review");
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       agent: undefined,
@@ -120,7 +130,15 @@ describe("project review workflows", () => {
       reviewResult(),
     ]);
     expect(outcome.status).toBe("completed");
-    expect(outcome.value).toMatchObject({ outcome: "approved" });
+    expect(outcome.value).toMatchObject({
+      outcome: "approved",
+      round_index: 0,
+      report: "# Code Review\n\nReview report.",
+      actionable: [],
+      implementation:
+        "## Implementation summary\n\nApplied the requested fixes.",
+    });
+    expect(outcome.value).not.toHaveProperty("review");
     expect(calls).toHaveLength(3);
     expect(calls[1]?.task).toContain("Act as the Implementer");
     expect(calls[1]?.output).toBe("text");
@@ -137,10 +155,46 @@ describe("project review workflows", () => {
       expect(outcome.status).toBe("completed");
       expect(outcome.value).toMatchObject({
         outcome: "cannot_proceed",
+        round_index: null,
+        report: null,
+        actionable: [],
         implementation: null,
       });
       expect(calls).toHaveLength(1);
     }
+  });
+
+  test("returns a flat initial cannot_proceed review without repairing", async () => {
+    const { calls, outcome } = await runReviewFix([
+      reviewResult({ cannotProceed: true }),
+    ]);
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toMatchObject({
+      outcome: "cannot_proceed",
+      reason: "The review cannot continue safely.",
+      round_index: null,
+      report: "# Code Review\n\nReview report.",
+      actionable: [],
+      implementation: null,
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("fails closed with round metadata when verification is malformed", async () => {
+    const { calls, outcome } = await runReviewFix([
+      reviewResult({ p2: 1 }),
+      "{}",
+    ]);
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toMatchObject({
+      outcome: "cannot_proceed",
+      round_index: 0,
+      report: null,
+      actionable: [],
+      implementation:
+        "## Implementation summary\n\nApplied the requested fixes.",
+    });
+    expect(calls).toHaveLength(3);
   });
 
   test("returns cannot_proceed when verification reports no progress", async () => {
@@ -149,7 +203,11 @@ describe("project review workflows", () => {
       reviewResult({ p2: 1, stalled: true }),
     ]);
     expect(outcome.status).toBe("completed");
-    expect(outcome.value).toMatchObject({ outcome: "cannot_proceed" });
+    expect(outcome.value).toMatchObject({
+      outcome: "cannot_proceed",
+      round_index: 0,
+      actionable: [finding],
+    });
     expect(calls).toHaveLength(3);
   });
 
@@ -162,7 +220,15 @@ describe("project review workflows", () => {
       actionable,
     ]);
     expect(outcome.status).toBe("completed");
-    expect(outcome.value).toMatchObject({ outcome: "exhausted" });
+    expect(outcome.value).toMatchObject({
+      outcome: "exhausted",
+      round_index: 2,
+      report: "# Code Review\n\nReview report.",
+      actionable: [finding],
+      implementation:
+        "## Implementation summary\n\nApplied the requested fixes.",
+    });
+    expect(outcome.value).not.toHaveProperty("review");
     expect(calls).toHaveLength(7);
     expect(calls.filter((call) => call.output === "json")).toHaveLength(4);
     expect(calls.filter((call) => call.output === "text")).toHaveLength(3);

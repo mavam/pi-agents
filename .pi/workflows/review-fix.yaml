@@ -1,11 +1,12 @@
 name: review-fix
 description: Review and fix the current checkout until approved or unable to proceed
-trigger: when the user explicitly asks to review and implement fixes in the current checkout
+trigger: when the user explicitly asks to review and implement fixes in the current checkout, or explicitly asks to keep iterating until the review comes back clean
 doc: >-
-  Runs the canonical read-only review workflow, sends validated P1-P3 findings
-  to an anonymous Implementer, and verifies each implementation with a fresh
-  review. Stops when approved, unable to proceed, stalled, malformed, or after
-  three complete implementation-and-review rounds.
+  Mutates the current working tree. Use `review` for a read-only pass. Runs
+  that canonical review first, sends validated P1-P3 findings to an anonymous
+  Implementer, and verifies every implementation with a fresh review. Stops
+  when approved, unable to proceed, stalled, malformed, or after three
+  complete implementation-and-review rounds.
 params:
   - name: target
     description: The editable change in the current checkout to review and fix
@@ -19,40 +20,60 @@ flow:
         target: "{params.target}"
       as: initial_review
 
+    # Normalize every reviewer response before downstream nodes dereference
+    # it. The result has one guaranteed flat shape even for malformed JSON.
     - kind: switch
       on: "{initial_review}"
-      as: cycle_result
+      as: initial_state
       cases:
         - when:
-            eq: [cannot_proceed, true]
+            and:
+              - eq: [cannot_proceed, true]
+              - eq: [stalled, false]
+              - exists: actionable
+              - not:
+                  empty: report
+              - not:
+                  empty: reason
           then:
             kind: value
             value:
               outcome: cannot_proceed
-              reason: The Reviewer reported that the workflow cannot proceed.
-              review: "{initial_review}"
+              reason: "{initial_review.reason}"
+              round_index: null
+              report: "{initial_review.report}"
+              actionable: "{initial_review.actionable}"
               implementation: null
 
         - when:
-            eq: [stalled, true]
+            and:
+              - eq: [cannot_proceed, false]
+              - eq: [stalled, true]
+              - not:
+                  empty: actionable
+              - not:
+                  empty: report
+              - not:
+                  empty: reason
           then:
             kind: value
             value:
               outcome: cannot_proceed
-              reason: The Reviewer reported no meaningful progress on the remaining findings.
-              review: "{initial_review}"
+              reason: "{initial_review.reason}"
+              round_index: null
+              report: "{initial_review.report}"
+              actionable: "{initial_review.actionable}"
               implementation: null
 
-        # Approved: both flags explicitly false, no P1-P3 findings, and a
-        # report present. Anything shy of that falls through to the
-        # malformed catch-all in `else`.
         - when:
             and:
               - eq: [cannot_proceed, false]
               - eq: [stalled, false]
+              - eq: [reason, null]
               - eq: [counts.p1, 0]
               - eq: [counts.p2, 0]
               - eq: [counts.p3, 0]
+              - exists: actionable
               - empty: actionable
               - not:
                   empty: report
@@ -61,17 +82,16 @@ flow:
             value:
               outcome: approved
               reason: null
-              review: "{initial_review}"
+              round_index: null
+              report: "{initial_review.report}"
+              actionable: "{initial_review.actionable}"
               implementation: null
 
-        # Actionable: both flags explicitly false and the findings
-        # consistent — a non-empty actionable array backed by a positive
-        # P1-P3 count. Only such a review may reach the mutating branch;
-        # anything else is malformed and falls through to `else`.
         - when:
             and:
               - eq: [cannot_proceed, false]
               - eq: [stalled, false]
+              - eq: [reason, null]
               - or:
                   - gt: [counts.p1, 0]
                   - gt: [counts.p2, 0]
@@ -81,155 +101,187 @@ flow:
               - not:
                   empty: report
           then:
-            # Each iteration is a complete implementation-and-review round.
-            kind: loop
-            max: 3
-            until:
-              or:
-                - eq: [outcome, approved]
-                - eq: [outcome, cannot_proceed]
-            body:
-              kind: sequence
-              steps:
-                - kind: switch
-                  on: "{last}"
-                  as: current_review
-                  cases:
-                    - when:
-                        exists: review
-                      then:
-                        kind: value
-                        value: "{last.review}"
-                  else:
-                    kind: value
-                    value: "{initial_review}"
-
-                - kind: agent
-                  thinking: high
-                  as: implementation
-                  task: |-
-                    Act as the Implementer for {params.target}.
-
-                    Current review:
-                    {current_review}
-
-                    Work only in the current checkout. Before modifying files,
-                    verify that the target describes the checked-out change. Do
-                    not check out another branch, push, create commits, reply to
-                    review comments, or resolve review threads. If the target is
-                    not editable here, make no changes and report that blocker.
-
-                    Validate every actionable finding against the current code.
-                    Implement the valid P1-P3 fixes without unrelated cleanup or
-                    opportunistic refactoring. Run the narrowest relevant tests,
-                    type checks, and lint checks. Do not claim that the result is
-                    clean; the next Reviewer makes that determination.
-
-                    End with a concise Markdown summary containing:
-                    - the implementation status;
-                    - changed files and what changed;
-                    - checks run and their results;
-                    - skipped or rejected findings with reasons;
-                    - unresolved blockers.
-
-                - kind: workflow
-                  name: review
-                  params:
-                    target: "{params.target}"
-                    focus: >-
-                      Perform a full verification review with the normal
-                      risk-based lens selection. Confirm whether every prior
-                      actionable finding is resolved and detect regressions
-                      introduced by the implementation.
-                    context: |-
-                      Previous review:
-                      {current_review}
-
-                      Implementer summary:
-                      {implementation}
-                  as: verified_review
-
-                # The Reviewer always ends the round, so the final changes are verified.
-                - kind: switch
-                  on: "{verified_review}"
-                  cases:
-                    - when:
-                        eq: [cannot_proceed, true]
-                      then:
-                        kind: value
-                        value:
-                          outcome: cannot_proceed
-                          reason: The Reviewer reported that verification cannot proceed.
-                          review: "{verified_review}"
-                          implementation: "{implementation}"
-
-                    - when:
-                        eq: [stalled, true]
-                      then:
-                        kind: value
-                        value:
-                          outcome: cannot_proceed
-                          reason: The Reviewer found no meaningful progress on the remaining findings.
-                          review: "{verified_review}"
-                          implementation: "{implementation}"
-
-                    # Approved: same contract check as the initial switch.
-                    - when:
-                        and:
-                          - eq: [cannot_proceed, false]
-                          - eq: [stalled, false]
-                          - eq: [counts.p1, 0]
-                          - eq: [counts.p2, 0]
-                          - eq: [counts.p3, 0]
-                          - empty: actionable
-                          - not:
-                              empty: report
-                      then:
-                        kind: value
-                        value:
-                          outcome: approved
-                          reason: null
-                          review: "{verified_review}"
-                          implementation: "{implementation}"
-
-                    # Actionable: same consistency check as the initial
-                    # switch; keeps the loop going as changes_required.
-                    - when:
-                        and:
-                          - eq: [cannot_proceed, false]
-                          - eq: [stalled, false]
-                          - or:
-                              - gt: [counts.p1, 0]
-                              - gt: [counts.p2, 0]
-                              - gt: [counts.p3, 0]
-                          - not:
-                              empty: actionable
-                          - not:
-                              empty: report
-                      then:
-                        kind: value
-                        value:
-                          outcome: changes_required
-                          reason: null
-                          review: "{verified_review}"
-                          implementation: "{implementation}"
-
-                  else:
-                    kind: value
-                    value:
-                      outcome: cannot_proceed
-                      reason: The Reviewer returned malformed or inconsistent verification data.
-                      review: "{verified_review}"
-                      implementation: "{implementation}"
+            kind: value
+            value:
+              outcome: changes_required
+              reason: null
+              round_index: null
+              report: "{initial_review.report}"
+              actionable: "{initial_review.actionable}"
+              implementation: null
 
       else:
         kind: value
         value:
           outcome: cannot_proceed
           reason: The Reviewer returned malformed or inconsistent review data.
-          review: "{initial_review}"
+          round_index: null
+          report: null
+          actionable: []
           implementation: null
 
+    - kind: while
+      on: "{initial_state}"
+      condition:
+        eq: [outcome, changes_required]
+      max: 3
+      as: cycle_result
+      body:
+        kind: sequence
+        steps:
+          - kind: agent
+            thinking: high
+            as: implementation
+            task: |-
+              Act as the Implementer for {params.target}.
+
+              Current review report:
+              {current.report}
+
+              Actionable P1-P3 findings:
+              {current.actionable}
+
+              Work only in the current checkout. Before modifying files,
+              verify that the target describes the checked-out change. Do
+              not check out another branch, push, create commits, reply to
+              review comments, or resolve review threads. If the target is
+              not editable here, make no changes and report that blocker.
+
+              Validate every actionable finding against the current code.
+              Implement the valid P1-P3 fixes without unrelated cleanup or
+              opportunistic refactoring. Run the narrowest relevant tests,
+              type checks, and lint checks. Do not claim that the result is
+              clean; the next Reviewer makes that determination.
+
+              End with a concise Markdown summary containing:
+              - the implementation status;
+              - changed files and what changed;
+              - checks run and their results;
+              - skipped or rejected findings with reasons;
+              - unresolved blockers.
+
+          - kind: workflow
+            name: review
+            params:
+              target: "{params.target}"
+              focus: >-
+                Perform a full verification review with the normal risk-based
+                lens selection. Confirm whether every prior actionable finding
+                is resolved and detect regressions introduced by the
+                implementation.
+              context: |-
+                Repair round {iteration} (zero-based) was just attempted.
+
+                Previous review report:
+                {current.report}
+
+                Previous actionable findings:
+                {current.actionable}
+
+                Implementer summary:
+                {implementation}
+            as: verified_review
+
+          # Recreate the same guaranteed flat state after each repair round.
+          - kind: switch
+            on: "{verified_review}"
+            cases:
+              - when:
+                  and:
+                    - eq: [cannot_proceed, true]
+                    - eq: [stalled, false]
+                    - exists: actionable
+                    - not:
+                        empty: report
+                    - not:
+                        empty: reason
+                then:
+                  kind: value
+                  value:
+                    outcome: cannot_proceed
+                    reason: "{verified_review.reason}"
+                    round_index: "{iteration}"
+                    report: "{verified_review.report}"
+                    actionable: "{verified_review.actionable}"
+                    implementation: "{implementation}"
+
+              - when:
+                  and:
+                    - eq: [cannot_proceed, false]
+                    - eq: [stalled, true]
+                    - not:
+                        empty: actionable
+                    - not:
+                        empty: report
+                    - not:
+                        empty: reason
+                then:
+                  kind: value
+                  value:
+                    outcome: cannot_proceed
+                    reason: "{verified_review.reason}"
+                    round_index: "{iteration}"
+                    report: "{verified_review.report}"
+                    actionable: "{verified_review.actionable}"
+                    implementation: "{implementation}"
+
+              - when:
+                  and:
+                    - eq: [cannot_proceed, false]
+                    - eq: [stalled, false]
+                    - eq: [reason, null]
+                    - eq: [counts.p1, 0]
+                    - eq: [counts.p2, 0]
+                    - eq: [counts.p3, 0]
+                    - exists: actionable
+                    - empty: actionable
+                    - not:
+                        empty: report
+                then:
+                  kind: value
+                  value:
+                    outcome: approved
+                    reason: null
+                    round_index: "{iteration}"
+                    report: "{verified_review.report}"
+                    actionable: "{verified_review.actionable}"
+                    implementation: "{implementation}"
+
+              - when:
+                  and:
+                    - eq: [cannot_proceed, false]
+                    - eq: [stalled, false]
+                    - eq: [reason, null]
+                    - or:
+                        - gt: [counts.p1, 0]
+                        - gt: [counts.p2, 0]
+                        - gt: [counts.p3, 0]
+                    - not:
+                        empty: actionable
+                    - not:
+                        empty: report
+                then:
+                  kind: value
+                  value:
+                    outcome: changes_required
+                    reason: null
+                    round_index: "{iteration}"
+                    report: "{verified_review.report}"
+                    actionable: "{verified_review.actionable}"
+                    implementation: "{implementation}"
+
+            else:
+              kind: value
+              value:
+                outcome: cannot_proceed
+                reason: The Reviewer returned malformed or inconsistent verification data.
+                round_index: "{iteration}"
+                report: null
+                actionable: []
+                implementation: "{implementation}"
+
+    # A while node returns only its carried value. If that value still asks
+    # for changes after the cap, classify it as exhaustion here.
     - kind: switch
       on: "{cycle_result}"
       cases:
@@ -240,7 +292,9 @@ flow:
             value:
               outcome: exhausted
               reason: The workflow reached its implementation-round limit with actionable findings remaining.
-              review: "{cycle_result.review}"
+              round_index: "{cycle_result.round_index}"
+              report: "{cycle_result.report}"
+              actionable: "{cycle_result.actionable}"
               implementation: "{cycle_result.implementation}"
       else:
         kind: value

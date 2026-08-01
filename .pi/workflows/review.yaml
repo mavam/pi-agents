@@ -4,7 +4,8 @@ trigger: when the user asks for a read-only code review of a change, pull reques
 doc: >-
   Runs one anonymous high-thinking reviewer with the personal code-review
   skill. Returns machine-readable review state together with the complete
-  Markdown report and never modifies the target.
+  Markdown report and never modifies the target. Use `review-fix` only when
+  you explicitly want a workflow that mutates the current working tree.
 params:
   - name: target
     description: What to review (a pull request, local change, path, or description)
@@ -46,7 +47,9 @@ task: |-
         "severity": "P1 | P2 | P3",
         "category": "correctness",
         "title": "Imperative fix title",
+        "problem": "Concrete description of what is wrong",
         "fix": "Specific implementation action",
+        "context": "Evidence and reasoning that validate the finding",
         "locations": ["src/file.ts:10-20"]
       }
     ],

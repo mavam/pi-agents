@@ -180,23 +180,8 @@ accepts every agent-node option (`model`, `thinking`, `skills`, `tools`, `cwd`,
 `scope`, `output`). Mixing the flat form with `flow:` is an error; put execution
 options on the relevant agent node when `flow:` is present.
 
-Saved workflows compose like functions. This focused workflow reuses the
-canonical review contract instead of defining a reviewer profile:
-
-```yaml
-name: bug-hunt
-description: Hunt correctness bugs in a target
-params: [{ name: target, required: true }]
-flow:
-  kind: workflow
-  name: review
-  params:
-    target: "{params.target}"
-    focus: "Review strictly for concrete correctness bugs."
-```
-
-This repository also includes `/review-fix`, an explicitly mutating workflow
-for the current checkout. It invokes the saved `review` workflow, sends
+Saved workflows compose like functions through `workflow` nodes. The included
+`/review-fix` workflow uses that composition to invoke `/review`, then sends
 validated P1–P3 findings to an anonymous Implementer, and ends every
 implementation round with a fresh review. It stops when the change is approved,
 cannot proceed, or reaches three complete implementation-and-review rounds.

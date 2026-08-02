@@ -92,11 +92,7 @@ async function runReviewFix(reviewResults: string[]) {
 describe("project review workflows", () => {
   test("discover without diagnostics and use no named reviewer profile", () => {
     const workflows = projectWorkflows();
-    expect([...workflows.keys()].sort()).toEqual([
-      "bug-hunt",
-      "review",
-      "review-fix",
-    ]);
+    expect([...workflows.keys()].sort()).toEqual(["review", "review-fix"]);
     for (const name of workflows.keys()) {
       expect([...collectAgentNames(expandedWorkflow(name))]).toEqual([]);
     }

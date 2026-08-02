@@ -3,7 +3,11 @@ import path from "node:path";
 import { discoverWorkflows } from "../src/catalog/workflows.js";
 import { emptyUsage } from "../src/engine/types.js";
 import type { WorkflowDef } from "../src/model/ast.js";
-import { collectAgentNames, validateFlow } from "../src/model/validate.js";
+import {
+  collectAgentNames,
+  collectInvocations,
+  validateFlow,
+} from "../src/model/validate.js";
 import type { AgentCall } from "../src/run/interpreter.js";
 import { executeFlow } from "../src/run/interpreter.js";
 
@@ -90,11 +94,17 @@ async function runReviewFix(reviewResults: string[]) {
 }
 
 describe("project review workflows", () => {
-  test("discover without diagnostics and use no named reviewer profile", () => {
+  test("discover without diagnostics or external profiles and skills", () => {
     const workflows = projectWorkflows();
     expect([...workflows.keys()].sort()).toEqual(["review", "review-fix"]);
     for (const name of workflows.keys()) {
-      expect([...collectAgentNames(expandedWorkflow(name))]).toEqual([]);
+      const flow = expandedWorkflow(name);
+      expect([...collectAgentNames(flow)]).toEqual([]);
+      expect(
+        collectInvocations(flow).flatMap(
+          (invocation) => invocation.skills ?? [],
+        ),
+      ).toEqual([]);
     }
   });
 
@@ -115,9 +125,9 @@ describe("project review workflows", () => {
       agent: undefined,
       output: "json",
       thinking: "high",
-      skills: ["code-review"],
-      scope: "user",
     });
+    expect(calls[0]?.skills).toBeUndefined();
+    expect(calls[0]?.scope).toBeUndefined();
   });
 
   test("runs an Implementer and verifies its changes before approval", async () => {

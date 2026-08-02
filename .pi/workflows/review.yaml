@@ -2,17 +2,17 @@ name: review
 description: Review a target with risk-selected lenses and structured findings
 trigger: when the user asks for a read-only code review of a change, pull request, path, or subsystem
 doc: >-
-  Runs one anonymous high-thinking reviewer with the personal code-review
-  skill. Returns machine-readable review state together with the complete
-  Markdown report and never modifies the target. Use `review-fix` only when
-  you explicitly want a workflow that mutates the current working tree.
+  Runs one self-contained anonymous high-thinking reviewer. Returns
+  machine-readable review state together with the complete Markdown report
+  and never modifies the target. Use `review-fix` only when you explicitly
+  want a workflow that mutates the current working tree.
 params:
   - name: target
     description: What to review (a pull request, local change, path, or description)
     required: true
   - name: focus
     description: Optional review emphasis
-    default: Apply the code-review skill's normal risk-based lens selection.
+    default: Apply the normal risk-based lens selection.
   - name: context
     description: Optional prior findings and implementation summary for verification
     default: No prior review or implementation context.
@@ -26,10 +26,50 @@ task: |-
   {params.context}
 
   This is a read-only review. Do not modify files, create commits, push, reply
-  to review comments, or resolve review threads. Follow the code-review skill,
-  including its severity, confidence, actionability, and report requirements.
-  Treat P1, P2, and P3 findings as actionable. Keep P4 observations in the
-  report, but exclude them from the actionable array.
+  to review comments, or resolve review threads.
+
+  First understand the target's intent, then inspect the complete relevant
+  diff or changed code. For a pull request, read its description, commits,
+  full diff, and existing review feedback; verify prior comments against the
+  current code and avoid duplicating resolved concerns. For local changes,
+  inspect committed changes from the default branch's merge base plus staged
+  and unstaged changes. Focus on behavior introduced by the change and read
+  adjacent unchanged code only when needed to verify impact. Always review
+  for correctness and readability. Select additional risk lenses when applicable:
+  - Security for input, authentication, networking, secrets, or dependencies.
+  - Architecture for public APIs, module boundaries, configuration, or schemas.
+  - User experience for CLI output, errors, and defaults.
+  - Performance for hot paths, loops, queries, or large data.
+  - Tests for new behavior and branches.
+  - Documentation for docs, examples, or public behavior.
+
+  Report only findings that are specific, actionable, and grounded in concrete
+  code or observable behavior. Group symptoms that share one root cause. For a
+  normal-sized change, report at most eight findings and prioritize the highest
+  risks. Treat formatting and mechanical consistency as tooling concerns when
+  the project already enforces them.
+
+  Rate impact separately from certainty:
+  - P1: security flaws, data loss, crashes, or release blockers.
+  - P2: broken features, serious regressions, or major correctness gaps.
+  - P3: smaller bugs, coverage gaps, or usability problems that should be fixed.
+  - P4: low-impact polish or consistency improvements.
+
+  Include only high-confidence findings in the actionable review: point to the
+  exact code and explain the concrete failure mode or harm. Put plausible but
+  unverified medium-confidence concerns in lower_confidence_observations. Drop
+  low-confidence hunches. Treat P1, P2, and P3 findings as actionable. Keep P4
+  observations in the report, but exclude them from the actionable array.
+
+  For every finding, use an imperative fix title and provide the problem, a
+  specific fix, supporting context or evidence, and precise file locations.
+  Set category to correctness, security, architecture, tests, user_experience,
+  readability, documentation, or performance.
+  The Markdown report must contain `# Code Review`, a short context statement,
+  `## Overview`, `## Findings`, and `## Verdict`, plus optional
+  `## Lower-confidence observations`. Use one verdict: `Ship it` for no
+  findings or P4 only; `Ship with fixes` for P3 or below; `Needs changes` for
+  any P2; or `Blocked` for any P1.
 
   When prior round context is present, verify the actual current code rather
   than trusting the implementation summary. Set stalled to true only when the
@@ -65,7 +105,4 @@ task: |-
   cannot_proceed is true. Put the complete human-readable Markdown review in
   report despite returning JSON.
 thinking: high
-skills:
-  - code-review
-scope: user
 output: json

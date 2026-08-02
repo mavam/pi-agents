@@ -168,8 +168,6 @@ task: |-
   Context: {params.context}
   Return the structured review JSON contract.
 thinking: high
-skills: [code-review]
-scope: user
 output: json
 ```
 
@@ -185,6 +183,8 @@ Saved workflows compose like functions through `workflow` nodes. The included
 validated P1–P3 findings to an anonymous Implementer, and ends every
 implementation round with a fresh review. It stops when the change is approved,
 cannot proceed, or reaches three complete implementation-and-review rounds.
+The review rubric is part of the workflow, so neither command requires an
+external agent profile or skill.
 The maximum run executes seven agents: one initial Reviewer and three
 Implementer/Reviewer pairs. Its flat final result includes `outcome`, `reason`,
 `round_index`, `report`, `actionable`, and `implementation`; `outcome` is
@@ -288,7 +288,7 @@ name: specialist        # optional; must match a discovered agent profile
 output: text            # or "json": parse the result (fences tolerated)
 model: some-model       # optional override (wins over the agent file)
 thinking: low           # optional override (wins over the agent file)
-skills: [code-review]   # optional skills to inject; [] forces none
+skills: [my-review-guide] # optional installed skills; [] forces none
 tools: [read, grep]     # optional allowlist; [] means NO tools at all
 as: findings            # binding name; only legal on direct sequence steps
 cwd: /path/override     # optional
@@ -305,9 +305,8 @@ the profile's list wholesale and `skills: []` clears it; omit the key to
 inherit. `tools` behaves identically, and `tools: []` leaves the agent no way
 to read the files a skill references — pair the two deliberately.
 
-Skills are named, not inlined: `skills: [code-review]` resolves against the
-same catalog pi advertises in `<available_skills>`, so a name you see there
-works here. In precedence order, first match winning:
+Skills are named, not inlined: `skills: [my-review-guide]` resolves against
+the user and project catalogs below. In precedence order, first match wins:
 
 | Scope   | Locations                                                            |
 | ------- | -------------------------------------------------------------------- |
@@ -318,6 +317,10 @@ The same `scope` that governs profile discovery selects which rows apply, so an
 untrusted project contributes no skills at all. Resolved instructions are
 injected into the delegated agent's system prompt; a name that does not resolve
 fails the run during preflight, before anything spawns.
+
+Pi packages can bundle skills through `pi.skills`, but pi-agents does not yet
+include package resources in delegated-node skill resolution. Put skills used
+by workflow nodes in one of the user or project locations above.
 
 **Value contract.** An agent's value is the text of its *last* assistant
 message — nothing else. Thinking, tool calls, tool output, and earlier
@@ -354,7 +357,7 @@ concurrency: 4          # cap on simultaneous branches
 reduce:                 # optional fold over the collected value
   task: "Merge {branches}"
   agent: synthesizer    # optional; omit to reduce with an ad-hoc agent
-  skills: [code-review] # reducers take every agent-node execution option:
+  skills: [my-review-guide] # reducers take every agent-node execution option:
   model: some-model     # model, thinking, skills, tools, cwd, scope, output
 ```
 

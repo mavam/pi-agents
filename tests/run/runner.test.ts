@@ -62,6 +62,7 @@ describe("createAgentRunner system prompt", () => {
     });
     await runner(call());
     expect(specs[0]?.systemPrompt).toContain(delegationPreamble("text"));
+    expect(specs[0]?.disableSkillDiscovery).toBe(false);
   });
 
   test("json calls get the JSON variant", async () => {
@@ -99,10 +100,22 @@ describe("createAgentRunner system prompt", () => {
       expect(prompt.indexOf("runner-skill")).toBeLessThan(
         prompt.indexOf(delegationPreamble("text")),
       );
+      expect(specs[0]?.disableSkillDiscovery).toBe(true);
       expect(specs[0]?.agent).toBe("ad-hoc");
     } finally {
       fs.rmSync(skillsDir, { recursive: true, force: true });
     }
+  });
+
+  test("an explicit empty skill list disables ambient discovery", async () => {
+    const specs: SpawnSpec[] = [];
+    const runner = createAgentRunner({
+      engine: captureEngine(specs),
+      cwd: process.cwd(),
+    });
+    await runner(call({ skills: [] }));
+    expect(specs[0]?.systemPrompt).not.toContain("<skill");
+    expect(specs[0]?.disableSkillDiscovery).toBe(true);
   });
 
   test("an unresolvable skill fails the call instead of degrading the prompt", async () => {

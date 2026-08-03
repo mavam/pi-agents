@@ -53,7 +53,8 @@ export interface AgentExecutionOptions {
   model?: string;
   /** Thinking-level override (wins over the agent file). */
   thinking?: ThinkingLevel;
-  /** Skills to inject; replaces the profile's list. `[]` forces none. */
+  /** Closed set of skills to inject; replaces ambient/profile skills. `[]`
+   * disables skill discovery for the delegated process. */
   skills?: string[];
   /** Tool allowlist for the delegated process; `[]` means no tools at all. */
   tools?: string[];

@@ -46,6 +46,9 @@ export interface SpawnSpec {
   systemPrompt?: string;
   model?: string;
   thinking?: string;
+  /** Disable the child Pi process's ambient skill discovery. Instructions
+   * already included in `systemPrompt` remain available. */
+  disableSkillDiscovery?: boolean;
   /** Tool allowlist passed as `--tools a,b,c`. */
   tools?: string[];
   /** Extra environment variables for the child process. */

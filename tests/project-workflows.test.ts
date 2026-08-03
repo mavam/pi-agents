@@ -100,11 +100,9 @@ describe("project review workflows", () => {
     for (const name of workflows.keys()) {
       const flow = expandedWorkflow(name);
       expect([...collectAgentNames(flow)]).toEqual([]);
-      expect(
-        collectInvocations(flow).flatMap(
-          (invocation) => invocation.skills ?? [],
-        ),
-      ).toEqual([]);
+      for (const invocation of collectInvocations(flow)) {
+        expect(invocation.skills).toEqual([]);
+      }
     }
   });
 
@@ -126,7 +124,7 @@ describe("project review workflows", () => {
       output: "json",
       thinking: "high",
     });
-    expect(calls[0]?.skills).toBeUndefined();
+    expect(calls[0]?.skills).toEqual([]);
     expect(calls[0]?.scope).toBeUndefined();
   });
 
@@ -147,6 +145,7 @@ describe("project review workflows", () => {
     expect(outcome.value).not.toHaveProperty("review");
     expect(calls).toHaveLength(3);
     expect(calls[1]?.task).toContain("Act as the Implementer");
+    expect(calls[1]?.skills).toEqual([]);
     expect(calls[1]?.output).toBe("text");
     expect(calls[2]?.task).toContain("Implementer summary:");
     expect(calls[2]?.output).toBe("json");

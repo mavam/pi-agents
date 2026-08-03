@@ -381,6 +381,7 @@ export function createSubprocessSpawnEngine(options?: {
       const args: string[] = ["--mode", "rpc", "--no-session"];
       if (spec.model) args.push("--model", spec.model);
       if (spec.thinking) args.push("--thinking", spec.thinking);
+      if (spec.disableSkillDiscovery) args.push("--no-skills");
       // An explicit empty allowlist means "no tools", not "all tools".
       if (spec.tools) {
         if (spec.tools.length === 0) args.push("--no-tools");

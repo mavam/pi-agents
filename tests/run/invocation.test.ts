@@ -91,47 +91,54 @@ describe("skills and tools precedence", () => {
     what: string;
     call: InvocationCall;
     skills: string[];
+    disableSkillDiscovery: boolean;
     tools?: string[];
   }> = [
     {
       what: "anonymous omitted → nothing forced",
       call: {},
       skills: [],
+      disableSkillDiscovery: false,
       tools: undefined,
     },
     {
       what: "anonymous explicit → exactly what was asked",
       call: { skills: ["code-review"], tools: ["read"] },
       skills: ["code-review"],
+      disableSkillDiscovery: true,
       tools: ["read"],
     },
     {
       what: "anonymous empty → cleared",
       call: { skills: [], tools: [] },
       skills: [],
+      disableSkillDiscovery: true,
       tools: [],
     },
     {
       what: "named omitted → inherits the profile",
       call: { agent: "reviewer" },
       skills: ["code-review"],
+      disableSkillDiscovery: true,
       tools: ["read", "grep"],
     },
     {
       what: "named explicit → replaces the profile",
       call: { agent: "reviewer", skills: ["gh"], tools: ["find"] },
       skills: ["gh"],
+      disableSkillDiscovery: true,
       tools: ["find"],
     },
     {
       what: "named empty → clears the profile",
       call: { agent: "reviewer", skills: [], tools: [] },
       skills: [],
+      disableSkillDiscovery: true,
       tools: [],
     },
   ];
 
-  for (const { what, call, skills, tools } of cases) {
+  for (const { what, call, skills, disableSkillDiscovery, tools } of cases) {
     test(what, () => {
       writeAgent(projectDir, "reviewer", {
         skills: "[code-review]",
@@ -139,9 +146,17 @@ describe("skills and tools precedence", () => {
       });
       const invocation = resolveOk(call);
       expect(invocation.skills.map((s) => s.name)).toEqual(skills);
+      expect(invocation.disableSkillDiscovery).toBe(disableSkillDiscovery);
       expect(invocation.tools).toEqual(tools);
     });
   }
+
+  test("a named profile without skills still closes ambient discovery", () => {
+    writeAgent(projectDir, "reviewer");
+    const invocation = resolveOk({ agent: "reviewer" });
+    expect(invocation.skills).toEqual([]);
+    expect(invocation.disableSkillDiscovery).toBe(true);
+  });
 
   test("model and thinking follow call → profile → session default", () => {
     writeAgent(projectDir, "reviewer", {

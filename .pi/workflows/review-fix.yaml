@@ -131,6 +131,7 @@ flow:
         steps:
           - kind: agent
             thinking: high
+            skills: []
             as: implementation
             task: |-
               Act as the Implementer for {params.target}.

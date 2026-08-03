@@ -131,7 +131,7 @@ name: planner
 description: Maps a codebase and proposes implementation plans
 model: openai-codex/gpt-5.6-terra  # optional; defaults to the active session model
 thinking: medium           # optional: off|minimal|low|medium|high|xhigh
-skills: []                 # optional pi skills to inject
+skills: []                 # closed skill set for this profile
 tools: [read, grep, find]  # optional allowlist; [] means NO tools at all
 ---
 
@@ -290,7 +290,7 @@ name: specialist        # optional; must match a discovered agent profile
 output: text            # or "json": parse the result (fences tolerated)
 model: some-model       # optional override (wins over the agent file)
 thinking: low           # optional override (wins over the agent file)
-skills: [my-review-guide] # optional installed skills; [] forces none
+skills: [my-review-guide] # optional closed set; [] disables skill discovery
 tools: [read, grep]     # optional allowlist; [] means NO tools at all
 as: findings            # binding name; only legal on direct sequence steps
 cwd: /path/override     # optional
@@ -302,10 +302,13 @@ more. Without `name` the node runs as an anonymous ad-hoc agent (rendered as
 `ad-hoc`): no profile prompt, but every execution option above still applies.
 
 **Precedence** is uniform: flow node → agent file (named only) → active
-session. Lists *replace* rather than merge, so `skills` on a named call swaps
-the profile's list wholesale and `skills: []` clears it; omit the key to
-inherit. `tools` behaves identically, and `tools: []` leaves the agent no way
-to read the files a skill references — pair the two deliberately.
+session. Lists *replace* rather than merge. A named call uses its profile's
+skills as a closed set unless the node replaces them. On an anonymous call,
+omit `skills` to retain the child Pi process's normal ambient skill discovery.
+Any explicit list is closed: a non-empty list injects exactly those skills,
+and `skills: []` disables skill discovery. `tools` follows the same replacement
+precedence, and `tools: []` leaves the agent no way to read files — pair it
+with skill selection deliberately.
 
 Skills are named, not inlined: `skills: [my-review-guide]` resolves against
 the user and project catalogs below. In precedence order, first match wins:

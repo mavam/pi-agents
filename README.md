@@ -184,7 +184,9 @@ validated P1–P3 findings to an anonymous Implementer, and ends every
 implementation round with a fresh review. It stops when the change is approved,
 cannot proceed, or reaches three complete implementation-and-review rounds.
 The review rubric is part of the workflow, so neither command requires an
-external agent profile or skill.
+external agent profile or skill. Its Markdown report keeps fixed emoji-coded
+severity and category headings plus a verdict table for quick scanning, while
+the accompanying JSON fields remain plain for machine consumers.
 The maximum run executes seven agents: one initial Reviewer and three
 Implementer/Reviewer pairs. Its flat final result includes `outcome`, `reason`,
 `round_index`, `report`, `actionable`, and `implementation`; `outcome` is

@@ -54,6 +54,7 @@ task: |-
   - P2: broken features, serious regressions, or major correctness gaps.
   - P3: smaller bugs, coverage gaps, or usability problems that should be fixed.
   - P4: low-impact polish or consistency improvements.
+  Use the fixed report markers 🔴 P1, 🟠 P2, 🟡 P3, and ⚪ P4.
 
   Include only high-confidence findings in the actionable review: point to the
   exact code and explain the concrete failure mode or harm. Put plausible but
@@ -63,13 +64,45 @@ task: |-
 
   For every finding, use an imperative fix title and provide the problem, a
   specific fix, supporting context or evidence, and precise file locations.
-  Set category to correctness, security, architecture, tests, user_experience,
-  readability, documentation, or performance.
+  Assign a stable ID and use these fixed category mappings in the report:
+  - BUG / 🐛 / correctness
+  - SEC / 🛡️ / security
+  - ARC / 🏗️ / architecture
+  - TST / 🧪 / tests
+  - UXD / 🎨 / user_experience
+  - RDY / 👁️ / readability
+  - DOC / 📖 / documentation
+  - PRF / 🚀 / performance
+  - GRP / 📦 / grouped, only for symptoms with one shared root cause
+
+  Keep the JSON fields plain and machine-readable: severity is P1, P2, or P3;
+  category is the mapping's text value; and id combines its prefix with a
+  sequence number. Emojis appear only in the Markdown report and must always
+  be paired with their text label.
+
   The Markdown report must contain `# Code Review`, a short context statement,
   `## Overview`, `## Findings`, and `## Verdict`, plus optional
   `## Lower-confidence observations`. Use one verdict: `Ship it` for no
   findings or P4 only; `Ship with fixes` for P3 or below; `Needs changes` for
   any P2; or `Blocked` for any P1.
+
+  In `## Overview`, list every high-confidence finding in severity order as a
+  one-line to-do item. For example:
+  `- 🟠 P2 · 🐛 BUG-1 · Reject malformed workflow state`
+
+  In `## Findings`, use the same visual identity as the heading. For example:
+  `### 🟠 P2 · 🐛 BUG-1 · Reject malformed workflow state`
+  Follow it with one or two sentences describing the problem, a `**Fix:**`
+  paragraph with the concrete action, and a blockquote starting with
+  `Context:` that contains the evidence and a blockquoted list of backticked
+  `file:line` locations. Keep emojis out of the finding body.
+
+  In `## Verdict`, put the bold verdict label first, then this table with the
+  actual counts in its last row:
+  | 🔴 P1 | 🟠 P2 | 🟡 P3 | ⚪ P4 |
+  | :---: | :---: | :---: | :---: |
+  | count | count | count | count |
+  End with concrete next-step bullets.
 
   When prior round context is present, verify the actual current code rather
   than trusting the implementation summary. Set stalled to true only when the
@@ -84,7 +117,7 @@ task: |-
     "actionable": [
       {
         "id": "BUG-1",
-        "severity": "P1 | P2 | P3",
+        "severity": "P2",
         "category": "correctness",
         "title": "Imperative fix title",
         "problem": "Concrete description of what is wrong",
@@ -97,7 +130,7 @@ task: |-
     "cannot_proceed": false,
     "reason": null,
     "lower_confidence_observations": [],
-    "report": "Complete Markdown report following the skill's report structure"
+    "report": "Complete Markdown report following the format described earlier"
   }
 
   Keep counts consistent with the full report. Include every P1-P3 finding in

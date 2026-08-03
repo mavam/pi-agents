@@ -377,7 +377,6 @@ export function formatRunWidget(
     shortId(run.header.id),
     formatElapsed(now - run.createdAt),
     tokens > 0 ? formatTokens(tokens) : undefined,
-    activity.tool,
   ]
     .filter((part): part is string => part !== undefined)
     .map((part) => color("dim", part))
@@ -410,8 +409,14 @@ export function formatRunWidget(
   };
   const strip = segments.map(renderSegment).join("");
 
+  // The strip precedes the tool and excerpt: those tails have unbounded
+  // width, and truncation must never push the liveness glyphs off screen.
+  const after = [activity.tool ? color("dim", activity.tool) : undefined, tail]
+    .filter((part): part is string => part !== undefined)
+    .map((part) => `${dot}${part}`)
+    .join("");
   return [
-    `${color("muted", "❖")} ${percent}${dot}${label}${dot}${meta}${dot}${strip}${tail ? `${dot}${tail}` : ""}`,
+    `${color("muted", "❖")} ${percent}${dot}${label}${dot}${meta}${dot}${strip}${after}`,
   ];
 }
 

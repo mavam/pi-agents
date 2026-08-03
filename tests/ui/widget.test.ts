@@ -499,7 +499,9 @@ describe("live activity", () => {
     // Turns summed across concurrent agents are not meaningful; only the
     // token volume and the active tool surface here.
     expect(line1).not.toContain("turn");
-    expect(line1).toContain("bash");
+    // The unbounded-width tool tail follows the strip, so terminal
+    // truncation can never push the liveness glyphs off screen.
+    expect(line1).toContain("◆◆⑂ · bash");
   });
 
   test("a long silence replaces the excerpt with a stall hint", async () => {

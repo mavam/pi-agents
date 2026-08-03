@@ -1,6 +1,7 @@
 name: review-fix
 description: Review and fix the current checkout until approved or unable to proceed
 trigger: when the user explicitly asks to review and implement fixes in the current checkout, or explicitly asks to keep iterating until the review comes back clean
+display: report
 doc: >-
   Mutates the current working tree. Use `review` for a read-only pass. Runs
   that canonical review first, sends validated P1-P3 findings to an anonymous

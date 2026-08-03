@@ -1,9 +1,9 @@
 /**
  * Saved-workflow discovery: pure YAML or JSON files (`.pi/workflows/*.yaml`,
  * `.yml`, `.json` — the extension decides the parser). One object per file:
- * name, description, trigger, on, debounce, params, optional doc prose, and
- * the flow expression (either a `flow:` tree or the flat `agent:`/`task:`
- * single-unit form).
+ * name, description, trigger, display, on, debounce, params, optional doc
+ * prose, and the flow expression (either a `flow:` tree or the flat
+ * `agent:`/`task:` single-unit form).
  *
  * Discovery mirrors agents: user `~/.pi/agent/workflows` plus the nearest project
  * `.pi/workflows` walking up from cwd; project wins on name conflicts.
@@ -72,6 +72,7 @@ const ALLOWED_KEYS = new Set([
   "name",
   "description",
   "trigger",
+  "display",
   "on",
   "debounce",
   "params",
@@ -88,6 +89,9 @@ const WORKFLOW_EXTENSIONS = [".yaml", ".yml", ".json"];
 const FLAT_LIST_KEYS = new Set(["skills", "tools"]);
 
 const WORKFLOW_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+
+/** Dot path into a workflow's final JSON value. */
+const DISPLAY_PATH_RE = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
 
 function toErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -293,6 +297,12 @@ export function parseWorkflowFile(
     return "Invalid 'trigger' (must be a string)";
   }
   if (
+    fm.display !== undefined &&
+    (typeof fm.display !== "string" || !DISPLAY_PATH_RE.test(fm.display.trim()))
+  ) {
+    return "Invalid 'display' (must be a non-empty dot path)";
+  }
+  if (
     fm.on !== undefined &&
     (!Array.isArray(fm.on) || fm.on.some((e) => typeof e !== "string"))
   ) {
@@ -343,6 +353,7 @@ export function parseWorkflowFile(
     name: fm.name.trim(),
     description: fm.description.trim(),
     trigger: typeof fm.trigger === "string" ? fm.trigger.trim() : undefined,
+    display: typeof fm.display === "string" ? fm.display.trim() : undefined,
     on,
     debounce: fm.debounce as number | undefined,
     params: allParams,

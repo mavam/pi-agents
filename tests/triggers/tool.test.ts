@@ -168,7 +168,7 @@ beforeEach(() => {
   );
   writeFile(
     ".pi/workflows/greet.yaml",
-    'name: greet\ndescription: greets a target\nparams:\n  - name: target\n    required: true\nflow: { kind: agent, name: echo, task: "greet {params.target}" }\n',
+    'name: greet\ndescription: greets a target\ndisplay: report\nparams:\n  - name: target\n    required: true\nflow: { kind: agent, name: echo, task: "greet {params.target}" }\n',
   );
 });
 
@@ -201,7 +201,8 @@ describe("workflow tool", () => {
 
   test("runs a saved workflow by name with params", async () => {
     const { engine } = fakeEngine((spec) => `ran: ${spec.task}`);
-    const tool = createWorkflowTool(makeDeps(engine));
+    const deps = makeDeps(engine);
+    const tool = createWorkflowTool(deps);
     const result = await tool.execute(
       "t2",
       { name: "greet", params: { target: "world" }, scope: "project" },
@@ -212,6 +213,9 @@ describe("workflow tool", () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain("ran: greet world");
     expect(result.details.label).toBe("greet");
+    expect(
+      deps.manager.state.runs.get(result.details.runId)?.header.display,
+    ).toBe("report");
   });
 
   test("passes the agent tools allowlist to the engine", async () => {

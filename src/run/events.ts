@@ -36,6 +36,8 @@ export interface RunSource {
 export interface RunHeader {
   id: string;
   label?: string;
+  /** Saved-workflow result path selected for human-facing rendering. */
+  display?: string;
   source: RunSource;
   /** The expanded flow (workflow refs inlined). */
   flow: FlowNode;

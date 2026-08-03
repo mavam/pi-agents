@@ -86,6 +86,9 @@ describe("run notification renderer", () => {
     );
     expect(output).toContain("/workflow 9a7eb000 result");
     expect(output).toContain("done");
+    expect(output.indexOf("done")).toBeLessThan(
+      output.indexOf("/workflow 9a7eb000 result"),
+    );
     expect(output).not.toContain("Continue your task");
   });
 

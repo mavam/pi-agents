@@ -519,6 +519,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
 
       let raw: unknown;
       let label = params.label;
+      let display: string | undefined;
       if (params.name !== undefined) {
         const def = resolveWorkflow(params.name);
         if (!def) {
@@ -529,6 +530,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
         }
         raw = { kind: "workflow", name: def.name, params: params.params ?? {} };
         label = label ?? def.name;
+        display = def.display;
       } else {
         raw = params.flow;
       }
@@ -546,6 +548,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
         cwd,
         scope,
         label,
+        display,
         budgets: params.budgets as Budgets | undefined,
         source: { kind: "tool", workflow: params.name },
         ctx,

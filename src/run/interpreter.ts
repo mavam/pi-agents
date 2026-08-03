@@ -219,6 +219,8 @@ export interface ExecuteOptions {
   runAgent: AgentRunner;
   emit?: (event: RunEvent) => void;
   label?: string;
+  /** Saved-workflow result path selected for human-facing rendering. */
+  display?: string;
   source?: RunSource;
   /** Resolved top-level params (saved workflow invocations). */
   params?: Record<string, unknown>;
@@ -331,6 +333,7 @@ class Interpreter {
       run: {
         id: this.options.runId,
         label: this.options.label,
+        display: this.options.display,
         source: this.options.source ?? { kind: "tool" },
         flow: this.options.flow,
         params: this.options.params,

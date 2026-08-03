@@ -315,6 +315,8 @@ export interface WorkflowLike {
 export interface WorkflowDef extends WorkflowLike {
   description: string;
   trigger?: string;
+  /** Dot path to a Markdown string in the final value for human rendering. */
+  display?: string;
   /** pi event names that trigger this workflow (background runs). */
   on?: string[];
   /** Trailing-edge debounce for event triggers, in milliseconds. */

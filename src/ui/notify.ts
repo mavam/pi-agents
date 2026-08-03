@@ -21,6 +21,7 @@ import {
   NOTIFICATION_TYPE,
   type RunNotificationDetails,
   renderResultValue,
+  selectDisplayValue,
   shortId,
 } from "./render.js";
 import { STATUS_STYLES } from "./status.js";
@@ -105,7 +106,10 @@ export class NotificationManager {
     const usage = formatUsage(event.usage) || undefined;
     if (event.status === "completed") {
       const result = valueText(event.value) ?? "";
-      const preview = formatValuePreview(event.value, 600);
+      const display = selectDisplayValue(event.value, run?.header.display);
+      const preview = display.selected
+        ? (valueText(display.value) ?? "")
+        : formatValuePreview(event.value, 600);
       return {
         kind: "run_final",
         version: 2,
@@ -115,7 +119,9 @@ export class NotificationManager {
         usage,
         agents: event.agents,
         bodyKind: "result",
-        body: preview ? renderResultValue(event.value, preview) : "(no output)",
+        body: preview
+          ? renderResultValue(display.value, preview)
+          : "(no output)",
         modelBody: result
           ? renderResultValue(
               event.value,
@@ -205,13 +211,12 @@ export class NotificationManager {
       : "";
     const lines = [
       `❖ ${identity} · ${status.icon} ${notification.status}${usage}`,
-      "",
-      formatRunNotificationControls(notification.runId),
     ];
     if (wake) lines.push("", "Continue your task using this result.");
     if (notification.bodyKind !== "none" && notification.body !== undefined) {
       lines.push("", notification.modelBody ?? notification.body);
     }
+    lines.push("", formatRunNotificationControls(notification.runId));
     return lines.join("\n");
   }
 }

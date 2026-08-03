@@ -1,6 +1,7 @@
 name: review
 description: Review a target with risk-selected lenses and structured findings
 trigger: when the user asks for a read-only code review of a change, pull request, path, or subsystem
+display: report
 doc: >-
   Runs one self-contained anonymous high-thinking reviewer. Returns
   machine-readable review state together with the complete Markdown report

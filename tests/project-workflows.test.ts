@@ -90,6 +90,8 @@ describe("project review workflows", () => {
   test("discover without diagnostics or external profiles and skills", () => {
     const workflows = projectWorkflows();
     expect([...workflows.keys()].sort()).toEqual(["review", "review-fix"]);
+    expect(workflows.get("review")?.display).toBe("report");
+    expect(workflows.get("review-fix")?.display).toBe("report");
     for (const name of workflows.keys()) {
       const flow = expandedWorkflow(name);
       expect([...collectAgentNames(flow)]).toEqual([]);

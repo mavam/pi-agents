@@ -36,12 +36,18 @@ function makeFakes(sessionFile = "session.jsonl") {
 function addRun(
   manager: RunManager,
   runId: string,
-  options: { label?: string; workflow?: string; kind?: "agent" | "value" },
+  options: {
+    label?: string;
+    workflow?: string;
+    kind?: "agent" | "value";
+    display?: string;
+  },
 ): void {
   manager.state.runs.set(runId, {
     header: {
       id: runId,
       label: options.label,
+      display: options.display,
       source: { kind: "tool", workflow: options.workflow },
       flow:
         options.kind === "value"
@@ -169,7 +175,10 @@ describe("NotificationManager", () => {
     expect(sent[0]?.message.content.split("\n")[0]).toBe(
       "❖ `run-fail` · ✗ failed",
     );
-    expect(sent[0]?.message.content.endsWith("agent exploded")).toBe(true);
+    expect(sent[0]?.message.content).toContain("agent exploded");
+    expect(
+      sent[0]?.message.content.indexOf("agent exploded") ?? Number.NaN,
+    ).toBeLessThan(sent[0]?.message.content.indexOf("Run details:") ?? -1);
     expect(sent[0]?.message.content).not.toContain("```\nagent exploded");
     expect(sent[0]?.message.details?.bodyKind).toBe("error");
     expect(sent[1]?.message.content.split("\n")[0]).toBe(
@@ -188,8 +197,9 @@ describe("NotificationManager", () => {
     const markdown = "## Change map\n\n- **AST and structural parsing**";
     notifications.handleRunEvent(completed("run-1", markdown));
     const content = sent[0]?.message.content ?? "";
-    expect(content.indexOf("Inspect:")).toBeLessThan(content.indexOf(markdown));
-    expect(content.endsWith(markdown)).toBe(true);
+    expect(content.indexOf(markdown)).toBeLessThan(
+      content.indexOf("Run details:"),
+    );
     expect(content).not.toContain(`\`\`\`\n${markdown}`);
   });
 
@@ -202,13 +212,36 @@ describe("NotificationManager", () => {
       completed("run-1", { findings: ["one", "two"] }),
     );
     const content = sent[0]?.message.content ?? "";
-    expect(content.indexOf("Inspect:")).toBeLessThan(
-      content.indexOf('```\n{\n  "findings": ['),
+    expect(content.indexOf('```\n{\n  "findings": [')).toBeLessThan(
+      content.indexOf("Run details:"),
     );
     expect(content).toContain("\n}\n```");
   });
 
-  test("delivers complete long results after the host controls", () => {
+  test("renders a declared display field instead of structured data", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    const report = `# Code Review\n\n${"Readable finding. ".repeat(50)}`;
+    addRun(manager, "run-review", {
+      workflow: "review",
+      display: "report",
+    });
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    notifications.track("run-review", "session.jsonl", false);
+    notifications.handleRunEvent(
+      completed("run-review", {
+        outcome: "changes_required",
+        actionable: [{ id: "BUG-1" }],
+        report,
+      }),
+    );
+
+    expect(sent[0]?.message.details?.body).toBe(report);
+    expect(sent[0]?.message.content).toContain('"outcome": "changes_required"');
+    expect(sent[0]?.message.content).not.toContain("…");
+  });
+
+  test("delivers complete long results before the host controls", () => {
     const { sent, pi, manager, makeCtx } = makeFakes();
     const notifications = new NotificationManager(pi, manager);
     notifications.setContext(makeCtx(true));
@@ -217,9 +250,8 @@ describe("NotificationManager", () => {
     notifications.handleRunEvent(completed("run-1", markdown));
     const content = sent[0]?.message.content ?? "";
     const resultStart = content.indexOf("```ts");
-    expect(content.indexOf("Inspect:")).toBeLessThan(resultStart);
     expect(content.indexOf("Continue your task")).toBeLessThan(resultStart);
-    expect(content.endsWith(markdown)).toBe(true);
+    expect(resultStart).toBeLessThan(content.indexOf("Run details:"));
     expect(sent[0]?.message.details?.body).toBe(`${markdown.slice(0, 600)}…`);
   });
 

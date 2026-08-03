@@ -40,6 +40,7 @@ import {
   formatValuePreview,
   nodeDisplayName,
   renderResultValue,
+  selectDisplayValue,
   sendInfo,
   shortId,
 } from "../ui/render.js";
@@ -490,8 +491,9 @@ function nodeTailDetail(node: NodeView, color: Colorize): string[] {
 function runDetail(run: RunView, color: Colorize): string[] {
   const lines = (renderRunTree(run, color) || "(no nodes yet)").split("\n");
   if (run.error) lines.push(color("error", `✗ ${run.error}`));
+  const display = selectDisplayValue(run.value, run.header.display);
   const value =
-    run.status !== "running" ? formatValuePreview(run.value, 300) : "";
+    run.status !== "running" ? formatValuePreview(display.value, 300) : "";
   if (value) lines.push("", ...value.split("\n"));
   return lines;
 }
@@ -572,6 +574,7 @@ function runAction(
         cwd: run.header.cwd ?? ctx.cwd,
         scope: run.header.scope,
         label: run.header.label,
+        display: run.header.display,
         budgets: run.header.budgets,
         source: run.header.source,
         ctx,
@@ -767,6 +770,7 @@ export function buildWorkflowsSpec(
           meta("file", wf.filePath),
         ];
         if (wf.trigger) lines.push(meta("trigger", wf.trigger));
+        if (wf.display) lines.push(meta("display", wf.display));
         lines.push(
           meta(
             "on",
@@ -1057,6 +1061,7 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
     `- file: ${wf.filePath}`,
   ];
   if (wf.trigger) lines.push(`- trigger: `);
+  if (wf.display) lines.push(`- display: \`${wf.display}\``);
   if (wf.on && wf.on.length > 0) lines.push(`- triggers: ${wf.on.join(", ")}`);
   if (wf.debounce !== undefined) lines.push(`- debounce: ${wf.debounce}ms`);
   if (wf.params.length > 0) {
@@ -1088,7 +1093,7 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
 
 /** The complete run value (bounded only by what persistence retained). */
 function formatRunResultFull(run: RunView): string {
-  const lines = [`## Run ${shortId(run.header.id)} — result`, ""];
+  const lines = [`## Run ${shortId(run.header.id)} — raw result`, ""];
   if (run.status === "running") {
     lines.push("Still running — no result yet.");
     return lines.join("\n");
@@ -1270,23 +1275,24 @@ export function formatRunDetails(run: RunView, fullValue = false): string {
       "",
       `Per-agent output: \`/workflow ${shortId(run.header.id)} agents\``,
     );
-  if (fullValue) {
-    const text = valueText(run.value);
+  const display = selectDisplayValue(run.value, run.header.display);
+  if (fullValue || display.selected) {
+    const text = valueText(display.value);
     if (text)
-      lines.push("", "### Result", "", renderResultValue(run.value, text));
+      lines.push("", "### Result", "", renderResultValue(display.value, text));
   } else {
-    const value = formatValuePreview(run.value);
+    const value = formatValuePreview(display.value);
     if (value) {
       lines.push(
         "",
         "### Result (preview)",
         "",
-        `Full result: \`/workflow ${shortId(run.header.id)} result\``,
-        "",
-        renderResultValue(run.value, value),
+        renderResultValue(display.value, value),
       );
     }
   }
+  if (run.value !== undefined)
+    lines.push("", `Raw data: \`/workflow ${shortId(run.header.id)} result\``);
   return lines.join("\n");
 }
 
@@ -1426,6 +1432,7 @@ async function runWorkflowCommand(
       cwd: ctx.cwd,
       scope: "both",
       label: wf.name,
+      display: wf.display,
       source: { kind: "command", workflow: wf.name },
       ctx,
       background: true,

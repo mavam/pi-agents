@@ -159,6 +159,7 @@ named profile:
 name: review
 description: Review a target with structured findings
 trigger: when the user asks for a read-only code review
+display: report
 params:
   - { name: target, required: true }
   - { name: focus, default: "Apply normal risk-based lens selection." }
@@ -179,6 +180,13 @@ accepts every agent-node option (`model`, `thinking`, `skills`, `tools`, `cwd`,
 `scope`, `output`). Mixing the flat form with `flow:` is an error; put execution
 options on the relevant agent node when `flow:` is present.
 
+When a workflow returns structured data with a human-readable Markdown field,
+set `display` to its dot path. A top-level run renders that string in completion
+cards and run details while preserving the complete structured value for the
+calling model, `/workflow <id> result`, and parent workflows. A nested workflow
+always passes its complete value to its caller. If the path is missing or does
+not resolve to a string, rendering falls back to the raw value.
+
 Saved workflows compose like functions through `workflow` nodes. This
 repository's project-local `/review-fix` workflow uses that composition to
 invoke `/review`, then sends validated P1–P3 findings to an anonymous
@@ -188,7 +196,8 @@ implementation-and-review rounds. The review rubric is part of the workflow,
 so neither command requires an external agent profile or skill. Its Markdown
 report keeps fixed emoji-coded severity and category headings plus a verdict
 table for quick scanning, while the accompanying JSON fields remain plain for
-machine consumers.
+machine consumers. Both workflows declare `display: report`, so people see the
+Markdown review instead of the JSON routing contract.
 The maximum run executes seven agents: one initial Reviewer and three
 Implementer/Reviewer pairs. Its flat final result includes `outcome`, `reason`,
 `round_index`, `report`, `actionable`, and `implementation`; `outcome` is
@@ -554,7 +563,7 @@ usage only in their final outcome cannot be cut off mid-run.
 | `/workflow <name>`    | Show one workflow: params, triggers, docs, flow.     |
 | `/<name> [args]`      | Run saved workflow `<name>` directly.                |
 | `/workflow <id>`      | Inspect a run (unique id prefixes work).             |
-| `/workflow <id> result` | The complete result value of a finished run.       |
+| `/workflow <id> result` | The complete raw result value of a finished run.   |
 | `/workflow <id> agents` | Per-agent status and output previews.              |
 | `/workflow <id> watch`  | Snapshot now, final tree when the run settles.     |
 | `/workflow <id> mermaid`| Deterministic Mermaid diagram of the run's flow.   |
@@ -565,8 +574,9 @@ hex, workflow names are slugs, so the two never collide in practice.
 
 A completed workflow can send up to 200,000 characters to the calling model.
 Larger values include a truncation notice and remain available in full through
-`/workflow <id> result`. Completion cards show a compact preview to keep the
-transcript responsive, and step-to-step interpolation uses the same
+`/workflow <id> result`. When a saved workflow declares `display`, completion
+cards render that complete Markdown string; other values use a compact preview
+to keep the transcript responsive. Step-to-step interpolation uses the same
 200,000-character ceiling.
 
 ### Interactive browsing
@@ -614,15 +624,16 @@ immediately and keeps the panel open so you can watch it start (workflows
 with required parameters fall back to composing),
 and `n` starts a new workflow or agent: you name it and describe the
 intent, the model drafts the definition file. Run tier: `⏎` posts the run
-details with the full result to the chat, `a` drills into the run's agents,
-`c` cancels a live run, `r` starts the same flow again, and `h` shows/hides
-that run in the live summary above the composer (useful for long-running
-flows). Agent tier: `⏎` posts the agent's full output, while `t` opens a live,
-auto-following tail of its assistant output and tool activity. The tail is a
-bounded in-memory peek and is not persisted as another agent artifact. On a
-running agent, `s` opens an inline composer for a steering message from either
-the agent list or its tail, so you can observe, correct course, and keep
-watching. In the agents panel, `⏎` posts the full agent details and `n` starts
+details with the full presented result to the chat, `a` drills into the run's
+agents, `c` cancels a live run, `r` starts the same flow again, and `h`
+shows/hides that run in the live summary above the composer (useful for
+long-running flows). Agent tier: `⏎` posts the agent's full output, while `t`
+opens a live, auto-following tail of its assistant output and tool activity.
+The tail is a bounded in-memory peek and is not persisted as another agent
+artifact. On a running agent, `s` opens an inline composer for a steering
+message from either the agent list or its tail, so you can observe, correct
+course, and keep watching. In the agents panel, `⏎` posts the full agent
+details and `n` starts
 a new definition.
 
 The live summary widget can be toggled wholesale with `/workflows widget`.

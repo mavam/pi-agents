@@ -1,16 +1,18 @@
 /**
  * The above-editor widget for live runs: one line per run.
  *
- *   ⠸ 67% · review · c9e5799 · 1m32s · 15.5k · 14 turns · ◆◆⑂ · bash
+ *   ⠸ 67% · review · c9e5799 · 1m32s · 15.5k · 14 turns · ◆⑃⟨◆◆⑂⟩⇶↺ · bash
  *
  * Braille spinner, completion percent (done agents over known agents — the
  * denominator grows as map items are discovered), label, dim id, elapsed,
  * live token and turn counts (completed usage + streaming usage), the glyph
  * strip, the running agent's current tool, then the latest output excerpt —
  * replaced by a "no output for …" stall hint when agents have been silent.
- * The strip shows one kind glyph per depth-1 unit (◆ marks an agent),
+ * The strip shows one kind glyph per top-level unit (◆ marks an agent),
  * colored by status; failed units render ✗ so failures survive without
- * color.
+ * color. Running composites expand their children in ⟨…⟩ — recursively, so
+ * the strip zooms into the active spine — while map items and loop
+ * iterations always collapse to one glyph each, capped with an ellipsis.
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -19,6 +21,8 @@ import type { SpawnUsage } from "../engine/types.js";
 import {
   bodyPath,
   branchPath,
+  casePath,
+  elsePath,
   type FlowNode,
   reducePath,
   stepPath,
@@ -44,7 +48,12 @@ type SegmentStatus =
 export interface WidgetSegment {
   glyph: string;
   status: SegmentStatus;
+  /** Immediate children; present only while this composite is running. */
+  children?: WidgetSegment[];
 }
+
+/** Fan-out wider than this collapses into a dim ellipsis glyph. */
+const MAX_ITEM_GLYPHS = 8;
 
 /** Kind glyphs for the strip; ◆ marks an agent, ⑂ a parallel reducer. */
 const KIND_GLYPHS: Record<FlowNode["kind"], string> = {
@@ -110,19 +119,97 @@ function unitStatus(
   return running > 0 ? "running" : failed > 0 ? "failed" : "completed";
 }
 
+/** Per-path node statuses in first-seen order (map items, loop iterations). */
+export function instanceStatuses(run: RunView): Map<string, SegmentStatus[]> {
+  const byPath = new Map<string, SegmentStatus[]>();
+  for (const instance of run.order) {
+    const node = run.nodes.get(instance);
+    if (!node) continue;
+    const list = byPath.get(node.path) ?? [];
+    list.push(node.status);
+    byPath.set(node.path, list);
+  }
+  return byPath;
+}
+
 /**
- * One glyph per depth-1 unit. The tool-call box carries the full vertical
+ * One glyph per top-level unit. The tool-call box carries the full vertical
  * structure; the widget summarizes horizontally: a sequence root yields one
  * glyph per top-level step, a parallel root one per branch (plus ⑂ for the
- * reducer), and composite units collapse to their kind glyph.
+ * reducer). Running composites expand recursively along the active spine:
+ * sequences, parallels, switches (the chosen arm), and workflow bodies show
+ * their children, while everything else — completed, pending, failed units,
+ * and all map items and loop iterations — collapses to one glyph. Fan-out is
+ * therefore bounded: items never multiply with depth, and a cap adds a dim
+ * ellipsis when a map discovers more items than fit.
  */
 export function widgetSegments(
   flow: FlowNode,
   statuses: Map<string, PathStatus>,
+  instances: Map<string, SegmentStatus[]> = new Map(),
 ): WidgetSegment[] {
-  const segments: WidgetSegment[] = [];
-  const push = (path: string, glyph: string): void => {
-    segments.push({ glyph, status: unitStatus(statuses, path) });
+  const unit = (node: FlowNode, path: string): WidgetSegment => {
+    const status = unitStatus(statuses, path);
+    const segment: WidgetSegment = { glyph: KIND_GLYPHS[node.kind], status };
+    if (status !== "running") return segment;
+    const children = expand(node, path);
+    if (children && children.length > 0) segment.children = children;
+    return segment;
+  };
+
+  /** One collapsed glyph per body instance (map items, loop iterations). */
+  const itemGlyphs = (path: string, glyph: string): WidgetSegment[] => {
+    const seen = instances.get(path) ?? [];
+    const shown: WidgetSegment[] = seen
+      .slice(0, MAX_ITEM_GLYPHS)
+      .map((status) => ({ glyph, status }));
+    // Pending status renders the overflow ellipsis dim, like the delimiters.
+    if (seen.length > MAX_ITEM_GLYPHS) {
+      shown.push({ glyph: "…", status: "pending" });
+    }
+    return shown;
+  };
+
+  const expand = (
+    node: FlowNode,
+    path: string,
+  ): WidgetSegment[] | undefined => {
+    switch (node.kind) {
+      case "sequence":
+        return node.steps.map((step, index) =>
+          unit(step, stepPath(path, index)),
+        );
+      case "parallel": {
+        const children = Object.entries(node.branches).map(([key, branch]) =>
+          unit(branch, branchPath(path, key)),
+        );
+        if (node.reduce) {
+          children.push({
+            glyph: "⑂",
+            status: unitStatus(statuses, reducePath(path)),
+          });
+        }
+        return children;
+      }
+      case "switch": {
+        // Only the chosen arm has instances; unchosen arms never ran.
+        for (const [index, arm] of node.cases.entries()) {
+          const armPath = casePath(path, index);
+          if (statuses.has(armPath)) return [unit(arm.then, armPath)];
+        }
+        const fallback = elsePath(path);
+        return statuses.has(fallback) ? [unit(node.else, fallback)] : undefined;
+      }
+      case "map":
+      case "loop":
+      case "while":
+        return itemGlyphs(bodyPath(path), KIND_GLYPHS[node.body.kind]);
+      case "workflow":
+        return node.body ? [unit(node.body, bodyPath(path))] : undefined;
+      case "agent":
+      case "value":
+        return undefined;
+    }
   };
 
   // Unwrap workflow refs so the inlined body's shape drives the summary.
@@ -134,20 +221,23 @@ export function widgetSegments(
   }
 
   if (root.kind === "sequence") {
-    root.steps.forEach((step, index) => {
-      push(stepPath(rootPath, index), KIND_GLYPHS[step.kind]);
-    });
-  } else if (root.kind === "parallel") {
-    for (const [key, branch] of Object.entries(root.branches)) {
-      push(branchPath(rootPath, key), KIND_GLYPHS[branch.kind]);
-    }
-    if (root.reduce) {
-      push(reducePath(rootPath), "⑂");
-    }
-  } else {
-    push(rootPath, KIND_GLYPHS[root.kind]);
+    return root.steps.map((step, index) =>
+      unit(step, stepPath(rootPath, index)),
+    );
   }
-  return segments;
+  if (root.kind === "parallel") {
+    const segments = Object.entries(root.branches).map(([key, branch]) =>
+      unit(branch, branchPath(rootPath, key)),
+    );
+    if (root.reduce) {
+      segments.push({
+        glyph: "⑂",
+        status: unitStatus(statuses, reducePath(rootPath)),
+      });
+    }
+    return segments;
+  }
+  return [unit(root, rootPath)];
 }
 
 /** Count agent-bearing leaves in the static skeleton (iterative bodies once). */
@@ -294,16 +384,22 @@ export function formatRunWidget(
         : undefined;
 
   const statuses = aggregateStatuses(run);
-  const segments = widgetSegments(run.header.flow, statuses);
+  const segments = widgetSegments(
+    run.header.flow,
+    statuses,
+    instanceStatuses(run),
+  );
   // Failure must survive without color: ✗ replaces the kind glyph.
-  const strip = segments
-    .map((segment) => {
-      const presentation = STATUS_STYLES[segment.status];
-      const glyph =
-        segment.status === "failed" ? presentation.icon : segment.glyph;
-      return color(presentation.color, glyph);
-    })
-    .join("");
+  const renderSegment = (segment: WidgetSegment): string => {
+    const presentation = STATUS_STYLES[segment.status];
+    const glyph =
+      segment.status === "failed" ? presentation.icon : segment.glyph;
+    const own = color(presentation.color, glyph);
+    if (!segment.children) return own;
+    const inner = segment.children.map(renderSegment).join("");
+    return `${own}${color("dim", "⟨")}${inner}${color("dim", "⟩")}`;
+  };
+  const strip = segments.map(renderSegment).join("");
 
   return [
     `${color("accent", spinner)} ${percent}${dot}${label}${dot}${meta}${dot}${strip}${tail ? `${dot}${tail}` : ""}`,

@@ -53,6 +53,8 @@ describe("formatRunWidget", () => {
     expect(line).toContain("1m32s");
     // Two agent branches plus the reducer, all completed.
     expect(line).toContain("<success>◆</><success>◆</><success>⑂</>");
+    // Nothing is running, so nothing expands.
+    expect(line).not.toContain("⟨");
   });
 
   test("mid-run shows partial percent and a running glyph", async () => {
@@ -290,6 +292,126 @@ describe("formatRunWidget", () => {
     // Four top-level steps, not one glyph per structural agent.
     expect(line).toContain("◆⑃⇶↺");
     expect(line).not.toContain("bugs");
+  });
+
+  test("a running composite expands its children recursively", async () => {
+    // Sequence → parallel → sequence: the deepest agent stays running, so
+    // every running ancestor expands and the strip zooms into the spine.
+    const run = await recordedRun(
+      {
+        kind: "sequence",
+        steps: [
+          {
+            kind: "parallel",
+            branches: {
+              x: { kind: "agent", name: "a", task: "t" },
+              sec: {
+                kind: "sequence",
+                steps: [
+                  { kind: "agent", name: "b", task: "t" },
+                  { kind: "agent", name: "c", task: "t" },
+                ],
+              },
+            },
+          },
+        ],
+      },
+      () => "ok",
+      (event) => {
+        if (event.type === "run_completed") return false;
+        if (event.type !== "node_completed") return true;
+        // Keep the deepest agent and all of its ancestors running.
+        return ![
+          "$.steps[0].branches.sec.steps[1]",
+          "$.steps[0].branches.sec",
+          "$.steps[0]",
+          "$",
+        ].includes(event.instance);
+      },
+    );
+    const [line] = formatRunWidget(run, run.createdAt, 0, tagged);
+    expect(line).toContain(
+      "<warning>⑃</><dim>⟨</><success>◆</><warning>≡</><dim>⟨</>" +
+        "<success>◆</><warning>◆</><dim>⟩</><dim>⟩</>",
+    );
+  });
+
+  test("a running switch expands only the chosen arm", async () => {
+    const run = await recordedRun(
+      {
+        kind: "sequence",
+        steps: [
+          {
+            kind: "agent",
+            name: "gate",
+            task: "inspect",
+            output: "json",
+            as: "gate",
+          },
+          {
+            kind: "switch",
+            on: "{gate}",
+            cases: [
+              {
+                when: { eq: ["status", "findings"] },
+                then: { kind: "agent", name: "fixer", task: "fix" },
+              },
+            ],
+            else: { kind: "agent", name: "reporter", task: "report" },
+          },
+        ],
+      },
+      (agent) => (agent === "gate" ? '{"status": "findings"}' : "ok"),
+      (event) => {
+        if (event.type === "run_completed") return false;
+        if (event.type !== "node_completed") return true;
+        return !["$.steps[1].cases[0].then", "$.steps[1]", "$"].includes(
+          event.instance,
+        );
+      },
+    );
+    const [line] = formatRunWidget(run, run.createdAt, 0, tagged);
+    // Gate done; the switch expands to exactly the running chosen arm.
+    expect(line).toContain(
+      "<success>◆</><warning>⎇</><dim>⟨</><warning>◆</><dim>⟩</>",
+    );
+  });
+
+  test("a running map shows one glyph per item, capped with an ellipsis", async () => {
+    const run = await recordedRun(
+      {
+        kind: "sequence",
+        steps: [
+          {
+            kind: "agent",
+            name: "scout",
+            task: "list",
+            output: "json",
+            as: "files",
+          },
+          {
+            kind: "map",
+            over: "{files}",
+            body: { kind: "agent", name: "reviewer", task: "review {item}" },
+          },
+        ],
+      },
+      (agent) =>
+        agent === "scout"
+          ? JSON.stringify(Array.from({ length: 10 }, (_, i) => `f${i}`))
+          : "ok",
+      (event) => {
+        if (event.type === "run_completed") return false;
+        if (event.type !== "node_completed") return true;
+        // Items finish; the map node itself stays running.
+        return event.instance !== "$.steps[1]" && event.instance !== "$";
+      },
+    );
+    const [line] = formatRunWidget(run, run.createdAt, 0, tagged);
+    // 10 items: 8 collapsed glyphs plus a dim ellipsis inside the brackets.
+    expect(line).toContain(
+      `<warning>⇶</><dim>⟨</>${"<success>◆</>".repeat(8)}<dim>…</><dim>⟩</>`,
+    );
   });
 
   test("wide flows keep one glyph per step without overflow", async () => {

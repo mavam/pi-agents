@@ -1,13 +1,13 @@
 /**
  * The above-editor widget for live runs: one line per run.
  *
- *   ❖ 67% · review · c9e5799 · 1m32s · 15.5k · ◆⑃⟨◆◆⑂⟩⇶↺ · bash
+ *   ❖ 67% · review · c9e5799 · 1m32s · 15.5k · ◆⑃⟨◆◆⑂⟩⇶↺ · merging…
  *
  * The static ❖ run mark (shared with completion cards and notifications),
  * completion percent (done agents over known agents — the denominator grows
  * as map items are discovered), label, dim id, elapsed, live token count
- * (completed usage + streaming usage), the glyph strip,
- * the running agent's current tool, then the latest output excerpt —
+ * (completed usage + streaming usage), the glyph strip, then the latest
+ * output excerpt —
  * replaced by a "no output for …" stall hint when agents have been silent.
  * The strip shows one kind glyph per top-level unit (◆ marks an agent),
  * colored by status; failed units render ✗ so failures survive without
@@ -324,8 +324,6 @@ export const STALL_AFTER_MS = 60_000;
 export interface LiveActivity {
   /** Latest output line of the most recently started running agent. */
   excerpt?: string;
-  /** Tool that agent is currently executing, when reported. */
-  tool?: string;
   /** Most recent progress timestamp across all running agents. */
   lastAt?: number;
 }
@@ -333,7 +331,6 @@ export interface LiveActivity {
 export function liveActivity(run: RunView): LiveActivity {
   let lastAt: number | undefined;
   let bestText: { startedAt: number; text: string } | undefined;
-  let bestTool: { startedAt: number; tool: string } | undefined;
   for (const node of run.nodes.values()) {
     // Only work leaves report progress; structural nodes just wrap them.
     if (node.kind !== "agent" && node.kind !== "reduce") continue;
@@ -346,15 +343,9 @@ export function liveActivity(run: RunView): LiveActivity {
     ) {
       bestText = { startedAt: node.startedAt, text: node.progressText };
     }
-    if (
-      node.progressTool &&
-      (!bestTool || node.startedAt > bestTool.startedAt)
-    ) {
-      bestTool = { startedAt: node.startedAt, tool: node.progressTool };
-    }
   }
   const line = bestText?.text.split("\n").find((part) => part.trim());
-  return { excerpt: line?.trim(), tool: bestTool?.tool, lastAt };
+  return { excerpt: line?.trim(), lastAt };
 }
 
 /**
@@ -409,14 +400,10 @@ export function formatRunWidget(
   };
   const strip = segments.map(renderSegment).join("");
 
-  // The strip precedes the tool and excerpt: those tails have unbounded
-  // width, and truncation must never push the liveness glyphs off screen.
-  const after = [activity.tool ? color("dim", activity.tool) : undefined, tail]
-    .filter((part): part is string => part !== undefined)
-    .map((part) => `${dot}${part}`)
-    .join("");
+  // The strip precedes the excerpt: that tail has unbounded width, and
+  // truncation must never push the liveness glyphs off screen.
   return [
-    `${color("muted", "❖")} ${percent}${dot}${label}${dot}${meta}${dot}${strip}${after}`,
+    `${color("muted", "❖")} ${percent}${dot}${label}${dot}${meta}${dot}${strip}${tail ? `${dot}${tail}` : ""}`,
   ];
 }
 

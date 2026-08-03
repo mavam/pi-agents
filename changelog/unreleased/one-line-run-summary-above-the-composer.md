@@ -38,10 +38,12 @@ completion cards and notifications already use: liveness now shows through
 the yellow glyphs in the strip, so nothing needs to flicker, and the fixed
 one-cell mark keeps the line's left edge stable while the percent grows.
 
-The summary also drops the aggregate turn count: turns summed across
-concurrent agents with independent conversations carried no meaning, and the
-token count already conveys activity volume. Per-agent turn counts remain
-available in `/workflows`.
+The summary also drops the aggregate turn count and the current tool: turns
+summed across concurrent agents carried no meaning, and the tool belonged to
+whichever agent started most recently, without attribution — its
+variable-width name ahead of the status glyphs also shifted them on every
+tool switch. The token count already conveys activity volume, and per-agent
+turns and tools remain visible in `/workflows`.
 
 The strip shows the workflow's shape and locus of activity at a glance while
 halving the widget's vertical footprint; full per-node detail remains

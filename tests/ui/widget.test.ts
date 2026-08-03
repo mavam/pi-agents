@@ -478,7 +478,7 @@ describe("live activity", () => {
     return !event.instance.endsWith(".reduce") && event.instance !== "$";
   };
 
-  test("the current tool joins line 1 without a turn count", async () => {
+  test("per-agent tool and turn metrics stay off the summary line", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
@@ -496,12 +496,13 @@ describe("live activity", () => {
       }
     }
     const [line1] = formatRunWidget(run, run.createdAt + 1000);
-    // Turns summed across concurrent agents are not meaningful; only the
-    // token volume and the active tool surface here.
+    // Neither turns summed across concurrent agents nor one unattributed
+    // agent's current tool mean anything at the run level — and a
+    // variable-width tool name ahead of the strip made the glyphs shift on
+    // every tool switch. Only the token volume aggregates meaningfully.
     expect(line1).not.toContain("turn");
-    // The unbounded-width tool tail follows the strip, so terminal
-    // truncation can never push the liveness glyphs off screen.
-    expect(line1).toContain("◆◆⑂ · bash");
+    expect(line1).not.toContain("bash");
+    expect(line1).toContain("◆◆⑂");
   });
 
   test("a long silence replaces the excerpt with a stall hint", async () => {

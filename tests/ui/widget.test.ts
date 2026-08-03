@@ -431,3 +431,38 @@ describe("RunWidget suppression", () => {
     widget.dispose();
   });
 });
+
+describe("RunWidget lifecycle", () => {
+  test("disposal detaches the session context from late updates", () => {
+    const runs = new Map<string, RunView>();
+    runs.set("a", {
+      status: "running",
+      header: { id: "a", source: { kind: "command" } },
+    } as unknown as RunView);
+    const widget = new RunWidget({ state: { runs } } as never);
+    const shown: unknown[] = [];
+    let contextActive = true;
+    const ctx = {
+      get mode() {
+        if (!contextActive) throw new Error("stale context");
+        return "tui";
+      },
+      get ui() {
+        if (!contextActive) throw new Error("stale context");
+        return {
+          setWidget: (_key: string, value: unknown) => shown.push(value),
+        };
+      },
+    } as never;
+
+    widget.update(ctx);
+    const count = shown.length;
+    widget.dispose();
+    contextActive = false;
+
+    // A queued animation tick or late run-state callback may still call update
+    // after pi invalidates this extension's session context.
+    expect(() => widget.update()).not.toThrow();
+    expect(shown.length).toBe(count);
+  });
+});

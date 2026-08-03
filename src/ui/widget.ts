@@ -383,6 +383,7 @@ export class RunWidget {
   private lastContext: ExtensionContext | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private frame = 0;
+  private disposed = false;
   /** Run ids muted from the summary (session-scoped, via the /workflows overlay `h`). */
   private readonly hidden = new Set<string>();
   private enabled = true;
@@ -394,6 +395,7 @@ export class RunWidget {
   }
 
   update(ctx?: ExtensionContext): void {
+    if (this.disposed) return;
     const context = ctx ?? this.lastContext;
     // RPC exposes a UI bridge, but delegated/headless sessions must not start
     // widget timers or emit display requests. The widget belongs to the TUI.
@@ -441,6 +443,7 @@ export class RunWidget {
   }
 
   private render(context: ExtensionContext): void {
+    if (this.disposed) return;
     const running = this.enabled && !this.suppressed ? this.running() : [];
     if (running.length === 0) {
       this.stopTicking();
@@ -465,8 +468,9 @@ export class RunWidget {
   }
 
   private startTicking(): void {
-    if (this.timer) return;
+    if (this.timer || this.disposed) return;
     this.timer = setInterval(() => {
+      if (this.disposed) return;
       this.frame += 1;
       const context = this.lastContext;
       if (context) this.render(context);
@@ -480,8 +484,10 @@ export class RunWidget {
     this.timer = undefined;
   }
 
-  /** Stop the animation timer (session shutdown). */
+  /** Detach session-bound state and stop animation (session shutdown). */
   dispose(): void {
+    this.disposed = true;
+    this.lastContext = undefined;
     this.stopTicking();
   }
 }

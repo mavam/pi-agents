@@ -1,24 +1,29 @@
 /**
- * The above-editor widget for live runs: two lines per run.
+ * The above-editor widget for live runs: one line per run.
  *
- *   ⠸ ▰▰▰▰▰▰▰▱▱▱ 67%  review · c9e5799 · 1m32s · 15.5k · 14 turns · bash
- *      ● bugs→reviewer   ● clarity→reviewer   ◉ ⑂reduce→worker
+ *   ❖ 67% · review · c9e5799 · 1m32s · 15.5k · ◆⑃⟨◆◆⑂⟩⇶↺ · merging…
  *
- * Line 1: braille spinner, parallelogram completion bar (done agents over
- * known agents — the denominator grows as map items are discovered), label,
- * dim id, elapsed, live token and turn counts (completed usage + streaming
- * usage), the running agent's current tool, then the latest output excerpt —
+ * The static ❖ run mark (shared with completion cards and notifications),
+ * completion percent (done agents over known agents — the denominator grows
+ * as map items are discovered), label, dim id, elapsed, live token count
+ * (completed usage + streaming usage), the glyph strip, then the latest
+ * output excerpt —
  * replaced by a "no output for …" stall hint when agents have been silent.
- * Line 2: one status-iconed segment per structural agent position.
+ * The strip shows one kind glyph per top-level unit (◆ marks an agent),
+ * colored by status; failed units render ✗ so failures survive without
+ * color. Running composites expand their children in ⟨…⟩ — recursively, so
+ * the strip zooms into the active spine — while map items and loop
+ * iterations always collapse to one glyph each, capped with an ellipsis.
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
 import {
-  ADHOC_LABEL,
   bodyPath,
   branchPath,
+  casePath,
+  elsePath,
   type FlowNode,
   reducePath,
   stepPath,
@@ -31,9 +36,9 @@ import { aggregateStatuses, type PathStatus } from "./tree.js";
 
 const WIDGET_KEY = "pi-agents:runs";
 const MAX_RUNS = 4;
-const MAX_SEGMENTS = 5;
-const TICK_MS = 200;
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+// The glyph strip carries liveness through color, so no spinner animates;
+// the tick only refreshes elapsed time and stall hints at their granularity.
+const TICK_MS = 1000;
 
 type SegmentStatus =
   | "pending"
@@ -43,9 +48,27 @@ type SegmentStatus =
   | "cancelled";
 
 export interface WidgetSegment {
-  text: string;
+  glyph: string;
   status: SegmentStatus;
+  /** Immediate children; present only while this composite is running. */
+  children?: WidgetSegment[];
 }
+
+/** Fan-out wider than this collapses into a dim ellipsis glyph. */
+const MAX_ITEM_GLYPHS = 8;
+
+/** Kind glyphs for the strip; ◆ marks an agent, ⑂ a parallel reducer. */
+const KIND_GLYPHS: Record<FlowNode["kind"], string> = {
+  agent: "◆",
+  sequence: "≡",
+  parallel: "⑃",
+  map: "⇶",
+  loop: "↺",
+  while: "↺",
+  switch: "⎇",
+  value: "≔",
+  workflow: "❖",
+};
 
 /** Colors used by the widget; the identity function makes it testable. */
 export type Colorize = (
@@ -75,96 +98,133 @@ class TruncatedLines implements Component {
 
 /**
  * Status for one depth-1 unit: liveness from the unit's own node (when it
- * has started), work counts aggregated over the agent/reduce paths in its
- * subtree — so `⑃ parallel [2/4]` counts agents, not structural nodes.
+ * has started), otherwise derived from the agent/reduce work in its subtree
+ * — so a parallel glyph turns green only once all of its agents finished.
  */
 function unitStatus(
   statuses: Map<string, PathStatus>,
   path: string,
-): { status: SegmentStatus; detail?: string } {
+): SegmentStatus {
   const own = statuses.get(path);
-  let completed = 0;
-  let total = 0;
+  if (own) return own.status;
   let running = 0;
   let failed = 0;
+  let total = 0;
   for (const [key, status] of statuses) {
     if (key !== path && !key.startsWith(`${path}.`)) continue;
     if (status.kind !== "agent" && status.kind !== "reduce") continue;
-    completed += status.completed;
     total += status.total;
     if (status.status === "running") running += 1;
     if (status.status === "failed") failed += 1;
   }
-  const derived: SegmentStatus | undefined =
-    total > 0
-      ? running > 0
-        ? "running"
-        : failed > 0
-          ? "failed"
-          : "completed"
-      : undefined;
-  return {
-    status: own?.status ?? derived ?? "pending",
-    detail: total > 1 ? `${completed}/${total}` : undefined,
-  };
+  if (total === 0) return "pending";
+  return running > 0 ? "running" : failed > 0 ? "failed" : "completed";
+}
+
+/** Per-path node statuses in first-seen order (map items, loop iterations). */
+export function instanceStatuses(run: RunView): Map<string, SegmentStatus[]> {
+  const byPath = new Map<string, SegmentStatus[]>();
+  for (const instance of run.order) {
+    const node = run.nodes.get(instance);
+    if (!node) continue;
+    const list = byPath.get(node.path) ?? [];
+    list.push(node.status);
+    byPath.set(node.path, list);
+  }
+  return byPath;
 }
 
 /**
- * One segment per depth-1 unit. The tool-call box carries the full vertical
+ * One glyph per top-level unit. The tool-call box carries the full vertical
  * structure; the widget summarizes horizontally: a sequence root yields one
- * segment per top-level step, a parallel root one per branch (plus reduce), and
- * composite units collapse to their kind glyph with aggregate counts.
+ * glyph per top-level step, a parallel root one per branch (plus ⑂ for the
+ * reducer). Running composites expand recursively along the active spine:
+ * sequences, parallels, switches (the chosen arm), and workflow bodies show
+ * their children, while everything else — completed, pending, failed units,
+ * and all map items and loop iterations — collapses to one glyph. Fan-out is
+ * therefore bounded: items never multiply with depth, and a cap adds a dim
+ * ellipsis when a map discovers more items than fit.
  */
 export function widgetSegments(
   flow: FlowNode,
   statuses: Map<string, PathStatus>,
+  instances: Map<string, SegmentStatus[]> = new Map(),
 ): WidgetSegment[] {
-  const segments: WidgetSegment[] = [];
-  const push = (path: string, text: string): void => {
-    const { status, detail } = unitStatus(statuses, path);
-    segments.push({
-      text: `${text}${detail ? ` [${detail}]` : ""}`,
-      status,
-    });
-  };
-  const agentText = (node: Extract<FlowNode, { kind: "agent" }>): string => {
-    const name = node.name ?? ADHOC_LABEL;
-    return node.as ? `${name} → {${node.as}}` : name;
+  const unit = (node: FlowNode, path: string): WidgetSegment => {
+    const status = unitStatus(statuses, path);
+    const segment: WidgetSegment = { glyph: KIND_GLYPHS[node.kind], status };
+    if (status !== "running") return segment;
+    const children = expand(node, path);
+    if (children && children.length > 0) segment.children = children;
+    return segment;
   };
 
-  /** Summarize any node as one collapsed segment. */
-  const unit = (node: FlowNode, path: string, prefix = ""): void => {
+  /** One collapsed glyph per body instance (map items, loop iterations). */
+  const itemGlyphs = (path: string, glyph: string): WidgetSegment[] => {
+    const seen = instances.get(path) ?? [];
+    const shown: WidgetSegment[] = seen
+      .slice(0, MAX_ITEM_GLYPHS)
+      .map((status) => ({ glyph, status }));
+    // Pending status renders the overflow ellipsis dim, like the delimiters.
+    if (seen.length > MAX_ITEM_GLYPHS) {
+      shown.push({ glyph: "…", status: "pending" });
+    }
+    return shown;
+  };
+
+  const expand = (
+    node: FlowNode,
+    path: string,
+  ): WidgetSegment[] | undefined => {
     switch (node.kind) {
-      case "agent":
-        push(
-          path,
-          `${prefix}${prefix ? (node.name ?? ADHOC_LABEL) : agentText(node)}`,
-        );
-        return;
       case "sequence":
-        push(path, `${prefix}≡ ${node.label ?? "sequence"}`);
-        return;
-      case "parallel":
-        push(path, `${prefix}⑃ ${node.label ?? "parallel"}`);
-        return;
-      case "map":
-        push(path, `${prefix}⇶ map ${node.over}`);
-        return;
+        return node.steps.map((step, index) =>
+          unit(step, stepPath(path, index)),
+        );
+      case "parallel": {
+        const children = Object.entries(node.branches).map(([key, branch]) =>
+          unit(branch, branchPath(path, key)),
+        );
+        if (node.reduce) {
+          children.push({
+            glyph: "⑂",
+            status: unitStatus(statuses, reducePath(path)),
+          });
+        }
+        return children;
+      }
+      case "switch": {
+        // Only the chosen arm has instances; unchosen arms never ran.
+        for (const [index, arm] of node.cases.entries()) {
+          const armPath = casePath(path, index);
+          if (statuses.has(armPath)) return [unit(arm.then, armPath)];
+        }
+        const fallback = elsePath(path);
+        return statuses.has(fallback) ? [unit(node.else, fallback)] : undefined;
+      }
+      case "map": {
+        const children = itemGlyphs(
+          bodyPath(path),
+          KIND_GLYPHS[node.body.kind],
+        );
+        // The reducer is map work too — without it a map whose items all
+        // finished would expand to only-green glyphs while still running.
+        if (node.reduce) {
+          children.push({
+            glyph: "⑂",
+            status: unitStatus(statuses, reducePath(path)),
+          });
+        }
+        return children;
+      }
       case "loop":
-        push(path, `${prefix}↺ loop`);
-        return;
       case "while":
-        push(path, `${prefix}↺ while`);
-        return;
-      case "switch":
-        push(path, `${prefix}⎇ ${node.label ?? "switch"}`);
-        return;
-      case "value":
-        push(path, `${prefix}≔ ${node.label ?? "value"}`);
-        return;
+        return itemGlyphs(bodyPath(path), KIND_GLYPHS[node.body.kind]);
       case "workflow":
-        push(path, `${prefix}❖ ${node.name}`);
-        return;
+        return node.body ? [unit(node.body, bodyPath(path))] : undefined;
+      case "agent":
+      case "value":
+        return undefined;
     }
   };
 
@@ -177,30 +237,23 @@ export function widgetSegments(
   }
 
   if (root.kind === "sequence") {
-    root.steps.forEach((step, index) => {
-      unit(step, stepPath(rootPath, index));
-    });
-  } else if (root.kind === "parallel") {
-    for (const [key, branch] of Object.entries(root.branches)) {
-      if (branch.kind === "agent") {
-        push(
-          branchPath(rootPath, key),
-          `${key} → ${branch.name ?? ADHOC_LABEL}`,
-        );
-      } else {
-        unit(branch, branchPath(rootPath, key), `${key} `);
-      }
-    }
-    if (root.reduce) {
-      push(
-        reducePath(rootPath),
-        `⑂ reduce → ${root.reduce.agent ?? ADHOC_LABEL}`,
-      );
-    }
-  } else {
-    unit(root, rootPath);
+    return root.steps.map((step, index) =>
+      unit(step, stepPath(rootPath, index)),
+    );
   }
-  return segments;
+  if (root.kind === "parallel") {
+    const segments = Object.entries(root.branches).map(([key, branch]) =>
+      unit(branch, branchPath(rootPath, key)),
+    );
+    if (root.reduce) {
+      segments.push({
+        glyph: "⑂",
+        status: unitStatus(statuses, reducePath(rootPath)),
+      });
+    }
+    return segments;
+  }
+  return [unit(root, rootPath)];
 }
 
 /** Count agent-bearing leaves in the static skeleton (iterative bodies once). */
@@ -246,19 +299,15 @@ export function widgetProgress(run: RunView): { done: number; total: number } {
   return { done, total: agentNodes.length + unstarted };
 }
 
-function liveTokens(run: RunView): { tokens: number; turns: number } {
+function liveTokens(run: RunView): number {
   let tokens = 0;
-  let turns = 0;
   for (const node of run.nodes.values()) {
     const usage: SpawnUsage | undefined =
       node.usage ??
       (node.status === "running" ? node.progressUsage : undefined);
-    if (usage) {
-      tokens += usage.input + usage.output;
-      turns += usage.turns;
-    }
+    if (usage) tokens += usage.input + usage.output;
   }
-  return { tokens, turns };
+  return tokens;
 }
 
 export function formatElapsed(ms: number): string {
@@ -275,8 +324,6 @@ export const STALL_AFTER_MS = 60_000;
 export interface LiveActivity {
   /** Latest output line of the most recently started running agent. */
   excerpt?: string;
-  /** Tool that agent is currently executing, when reported. */
-  tool?: string;
   /** Most recent progress timestamp across all running agents. */
   lastAt?: number;
 }
@@ -284,7 +331,6 @@ export interface LiveActivity {
 export function liveActivity(run: RunView): LiveActivity {
   let lastAt: number | undefined;
   let bestText: { startedAt: number; text: string } | undefined;
-  let bestTool: { startedAt: number; tool: string } | undefined;
   for (const node of run.nodes.values()) {
     // Only work leaves report progress; structural nodes just wrap them.
     if (node.kind !== "agent" && node.kind !== "reduce") continue;
@@ -297,41 +343,31 @@ export function liveActivity(run: RunView): LiveActivity {
     ) {
       bestText = { startedAt: node.startedAt, text: node.progressText };
     }
-    if (
-      node.progressTool &&
-      (!bestTool || node.startedAt > bestTool.startedAt)
-    ) {
-      bestTool = { startedAt: node.startedAt, tool: node.progressTool };
-    }
   }
   const line = bestText?.text.split("\n").find((part) => part.trim());
-  return { excerpt: line?.trim(), tool: bestTool?.tool, lastAt };
+  return { excerpt: line?.trim(), lastAt };
 }
 
 /**
- * The two widget lines for one run. Pure — testable with plainColorize.
- * Lines are truncated to the terminal width at render time (ANSI-aware).
+ * The one widget line for one run. Pure — testable with plainColorize.
+ * The line is truncated to the terminal width at render time (ANSI-aware).
  */
 export function formatRunWidget(
   run: RunView,
   now: number,
-  frame: number,
   color: Colorize = plainColorize,
 ): string[] {
-  const spinner = SPINNER_FRAMES[frame % SPINNER_FRAMES.length] as string;
   const { done, total } = widgetProgress(run);
   const ratio = total > 0 ? done / total : 0;
   const percent = `${Math.round(ratio * 100)}%`;
   const label = run.header.label ?? run.header.flow.kind;
-  const { tokens, turns } = liveTokens(run);
+  const tokens = liveTokens(run);
   const activity = liveActivity(run);
   const dot = color("dim", " · ");
   const meta = [
     shortId(run.header.id),
     formatElapsed(now - run.createdAt),
     tokens > 0 ? formatTokens(tokens) : undefined,
-    turns > 0 ? `${turns} turn${turns === 1 ? "" : "s"}` : undefined,
-    activity.tool,
   ]
     .filter((part): part is string => part !== undefined)
     .map((part) => color("dim", part))
@@ -347,24 +383,27 @@ export function formatRunWidget(
         : undefined;
 
   const statuses = aggregateStatuses(run);
-  const segments = widgetSegments(run.header.flow, statuses);
-  const shown = segments.slice(0, MAX_SEGMENTS);
-  const overflow = segments.length - shown.length;
-  const segmentText = shown
-    .map((segment) => {
-      const presentation = STATUS_STYLES[segment.status];
-      const icon = color(presentation.color, presentation.icon);
-      const text =
-        segment.status === "running"
-          ? segment.text
-          : color("muted", segment.text);
-      return `${icon} ${text}`;
-    })
-    .join("   ");
+  const segments = widgetSegments(
+    run.header.flow,
+    statuses,
+    instanceStatuses(run),
+  );
+  // Failure must survive without color: ✗ replaces the kind glyph.
+  const renderSegment = (segment: WidgetSegment): string => {
+    const presentation = STATUS_STYLES[segment.status];
+    const glyph =
+      segment.status === "failed" ? presentation.icon : segment.glyph;
+    const own = color(presentation.color, glyph);
+    if (!segment.children) return own;
+    const inner = segment.children.map(renderSegment).join("");
+    return `${own}${color("dim", "⟨")}${inner}${color("dim", "⟩")}`;
+  };
+  const strip = segments.map(renderSegment).join("");
 
+  // The strip precedes the excerpt: that tail has unbounded width, and
+  // truncation must never push the liveness glyphs off screen.
   return [
-    `${color("accent", spinner)} ${percent}${dot}${label}${dot}${meta}${tail ? `${dot}${tail}` : ""}`,
-    `  ${segmentText}${overflow > 0 ? color("dim", `   …+${overflow}`) : ""}`,
+    `${color("muted", "❖")} ${percent}${dot}${label}${dot}${meta}${dot}${strip}${tail ? `${dot}${tail}` : ""}`,
   ];
 }
 
@@ -382,7 +421,6 @@ export class RunWidget {
   private readonly manager: RunManager;
   private lastContext: ExtensionContext | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
-  private frame = 0;
   private disposed = false;
   /** Run ids muted from the summary (session-scoped, via the /workflows overlay `h`). */
   private readonly hidden = new Set<string>();
@@ -452,12 +490,11 @@ export class RunWidget {
     }
     this.startTicking();
     const now = Date.now();
-    const frame = this.frame;
     context.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
       const color: Colorize = (name, text) => theme.fg(name, text);
       const lines = running
         .slice(0, MAX_RUNS)
-        .flatMap((run) => formatRunWidget(run, now, frame, color));
+        .flatMap((run) => formatRunWidget(run, now, color));
       if (running.length > MAX_RUNS) {
         lines.push(
           color("dim", `…+${running.length - MAX_RUNS} more (see /workflows)`),
@@ -471,7 +508,6 @@ export class RunWidget {
     if (this.timer || this.disposed) return;
     this.timer = setInterval(() => {
       if (this.disposed) return;
-      this.frame += 1;
       const context = this.lastContext;
       if (context) this.render(context);
     }, TICK_MS);

@@ -58,9 +58,10 @@ task: |-
 
   Include only high-confidence findings in the actionable review: point to the
   exact code and explain the concrete failure mode or harm. Put plausible but
-  unverified medium-confidence concerns in lower_confidence_observations. Drop
-  low-confidence hunches. Treat P1, P2, and P3 findings as actionable. Keep P4
-  observations in the report, but exclude them from the actionable array.
+  unverified medium-confidence concerns in the optional
+  `## Lower-confidence observations` report section. Drop low-confidence
+  hunches. Treat P1, P2, and P3 findings as actionable. Keep P4 observations
+  in the report, but exclude them from the actionable array.
 
   For every finding, use an imperative fix title and provide the problem, a
   specific fix, supporting context or evidence, and precise file locations.
@@ -105,15 +106,21 @@ task: |-
   End with concrete next-step bullets.
 
   When prior round context is present, verify the actual current code rather
-  than trusting the implementation summary. Set stalled to true only when the
-  same material actionable finding remains after an attempted implementation
-  with no meaningful progress. Set cannot_proceed to true when the review
-  cannot be completed safely or required context or prerequisites are missing.
-  Otherwise set both flags to false.
+  than trusting the implementation summary. Use `cannot_proceed` when the same
+  material actionable finding remains after an attempted implementation with
+  no meaningful progress, or when the review cannot be completed safely
+  because required context or prerequisites are missing.
+
+  Set outcome to `approved` when no actionable P1-P3 findings remain,
+  `changes_required` when one or more actionable P1-P3 findings remain, or
+  `cannot_proceed` in the cases described earlier. Set reason to null for
+  approved and changes_required, and use a non-empty reason for
+  cannot_proceed.
 
   End with exactly one raw JSON object using this contract:
   {
-    "counts": {"p1": 0, "p2": 0, "p3": 0, "p4": 0},
+    "outcome": "changes_required",
+    "reason": null,
     "actionable": [
       {
         "id": "BUG-1",
@@ -126,17 +133,12 @@ task: |-
         "locations": ["src/file.ts:10-20"]
       }
     ],
-    "stalled": false,
-    "cannot_proceed": false,
-    "reason": null,
-    "lower_confidence_observations": [],
     "report": "Complete Markdown report following the format described earlier"
   }
 
-  Keep counts consistent with the full report. Include every P1-P3 finding in
-  actionable and no P4 findings there. Use a non-empty reason when stalled or
-  cannot_proceed is true. Put the complete human-readable Markdown review in
-  report despite returning JSON.
+  Include every P1-P3 finding in actionable and no P4 findings there. Keep
+  outcome, reason, and actionable mutually consistent. Put the complete
+  human-readable Markdown review in report despite returning JSON.
 thinking: high
 output: json
 skills: []

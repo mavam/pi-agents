@@ -106,7 +106,7 @@ const WorkflowToolParams = Type.Object({
           Type.Integer({
             minimum: 1,
             description:
-              "Maximum iterations allowed for each loop. Integer >= 1; default 10.",
+              "Maximum iterations allowed for each loop or while node. Integer >= 1; default 10.",
           }),
         ),
         maxAgents: Type.Optional(

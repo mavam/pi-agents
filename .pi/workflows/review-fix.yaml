@@ -5,8 +5,8 @@ doc: >-
   Mutates the current working tree. Use `review` for a read-only pass. Runs
   that canonical review first, sends validated P1-P3 findings to an anonymous
   Implementer, and verifies every implementation with a fresh review. Stops
-  when approved, unable to proceed, stalled, malformed, or after three
-  complete implementation-and-review rounds.
+  when approved, unable to proceed, malformed, or after three complete
+  implementation-and-review rounds.
 params:
   - name: target
     description: The editable change in the current checkout to review and fix
@@ -28,51 +28,8 @@ flow:
       cases:
         - when:
             and:
-              - eq: [cannot_proceed, true]
-              - eq: [stalled, false]
-              - exists: actionable
-              - not:
-                  empty: report
-              - not:
-                  empty: reason
-          then:
-            kind: value
-            value:
-              outcome: cannot_proceed
-              reason: "{initial_review.reason}"
-              round_index: null
-              report: "{initial_review.report}"
-              actionable: "{initial_review.actionable}"
-              implementation: null
-
-        - when:
-            and:
-              - eq: [cannot_proceed, false]
-              - eq: [stalled, true]
-              - not:
-                  empty: actionable
-              - not:
-                  empty: report
-              - not:
-                  empty: reason
-          then:
-            kind: value
-            value:
-              outcome: cannot_proceed
-              reason: "{initial_review.reason}"
-              round_index: null
-              report: "{initial_review.report}"
-              actionable: "{initial_review.actionable}"
-              implementation: null
-
-        - when:
-            and:
-              - eq: [cannot_proceed, false]
-              - eq: [stalled, false]
+              - eq: [outcome, approved]
               - eq: [reason, null]
-              - eq: [counts.p1, 0]
-              - eq: [counts.p2, 0]
-              - eq: [counts.p3, 0]
               - exists: actionable
               - empty: actionable
               - not:
@@ -89,13 +46,8 @@ flow:
 
         - when:
             and:
-              - eq: [cannot_proceed, false]
-              - eq: [stalled, false]
+              - eq: [outcome, changes_required]
               - eq: [reason, null]
-              - or:
-                  - gt: [counts.p1, 0]
-                  - gt: [counts.p2, 0]
-                  - gt: [counts.p3, 0]
               - not:
                   empty: actionable
               - not:
@@ -105,6 +57,24 @@ flow:
             value:
               outcome: changes_required
               reason: null
+              round_index: null
+              report: "{initial_review.report}"
+              actionable: "{initial_review.actionable}"
+              implementation: null
+
+        - when:
+            and:
+              - eq: [outcome, cannot_proceed]
+              - exists: actionable
+              - not:
+                  empty: report
+              - not:
+                  empty: reason
+          then:
+            kind: value
+            value:
+              outcome: cannot_proceed
+              reason: "{initial_review.reason}"
               round_index: null
               report: "{initial_review.report}"
               actionable: "{initial_review.actionable}"
@@ -189,51 +159,8 @@ flow:
             cases:
               - when:
                   and:
-                    - eq: [cannot_proceed, true]
-                    - eq: [stalled, false]
-                    - exists: actionable
-                    - not:
-                        empty: report
-                    - not:
-                        empty: reason
-                then:
-                  kind: value
-                  value:
-                    outcome: cannot_proceed
-                    reason: "{verified_review.reason}"
-                    round_index: "{iteration}"
-                    report: "{verified_review.report}"
-                    actionable: "{verified_review.actionable}"
-                    implementation: "{implementation}"
-
-              - when:
-                  and:
-                    - eq: [cannot_proceed, false]
-                    - eq: [stalled, true]
-                    - not:
-                        empty: actionable
-                    - not:
-                        empty: report
-                    - not:
-                        empty: reason
-                then:
-                  kind: value
-                  value:
-                    outcome: cannot_proceed
-                    reason: "{verified_review.reason}"
-                    round_index: "{iteration}"
-                    report: "{verified_review.report}"
-                    actionable: "{verified_review.actionable}"
-                    implementation: "{implementation}"
-
-              - when:
-                  and:
-                    - eq: [cannot_proceed, false]
-                    - eq: [stalled, false]
+                    - eq: [outcome, approved]
                     - eq: [reason, null]
-                    - eq: [counts.p1, 0]
-                    - eq: [counts.p2, 0]
-                    - eq: [counts.p3, 0]
                     - exists: actionable
                     - empty: actionable
                     - not:
@@ -250,13 +177,8 @@ flow:
 
               - when:
                   and:
-                    - eq: [cannot_proceed, false]
-                    - eq: [stalled, false]
+                    - eq: [outcome, changes_required]
                     - eq: [reason, null]
-                    - or:
-                        - gt: [counts.p1, 0]
-                        - gt: [counts.p2, 0]
-                        - gt: [counts.p3, 0]
                     - not:
                         empty: actionable
                     - not:
@@ -266,6 +188,24 @@ flow:
                   value:
                     outcome: changes_required
                     reason: null
+                    round_index: "{iteration}"
+                    report: "{verified_review.report}"
+                    actionable: "{verified_review.actionable}"
+                    implementation: "{implementation}"
+
+              - when:
+                  and:
+                    - eq: [outcome, cannot_proceed]
+                    - exists: actionable
+                    - not:
+                        empty: report
+                    - not:
+                        empty: reason
+                then:
+                  kind: value
+                  value:
+                    outcome: cannot_proceed
+                    reason: "{verified_review.reason}"
                     round_index: "{iteration}"
                     report: "{verified_review.report}"
                     actionable: "{verified_review.actionable}"

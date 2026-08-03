@@ -79,13 +79,13 @@ describe("parseWorkflowFile", () => {
 
   test("flat agent form normalizes to a bare agent leaf", () => {
     const filePath = writeWorkflow(
-      "focused-review.yaml",
-      `name: focused-review
-description: Review a target with a specific focus
+      "bug-hunt.yaml",
+      `name: bug-hunt
+description: Hunt bugs in a target
 params:
   - { name: target, required: true }
 agent: reviewer
-task: "Review {params.target} with the requested focus."
+task: "Review {params.target} strictly for bugs."
 model: cheap-model
 thinking: low
 `,
@@ -95,7 +95,7 @@ thinking: low
     expect(result.flow).toMatchObject({
       kind: "agent",
       name: "reviewer",
-      task: "Review {params.target} with the requested focus.",
+      task: "Review {params.target} strictly for bugs.",
       model: "cheap-model",
       thinking: "low",
     });

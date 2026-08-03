@@ -151,8 +151,9 @@ agent+task unit, use a flat workflow (below).
 
 Workflows are pure data: one YAML or JSON object per file, and the extension
 decides the parser (`.yaml`, `.yml`, `.json`). A reusable agent-plus-task unit
-uses the flat form. For example, `.pi/workflows/review.yaml` starts an
-anonymous reviewer without requiring a named profile:
+uses the flat form. For example, this repository's project-local
+`.pi/workflows/review.yaml` starts an anonymous reviewer without requiring a
+named profile:
 
 ```yaml
 name: review
@@ -178,21 +179,25 @@ accepts every agent-node option (`model`, `thinking`, `skills`, `tools`, `cwd`,
 `scope`, `output`). Mixing the flat form with `flow:` is an error; put execution
 options on the relevant agent node when `flow:` is present.
 
-Saved workflows compose like functions through `workflow` nodes. The included
-`/review-fix` workflow uses that composition to invoke `/review`, then sends
-validated P1–P3 findings to an anonymous Implementer, and ends every
-implementation round with a fresh review. It stops when the change is approved,
-cannot proceed, or reaches three complete implementation-and-review rounds.
-The review rubric is part of the workflow, so neither command requires an
-external agent profile or skill. Its Markdown report keeps fixed emoji-coded
-severity and category headings plus a verdict table for quick scanning, while
-the accompanying JSON fields remain plain for machine consumers.
+Saved workflows compose like functions through `workflow` nodes. This
+repository's project-local `/review-fix` workflow uses that composition to
+invoke `/review`, then sends validated P1–P3 findings to an anonymous
+Implementer, and ends every implementation round with a fresh review. It stops
+when the change is approved, cannot proceed, or reaches three complete
+implementation-and-review rounds. The review rubric is part of the workflow,
+so neither command requires an external agent profile or skill. Its Markdown
+report keeps fixed emoji-coded severity and category headings plus a verdict
+table for quick scanning, while the accompanying JSON fields remain plain for
+machine consumers.
 The maximum run executes seven agents: one initial Reviewer and three
 Implementer/Reviewer pairs. Its flat final result includes `outcome`, `reason`,
 `round_index`, `report`, `actionable`, and `implementation`; `outcome` is
 `approved`, `cannot_proceed`, or `exhausted`. Implementer messages remain
 Markdown because only reviewer output controls routing: forcing strict JSON
 there would turn a malformed status report into a mid-cycle hard failure.
+
+These two workflows are dogfood for this repository checkout. The npm package
+does not include them.
 
 Workflows live in `~/.pi/agent/workflows` and `.pi/workflows`, discovered like
 agents. Every definition is fully validated at discovery (references, cycles,
@@ -213,11 +218,10 @@ Workflows fire from four surfaces:
    neither is a task that looks big or parallelizable. In interactive
    sessions runs go to the background: the widget shows progress and the
    result arrives as a notification.
-2. **You.** Every saved workflow registers a slash command:
-   `/review src/core` runs the read-only review directly, with args bound to
-   parameters and no model round-trip. `/review-fix local-changes` explicitly
-   opts into modifying the current checkout. Positional args and `key=value`
-   pairs both work.
+2. **You.** Every saved workflow registers a slash command. For a workflow
+   named `triage`, `/triage src/core` runs it directly, with args bound to
+   parameters and no model round-trip. Positional args and `key=value` pairs
+   both work.
 3. **Events.** Add `on: [turn_end]` (plus optional `debounce:` milliseconds)
    and the workflow fires on those pi events, always in the background,
    with the event payload bound as `{params.event}`. Hooks run only in the

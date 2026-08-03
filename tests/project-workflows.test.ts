@@ -45,28 +45,21 @@ const finding = {
 
 function reviewResult(
   options: {
-    p1?: number;
-    p2?: number;
-    p3?: number;
-    p4?: number;
+    outcome?: "approved" | "changes_required" | "cannot_proceed";
     actionable?: unknown[];
-    stalled?: boolean;
-    cannotProceed?: boolean;
+    reason?: string | null;
   } = {},
 ): string {
-  const p1 = options.p1 ?? 0;
-  const p2 = options.p2 ?? 0;
-  const p3 = options.p3 ?? 0;
+  const outcome = options.outcome ?? "approved";
   return JSON.stringify({
-    counts: { p1, p2, p3, p4: options.p4 ?? 0 },
-    actionable: options.actionable ?? (p1 + p2 + p3 > 0 ? [finding] : []),
-    stalled: options.stalled ?? false,
-    cannot_proceed: options.cannotProceed ?? false,
+    outcome,
     reason:
-      options.stalled || options.cannotProceed
+      options.reason ??
+      (outcome === "cannot_proceed"
         ? "The review cannot continue safely."
-        : null,
-    lower_confidence_observations: [],
+        : null),
+    actionable:
+      options.actionable ?? (outcome === "changes_required" ? [finding] : []),
     report: "# Code Review\n\nReview report.",
   });
 }
@@ -106,8 +99,8 @@ describe("project review workflows", () => {
     }
   });
 
-  test("approves P4-only reviews without invoking the Implementer", async () => {
-    const { calls, outcome } = await runReviewFix([reviewResult({ p4: 1 })]);
+  test("approves reviews without actionable findings", async () => {
+    const { calls, outcome } = await runReviewFix([reviewResult()]);
     expect(outcome.status).toBe("completed");
     expect(outcome.value).toMatchObject({
       outcome: "approved",
@@ -130,7 +123,7 @@ describe("project review workflows", () => {
 
   test("runs an Implementer and verifies its changes before approval", async () => {
     const { calls, outcome } = await runReviewFix([
-      reviewResult({ p2: 1 }),
+      reviewResult({ outcome: "changes_required" }),
       reviewResult(),
     ]);
     expect(outcome.status).toBe("completed");
@@ -154,7 +147,7 @@ describe("project review workflows", () => {
   test("fails closed when the initial review contract is malformed", async () => {
     for (const invalidReview of [
       "{}",
-      reviewResult({ p2: 1, actionable: [] }),
+      reviewResult({ outcome: "changes_required", actionable: [] }),
     ]) {
       const { calls, outcome } = await runReviewFix([invalidReview]);
       expect(outcome.status).toBe("completed");
@@ -171,7 +164,7 @@ describe("project review workflows", () => {
 
   test("returns a flat initial cannot_proceed review without repairing", async () => {
     const { calls, outcome } = await runReviewFix([
-      reviewResult({ cannotProceed: true }),
+      reviewResult({ outcome: "cannot_proceed" }),
     ]);
     expect(outcome.status).toBe("completed");
     expect(outcome.value).toMatchObject({
@@ -187,7 +180,7 @@ describe("project review workflows", () => {
 
   test("fails closed with round metadata when verification is malformed", async () => {
     const { calls, outcome } = await runReviewFix([
-      reviewResult({ p2: 1 }),
+      reviewResult({ outcome: "changes_required" }),
       "{}",
     ]);
     expect(outcome.status).toBe("completed");
@@ -204,8 +197,8 @@ describe("project review workflows", () => {
 
   test("returns cannot_proceed when verification reports no progress", async () => {
     const { calls, outcome } = await runReviewFix([
-      reviewResult({ p2: 1 }),
-      reviewResult({ p2: 1, stalled: true }),
+      reviewResult({ outcome: "changes_required" }),
+      reviewResult({ outcome: "cannot_proceed", actionable: [finding] }),
     ]);
     expect(outcome.status).toBe("completed");
     expect(outcome.value).toMatchObject({
@@ -217,7 +210,7 @@ describe("project review workflows", () => {
   });
 
   test("returns exhausted only after three complete implementation rounds", async () => {
-    const actionable = reviewResult({ p2: 1 });
+    const actionable = reviewResult({ outcome: "changes_required" });
     const { calls, outcome } = await runReviewFix([
       actionable,
       actionable,

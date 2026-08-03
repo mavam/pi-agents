@@ -4,11 +4,15 @@ import type { RunEvent } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
 import { type RunView, rebuildRunState } from "../../src/run/state.js";
 import {
+  type Colorize,
   formatRunWidget,
   RunWidget,
   STALL_AFTER_MS,
   widgetProgress,
 } from "../../src/ui/widget.js";
+
+/** Tags each colored span so tests can assert glyph colors. */
+const tagged: Colorize = (color, text) => `<${color}>${text}</>`;
 
 const REVIEW_FLOW = {
   kind: "parallel",
@@ -39,37 +43,19 @@ async function recordedRun(
 }
 
 describe("formatRunWidget", () => {
-  test("completed run shows 100% and all-green segments", async () => {
+  test("completed run is one line with 100% and an all-green strip", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
-    const [line1, line2] = formatRunWidget(run, run.createdAt + 92_000, 3);
-    expect(line1).toContain("100%");
-    expect(line1).toContain("review");
-    expect(line1).toContain("w1".length === 2 ? "w1" : "w1"); // shortId of "w1"
-    expect(line1).toContain("1m32s");
-    expect(line2).toContain("● bugs → reviewer");
-    expect(line2).toContain("● clarity → reviewer");
-    expect(line2).toContain("● ⑂ reduce → worker");
+    const lines = formatRunWidget(run, run.createdAt + 92_000, 3, tagged);
+    expect(lines).toHaveLength(1);
+    const [line] = lines;
+    expect(line).toContain("100%");
+    expect(line).toContain("review");
+    expect(line).toContain("1m32s");
+    // Two agent branches plus the reducer, all completed.
+    expect(line).toContain("<success>◆</><success>◆</><success>⑂</>");
   });
 
-  test("anonymous branches and reducers show ad-hoc segments", async () => {
-    const run = await recordedRun(
-      {
-        kind: "parallel",
-        branches: {
-          bugs: { kind: "agent", task: "bugs" },
-          clarity: { kind: "agent", name: "reviewer", task: "clarity" },
-        },
-        reduce: { task: "merge {branches}" },
-      },
-      () => "ok",
-    );
-    const [, line2] = formatRunWidget(run, run.createdAt + 1_000, 3);
-    expect(line2).toContain("● bugs → ad-hoc");
-    expect(line2).toContain("● clarity → reviewer");
-    expect(line2).toContain("● ⑂ reduce → ad-hoc");
-  });
-
-  test("mid-run shows partial percent and a running segment", async () => {
+  test("mid-run shows partial percent and a running glyph", async () => {
     // Drop the reduce completion and everything after: reduce stays running.
     const run = await recordedRun(
       REVIEW_FLOW,
@@ -83,9 +69,10 @@ describe("formatRunWidget", () => {
     const { done, total } = widgetProgress(run);
     expect(total).toBe(3);
     expect(done).toBe(2);
-    const [line1, line2] = formatRunWidget(run, run.createdAt + 5_000, 0);
-    expect(line1).toContain("67%");
-    expect(line2).toContain("◉ ⑂ reduce → worker");
+    const [line] = formatRunWidget(run, run.createdAt + 5_000, 0, tagged);
+    expect(line).toContain("67%");
+    // Finished branches are green; the running reducer is the warning glyph.
+    expect(line).toContain("<success>◆</><success>◆</><warning>⑂</>");
   });
 
   test("pending skeleton leaves keep the denominator honest before start", async () => {
@@ -98,9 +85,9 @@ describe("formatRunWidget", () => {
     const { total } = widgetProgress(run);
     // Even with no node events, the static skeleton knows 3 agents.
     expect(total).toBe(3);
-    const [line1, line2] = formatRunWidget(run, run.createdAt, 0);
-    expect(line1).toContain("0%");
-    expect(line2).toContain("○ bugs → reviewer");
+    const [line] = formatRunWidget(run, run.createdAt, 0, tagged);
+    expect(line).toContain("0%");
+    expect(line).toContain("<dim>◆</><dim>◆</><dim>⑂</>");
   });
 
   test("map fan-out aggregates counts into one segment", async () => {
@@ -124,12 +111,11 @@ describe("formatRunWidget", () => {
       },
       (agent) => (agent === "scout" ? '["a","b","c"]' : "ok"),
     );
-    const [line1, line2] = formatRunWidget(run, run.createdAt + 1000, 0);
-    expect(line2).toContain("● scout → {files}");
-    expect(line2).toContain("⇶ map {files} [3/3]");
+    const [line] = formatRunWidget(run, run.createdAt + 1000, 0);
+    expect(line).toContain("◆⇶");
     // 1 scout + 3 map items = 4 agents total.
     expect(widgetProgress(run)).toEqual({ done: 4, total: 4 });
-    expect(line1).toContain("100%");
+    expect(line).toContain("100%");
   });
 
   test("switch totals use the smallest arm and self-correct as instances appear", async () => {
@@ -175,9 +161,9 @@ describe("formatRunWidget", () => {
       agent === "gate" ? '{"status": "findings"}' : "ok",
     );
     expect(widgetProgress(run)).toEqual({ done: 3, total: 3 });
-    const [line1, line2] = formatRunWidget(run, run.createdAt, 0);
-    expect(line1).toContain("100%");
-    expect(line2).toContain("● ⎇ switch");
+    const [line] = formatRunWidget(run, run.createdAt, 0);
+    expect(line).toContain("100%");
+    expect(line).toContain("◆⎇");
   });
 
   test("value nodes add no work: zero leaves, ≔ segment", async () => {
@@ -198,12 +184,12 @@ describe("formatRunWidget", () => {
       () => '{"count": 3}',
     );
     expect(widgetProgress(run)).toEqual({ done: 1, total: 1 });
-    const [line1, line2] = formatRunWidget(run, run.createdAt, 0);
-    expect(line1).toContain("100%");
-    expect(line2).toContain("● ≔ value");
+    const [line] = formatRunWidget(run, run.createdAt, 0);
+    expect(line).toContain("100%");
+    expect(line).toContain("◆≔");
   });
 
-  test("failures color the segment with ✗", async () => {
+  test("failed units replace their glyph with ✗", async () => {
     const flow = {
       kind: "parallel",
       onError: "collect",
@@ -216,9 +202,8 @@ describe("formatRunWidget", () => {
       if (agent === "b") throw new Error("boom");
       return "ok";
     });
-    const [, line2] = formatRunWidget(run, run.createdAt, 0);
-    expect(line2).toContain("✗ bad → b");
-    expect(line2).toContain("● good → a");
+    const [line] = formatRunWidget(run, run.createdAt, 0, tagged);
+    expect(line).toContain("<success>◆</><error>✗</>");
   });
 
   test("live tokens sum completed and streaming usage", async () => {
@@ -260,7 +245,7 @@ describe("formatRunWidget", () => {
     expect(line1).not.toContain("more");
   });
 
-  test("deep flows collapse to one segment per top-level step", async () => {
+  test("deep flows collapse to one glyph per top-level step", async () => {
     const run = await recordedRun(
       {
         kind: "sequence",
@@ -301,17 +286,13 @@ describe("formatRunWidget", () => {
       },
       (_agent, task) => (task === "map" ? '{"hotspots":["a","b"]}' : "ok"),
     );
-    const [, line2] = formatRunWidget(run, run.createdAt, 0);
-    // Four top-level steps, not one segment per structural agent.
-    expect(line2).toContain("● explorer → {map}");
-    expect(line2).toContain("● ⑃ parallel [5/5]");
-    expect(line2).toContain("● ⇶ map {map.hotspots} [2/2]");
-    expect(line2).toContain("● ↺ loop [2/2]");
-    expect(line2).not.toContain("…+");
-    expect(line2).not.toContain("bugs");
+    const [line] = formatRunWidget(run, run.createdAt, 0);
+    // Four top-level steps, not one glyph per structural agent.
+    expect(line).toContain("◆⑃⇶↺");
+    expect(line).not.toContain("bugs");
   });
 
-  test("segment overflow collapses into a counter", async () => {
+  test("wide flows keep one glyph per step without overflow", async () => {
     const run = await recordedRun(
       {
         kind: "sequence",
@@ -323,8 +304,9 @@ describe("formatRunWidget", () => {
       },
       () => "ok",
     );
-    const [, line2] = formatRunWidget(run, run.createdAt, 0);
-    expect(line2).toContain("…+3");
+    const [line] = formatRunWidget(run, run.createdAt, 0);
+    expect(line).toContain("◆◆◆◆◆◆◆◆");
+    expect(line).not.toContain("…+");
   });
 });
 

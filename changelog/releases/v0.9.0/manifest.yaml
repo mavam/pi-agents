@@ -1,0 +1,10 @@
+created: 2026-08-03
+title: Bounded workflow iteration and clearer run visibility
+intro: >-
+  Pi agents now support bounded, pre-checked while iterations that safely carry JSON
+  state through workflows. The release also makes workflow results easier to read,
+  compresses live run summaries, and safely handles session replacement during active
+  workflows.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.8.0

@@ -14,7 +14,7 @@ two. The former segment line collapses into a compact glyph strip at the end
 of the stats line:
 
 ```
-⠴ 25% · Quick test workflow · 5fa27283 · 0m09s · 19.1k · ◆⑃⇶↺
+❖ 25% · Quick test workflow · 5fa27283 · 0m09s · 19.1k · ◆⑃⇶↺
 ```
 
 Each top-level unit contributes one kind glyph — `◆` for agents, `≡ ⑃ ⇶ ↺ ⎇ ≔
@@ -30,8 +30,13 @@ iterations show as one glyph per instance, capped at eight with an ellipsis,
 so wide fan-outs never flood the line:
 
 ```
-⠴ 55% · Quick test workflow · 5fa27283 · 0m21s · 48.2k · ◆⑃⇶⟨◆◆◆⟩↺
+❖ 55% · Quick test workflow · 5fa27283 · 0m21s · 48.2k · ◆⑃⇶⟨◆◆◆⟩↺
 ```
+
+The animated braille spinner gives way to the static ❖ run mark that
+completion cards and notifications already use: liveness now shows through
+the yellow glyphs in the strip, so nothing needs to flicker, and the fixed
+one-cell mark keeps the line's left edge stable while the percent grows.
 
 The summary also drops the aggregate turn count: turns summed across
 concurrent agents with independent conversations carried no meaning, and the

@@ -45,10 +45,11 @@ async function recordedRun(
 describe("formatRunWidget", () => {
   test("completed run is one line with 100% and an all-green strip", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
-    const lines = formatRunWidget(run, run.createdAt + 92_000, 3, tagged);
+    const lines = formatRunWidget(run, run.createdAt + 92_000, tagged);
     expect(lines).toHaveLength(1);
     const [line] = lines;
-    expect(line).toContain("100%");
+    // The static ❖ run mark leads; no spinner animates.
+    expect(line).toContain("<muted>❖</> 100%");
     expect(line).toContain("review");
     expect(line).toContain("1m32s");
     // Two agent branches plus the reducer, all completed.
@@ -71,7 +72,7 @@ describe("formatRunWidget", () => {
     const { done, total } = widgetProgress(run);
     expect(total).toBe(3);
     expect(done).toBe(2);
-    const [line] = formatRunWidget(run, run.createdAt + 5_000, 0, tagged);
+    const [line] = formatRunWidget(run, run.createdAt + 5_000, tagged);
     expect(line).toContain("67%");
     // Finished branches are green; the running reducer is the warning glyph.
     expect(line).toContain("<success>◆</><success>◆</><warning>⑂</>");
@@ -87,7 +88,7 @@ describe("formatRunWidget", () => {
     const { total } = widgetProgress(run);
     // Even with no node events, the static skeleton knows 3 agents.
     expect(total).toBe(3);
-    const [line] = formatRunWidget(run, run.createdAt, 0, tagged);
+    const [line] = formatRunWidget(run, run.createdAt, tagged);
     expect(line).toContain("0%");
     expect(line).toContain("<dim>◆</><dim>◆</><dim>⑂</>");
   });
@@ -113,7 +114,7 @@ describe("formatRunWidget", () => {
       },
       (agent) => (agent === "scout" ? '["a","b","c"]' : "ok"),
     );
-    const [line] = formatRunWidget(run, run.createdAt + 1000, 0);
+    const [line] = formatRunWidget(run, run.createdAt + 1000);
     expect(line).toContain("◆⇶");
     // 1 scout + 3 map items = 4 agents total.
     expect(widgetProgress(run)).toEqual({ done: 4, total: 4 });
@@ -163,7 +164,7 @@ describe("formatRunWidget", () => {
       agent === "gate" ? '{"status": "findings"}' : "ok",
     );
     expect(widgetProgress(run)).toEqual({ done: 3, total: 3 });
-    const [line] = formatRunWidget(run, run.createdAt, 0);
+    const [line] = formatRunWidget(run, run.createdAt);
     expect(line).toContain("100%");
     expect(line).toContain("◆⎇");
   });
@@ -186,7 +187,7 @@ describe("formatRunWidget", () => {
       () => '{"count": 3}',
     );
     expect(widgetProgress(run)).toEqual({ done: 1, total: 1 });
-    const [line] = formatRunWidget(run, run.createdAt, 0);
+    const [line] = formatRunWidget(run, run.createdAt);
     expect(line).toContain("100%");
     expect(line).toContain("◆≔");
   });
@@ -204,7 +205,7 @@ describe("formatRunWidget", () => {
       if (agent === "b") throw new Error("boom");
       return "ok";
     });
-    const [line] = formatRunWidget(run, run.createdAt, 0, tagged);
+    const [line] = formatRunWidget(run, run.createdAt, tagged);
     expect(line).toContain("<success>◆</><error>✗</>");
   });
 
@@ -223,7 +224,7 @@ describe("formatRunWidget", () => {
         };
       }
     }
-    const [line1] = formatRunWidget(run, run.createdAt, 0);
+    const [line1] = formatRunWidget(run, run.createdAt);
     expect(line1).toContain("4.5k");
   });
 
@@ -242,7 +243,7 @@ describe("formatRunWidget", () => {
         node.progressText = "Merging findings into one prioritized list\nmore";
       }
     }
-    const [line1] = formatRunWidget(run, run.createdAt + 1000, 0);
+    const [line1] = formatRunWidget(run, run.createdAt + 1000);
     expect(line1).toContain("· Merging findings into one prioritized list");
     expect(line1).not.toContain("more");
   });
@@ -288,7 +289,7 @@ describe("formatRunWidget", () => {
       },
       (_agent, task) => (task === "map" ? '{"hotspots":["a","b"]}' : "ok"),
     );
-    const [line] = formatRunWidget(run, run.createdAt, 0);
+    const [line] = formatRunWidget(run, run.createdAt);
     // Four top-level steps, not one glyph per structural agent.
     expect(line).toContain("◆⑃⇶↺");
     expect(line).not.toContain("bugs");
@@ -329,7 +330,7 @@ describe("formatRunWidget", () => {
         ].includes(event.instance);
       },
     );
-    const [line] = formatRunWidget(run, run.createdAt, 0, tagged);
+    const [line] = formatRunWidget(run, run.createdAt, tagged);
     expect(line).toContain(
       "<warning>⑃</><dim>⟨</><success>◆</><warning>≡</><dim>⟨</>" +
         "<success>◆</><warning>◆</><dim>⟩</><dim>⟩</>",
@@ -370,7 +371,7 @@ describe("formatRunWidget", () => {
         );
       },
     );
-    const [line] = formatRunWidget(run, run.createdAt, 0, tagged);
+    const [line] = formatRunWidget(run, run.createdAt, tagged);
     // Gate done; the switch expands to exactly the running chosen arm.
     expect(line).toContain(
       "<success>◆</><warning>⎇</><dim>⟨</><warning>◆</><dim>⟩</>",
@@ -407,7 +408,7 @@ describe("formatRunWidget", () => {
         return event.instance !== "$.steps[1]" && event.instance !== "$";
       },
     );
-    const [line] = formatRunWidget(run, run.createdAt, 0, tagged);
+    const [line] = formatRunWidget(run, run.createdAt, tagged);
     // 10 items: 8 collapsed glyphs plus a dim ellipsis inside the brackets.
     expect(line).toContain(
       `<warning>⇶</><dim>⟨</>${"<success>◆</>".repeat(8)}<dim>…</><dim>⟩</>`,
@@ -426,7 +427,7 @@ describe("formatRunWidget", () => {
       },
       () => "ok",
     );
-    const [line] = formatRunWidget(run, run.createdAt, 0);
+    const [line] = formatRunWidget(run, run.createdAt);
     expect(line).toContain("◆◆◆◆◆◆◆◆");
     expect(line).not.toContain("…+");
   });
@@ -456,7 +457,7 @@ describe("live activity", () => {
         node.lastProgressAt = run.createdAt;
       }
     }
-    const [line1] = formatRunWidget(run, run.createdAt + 1000, 0);
+    const [line1] = formatRunWidget(run, run.createdAt + 1000);
     // Turns summed across concurrent agents are not meaningful; only the
     // token volume and the active tool surface here.
     expect(line1).not.toContain("turn");
@@ -471,16 +472,11 @@ describe("live activity", () => {
         node.lastProgressAt = run.createdAt;
       }
     }
-    const [fresh] = formatRunWidget(
-      run,
-      run.createdAt + STALL_AFTER_MS - 1000,
-      0,
-    );
+    const [fresh] = formatRunWidget(run, run.createdAt + STALL_AFTER_MS - 1000);
     expect(fresh).toContain("still merging");
     const [stalled] = formatRunWidget(
       run,
       run.createdAt + STALL_AFTER_MS + 121_000,
-      0,
     );
     expect(stalled).toContain("no output for");
     expect(stalled).not.toContain("still merging");

@@ -1,11 +1,12 @@
 /**
  * The above-editor widget for live runs: one line per run.
  *
- *   ⠸ 67% · review · c9e5799 · 1m32s · 15.5k · ◆⑃⟨◆◆⑂⟩⇶↺ · bash
+ *   ❖ 67% · review · c9e5799 · 1m32s · 15.5k · ◆⑃⟨◆◆⑂⟩⇶↺ · bash
  *
- * Braille spinner, completion percent (done agents over known agents — the
- * denominator grows as map items are discovered), label, dim id, elapsed,
- * live token count (completed usage + streaming usage), the glyph strip,
+ * The static ❖ run mark (shared with completion cards and notifications),
+ * completion percent (done agents over known agents — the denominator grows
+ * as map items are discovered), label, dim id, elapsed, live token count
+ * (completed usage + streaming usage), the glyph strip,
  * the running agent's current tool, then the latest output excerpt —
  * replaced by a "no output for …" stall hint when agents have been silent.
  * The strip shows one kind glyph per top-level unit (◆ marks an agent),
@@ -35,8 +36,9 @@ import { aggregateStatuses, type PathStatus } from "./tree.js";
 
 const WIDGET_KEY = "pi-agents:runs";
 const MAX_RUNS = 4;
-const TICK_MS = 200;
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+// The glyph strip carries liveness through color, so no spinner animates;
+// the tick only refreshes elapsed time and stall hints at their granularity.
+const TICK_MS = 1000;
 
 type SegmentStatus =
   | "pending"
@@ -348,10 +350,8 @@ export function liveActivity(run: RunView): LiveActivity {
 export function formatRunWidget(
   run: RunView,
   now: number,
-  frame: number,
   color: Colorize = plainColorize,
 ): string[] {
-  const spinner = SPINNER_FRAMES[frame % SPINNER_FRAMES.length] as string;
   const { done, total } = widgetProgress(run);
   const ratio = total > 0 ? done / total : 0;
   const percent = `${Math.round(ratio * 100)}%`;
@@ -397,7 +397,7 @@ export function formatRunWidget(
   const strip = segments.map(renderSegment).join("");
 
   return [
-    `${color("accent", spinner)} ${percent}${dot}${label}${dot}${meta}${dot}${strip}${tail ? `${dot}${tail}` : ""}`,
+    `${color("muted", "❖")} ${percent}${dot}${label}${dot}${meta}${dot}${strip}${tail ? `${dot}${tail}` : ""}`,
   ];
 }
 
@@ -415,7 +415,6 @@ export class RunWidget {
   private readonly manager: RunManager;
   private lastContext: ExtensionContext | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
-  private frame = 0;
   private disposed = false;
   /** Run ids muted from the summary (session-scoped, via the /workflows overlay `h`). */
   private readonly hidden = new Set<string>();
@@ -485,12 +484,11 @@ export class RunWidget {
     }
     this.startTicking();
     const now = Date.now();
-    const frame = this.frame;
     context.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
       const color: Colorize = (name, text) => theme.fg(name, text);
       const lines = running
         .slice(0, MAX_RUNS)
-        .flatMap((run) => formatRunWidget(run, now, frame, color));
+        .flatMap((run) => formatRunWidget(run, now, color));
       if (running.length > MAX_RUNS) {
         lines.push(
           color("dim", `…+${running.length - MAX_RUNS} more (see /workflows)`),
@@ -504,7 +502,6 @@ export class RunWidget {
     if (this.timer || this.disposed) return;
     this.timer = setInterval(() => {
       if (this.disposed) return;
-      this.frame += 1;
       const context = this.lastContext;
       if (context) this.render(context);
     }, TICK_MS);

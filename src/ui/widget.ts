@@ -1,12 +1,12 @@
 /**
  * The above-editor widget for live runs: one line per run.
  *
- *   ⠸ 67% · review · c9e5799 · 1m32s · 15.5k · 14 turns · ◆⑃⟨◆◆⑂⟩⇶↺ · bash
+ *   ⠸ 67% · review · c9e5799 · 1m32s · 15.5k · ◆⑃⟨◆◆⑂⟩⇶↺ · bash
  *
  * Braille spinner, completion percent (done agents over known agents — the
  * denominator grows as map items are discovered), label, dim id, elapsed,
- * live token and turn counts (completed usage + streaming usage), the glyph
- * strip, the running agent's current tool, then the latest output excerpt —
+ * live token count (completed usage + streaming usage), the glyph strip,
+ * the running agent's current tool, then the latest output excerpt —
  * replaced by a "no output for …" stall hint when agents have been silent.
  * The strip shows one kind glyph per top-level unit (◆ marks an agent),
  * colored by status; failed units render ✗ so failures survive without
@@ -283,19 +283,15 @@ export function widgetProgress(run: RunView): { done: number; total: number } {
   return { done, total: agentNodes.length + unstarted };
 }
 
-function liveTokens(run: RunView): { tokens: number; turns: number } {
+function liveTokens(run: RunView): number {
   let tokens = 0;
-  let turns = 0;
   for (const node of run.nodes.values()) {
     const usage: SpawnUsage | undefined =
       node.usage ??
       (node.status === "running" ? node.progressUsage : undefined);
-    if (usage) {
-      tokens += usage.input + usage.output;
-      turns += usage.turns;
-    }
+    if (usage) tokens += usage.input + usage.output;
   }
-  return { tokens, turns };
+  return tokens;
 }
 
 export function formatElapsed(ms: number): string {
@@ -360,14 +356,13 @@ export function formatRunWidget(
   const ratio = total > 0 ? done / total : 0;
   const percent = `${Math.round(ratio * 100)}%`;
   const label = run.header.label ?? run.header.flow.kind;
-  const { tokens, turns } = liveTokens(run);
+  const tokens = liveTokens(run);
   const activity = liveActivity(run);
   const dot = color("dim", " · ");
   const meta = [
     shortId(run.header.id),
     formatElapsed(now - run.createdAt),
     tokens > 0 ? formatTokens(tokens) : undefined,
-    turns > 0 ? `${turns} turn${turns === 1 ? "" : "s"}` : undefined,
     activity.tool,
   ]
     .filter((part): part is string => part !== undefined)

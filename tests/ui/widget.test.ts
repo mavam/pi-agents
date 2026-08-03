@@ -439,7 +439,7 @@ describe("live activity", () => {
     return !event.instance.endsWith(".reduce") && event.instance !== "$";
   };
 
-  test("turn count and current tool join line 1", async () => {
+  test("the current tool joins line 1 without a turn count", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
@@ -457,7 +457,9 @@ describe("live activity", () => {
       }
     }
     const [line1] = formatRunWidget(run, run.createdAt + 1000, 0);
-    expect(line1).toContain("7 turns");
+    // Turns summed across concurrent agents are not meaningful; only the
+    // token volume and the active tool surface here.
+    expect(line1).not.toContain("turn");
     expect(line1).toContain("bash");
   });
 

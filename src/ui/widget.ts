@@ -202,7 +202,21 @@ export function widgetSegments(
         const fallback = elsePath(path);
         return statuses.has(fallback) ? [unit(node.else, fallback)] : undefined;
       }
-      case "map":
+      case "map": {
+        const children = itemGlyphs(
+          bodyPath(path),
+          KIND_GLYPHS[node.body.kind],
+        );
+        // The reducer is map work too — without it a map whose items all
+        // finished would expand to only-green glyphs while still running.
+        if (node.reduce) {
+          children.push({
+            glyph: "⑂",
+            status: unitStatus(statuses, reducePath(path)),
+          });
+        }
+        return children;
+      }
       case "loop":
       case "while":
         return itemGlyphs(bodyPath(path), KIND_GLYPHS[node.body.kind]);

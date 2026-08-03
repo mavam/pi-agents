@@ -415,6 +415,44 @@ describe("formatRunWidget", () => {
     );
   });
 
+  test("a running map reducer joins the item glyphs", async () => {
+    const run = await recordedRun(
+      {
+        kind: "sequence",
+        steps: [
+          {
+            kind: "agent",
+            name: "scout",
+            task: "list",
+            output: "json",
+            as: "files",
+          },
+          {
+            kind: "map",
+            over: "{files}",
+            body: { kind: "agent", name: "reviewer", task: "review {item}" },
+            reduce: { agent: "worker", task: "merge {items}" },
+          },
+        ],
+      },
+      (agent) => (agent === "scout" ? '["a","b"]' : "ok"),
+      (event) => {
+        if (event.type === "run_completed") return false;
+        if (event.type !== "node_completed") return true;
+        // Items finish; the reducer and the map itself stay running.
+        return !["$.steps[1].reduce", "$.steps[1]", "$"].includes(
+          event.instance,
+        );
+      },
+    );
+    const [line] = formatRunWidget(run, run.createdAt, tagged);
+    // Without the reducer glyph the expansion would read all-green while
+    // the map still runs; the yellow ⑂ names the unfinished work.
+    expect(line).toContain(
+      "<warning>⇶</><dim>⟨</><success>◆</><success>◆</><warning>⑂</><dim>⟩</>",
+    );
+  });
+
   test("wide flows keep one glyph per step without overflow", async () => {
     const run = await recordedRun(
       {

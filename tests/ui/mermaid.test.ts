@@ -33,6 +33,19 @@ describe("toMermaid", () => {
           body: { kind: "agent", name: "fixer", task: "fix", output: "json" },
           max: 3,
           until: { eq: ["done", true] },
+          as: "state",
+        },
+        {
+          kind: "while",
+          on: "{state}",
+          condition: { eq: ["done", false] },
+          body: {
+            kind: "agent",
+            name: "finisher",
+            task: "finish {current}",
+            output: "json",
+          },
+          max: 2,
         },
       ],
     });
@@ -49,6 +62,8 @@ describe("toMermaid", () => {
     expect(first).toContain("|per item|");
     expect(first).toContain("loop ≤3");
     expect(first).toContain("-.->|repeat|");
+    expect(first).toContain("while done == false on {state} ≤2");
+    expect(first).toContain("-.->|next|");
   });
 
   test("switch renders a decision head, labeled arm edges, and a join", () => {

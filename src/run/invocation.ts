@@ -67,6 +67,8 @@ export interface ResolvedInvocation {
   thinking?: string;
   /** Effective skills with instructions loaded, ready to render. */
   skills: ResolvedSkill[];
+  /** Whether the child Pi process must suppress its ambient skill catalog. */
+  disableSkillDiscovery: boolean;
   /** Effective tool allowlist; `[]` means no tools, undefined means default. */
   tools?: string[];
 }
@@ -208,6 +210,9 @@ export function resolveInvocation(
       thinking:
         call.thinking ?? profile?.thinking ?? context.defaults?.thinking,
       skills: resolved,
+      // An anonymous call with no selection retains normal Pi discovery.
+      // Every explicit call-site list and every named profile is closed.
+      disableSkillDiscovery: call.skills !== undefined || profile !== undefined,
       tools: call.tools !== undefined ? call.tools : profile?.tools,
     },
   };

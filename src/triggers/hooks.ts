@@ -171,6 +171,7 @@ export class HookManager {
         cwd: ctx.cwd,
         scope: "both",
         label: `${wf.name} (on ${eventName})`,
+        display: wf.display,
         source: { kind: "hook", workflow: wf.name, event: eventName },
         ctx,
         background: true,

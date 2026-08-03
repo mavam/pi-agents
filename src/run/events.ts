@@ -36,6 +36,8 @@ export interface RunSource {
 export interface RunHeader {
   id: string;
   label?: string;
+  /** Saved-workflow result path selected for human-facing rendering. */
+  display?: string;
   source: RunSource;
   /** The expanded flow (workflow refs inlined). */
   flow: FlowNode;
@@ -100,6 +102,7 @@ export type RunEvent =
       caller?: string;
     }
   | {
+      /** Emitted before a loop or while body iteration starts. */
       type: "loop_iteration";
       at: number;
       runId: string;

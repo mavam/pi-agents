@@ -112,6 +112,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       systemPrompt,
       model: resolved.model,
       thinking: resolved.thinking,
+      disableSkillDiscovery: resolved.disableSkillDiscovery,
       // Preserved exactly: `[]` makes the engine emit --no-tools.
       tools: resolved.tools,
       env,

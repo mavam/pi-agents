@@ -273,11 +273,26 @@ describe("formatNodeResultFull", () => {
 });
 
 describe("formatRunDetails", () => {
-  test("puts the full-result hint before a split preview fence", async () => {
+  test("puts the raw-data hint after a split preview fence", async () => {
     const markdown = `\`\`\`ts\n${"x".repeat(500)}\n\`\`\``;
     const run = await recordedRun(REVIEW_FLOW, () => markdown);
     const text = formatRunDetails(run);
-    expect(text.indexOf("Full result:")).toBeLessThan(text.indexOf("```ts"));
+    expect(text.indexOf("```ts")).toBeLessThan(text.indexOf("Raw data:"));
+  });
+
+  test("renders a workflow's declared display field", async () => {
+    const report = `# Code Review\n\n${"Readable finding. ".repeat(30)}`;
+    const run = await recordedRun(
+      { kind: "agent", task: "review", output: "json" },
+      () => JSON.stringify({ outcome: "changes_required", report }),
+    );
+    run.header.display = "report";
+
+    const text = formatRunDetails(run);
+    expect(text).toContain(report);
+    expect(text).not.toContain("…");
+    expect(text).not.toContain('"outcome": "changes_required"');
+    expect(text.indexOf(report)).toBeLessThan(text.indexOf("Raw data:"));
   });
 });
 

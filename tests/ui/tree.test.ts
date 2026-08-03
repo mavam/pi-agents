@@ -78,6 +78,41 @@ describe("renderFlowTree", () => {
     expect(tree).not.toContain("≡");
   });
 
+  test("while renders its pre-checked condition and carried value", () => {
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        {
+          kind: "agent",
+          name: "reviewer",
+          task: "Review",
+          output: "json",
+          as: "review",
+        },
+        {
+          kind: "while",
+          on: "{review}",
+          condition: { eq: ["outcome", "changes_required"] },
+          max: 3,
+          body: {
+            kind: "agent",
+            name: "fixer",
+            task: "Fix round {iteration} from {current}",
+            output: "json",
+          },
+          as: "result",
+        },
+      ],
+    });
+    expect(renderFlowTree(flow)).toBe(
+      [
+        "✦ reviewer → {review} · Review",
+        '↺ while outcome == "changes_required" on {review} ≤3 → {result}',
+        "└─ ✦ fixer · Fix round {iteration} from {current}",
+      ].join("\n"),
+    );
+  });
+
   test("anonymous agents and reducers render as ad-hoc", () => {
     expect(
       renderFlowTree(

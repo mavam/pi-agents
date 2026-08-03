@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
+import { resolvePath } from "../model/interpolate.js";
 import { valueText } from "../model/value.js";
 import type { RunSource } from "../run/events.js";
 import type { NodeView, RunView } from "../run/state.js";
@@ -80,7 +81,7 @@ export function formatAgentCount(agents: number): string {
 
 export function formatRunNotificationControls(runId: string): string {
   const id = shortId(runId);
-  return `Inspect: \`/workflow ${id}\` · full result: \`/workflow ${id} result\` · per-agent: \`/workflow ${id} agents\``;
+  return `Run details: \`/workflow ${id}\` · raw data: \`/workflow ${id} result\` · agent output: \`/workflow ${id} agents\``;
 }
 
 const renderMarkdownMessage: MessageRenderer = (message) =>
@@ -114,6 +115,10 @@ export const renderRunNotification: MessageRenderer = (
   // whenever the transcript is invalidated.
   const card = new Container();
   card.addChild(new Text(header, 1, 0));
+  if (details.bodyKind !== "none" && details.body !== undefined) {
+    card.addChild(new Spacer(1));
+    card.addChild(new Markdown(details.body, 1, 0, getMarkdownTheme()));
+  }
   card.addChild(new Spacer(1));
   card.addChild(
     new Markdown(
@@ -123,10 +128,6 @@ export const renderRunNotification: MessageRenderer = (
       getMarkdownTheme(),
     ),
   );
-  if (details.bodyKind !== "none" && details.body !== undefined) {
-    card.addChild(new Spacer(1));
-    card.addChild(new Markdown(details.body, 1, 0, getMarkdownTheme()));
-  }
   return card;
 };
 
@@ -172,6 +173,25 @@ export function formatValuePreview(value: unknown, maxChars = 400): string {
   const text = valueText(value) ?? "";
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}…`;
+}
+
+export interface SelectedDisplayValue {
+  /** The declared Markdown string, or the original value as a fallback. */
+  value: unknown;
+  /** Whether the declared path resolved to a string. */
+  selected: boolean;
+}
+
+/** Select a saved workflow's declared human-facing Markdown result. */
+export function selectDisplayValue(
+  value: unknown,
+  display: string | undefined,
+): SelectedDisplayValue {
+  if (!display) return { value, selected: false };
+  const resolved = resolvePath(value, display.split("."));
+  return resolved.found && typeof resolved.value === "string"
+    ? { value: resolved.value, selected: true }
+    : { value, selected: false };
 }
 
 /** Wrap text in a code fence long enough to contain embedded backticks. */

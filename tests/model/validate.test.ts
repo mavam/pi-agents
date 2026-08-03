@@ -217,6 +217,66 @@ describe("structural validation", () => {
     );
   });
 
+  test("while requires a single-reference on, condition, body, and max", () => {
+    const state = agent("seed", "state", { as: "state", output: "json" });
+    expectValid(
+      seq(state, {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["continue", true] },
+        body: agent("worker", "use {current}"),
+        max: 3,
+      }),
+    );
+    expectIssue(
+      seq(state, {
+        kind: "while",
+        on: "state",
+        condition: { eq: ["continue", true] },
+        body: agent("worker", "work"),
+        max: 3,
+      }),
+      "'on' must be exactly one reference",
+    );
+    expectIssue(
+      seq(state, {
+        kind: "while",
+        on: "{state}",
+        body: agent("worker", "work"),
+        max: 3,
+      }),
+      "$.steps[1].condition",
+    );
+    expectIssue(
+      seq(state, {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["continue", true] },
+        max: 3,
+      }),
+      "$.steps[1].body",
+    );
+    expectIssue(
+      seq(state, {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["continue", true] },
+        body: agent("worker", "work"),
+      }),
+      "'max' is required",
+    );
+    expectIssue(
+      seq(state, {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["continue", true] },
+        body: agent("worker", "work"),
+        max: 0,
+      }),
+      "'max' must be an integer >= 1",
+    );
+  });
+
   test("workflow ref rejects derived fields", () => {
     expectIssue(
       { kind: "workflow", name: "w", body: agent("a", "t") },
@@ -232,6 +292,10 @@ describe("structural validation", () => {
     expectIssue(
       seq(agent("a", "t", { as: "previous" }), agent("b", "t")),
       "reserved name 'previous'",
+    );
+    expectIssue(
+      seq(agent("a", "t", { as: "current" }), agent("b", "t")),
+      "reserved name 'current'",
     );
   });
 
@@ -392,6 +456,85 @@ describe("binding scope", () => {
       kind: "loop",
       body: agent("a", "iteration {iteration}, refine {last}"),
       max: 3,
+    });
+  });
+
+  test("while and loop bodies expose distinct iterative roots", () => {
+    const state = agent("seed", "state", { as: "state", output: "json" });
+    expectValid(
+      seq(state, {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["continue", true] },
+        body: agent("worker", "iteration {iteration}, use {current}"),
+        max: 3,
+      }),
+    );
+    expectIssue(
+      seq(state, {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["continue", true] },
+        body: agent("worker", "use {last}"),
+        max: 3,
+      }),
+      "{last} is only available inside a loop body",
+    );
+    expectIssue(
+      {
+        kind: "loop",
+        body: agent("worker", "use {current}"),
+        max: 3,
+      },
+      "{current} is only available inside a while body",
+    );
+  });
+
+  test("nested while resolves on in the enclosing frame and shadows its body", () => {
+    expectValid(
+      seq(agent("seed", "state", { as: "state", output: "json" }), {
+        kind: "while",
+        on: "{state}",
+        condition: { eq: ["outer", true] },
+        max: 2,
+        body: {
+          kind: "while",
+          on: "{current}",
+          condition: { eq: ["inner", true] },
+          max: 2,
+          body: agent("worker", "inner {iteration}: {current}"),
+        },
+      }),
+    );
+  });
+
+  test("while preserves map roots and shadows an enclosing loop frame", () => {
+    expectValid(
+      seq(agent("seed", "list", { as: "list", output: "json" }), {
+        kind: "map",
+        over: "{list}",
+        body: {
+          kind: "while",
+          on: "{item}",
+          condition: { eq: ["continue", true] },
+          max: 2,
+          body: agent(
+            "worker",
+            "item {index}: {item}; iteration {iteration}: {current}",
+          ),
+        },
+      }),
+    );
+    expectValid({
+      kind: "loop",
+      max: 2,
+      body: {
+        kind: "while",
+        on: "{last}",
+        condition: { exists: "continue" },
+        max: 2,
+        body: agent("worker", "use {current}, not the outer last"),
+      },
     });
   });
 

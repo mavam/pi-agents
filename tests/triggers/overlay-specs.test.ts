@@ -354,7 +354,7 @@ describe("command registration", () => {
     await workflow?.handler("aaaa1111", fakeCtx());
     expect(messages.at(-1)).toContain("## Run aaaa1111");
     await workflow?.handler("aaaa1111 result", fakeCtx());
-    expect(messages.at(-1)).toContain("— result");
+    expect(messages.at(-1)).toContain("— raw result");
   });
 
   test("/workflow rejects run verbs on a workflow name", async () => {

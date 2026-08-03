@@ -26,6 +26,7 @@ async function recordedEvents(): Promise<RunEvent[]> {
     runId: "run-42",
     flow,
     label: "test run",
+    display: "report",
     runAgent: async (call) => ({ text: `out-${call.task}` }),
     emit: (event) => events.push(event),
   });
@@ -40,6 +41,7 @@ describe("run state reducer", () => {
     const run = state.runs.get("run-42");
     expect(run?.status).toBe("completed");
     expect(run?.header.label).toBe("test run");
+    expect(run?.header.display).toBe("report");
     expect(run?.value).toEqual({ a: "out-ta", b: "out-tb" });
     const scout = run?.nodes.get("$.steps[0]");
     expect(scout).toMatchObject({

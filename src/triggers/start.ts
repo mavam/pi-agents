@@ -33,6 +33,8 @@ export interface StartTriggeredRunOptions {
   cwd: string;
   scope?: Scope;
   label?: string;
+  /** Saved-workflow result path selected for human-facing rendering. */
+  display?: string;
   budgets?: Budgets;
   source: RunSource;
   ctx: ExtensionContext;
@@ -64,6 +66,7 @@ export function startTriggeredRun(
     cwd: opts.cwd,
     scope: opts.scope,
     label: opts.label,
+    display: opts.display,
     budgets: opts.budgets,
     source: opts.source,
     originSessionFile: origin.sessionFile,

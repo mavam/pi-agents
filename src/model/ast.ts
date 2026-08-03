@@ -53,7 +53,8 @@ export interface AgentExecutionOptions {
   model?: string;
   /** Thinking-level override (wins over the agent file). */
   thinking?: ThinkingLevel;
-  /** Skills to inject; replaces the profile's list. `[]` forces none. */
+  /** Closed set of skills to inject; replaces ambient/profile skills. `[]`
+   * disables skill discovery for the delegated process. */
   skills?: string[];
   /** Tool allowlist for the delegated process; `[]` means no tools at all. */
   tools?: string[];
@@ -162,6 +163,22 @@ export interface LoopNode extends BaseNode {
   until?: Predicate;
 }
 
+/**
+ * Repeat `body` while `condition` holds over a loop-carried JSON value.
+ * `on` supplies the initial value, so the body may execute zero times. The
+ * body sees `{iteration}` (0-based) and `{current}`; its value becomes the
+ * next current value. Value: the current value when the condition becomes
+ * false or `max` iterations have run.
+ */
+export interface WhileNode extends BaseNode {
+  kind: "while";
+  /** A single-reference template naming the initial loop-carried value. */
+  on: string;
+  condition: Predicate;
+  body: FlowNode;
+  max: number;
+}
+
 /** One arm of a `switch`: run `then` when `when` holds over the subject. */
 export interface SwitchCase {
   when: Predicate;
@@ -217,13 +234,14 @@ export type FlowNode =
   | ParallelNode
   | MapNode
   | LoopNode
+  | WhileNode
   | SwitchNode
   | ValueNode
   | WorkflowRefNode;
 
 export type NodeKind = FlowNode["kind"];
 
-/** Condition language for `loop.until` and `switch.cases[].when`. Paths are dot-paths into the subject JSON value; "" addresses the whole value. */
+/** Condition language for `loop.until`, `while.condition`, and `switch.cases[].when`. Paths are dot-paths into the subject JSON value; "" addresses the whole value. */
 export type Predicate =
   | { eq: [path: string, value: string | number | boolean | null] }
   | { ne: [path: string, value: string | number | boolean | null] }
@@ -240,7 +258,7 @@ export interface Budgets {
   maxDepth?: number;
   /** Global cap on simultaneously running agents. */
   maxParallelism?: number;
-  /** Cap applied to every loop's iterations. */
+  /** Cap applied to every loop and while node's iterations. */
   maxIterations?: number;
   /** Total agent and reducer executions a run may consume. Zero prohibits
    * agent execution; value and structural nodes consume none. */
@@ -297,6 +315,8 @@ export interface WorkflowLike {
 export interface WorkflowDef extends WorkflowLike {
   description: string;
   trigger?: string;
+  /** Dot path to a Markdown string in the final value for human rendering. */
+  display?: string;
   /** pi event names that trigger this workflow (background runs). */
   on?: string[];
   /** Trailing-edge debounce for event triggers, in milliseconds. */
@@ -314,6 +334,7 @@ export const RESERVED_ROOTS = new Set([
   "index",
   "iteration",
   "last",
+  "current",
   "params",
   "branches",
   "items",
@@ -327,7 +348,7 @@ export const BRANCH_KEY_RE = /^[A-Za-z0-9_-]+$/;
 
 // Node paths identify static positions in a flow tree, e.g.
 // "$.steps[1].branches.security.reduce" or "$.cases[0].then". Dynamic
-// multiplicity (map items, loop iterations) is expressed by instance suffixes
+// multiplicity (map items, iterative instances) is expressed by instance suffixes
 // in run events, not here.
 
 export function stepPath(parent: string, index: number): string {

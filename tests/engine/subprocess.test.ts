@@ -234,6 +234,29 @@ describe("subprocess spawn engine", () => {
     await openHandle.wait();
   });
 
+  test("closed skill selections disable child discovery", async () => {
+    const closed = makeEngine();
+    const closedHandle = closed.engine.spawn({
+      agent: "closed",
+      task: "t",
+      cwd: "/tmp",
+      disableSkillDiscovery: true,
+    });
+    expect(closed.procs[0]?.args).toContain("--no-skills");
+    finish(closed.procs[0]?.proc as FakeProc);
+    await closedHandle.wait();
+
+    const ambient = makeEngine();
+    const ambientHandle = ambient.engine.spawn({
+      agent: "ambient",
+      task: "t",
+      cwd: "/tmp",
+    });
+    expect(ambient.procs[0]?.args).not.toContain("--no-skills");
+    finish(ambient.procs[0]?.proc as FakeProc);
+    await ambientHandle.wait();
+  });
+
   test("writes the system prompt to a temp file and cleans it up", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({

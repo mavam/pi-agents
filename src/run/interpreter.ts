@@ -3,7 +3,7 @@
  * environment of explicit bindings, emitting run events along the way.
  *
  * Every node yields a JSON value. Data flows only through `as` bindings,
- * `{previous}`, map item frames, loop iteration frames, and workflow params —
+ * `{previous}`, map item frames, iterative frames, and workflow params —
  * nothing is injected implicitly.
  */
 
@@ -33,6 +33,7 @@ import {
   type SwitchNode,
   stepPath,
   type ThinkingLevel,
+  type WhileNode,
   type WorkflowRefNode,
 } from "../model/ast.js";
 import {
@@ -89,9 +90,10 @@ interface Env {
   inMap: boolean;
   item?: unknown;
   index?: number;
-  inLoop: boolean;
+  iterationFrame?: "loop" | "while";
   iteration?: number;
   last?: unknown;
+  current?: unknown;
 }
 
 function rootEnv(params: Record<string, unknown>): Env {
@@ -100,7 +102,7 @@ function rootEnv(params: Record<string, unknown>): Env {
     params,
     hasPrevious: false,
     inMap: false,
-    inLoop: false,
+    iterationFrame: undefined,
   };
 }
 
@@ -119,11 +121,17 @@ function envResolver(
       case "index":
         return env.inMap ? { found: true, value: env.index } : { found: false };
       case "iteration":
-        return env.inLoop
+        return env.iterationFrame !== undefined
           ? { found: true, value: env.iteration }
           : { found: false };
       case "last":
-        return env.inLoop ? { found: true, value: env.last } : { found: false };
+        return env.iterationFrame === "loop"
+          ? { found: true, value: env.last }
+          : { found: false };
+      case "current":
+        return env.iterationFrame === "while"
+          ? { found: true, value: env.current }
+          : { found: false };
       case "params":
         return { found: true, value: env.params };
       case "branches":
@@ -211,6 +219,8 @@ export interface ExecuteOptions {
   runAgent: AgentRunner;
   emit?: (event: RunEvent) => void;
   label?: string;
+  /** Saved-workflow result path selected for human-facing rendering. */
+  display?: string;
   source?: RunSource;
   /** Resolved top-level params (saved workflow invocations). */
   params?: Record<string, unknown>;
@@ -323,6 +333,7 @@ class Interpreter {
       run: {
         id: this.options.runId,
         label: this.options.label,
+        display: this.options.display,
         source: this.options.source ?? { kind: "tool" },
         flow: this.options.flow,
         params: this.options.params,
@@ -476,6 +487,10 @@ class Interpreter {
       case "loop":
         return {
           value: await this.evaluateLoop(node, path, instance, env, signal),
+        };
+      case "while":
+        return {
+          value: await this.evaluateWhile(node, path, instance, env, signal),
         };
       case "switch":
         return {
@@ -896,12 +911,49 @@ class Interpreter {
         node.body,
         bodyPath(path),
         `${bodyPath(instance)}#${iteration}`,
-        { ...env, inLoop: true, iteration, last },
+        { ...env, iterationFrame: "loop", iteration, last },
         signal,
       );
       if (node.until && evaluatePredicate(node.until, last)) break;
     }
     return last;
+  }
+
+  private async evaluateWhile(
+    node: WhileNode,
+    path: string,
+    instance: string,
+    env: Env,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    const limit = this.budgets.iterationLimit(node.max);
+    // Resolve before installing the inner frame: an inner while can seed
+    // itself from the enclosing while's {current}.
+    let current = resolveSingleRef(node.on, env, "while.on");
+    for (let iteration = 0; iteration < limit; iteration++) {
+      if (!evaluatePredicate(node.condition, current)) break;
+      if (signal.aborted) {
+        throw signal.reason instanceof CancelledError
+          ? signal.reason
+          : new CancelledError("stopped");
+      }
+      this.emit({
+        type: "loop_iteration",
+        at: Date.now(),
+        runId: this.options.runId,
+        path,
+        instance,
+        iteration,
+      });
+      current = await this.evaluate(
+        node.body,
+        bodyPath(path),
+        `${bodyPath(instance)}#${iteration}`,
+        { ...env, iterationFrame: "while", iteration, current },
+        signal,
+      );
+    }
+    return current;
   }
 
   private async evaluateSwitch(

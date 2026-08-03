@@ -27,6 +27,7 @@ function writeWorkflow(fileName: string, content: string): string {
 const REVIEW = `name: review
 description: Multi-lens code review
 trigger: when the user asks for a thorough review
+display: report
 doc: Reviews the target from two lenses.
 params:
   - name: target
@@ -49,6 +50,7 @@ describe("parseWorkflowFile", () => {
     expect(result.name).toBe("review");
     expect(result.description).toBe("Multi-lens code review");
     expect(result.trigger).toContain("thorough review");
+    expect(result.display).toBe("report");
     expect(result.params).toEqual([
       {
         name: "target",
@@ -281,12 +283,19 @@ flow:
     );
   });
 
-  test("rejects invalid names and debounce", () => {
+  test("rejects invalid names, display paths, and debounce", () => {
     const badName = writeWorkflow(
       "badname.yaml",
       "name: 'bad name'\ndescription: d\nflow: { kind: agent, name: a, task: t }\n",
     );
     expect(parseWorkflowFile(badName, "project")).toContain("invalid 'name'");
+    const badDisplay = writeWorkflow(
+      "baddisplay.yaml",
+      "name: baddisplay\ndescription: d\ndisplay: 'report title'\nflow: { kind: agent, name: a, task: t }\n",
+    );
+    expect(parseWorkflowFile(badDisplay, "project")).toContain(
+      "Invalid 'display'",
+    );
     const badDebounce = writeWorkflow(
       "baddeb.yaml",
       "name: baddeb\ndescription: d\ndebounce: -5\nflow: { kind: agent, name: a, task: t }\n",

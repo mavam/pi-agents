@@ -51,8 +51,8 @@ Three nouns carry the whole framework:
 
 ### The algebra
 
-A workflow is a tree of eight node kinds. Composition is purely structural:
-`parallel` fuses fork and join into one expression, loops are bounded fixpoints,
+A workflow is a tree of nine node kinds. Composition is purely structural:
+`parallel` fuses fork and join into one expression, iterative nodes are bounded,
 and saved workflows inline like function calls.
 
 | Icon | Node       | Meaning                                                   | Value                                      |
@@ -61,21 +61,26 @@ and saved workflows inline like function calls.
 | `≡`  | `sequence` | Run steps in order.                                       | The last step's value.                     |
 | `⑃`  | `parallel` | Run named branches concurrently, optionally `⑂` reduce.   | `{branch: value}`, or the reducer's value. |
 | `⇶`  | `map`      | Fan out a body per element of a runtime array.            | Array of body values, or the reducer's.    |
-| `↺`  | `loop`     | Repeat a body until a predicate holds or `max` is hit.    | The last iteration's value.                |
+| `↺`  | `loop`     | Run a body, then repeat until a predicate holds.          | The last iteration's value.                |
+| `↺`  | `while`    | Carry a value through a body while a predicate holds.     | The final carried value.                   |
 | `⎇`  | `switch`   | Route to the first arm whose predicate matches a value.   | The chosen arm's value.                    |
 | `≔`  | `value`    | Yield a template-interpolated JSON value (no agent).      | The interpolated value.                    |
 | `❖`  | `workflow` | Invoke a saved workflow by name (inlined, cycle-checked). | The inlined flow's value.                  |
 
 The JSON/YAML form is what you author; the icons are how flows are *read*.
 Every surface that shows a flow — the tool call display, `/workflow <name>`,
-`/workflow <run-id>` — renders it as an icon tree. The review workflow, for
-example:
+`/workflow <run-id>` — renders it as an icon tree. This repository's
+`review-fix` workflow has the following shape (abridged):
 
 ```
-⑃ parallel (all)
-├─ bugs → ✦ reviewer · Review {params.target} strictly for correctness bug…
-├─ clarity → ✦ reviewer · Review {params.target} for readability, duplicat…
-└─ ⑂ reduce → worker · Merge these code review findings into one prioriti…
+❖ review → {initial_review}
+⎇ switch {initial_review} → {initial_state}
+↺ while outcome == "changes_required" on {initial_state} ≤3 → {cycle_result}
+├─ ✦ ad-hoc → {implementation}
+├─ ❖ review → {verified_review}
+└─ ⎇ switch {verified_review}
+⎇ switch {cycle_result}
+└─ changes remain → ≔ exhausted
 ```
 
 Sequences are transparent — their steps appear at the parent level without
@@ -85,7 +90,7 @@ status icons (`○` pending, `◉` running, `●` completed, `✗` failed,
 
 ```
 ● scout → {files} · List files to review
-◉ reviewer · Review {item} [3/5]
+◉ ad-hoc · Review {item} [3/5]
 ○ reduce → synthesizer · Merge {items}
 ```
 
@@ -96,8 +101,10 @@ Nothing flows between nodes implicitly. To pass data:
 - Mark a `sequence` step with `as: name`, then reference `{name}` (or a dot path
   like `{name.files.0}`) in any later step of that sequence.
 - `{previous}` is the immediately preceding step's value.
-- A `map` body sees `{item}` and `{index}`; a `loop` body sees `{iteration}`
-  and `{last}` (empty on the first iteration).
+- A `map` body sees `{item}` and `{index}`. A `loop` body sees `{iteration}`
+  and `{last}` (empty on the first iteration); a `while` body sees
+  `{iteration}` and `{current}`. Nested iterative nodes expose only their own
+  control roots, while enclosing map roots remain visible.
 - Reduce tasks see `{branches}` (parallel) or `{items}` (map).
 - Saved workflows see only their declared `{params.*}` — caller bindings are
   invisible, and param values are interpolated in the caller's scope.
@@ -116,20 +123,20 @@ thinking — is also available per call, so a profile is worth writing only for
 the persona and the repetition. For a one-off delegation, omit `name` and
 configure the node directly.
 
-`.pi/agents/reviewer.md`:
+`.pi/agents/planner.md`:
 
 ```md
 ---
-name: reviewer
-description: Focused code review from a single lens
+name: planner
+description: Maps a codebase and proposes implementation plans
 model: openai-codex/gpt-5.6-terra  # optional; defaults to the active session model
 thinking: medium           # optional: off|minimal|low|medium|high|xhigh
-skills: []                 # optional pi skills to inject
+skills: []                 # closed skill set for this profile
 tools: [read, grep, find]  # optional allowlist; [] means NO tools at all
 ---
 
-You are a review agent. Review code through exactly the lens given in your
-task. Return concrete findings with file paths.
+You are a planning agent. Map the relevant code and return a concrete plan with
+file paths. Do not edit files.
 ```
 
 Agents are discovered from `~/.pi/agent/agents` (user) and `<project>/.pi/agents`
@@ -142,55 +149,64 @@ agent+task unit, use a flat workflow (below).
 
 ### 2. Define a workflow
 
-Workflows are pure data: one YAML or JSON object per file, the extension
-decides the parser (`.yaml`, `.yml`, `.json`). `.pi/workflows/review.yaml`:
+Workflows are pure data: one YAML or JSON object per file, and the extension
+decides the parser (`.yaml`, `.yml`, `.json`). A reusable agent-plus-task unit
+uses the flat form. For example, this repository's project-local
+`.pi/workflows/review.yaml` starts an anonymous reviewer without requiring a
+named profile:
 
 ```yaml
 name: review
-description: Multi-lens code review with a synthesis pass
-trigger: when the user asks for a thorough review
-doc: >-
-  Optional prose documentation lives here.
+description: Review a target with structured findings
+trigger: when the user asks for a read-only code review
+display: report
 params:
-  - name: target
-    required: true
-flow:
-  kind: parallel
-  branches:
-    bugs:    { kind: agent, name: reviewer, task: "Find bugs in {params.target}" }
-    clarity: { kind: agent, name: reviewer, task: "Review {params.target} for clarity" }
-  reduce:
-    agent: worker
-    task: "Merge and prioritize:\n{branches}"
-```
-
-For a single-unit workflow — one task, no graph — skip `flow:` entirely and
-use the flat form, which normalizes to a bare agent leaf but keeps full
-workflow powers (params, `/name` command, `on:` hooks, and
-`{kind: workflow, name: …}` references from other flows). `agent:` is
-optional; without it the task runs as an ad-hoc agent:
-
-```yaml
-name: summarize
-description: Summarize a target
-params: [{ name: target, required: true }]
-task: "Summarize {params.target}"
+  - { name: target, required: true }
+  - { name: focus, default: "Apply normal risk-based lens selection." }
+  - { name: context, default: "No prior round context." }
+task: |-
+  Review {params.target}.
+  Focus: {params.focus}
+  Context: {params.context}
+  Return the structured review JSON contract.
 thinking: high
-skills: [tenzir-technical-writing]
+output: json
 ```
 
-The flat form accepts every agent-node option (`model`, `thinking`, `skills`,
-`tools`, `cwd`, `scope`, `output`) and normalizes to exactly the node the
-equivalent `flow:` tree would produce. Mixing the two is an error: with `flow:`
-present, put the options on the agent node.
+The flat form normalizes to a bare agent leaf while retaining workflow powers:
+parameters, a slash command, event hooks, and composition through a `workflow`
+node. `agent:` is optional; omitting it runs an ad-hoc agent. The flat form
+accepts every agent-node option (`model`, `thinking`, `skills`, `tools`, `cwd`,
+`scope`, `output`). Mixing the flat form with `flow:` is an error; put execution
+options on the relevant agent node when `flow:` is present.
 
-```yaml
-name: bug-hunt
-description: Hunt correctness bugs in a target
-params: [{ name: target, required: true }]
-agent: reviewer # optional: use the reviewer profile
-task: "Review {params.target} strictly for bugs."
-```
+When a workflow returns structured data with a human-readable Markdown field,
+set `display` to its dot path. A top-level run renders that string in completion
+cards and run details while preserving the complete structured value for the
+calling model, `/workflow <id> result`, and parent workflows. A nested workflow
+always passes its complete value to its caller. If the path is missing or does
+not resolve to a string, rendering falls back to the raw value.
+
+Saved workflows compose like functions through `workflow` nodes. This
+repository's project-local `/review-fix` workflow uses that composition to
+invoke `/review`, then sends validated P1–P3 findings to an anonymous
+Implementer, and ends every implementation round with a fresh review. It stops
+when the change is approved, cannot proceed, or reaches three complete
+implementation-and-review rounds. The review rubric is part of the workflow,
+so neither command requires an external agent profile or skill. Its Markdown
+report keeps fixed emoji-coded severity and category headings plus a verdict
+table for quick scanning, while the accompanying JSON fields remain plain for
+machine consumers. Both workflows declare `display: report`, so people see the
+Markdown review instead of the JSON routing contract.
+The maximum run executes seven agents: one initial Reviewer and three
+Implementer/Reviewer pairs. Its flat final result includes `outcome`, `reason`,
+`round_index`, `report`, `actionable`, and `implementation`; `outcome` is
+`approved`, `cannot_proceed`, or `exhausted`. Implementer messages remain
+Markdown because only reviewer output controls routing: forcing strict JSON
+there would turn a malformed status report into a mid-cycle hard failure.
+
+These two workflows are dogfood for this repository checkout. The npm package
+does not include them.
 
 Workflows live in `~/.pi/agent/workflows` and `.pi/workflows`, discovered like
 agents. Every definition is fully validated at discovery (references, cycles,
@@ -211,9 +227,10 @@ Workflows fire from four surfaces:
    neither is a task that looks big or parallelizable. In interactive
    sessions runs go to the background: the widget shows progress and the
    result arrives as a notification.
-2. **You.** Every saved workflow registers a slash command:
-   `/review src/core` runs the graph directly, with args bound to params —
-   no model round-trip. Positional args and `key=value` pairs both work.
+2. **You.** Every saved workflow registers a slash command. For a workflow
+   named `triage`, `/triage src/core` runs it directly, with args bound to
+   parameters and no model round-trip. Positional args and `key=value` pairs
+   both work.
 3. **Events.** Add `on: [turn_end]` (plus optional `debounce:` milliseconds)
    and the workflow fires on those pi events, always in the background,
    with the event payload bound as `{params.event}`. Hooks run only in the
@@ -252,12 +269,12 @@ and an existing run is inspected or stopped with `/workflow <run-id>`.
       { "kind": "parallel",
         "as": "reviews",
         "branches": {
-          "core":  { "kind": "agent", "name": "reviewer", "task": "Review src/core" },
-          "run":   { "kind": "agent", "name": "reviewer", "task": "Review src/run" },
-          "ui":    { "kind": "agent", "name": "reviewer", "task": "Review src/ui" }
+          "core": { "kind": "workflow", "name": "review", "params": { "target": "src/core" } },
+          "run":  { "kind": "workflow", "name": "review", "params": { "target": "src/run" } },
+          "ui":   { "kind": "workflow", "name": "review", "params": { "target": "src/ui" } }
         },
-        "reduce": { "agent": "worker", "task": "List findings all reviews agree on:\n{branches}", "output": "json" } },
-      { "kind": "agent", "name": "worker", "task": "Fix these agreed findings: {previous}" }
+        "reduce": { "task": "List findings all reviews agree on:\n{branches}", "output": "json" } },
+      { "kind": "agent", "task": "Fix these agreed findings: {previous}" }
     ]
   },
   "label": "review three modules, fix consensus",
@@ -281,12 +298,12 @@ saved profile).
 
 ```yaml
 kind: agent
-task: "Review {previous}"
-name: reviewer          # optional; must match a discovered agent profile
+task: "Analyze {previous}"
+name: specialist        # optional; must match a discovered agent profile
 output: text            # or "json": parse the result (fences tolerated)
 model: some-model       # optional override (wins over the agent file)
 thinking: low           # optional override (wins over the agent file)
-skills: [code-review]   # optional skills to inject; [] forces none
+skills: [my-review-guide] # optional closed set; [] disables skill discovery
 tools: [read, grep]     # optional allowlist; [] means NO tools at all
 as: findings            # binding name; only legal on direct sequence steps
 cwd: /path/override     # optional
@@ -298,14 +315,16 @@ more. Without `name` the node runs as an anonymous ad-hoc agent (rendered as
 `ad-hoc`): no profile prompt, but every execution option above still applies.
 
 **Precedence** is uniform: flow node → agent file (named only) → active
-session. Lists *replace* rather than merge, so `skills` on a named call swaps
-the profile's list wholesale and `skills: []` clears it; omit the key to
-inherit. `tools` behaves identically, and `tools: []` leaves the agent no way
-to read the files a skill references — pair the two deliberately.
+session. Lists *replace* rather than merge. A named call uses its profile's
+skills as a closed set unless the node replaces them. On an anonymous call,
+omit `skills` to retain the child Pi process's normal ambient skill discovery.
+Any explicit list is closed: a non-empty list injects exactly those skills,
+and `skills: []` disables skill discovery. `tools` follows the same replacement
+precedence, and `tools: []` leaves the agent no way to read files — pair it
+with skill selection deliberately.
 
-Skills are named, not inlined: `skills: [code-review]` resolves against the
-same catalog pi advertises in `<available_skills>`, so a name you see there
-works here. In precedence order, first match winning:
+Skills are named, not inlined: `skills: [my-review-guide]` resolves against
+the user and project catalogs below. In precedence order, first match wins:
 
 | Scope   | Locations                                                            |
 | ------- | -------------------------------------------------------------------- |
@@ -316,6 +335,10 @@ The same `scope` that governs profile discovery selects which rows apply, so an
 untrusted project contributes no skills at all. Resolved instructions are
 injected into the delegated agent's system prompt; a name that does not resolve
 fails the run during preflight, before anything spawns.
+
+Pi packages can bundle skills through `pi.skills`, but pi-agents does not yet
+include package resources in delegated-node skill resolution. Put skills used
+by workflow nodes in one of the user or project locations above.
 
 **Value contract.** An agent's value is the text of its *last* assistant
 message — nothing else. Thinking, tool calls, tool output, and earlier
@@ -352,7 +375,7 @@ concurrency: 4          # cap on simultaneous branches
 reduce:                 # optional fold over the collected value
   task: "Merge {branches}"
   agent: synthesizer    # optional; omit to reduce with an ad-hoc agent
-  skills: [code-review] # reducers take every agent-node execution option:
+  skills: [my-review-guide] # reducers take every agent-node execution option:
   model: some-model     # model, thinking, skills, tools, cwd, scope, output
 ```
 
@@ -371,7 +394,7 @@ kind: map
 over: "{scout.files}"   # must resolve to a JSON array at runtime
 body:
   kind: agent
-  name: reviewer
+  name: auditor
   task: "Review {item} (#{index})"
 concurrency: 4
 reduce: { agent: synthesizer, task: "Combine {items}" }
@@ -389,9 +412,37 @@ max: 3
 until: { eq: ["done", true] }
 ```
 
-Predicates address the body's JSON value by dot path (`""` is the whole
-value): `eq`, `ne`, `gt`, `lt`, `exists`, `empty`, composed with `and`,
-`or`, `not`.
+`loop` is a bounded do-until: its body executes at least once, `{last}` is
+empty for that first iteration, and `until` is evaluated against each body
+result. The node returns the last result when the predicate matches or `max`
+is reached.
+
+### `while`
+
+```yaml
+kind: while
+on: "{initial_state}"       # exactly one reference, resolved before the loop
+condition: { eq: ["outcome", "changes_required"] }
+max: 3
+body:
+  kind: agent
+  task: "Round {iteration}; fix {current.actionable}"
+  output: json
+```
+
+`while` is a bounded, pre-checked fold. It resolves `on` once in the enclosing
+scope, evaluates `condition` against that value, and runs the body only while
+the predicate matches. The body sees the zero-based `{iteration}` and the
+carried `{current}` value; its result becomes the next carried value. If the
+initial condition is false, the node runs zero iterations and returns `on`
+unchanged. If `max` is reached, it returns the current value without adding a
+termination flag, so callers that distinguish convergence from exhaustion
+must encode that state in the carried value.
+
+Predicates address their subject's JSON value by dot path (`""` is the whole
+value): `eq`, `ne`, `gt`, `lt`, `exists`, `empty`, composed with `and`, `or`,
+`not`. The same language is used by `loop.until`, `while.condition`, and
+`switch.cases[].when`.
 
 ### `switch`
 
@@ -409,7 +460,7 @@ else:                   # required — the switch always yields a value
 ```
 
 Exclusive, ordered, total routing on data: `on` resolves to a JSON value,
-the cases' predicates (the same language as `loop.until`) are tried in
+the cases' predicates are tried in
 definition order, and exactly one arm runs — the first match, or `else`.
 The switch yields the chosen arm's value directly, like a ternary, so an
 `as` binding on the switch never dangles. Arms see the enclosing scope
@@ -453,7 +504,7 @@ Every run enforces limits (tool parameter `budgets`, all optional):
 | ------------------ | ------- | ----------------------------------------------------------- |
 | `maxAgents`        | 50      | Total agent and reducer executions; `0` prohibits them.      |
 | `maxParallelism`   | 8       | Simultaneously running agents, global across nested pools.   |
-| `maxIterations`    | 10      | Cap applied to every loop.                                   |
+| `maxIterations`    | 10      | Cap applied to every `loop` and `while`.                     |
 | `maxDepth`         | 5       | Cross-process delegation depth.                              |
 | `maxTurns`         | 100     | Assistant turns a single delegated agent may take.           |
 | `maxAgentDuration` | —       | Wall-clock seconds a single delegated agent may run.         |
@@ -512,7 +563,7 @@ usage only in their final outcome cannot be cut off mid-run.
 | `/workflow <name>`    | Show one workflow: params, triggers, docs, flow.     |
 | `/<name> [args]`      | Run saved workflow `<name>` directly.                |
 | `/workflow <id>`      | Inspect a run (unique id prefixes work).             |
-| `/workflow <id> result` | The complete result value of a finished run.       |
+| `/workflow <id> result` | The complete raw result value of a finished run.   |
 | `/workflow <id> agents` | Per-agent status and output previews.              |
 | `/workflow <id> watch`  | Snapshot now, final tree when the run settles.     |
 | `/workflow <id> mermaid`| Deterministic Mermaid diagram of the run's flow.   |
@@ -523,8 +574,9 @@ hex, workflow names are slugs, so the two never collide in practice.
 
 A completed workflow can send up to 200,000 characters to the calling model.
 Larger values include a truncation notice and remain available in full through
-`/workflow <id> result`. Completion cards show a compact preview to keep the
-transcript responsive, and step-to-step interpolation uses the same
+`/workflow <id> result`. When a saved workflow declares `display`, completion
+cards render that complete Markdown string; other values use a compact preview
+to keep the transcript responsive. Step-to-step interpolation uses the same
 200,000-character ceiling.
 
 ### Interactive browsing
@@ -548,7 +600,7 @@ and `(ad-hoc)` (inline and tool-started flows).
 ╭─ Workflows (2/4) ──────────────────────────────────╮
 │   ◉ all runs           every run this session ◉1 ●3│
 │ ▸ ❖ /triage    user    Triage findings        ◉1 ●1│
-│   ❖ /review   project  Multi-lens code review    ●2│
+│   ❖ /review   project  Structured code review   ●2│
 ├─ /triage · user · 2 runs ──────────────────────────┤
 │ ✦ scout → {files} · List files to review           │
 │ ⇶ map {files}                                      │
@@ -572,15 +624,16 @@ immediately and keeps the panel open so you can watch it start (workflows
 with required parameters fall back to composing),
 and `n` starts a new workflow or agent: you name it and describe the
 intent, the model drafts the definition file. Run tier: `⏎` posts the run
-details with the full result to the chat, `a` drills into the run's agents,
-`c` cancels a live run, `r` starts the same flow again, and `h` shows/hides
-that run in the live summary above the composer (useful for long-running
-flows). Agent tier: `⏎` posts the agent's full output, while `t` opens a live,
-auto-following tail of its assistant output and tool activity. The tail is a
-bounded in-memory peek and is not persisted as another agent artifact. On a
-running agent, `s` opens an inline composer for a steering message from either
-the agent list or its tail, so you can observe, correct course, and keep
-watching. In the agents panel, `⏎` posts the full agent details and `n` starts
+details with the full presented result to the chat, `a` drills into the run's
+agents, `c` cancels a live run, `r` starts the same flow again, and `h`
+shows/hides that run in the live summary above the composer (useful for
+long-running flows). Agent tier: `⏎` posts the agent's full output, while `t`
+opens a live, auto-following tail of its assistant output and tool activity.
+The tail is a bounded in-memory peek and is not persisted as another agent
+artifact. On a running agent, `s` opens an inline composer for a steering
+message from either the agent list or its tail, so you can observe, correct
+course, and keep watching. In the agents panel, `⏎` posts the full agent
+details and `n` starts
 a new definition.
 
 The live summary widget can be toggled wholesale with `/workflows widget`.
@@ -655,7 +708,7 @@ typed client is exported from `pi-agents/api`.
 | `pi-agents:rpc:reply:<id>` | Correlated success or error reply |
 
 The run channel carries `run_created`, node lifecycle (including
-`node_steered` after queue acceptance), loop iteration, `run_backgrounded`,
+`node_steered` after queue acceptance), loop/while iteration, `run_backgrounded`,
 and `run_completed` events. These are detached, deeply frozen snapshots:
 subscribers cannot mutate pi-agents' internal run state or the event seen by
 later subscribers. Only new live events are published; use RPC `list` for the

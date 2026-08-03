@@ -48,11 +48,12 @@ Mentioning "workflow" or "flow" is not a request; neither is asking about a save
 For a run that already exists, never call this tool: steer a live agent with \`steer\`, and point the user at /workflow <run-id> to inspect or stop one.`;
 
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
-- {"kind":"agent","task":"...","name":"...","output":"text"|"json","model":"...","thinking":"...","skills":["..."],"tools":["..."],"cwd":"...","scope":"user"|"project"|"both"} — one delegated agent (leaf; a bare agent node is a valid flow). Omit "name" for an anonymous ad-hoc agent; set it only to use a profile from <agents>. Every execution option works with or without "name": "skills" injects skill instructions and "tools" is a tool allowlist ([] means no tools). On a named call both replace the profile's list rather than adding to it, and [] clears it.
+- {"kind":"agent","task":"...","name":"...","output":"text"|"json","model":"...","thinking":"...","skills":["..."],"tools":["..."],"cwd":"...","scope":"user"|"project"|"both"} — one delegated agent (leaf; a bare agent node is a valid flow). Omit "name" for an anonymous ad-hoc agent; set it only to use a profile from <agents>. Every execution option works with or without "name". "skills" is a closed selection: omit it on an anonymous call to retain ambient discovery, name exactly the skills to inject, or use [] to disable discovery. A named call inherits its profile's closed skill list unless the node replaces it. "tools" is a tool allowlist ([] means no tools) and likewise replaces a named profile's list.
 - {"kind":"sequence","steps":[node,...]} — steps in order; value = the last step's.
 - {"kind":"parallel","branches":{"a":node,...},"mode":"all"|"any"|{"quorum":n},"onError":"fail"|"collect","concurrency":n,"reduce":{"task":"merge {branches}","agent":"..."}} — concurrent branches; value = {branch: value}, or the winner's value for "any". A reduce spec takes the same execution options as an agent node ("agent" is its spelling of "name").
 - {"kind":"map","over":"{binding}","body":node,"concurrency":n,"reduce":{"task":"merge {items}"}} — run body per element of the array {binding}; the body sees {item} and {index}; value = array of body values.
-- {"kind":"loop","body":node,"max":n,"until":predicate} — repeat body (it sees {iteration} and {last}) until the predicate holds over its JSON value. Predicates: {"eq":["path",value]}, "ne", "gt", "lt", {"exists":"path"}, {"empty":"path"}, "and", "or", "not".
+- {"kind":"loop","body":node,"max":n,"until":predicate} — bounded do-until: run body at least once (it sees {iteration} and {last}), then stop when the predicate holds over its JSON value.
+- {"kind":"while","on":"{binding}","condition":predicate,"body":node,"max":n} — bounded pre-checked iteration: while the predicate holds over the carried value, run body with {current} and {iteration}; the body's value becomes the next current value. The node returns the current value without saying whether the condition failed or the cap was reached, so encode convergence in that value when the distinction matters. Predicates: {"eq":["path",value]}, "ne", "gt", "lt", {"exists":"path"}, {"empty":"path"}, "and", "or", "not".
 - {"kind":"switch","on":"{binding}","cases":[{"when":predicate,"then":node},...],"else":node} — exclusive routing: first case whose predicate holds over the JSON value {binding} runs; "else" is required; value = the chosen arm's.
 - {"kind":"value","value":json} — pure data leaf, no agent: strings are templates (a lone "{ref}" substitutes the JSON value itself; mixed text interpolates as a string); value = the interpolated JSON.
 - {"kind":"workflow","name":"...","params":{"k":"v"}} — invoke a saved workflow.
@@ -105,7 +106,7 @@ const WorkflowToolParams = Type.Object({
           Type.Integer({
             minimum: 1,
             description:
-              "Maximum iterations allowed for each loop. Integer >= 1; default 10.",
+              "Maximum iterations allowed for each loop or while node. Integer >= 1; default 10.",
           }),
         ),
         maxAgents: Type.Optional(
@@ -433,7 +434,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
       'Do not call `workflow` unless the user affirmatively asked to run one — "run the X workflow", "delegate this", "spawn agents", "do these in parallel", or a saved workflow they asked for by name or by its <trigger> situation. Merely mentioning "workflow"/"flow", or asking about a saved workflow, is not a request. Otherwise do the task yourself.',
       "Size, step count, parallelizability, and review/refactor/audit/research shape are not triggers. When a workflow looks like a good fit but was not requested, do the work directly and offer it in one sentence instead of calling the tool.",
       "`workflow` only starts new runs. For a run that already exists, use `steer` for a live agent, or point the user at /workflow <run-id> to inspect or stop it.",
-      "Once a workflow is requested: prefer a saved workflow via workflow({name, params}) when one in <workflows> matches; otherwise compose an inline flow — a bare agent leaf for one isolated task, sequence/parallel/map/loop for multi-agent work.",
+      "Once a workflow is requested: prefer a saved workflow via workflow({name, params}) when one in <workflows> matches; otherwise compose an inline flow — a bare agent leaf for one isolated task, or sequence/parallel/map/loop/while for multi-agent work.",
       "Route deterministically with `switch` instead of asking an agent to decide: predicates over a JSON binding pick exactly one arm; use a `value` arm to yield data without spawning an agent.",
       "Omit the agent name for one-off delegation; it is only needed to select a reusable profile from <agents>. Never invent agent names or create agent-definition files merely to execute an ad-hoc flow — an anonymous node can select skills, tools, model, and thinking directly.",
       "Request a skill by name on the node that needs it. An unknown skill fails the run before anything spawns, so do not guess names; take them from <available_skills>.",
@@ -518,6 +519,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
 
       let raw: unknown;
       let label = params.label;
+      let display: string | undefined;
       if (params.name !== undefined) {
         const def = resolveWorkflow(params.name);
         if (!def) {
@@ -528,6 +530,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
         }
         raw = { kind: "workflow", name: def.name, params: params.params ?? {} };
         label = label ?? def.name;
+        display = def.display;
       } else {
         raw = params.flow;
       }
@@ -545,6 +548,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
         cwd,
         scope,
         label,
+        display,
         budgets: params.budgets as Budgets | undefined,
         source: { kind: "tool", workflow: params.name },
         ctx,

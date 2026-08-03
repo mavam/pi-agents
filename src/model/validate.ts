@@ -9,8 +9,10 @@
  *   Duplicates and shadowing are errors.
  * - `{previous}` resolves against the nearest enclosing sequence; use in a first
  *   step (or with no enclosing sequence) is an error.
- * - `{item}`/`{index}` exist only inside a map body; `{iteration}`/`{last}`
- *   only inside a loop body; `{branches}`/`{items}` only in reduce tasks.
+ * - `{item}`/`{index}` exist only inside a map body. Iterative bodies expose
+ *   `{iteration}` plus `{last}` for loop or `{current}` for while; the nearest
+ *   iterative body shadows an enclosing iterative frame.
+ * - `{branches}`/`{items}` exist only in reduce tasks.
  * - Workflow references are opaque: inside the inlined body only `{params.*}`
  *   and its own bindings resolve.
  */
@@ -39,6 +41,7 @@ import {
   stepPath,
   THINKING_LEVELS,
   type ValueNode,
+  type WhileNode,
   type WorkflowLike,
   type WorkflowParamDef,
   type WorkflowRefNode,
@@ -291,6 +294,7 @@ const NODE_KINDS = [
   "parallel",
   "map",
   "loop",
+  "while",
   "switch",
   "value",
   "workflow",
@@ -323,6 +327,8 @@ export function parseFlowNode(
       return parseMap(obj, path, issues);
     case "loop":
       return parseLoop(obj, path, issues);
+    case "while":
+      return parseWhile(obj, path, issues);
     case "switch":
       return parseSwitch(obj, path, issues);
     case "value":
@@ -602,6 +608,40 @@ function parseLoop(
       obj.until === undefined
         ? undefined
         : parsePredicate(obj.until, `${path}.until`, issues),
+  };
+}
+
+function parseWhile(
+  obj: Record<string, unknown>,
+  path: string,
+  issues: Issues,
+): WhileNode {
+  checkKeys(
+    obj,
+    ["kind", "on", "condition", "body", "max", "as", "label"],
+    path,
+    issues,
+  );
+  const on = requiredString(obj, "on", path, issues);
+  if (on && !isSingleReference(on)) {
+    issues.push({
+      path,
+      message: `'on' must be exactly one reference like "{state}" or "{review.result}" (got '${on}')`,
+    });
+  }
+  const body = parseFlowNode(obj.body, bodyPath(path), issues);
+  const max = optionalPositiveInt(obj, "max", path, issues);
+  if (obj.max === undefined) {
+    issues.push({ path, message: "'max' is required (an integer >= 1)" });
+  }
+  const condition = parsePredicate(obj.condition, `${path}.condition`, issues);
+  return {
+    kind: "while",
+    ...parseBase(obj, path, issues),
+    on,
+    condition: condition ?? { empty: "" },
+    body: body ?? { kind: "sequence", steps: [] },
+    max: max ?? 1,
   };
 }
 
@@ -910,6 +950,7 @@ function expandNode(
       return;
     case "map":
     case "loop":
+    case "while":
       expandNode(node.body, bodyPath(path), stack, resolve, issues);
       return;
     case "switch":
@@ -986,7 +1027,7 @@ interface ScopeState {
   params: ReadonlySet<string>;
   hasPrevious: boolean;
   inMap: boolean;
-  inLoop: boolean;
+  iterationFrame?: "loop" | "while";
 }
 
 function initialScope(params?: WorkflowParamDef[]): ScopeState {
@@ -995,7 +1036,7 @@ function initialScope(params?: WorkflowParamDef[]): ScopeState {
     params: new Set((params ?? []).map((param) => param.name)),
     hasPrevious: false,
     inMap: false,
-    inLoop: false,
+    iterationFrame: undefined,
   };
 }
 
@@ -1026,11 +1067,27 @@ function checkTemplate(
         }
         break;
       case "iteration":
-      case "last":
-        if (!scope.inLoop) {
+        if (scope.iterationFrame === undefined) {
           issues.push({
             path,
-            message: `{${ref.root}} is only available inside a loop body`,
+            message:
+              "{iteration} is only available inside a loop or while body",
+          });
+        }
+        break;
+      case "last":
+        if (scope.iterationFrame !== "loop") {
+          issues.push({
+            path,
+            message: "{last} is only available inside a loop body",
+          });
+        }
+        break;
+      case "current":
+        if (scope.iterationFrame !== "while") {
+          issues.push({
+            path,
+            message: "{current} is only available inside a while body",
           });
         }
         break;
@@ -1178,7 +1235,20 @@ function checkNode(
       checkNode(
         node.body,
         bodyPath(path),
-        { ...scope, inLoop: true },
+        { ...scope, iterationFrame: "loop" },
+        issues,
+        false,
+      );
+      return;
+    case "while":
+      // Resolve the initial carried value in the enclosing frame. An inner
+      // while may therefore use the outer while's {current}; only its body
+      // installs the new frame and shadows that value.
+      checkTemplate(node.on, `${path}.on`, scope, undefined, issues);
+      checkNode(
+        node.body,
+        bodyPath(path),
+        { ...scope, iterationFrame: "while" },
         issues,
         false,
       );
@@ -1204,7 +1274,7 @@ function checkNode(
           params: new Set((node.paramDefs ?? []).map((param) => param.name)),
           hasPrevious: false,
           inMap: false,
-          inLoop: false,
+          iterationFrame: undefined,
         };
         checkNode(node.body, bodyPath(path), inner, issues, false);
       }
@@ -1290,6 +1360,7 @@ export function collectInvocations(
         if (current.reduce) addReduce(current.reduce, path);
         return;
       case "loop":
+      case "while":
         visit(current.body, bodyPath(path));
         return;
       case "switch":
@@ -1331,6 +1402,7 @@ export function collectAgentNames(node: FlowNode): Set<string> {
           names.add(current.reduce.agent);
         return;
       case "loop":
+      case "while":
         visit(current.body);
         return;
       case "switch":

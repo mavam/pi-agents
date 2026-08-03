@@ -58,7 +58,7 @@ export interface RunView {
   /** Node instances in first-seen order, keyed by instance id. */
   nodes: Map<string, NodeView>;
   order: string[];
-  /** Iterations seen per loop instance. */
+  /** Iterations seen per loop or while instance. */
   loopIterations: Map<string, number>;
   backgrounded: boolean;
   value?: unknown;
@@ -181,7 +181,7 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
 }
 
 /** The run's work leaves (agents and reduces) in first-seen order; composite
- * scaffolding nodes (sequence/parallel/map/loop/workflow) are skipped. */
+ * scaffolding nodes (sequence/parallel/map/loop/while/workflow) are skipped. */
 export function workNodes(run: RunView): NodeView[] {
   return run.order
     .map((instance) => run.nodes.get(instance))

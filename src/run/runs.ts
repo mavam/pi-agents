@@ -49,6 +49,8 @@ export interface StartRunOptions {
   cwd: string;
   scope?: Scope;
   label?: string;
+  /** Saved-workflow result path selected for human-facing rendering. */
+  display?: string;
   params?: Record<string, unknown>;
   budgets?: Budgets;
   source: RunSource;
@@ -214,6 +216,7 @@ export class RunManager {
       runAgent: runner,
       emit,
       label: opts.label,
+      display: opts.display,
       source: opts.source,
       params: opts.params,
       budgets,

@@ -189,6 +189,7 @@ export class RpcManager {
 
     let input: unknown = raw.flow;
     let effectiveLabel = label;
+    let display: string | undefined;
     if (workflow !== undefined) {
       const definition = resolveWorkflow(workflow);
       if (!definition) {
@@ -200,6 +201,7 @@ export class RpcManager {
       }
       input = { kind: "workflow", name: definition.name, params: params ?? {} };
       effectiveLabel = effectiveLabel ?? definition.name;
+      display = definition.display;
     }
 
     const flow = validateFlow(input, { resolveWorkflow });
@@ -209,6 +211,7 @@ export class RpcManager {
       cwd,
       scope,
       label: effectiveLabel,
+      display,
       source: { kind: "rpc", workflow, caller },
       ctx,
       background: true,

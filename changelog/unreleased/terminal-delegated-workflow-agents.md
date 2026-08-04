@@ -19,3 +19,7 @@ Agent and reducer tool lists can no longer include `workflow` or `steer`.
 Workflows that relied on an agent starting another workflow must express that
 composition in the parent flow with workflow, parallel, map, loop, or while
 nodes.
+
+Because delegated processes no longer run pi-agents, the `PI_AGENTS_BUDGETS`
+environment variable is gone. Only the `PI_AGENTS_DEPTH` marker remains, which
+keeps pi-agents inert in any Pi process that inherits a child's environment.

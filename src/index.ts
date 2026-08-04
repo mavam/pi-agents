@@ -12,11 +12,9 @@ import type {
 import { buildModelCatalog, createModelRefresher } from "./catalog/models.js";
 import { buildSystemPromptAppendix } from "./catalog/prompt.js";
 import {
-  BUDGETS_ENV_VAR,
   createSubprocessSpawnEngine,
   DEPTH_ENV_VAR,
 } from "./engine/subprocess.js";
-import type { Budgets } from "./model/ast.js";
 import {
   getSessionFile,
   isProjectTrusted,
@@ -51,18 +49,6 @@ function currentDepth(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-/** Budget limits inherited from a parent pi-agents process, if any. */
-function inheritedBudgets(): Budgets | undefined {
-  const raw = process.env[BUDGETS_ENV_VAR];
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as Budgets;
-    return typeof parsed === "object" && parsed !== null ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Register pi-agents only in the originating Pi process. */
 export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
   // Delegated agents are terminal workflow leaves. Their parent interpreter
@@ -78,8 +64,6 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
 
   const manager = new RunManager({
     engine,
-    depth,
-    defaultBudgets: inheritedBudgets(),
     onEvent: (event) => notifications.handleRunEvent(event),
     onStateChanged: () => {
       widget.update();

@@ -28,9 +28,6 @@ export type SpawnProcess = typeof spawn;
 /** Environment variable carrying delegation depth across process boundaries. */
 export const DEPTH_ENV_VAR = "PI_AGENTS_DEPTH";
 
-/** Environment variable carrying inherited budget limits (JSON) to children. */
-export const BUDGETS_ENV_VAR = "PI_AGENTS_BUDGETS";
-
 const CONTROL_RESPONSE_TIMEOUT_MS = 30_000;
 const TERMINATE_AFTER_MS = 1_000;
 const FORCE_KILL_AFTER_MS = 5_000;

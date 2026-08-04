@@ -574,8 +574,8 @@ Every run enforces limits (tool parameter `budgets`, all optional):
 integers; in particular, `maxDepth` starts at `1`. Durations (seconds) and
 `maxCost` (USD) accept fractional values. Budgets without a default are
 unbounded unless set. The root interpreter accounts for every statically
-composed node in one run. It also propagates depth and effective limits to each
-delegated process. The depth marker keeps pi-agents inert if a child launches
+composed node in one run and marks each delegated process with its depth
+(`PI_AGENTS_DEPTH`). The marker keeps pi-agents inert if a child launches
 another Pi process that inherits its environment; `maxDepth` remains a final
 circuit breaker rather than a mechanism for dynamic child orchestration.
 

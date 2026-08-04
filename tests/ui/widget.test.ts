@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { validateFlow } from "../../src/model/validate.js";
 import type { RunEvent } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
@@ -468,6 +469,81 @@ describe("formatRunWidget", () => {
     const [line] = formatRunWidget(run, run.createdAt);
     expect(line).toContain("◆◆◆◆◆◆◆◆");
     expect(line).not.toContain("…+");
+  });
+});
+
+describe("formatRunWidget width budgeting", () => {
+  const longLabel = "a-very-long-and-descriptive-workflow-label";
+
+  async function longLabelRun(): Promise<RunView> {
+    const run = await recordedRun(REVIEW_FLOW, () => "ok");
+    run.header.label = longLabel;
+    return run;
+  }
+
+  test("wide terminals show everything untruncated", async () => {
+    const run = await longLabelRun();
+    const [line] = formatRunWidget(run, run.createdAt + 92_000, undefined, 200);
+    expect(line).toContain(longLabel);
+    expect(line).toContain("w1"); // id
+    expect(line).toContain("1m32s");
+    expect(line).toContain("◆◆⑂");
+  });
+
+  test("the glyph strip survives narrow widths", async () => {
+    const run = await longLabelRun();
+    for (const width of [40, 60, 80]) {
+      const [line] = formatRunWidget(
+        run,
+        run.createdAt + 92_000,
+        undefined,
+        width,
+      );
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      expect(line).toContain("◆◆⑂");
+    }
+  });
+
+  test("meta drops by usefulness: id first, then tokens, then elapsed", async () => {
+    const run = await longLabelRun();
+    for (const node of run.nodes.values()) {
+      if (node.kind === "agent" || node.kind === "reduce") {
+        node.usage = {
+          input: 1000,
+          output: 500,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          contextTokens: 0,
+          turns: 1,
+        };
+      }
+    }
+    const at = (width: number) =>
+      formatRunWidget(run, run.createdAt + 92_000, undefined, width)[0];
+    // Roomy enough for elapsed and tokens, not for the id.
+    const mid = at(50);
+    expect(mid).not.toContain("w1");
+    expect(mid).toContain("4.5k");
+    expect(mid).toContain("1m32s");
+    // Tighter: tokens go next, elapsed is kept longest.
+    const tight = at(36);
+    expect(tight).not.toContain("4.5k");
+    expect(tight).toContain("1m32s");
+    // Tightest: all meta gone, label at its floor, strip intact.
+    const minimal = at(23);
+    expect(minimal).not.toContain("1m32s");
+    // truncateToWidth may emit a style reset before the ellipsis.
+    expect(minimal.replaceAll("\u001b[0m", "")).toContain("a-very-…");
+    expect(minimal).toContain("◆◆⑂");
+  });
+
+  test("long labels shrink with an ellipsis but keep a readable floor", async () => {
+    const run = await longLabelRun();
+    const [line] = formatRunWidget(run, run.createdAt + 92_000, undefined, 50);
+    expect(line).not.toContain(longLabel);
+    expect(line).toContain("…");
+    expect(line).toMatch(/a-very-/);
   });
 });
 

@@ -17,7 +17,11 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
 import {
   bodyPath,
@@ -78,21 +82,29 @@ export type Colorize = (
 
 export const plainColorize: Colorize = (_color, text) => text;
 
-/** Widget lines truncated to the terminal width (ANSI-aware), never wrapped. */
-class TruncatedLines implements Component {
-  private readonly lines: string[];
+/**
+ * Width-aware widget lines: content is (re)built per render with the actual
+ * terminal width, so each run line can budget its label and meta parts to
+ * keep the glyph strip visible. Lines are still truncated (ANSI-aware) as a
+ * last resort, never wrapped.
+ */
+class WidthAwareLines implements Component {
+  private readonly build: (width: number) => string[];
 
-  constructor(lines: string[]) {
-    this.lines = lines;
+  constructor(build: (width: number) => string[]) {
+    this.build = build;
   }
 
   invalidate(): void {
-    // Content is immutable; the widget is replaced wholesale on updates.
+    // Content is a pure function of run state; the widget is replaced
+    // wholesale on updates.
   }
 
   render(width: number): string[] {
     const usable = Math.max(4, width - 1);
-    return this.lines.map((line) => ` ${truncateToWidth(line, usable)}`);
+    return this.build(usable).map(
+      (line) => ` ${truncateToWidth(line, usable, "…")}`,
+    );
   }
 }
 
@@ -348,14 +360,21 @@ export function liveActivity(run: RunView): LiveActivity {
   return { excerpt: line?.trim(), lastAt };
 }
 
+/** Labels never shrink below this many columns before meta gives way. */
+const MIN_LABEL_WIDTH = 8;
+
 /**
  * The one widget line for one run. Pure — testable with plainColorize.
- * The line is truncated to the terminal width at render time (ANSI-aware).
+ * Width-aware: on narrow terminals meta parts are dropped by usefulness
+ * (id first — /workflows has it — then tokens, then elapsed) and the label
+ * shrinks toward a floor, so the glyph strip always survives. The excerpt
+ * tail is unbounded and absorbs the final right-truncation at render time.
  */
 export function formatRunWidget(
   run: RunView,
   now: number,
   color: Colorize = plainColorize,
+  width = Number.POSITIVE_INFINITY,
 ): string[] {
   const { done, total } = widgetProgress(run);
   const ratio = total > 0 ? done / total : 0;
@@ -364,14 +383,13 @@ export function formatRunWidget(
   const tokens = liveTokens(run);
   const activity = liveActivity(run);
   const dot = color("dim", " · ");
-  const meta = [
-    shortId(run.header.id),
-    formatElapsed(now - run.createdAt),
-    tokens > 0 ? formatTokens(tokens) : undefined,
-  ]
-    .filter((part): part is string => part !== undefined)
-    .map((part) => color("dim", part))
-    .join(dot);
+  const idPart = shortId(run.header.id);
+  const elapsed = formatElapsed(now - run.createdAt);
+  const tokensPart = tokens > 0 ? formatTokens(tokens) : undefined;
+  // In drop priority: the last entry goes first when space runs out.
+  const metaParts = [elapsed, tokensPart, idPart].filter(
+    (part): part is string => part !== undefined,
+  );
   // A long silence is more informative than a stale excerpt: surface it.
   const stalledFor =
     activity.lastAt !== undefined ? now - activity.lastAt : undefined;
@@ -400,10 +418,43 @@ export function formatRunWidget(
   };
   const strip = segments.map(renderSegment).join("");
 
+  // Budget everything left of the strip so the strip always fits. Widths
+  // are measured on colored strings — visibleWidth is ANSI-aware.
+  const sepWidth = 3; // " · "
+  const fixedWidth =
+    visibleWidth(`❖ ${percent}`) + sepWidth * 2 + visibleWidth(strip);
+  const metaWidth = (parts: string[]): number =>
+    parts.reduce((sum, part) => sum + visibleWidth(part) + sepWidth, 0);
+  const labelFloor = Math.min(visibleWidth(label), MIN_LABEL_WIDTH);
+  let kept = [...metaParts];
+  // The id is near-useless inline (/workflows lists it): it drops as soon
+  // as the full label no longer fits alongside the meta.
+  if (width - fixedWidth - metaWidth(kept) < visibleWidth(label)) {
+    kept = kept.filter((part) => part !== idPart);
+  }
+  // Tokens, then elapsed, give way only when the label would sink below
+  // its readable floor.
+  while (kept.length > 0 && width - fixedWidth - metaWidth(kept) < labelFloor) {
+    kept.pop();
+  }
+  const labelBudget = Math.max(
+    labelFloor,
+    width - fixedWidth - metaWidth(kept),
+  );
+  const shownLabel =
+    visibleWidth(label) > labelBudget
+      ? truncateToWidth(label, labelBudget, "…")
+      : label;
+  // Restore display order (id · elapsed · tokens) for whatever survived.
+  const meta = [idPart, elapsed, tokensPart]
+    .filter((part): part is string => part !== undefined && kept.includes(part))
+    .map((part) => color("dim", part))
+    .join(dot);
+
   // The strip precedes the excerpt: that tail has unbounded width, and
   // truncation must never push the liveness glyphs off screen.
   return [
-    `${color("muted", "❖")} ${percent}${dot}${label}${dot}${meta}${dot}${strip}${tail ? `${dot}${tail}` : ""}`,
+    `${color("muted", "❖")} ${percent}${dot}${shownLabel}${meta ? `${dot}${meta}` : ""}${dot}${strip}${tail ? `${dot}${tail}` : ""}`,
   ];
 }
 
@@ -492,15 +543,20 @@ export class RunWidget {
     const now = Date.now();
     context.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
       const color: Colorize = (name, text) => theme.fg(name, text);
-      const lines = running
-        .slice(0, MAX_RUNS)
-        .flatMap((run) => formatRunWidget(run, now, color));
-      if (running.length > MAX_RUNS) {
-        lines.push(
-          color("dim", `…+${running.length - MAX_RUNS} more (see /workflows)`),
-        );
-      }
-      return new TruncatedLines(lines);
+      return new WidthAwareLines((width) => {
+        const lines = running
+          .slice(0, MAX_RUNS)
+          .flatMap((run) => formatRunWidget(run, now, color, width));
+        if (running.length > MAX_RUNS) {
+          lines.push(
+            color(
+              "dim",
+              `…+${running.length - MAX_RUNS} more (see /workflows)`,
+            ),
+          );
+        }
+        return lines;
+      });
     });
   }
 

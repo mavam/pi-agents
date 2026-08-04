@@ -14,6 +14,7 @@ import {
   bodyPath,
   branchPath,
   casePath,
+  DEFAULT_BUDGETS,
   elsePath,
   type FlowNode,
   type ParMode,
@@ -71,6 +72,8 @@ interface DisplayNode {
   prefixText?: string;
   /** Static node path, for status overlay lookup. */
   path?: string;
+  /** Exactly one child subtree can execute (used to derive skipped arms). */
+  exclusiveChildren?: boolean;
   children: DisplayNode[];
 }
 
@@ -202,6 +205,7 @@ function build(
           icon: KIND_ICONS.switch,
           text: `switch ${color("accent", node.on)}${binding(node, color)}`,
           path,
+          exclusiveChildren: true,
           children,
         },
       ];
@@ -239,9 +243,53 @@ export interface PathStatus {
   kind: NodeView["kind"];
   completed: number;
   total: number;
-  /** e.g. "3/5" for map items, "#2" for loop or while iterations. */
+  /** True when no unseen dynamic instance can choose a different switch arm. */
+  instancesFinal?: boolean;
+  /** e.g. "3/5" for map items or "#2/4" for iterative progress. */
   detail?: string;
   error?: string;
+}
+
+function collectIterationCaps(
+  node: FlowNode,
+  path: string,
+  budgetCap: number,
+  caps: Map<string, number>,
+): void {
+  switch (node.kind) {
+    case "agent":
+    case "value":
+      return;
+    case "sequence":
+      node.steps.forEach((step, index) => {
+        collectIterationCaps(step, stepPath(path, index), budgetCap, caps);
+      });
+      return;
+    case "parallel":
+      Object.entries(node.branches).forEach(([key, branch]) => {
+        collectIterationCaps(branch, branchPath(path, key), budgetCap, caps);
+      });
+      return;
+    case "map":
+      collectIterationCaps(node.body, bodyPath(path), budgetCap, caps);
+      return;
+    case "loop":
+    case "while":
+      caps.set(path, Math.min(node.max, budgetCap));
+      collectIterationCaps(node.body, bodyPath(path), budgetCap, caps);
+      return;
+    case "switch":
+      node.cases.forEach((arm, index) => {
+        collectIterationCaps(arm.then, casePath(path, index), budgetCap, caps);
+      });
+      collectIterationCaps(node.else, elsePath(path), budgetCap, caps);
+      return;
+    case "workflow":
+      if (node.body) {
+        collectIterationCaps(node.body, bodyPath(path), budgetCap, caps);
+      }
+      return;
+  }
 }
 
 export function aggregateStatuses(run: RunView): Map<string, PathStatus> {
@@ -272,11 +320,50 @@ export function aggregateStatuses(run: RunView): Map<string, PathStatus> {
       kind: (nodes[0] as NodeView).kind,
       completed: counts.completed,
       total: nodes.length,
+      instancesFinal:
+        run.status !== "running" ||
+        nodes.every((node) => node.instance === node.path),
       detail,
       error,
     });
   }
+
+  // Iteration events already carry dynamic instance ids. Correlate them with
+  // their composite nodes, including completed zero-iteration while nodes,
+  // and summarize a shared static row as a compact range when necessary.
+  const caps = new Map<string, number>();
+  collectIterationCaps(
+    run.header.flow,
+    "$",
+    run.header.budgets?.maxIterations ?? DEFAULT_BUDGETS.maxIterations,
+    caps,
+  );
+  for (const [path, cap] of caps) {
+    const status = result.get(path);
+    if (!status) continue;
+    const instances = (byPath.get(path) ?? []).filter(
+      (node) => node.kind === "loop" || node.kind === "while",
+    );
+    if (instances.length === 0) continue;
+    const rounds = instances.map(
+      (node) => run.loopIterations.get(node.instance) ?? 0,
+    );
+    const min = Math.min(...rounds);
+    const max = Math.max(...rounds);
+    const progress = min === max ? `#${max}/${cap}` : `#${min}–${max}/${cap}`;
+    status.detail = [status.detail, progress].filter(Boolean).join(" · ");
+  }
   return result;
+}
+
+function hasObservedStatus(
+  node: DisplayNode,
+  statuses: Map<string, PathStatus>,
+): boolean {
+  return (
+    (node.path !== undefined && statuses.has(node.path)) ||
+    node.children.some((child) => hasObservedStatus(child, statuses))
+  );
 }
 
 function renderLines(
@@ -285,6 +372,8 @@ function renderLines(
   prefix: string,
   top: boolean,
   color: TreeColorize,
+  forceSkipped = false,
+  skipUnobserved = false,
 ): string[] {
   // Identity colorizers (markdown fences, tests) render plainly.
   const coloring = color("dim", "·") !== "·";
@@ -294,6 +383,9 @@ function renderLines(
     const connector = top ? "" : last ? "└─ " : "├─ ";
     const childPrefix = top ? "" : prefix + (last ? "   " : "│  ");
     const status = node.path ? statuses?.get(node.path) : undefined;
+    const observed = statuses ? hasObservedStatus(node, statuses) : false;
+    const skipped =
+      statuses !== undefined && (forceSkipped || (skipUnobserved && !observed));
     // Static trees mute the kind glyphs. Status overlays keep the kind
     // glyph so fork/join/map structure stays readable mid-run and encode
     // the outcome in its color (matching the run rows and the live
@@ -301,23 +393,40 @@ function renderLines(
     // state, so they pair the glyph with a status icon instead.
     let icon: string | undefined;
     if (statuses) {
-      const presentation = STATUS_STYLES[status?.status ?? "pending"];
+      const presentation =
+        STATUS_STYLES[skipped ? "skipped" : (status?.status ?? "pending")];
       const tint = presentation.color;
-      const statusGlyph = status?.icon ?? presentation.icon;
+      const statusGlyph = skipped
+        ? presentation.icon
+        : (status?.icon ?? presentation.icon);
       icon = coloring
         ? color(tint, node.icon ?? statusGlyph)
         : [statusGlyph, node.icon].filter(Boolean).join(" ");
     } else if (node.icon !== undefined) {
       icon = color("muted", node.icon);
     }
-    const detail = status?.detail ? ` [${status.detail}]` : "";
-    const error = status?.error ? ` — ${preview(status.error)}` : "";
+    const detail = !skipped && status?.detail ? ` [${status.detail}]` : "";
+    const error =
+      !skipped && status?.error ? ` — ${preview(status.error)}` : "";
     const skeleton = `${prefix}${connector}`;
     lines.push(
       `${skeleton ? color("dim", skeleton) : ""}${node.prefixText ?? ""}${icon ? `${icon} ` : ""}${node.text}${detail}${error}`,
     );
+    const exclusiveResolved =
+      statuses !== undefined &&
+      node.exclusiveChildren === true &&
+      status?.instancesFinal === true &&
+      node.children.some((child) => hasObservedStatus(child, statuses));
     lines.push(
-      ...renderLines(node.children, statuses, childPrefix, false, color),
+      ...renderLines(
+        node.children,
+        statuses,
+        childPrefix,
+        false,
+        color,
+        skipped,
+        exclusiveResolved,
+      ),
     );
   });
   return lines;

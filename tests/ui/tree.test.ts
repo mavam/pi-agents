@@ -291,7 +291,62 @@ describe("renderRunTree", () => {
     expect(tree).toContain("● ⇶ map {files}");
   });
 
-  test("the executed switch arm completes; the others stay pending", async () => {
+  test("iteration rows show rounds, effective caps, and zero iterations", async () => {
+    const loop = validateFlow({
+      kind: "loop",
+      max: 6,
+      until: { eq: ["done", true] },
+      body: {
+        kind: "agent",
+        name: "worker",
+        task: "round {iteration}",
+        output: "json",
+      },
+    });
+    const loopEvents: RunEvent[] = [];
+    await executeFlow({
+      runId: "loop-progress",
+      flow: loop,
+      runAgent: async (call) => ({
+        text: call.task === "round 0" ? '{"done":false}' : '{"done":true}',
+      }),
+      budgets: { maxIterations: 2 },
+      emit: (event) => loopEvents.push(event),
+    });
+    const loopRun = rebuildRunState(loopEvents).runs.get("loop-progress");
+    if (!loopRun) throw new Error("missing loop run");
+    expect(renderRunTree(loopRun)).toContain(
+      "● ↺ loop ≤6 until done == true [#2/2]",
+    );
+
+    const whileFlow = validateFlow({
+      kind: "sequence",
+      steps: [
+        { kind: "value", value: { continue: false }, as: "state" },
+        {
+          kind: "while",
+          on: "{state}",
+          condition: { eq: ["continue", true] },
+          max: 4,
+          body: { kind: "agent", name: "worker", task: "work" },
+        },
+      ],
+    });
+    const whileEvents: RunEvent[] = [];
+    await executeFlow({
+      runId: "while-progress",
+      flow: whileFlow,
+      runAgent: async () => ({ text: "unused" }),
+      emit: (event) => whileEvents.push(event),
+    });
+    const whileRun = rebuildRunState(whileEvents).runs.get("while-progress");
+    if (!whileRun) throw new Error("missing while run");
+    expect(renderRunTree(whileRun)).toContain(
+      "● ↺ while continue == true on {state} ≤4 [#0/4]",
+    );
+  });
+
+  test("the executed switch arm completes; the others are skipped", async () => {
     const flow = validateFlow({
       kind: "sequence",
       steps: [
@@ -310,6 +365,16 @@ describe("renderRunTree", () => {
               when: { eq: ["status", "approved"] },
               then: { kind: "agent", name: "shipper", task: "ship" },
             },
+            {
+              when: { eq: ["status", "rejected"] },
+              then: {
+                kind: "sequence",
+                steps: [
+                  { kind: "agent", name: "auditor", task: "audit" },
+                  { kind: "agent", name: "notifier", task: "notify" },
+                ],
+              },
+            },
           ],
           else: { kind: "agent", name: "reporter", task: "report" },
         },
@@ -325,13 +390,78 @@ describe("renderRunTree", () => {
           : { text: "shipped" },
       emit: (event) => events.push(event),
     });
+    const chosenStarted = events.findIndex(
+      (event) =>
+        event.type === "node_started" &&
+        event.instance === "$.steps[1].cases[0].then",
+    );
+    const live = rebuildRunState(events.slice(0, chosenStarted + 1)).runs.get(
+      "r5",
+    );
+    if (!live) throw new Error("missing live run");
+    const liveTree = renderRunTree(live);
+    expect(liveTree).toContain(
+      'when status == "approved" → ◉ ✦ shipper · ship',
+    );
+    expect(liveTree).toContain("else → ⊖ ✦ reporter · report");
+    expect(liveTree).toContain("⊖ ✦ auditor · audit");
+    expect(liveTree).toContain("⊖ ✦ notifier · notify");
+
     const run = rebuildRunState(events).runs.get("r5");
     if (!run) throw new Error("missing run");
     const tree = renderRunTree(run);
     expect(tree).toContain("● ⎇ switch {gate}");
     expect(tree).toContain('when status == "approved" → ● ✦ shipper · ship');
-    // The else arm never ran: pending status icon.
-    expect(tree).toContain("else → ○ ✦ reporter · report");
+    expect(tree).toContain("else → ⊖ ✦ reporter · report");
+    const mark = (color: string, text: string) =>
+      `<${color}>${text}</${color}>`;
+    expect(renderRunTree(run, mark)).toContain("<muted>✦</muted> reporter");
+  });
+
+  test("dynamic switch arms wait until all choices are final", async () => {
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        { kind: "value", value: ["approved", "approved"], as: "seeds" },
+        {
+          kind: "map",
+          over: "{seeds}",
+          concurrency: 1,
+          body: {
+            kind: "switch",
+            on: "{item}",
+            cases: [
+              {
+                when: { eq: ["", "approved"] },
+                then: { kind: "agent", name: "shipper", task: "ship" },
+              },
+            ],
+            else: { kind: "agent", name: "reporter", task: "report" },
+          },
+        },
+      ],
+    });
+    const events: RunEvent[] = [];
+    await executeFlow({
+      runId: "dynamic-switch",
+      flow,
+      runAgent: async () => ({ text: "ok" }),
+      emit: (event) => events.push(event),
+    });
+    const firstChoice = events.findIndex(
+      (event) =>
+        event.type === "node_started" &&
+        event.instance === "$.steps[1].body@0.cases[0].then",
+    );
+    const live = rebuildRunState(events.slice(0, firstChoice + 1)).runs.get(
+      "dynamic-switch",
+    );
+    if (!live) throw new Error("missing live dynamic run");
+    expect(renderRunTree(live)).toContain("else → ○ ✦ reporter · report");
+
+    const completed = rebuildRunState(events).runs.get("dynamic-switch");
+    if (!completed) throw new Error("missing completed dynamic run");
+    expect(renderRunTree(completed)).toContain("else → ⊖ ✦ reporter · report");
   });
 
   test("anonymous runs replay from persisted events and render as ad-hoc", async () => {

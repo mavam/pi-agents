@@ -99,12 +99,68 @@ describe("renderOverlay", () => {
   test("detail pane pads to the floor so rows above never shift", () => {
     // 1 table row + 1 detail line, but a floor of 8 detail rows:
     // top border + table + separator + 8 detail rows + bottom border.
-    const lines = renderOverlay(spec(["a"]), ["a"], 0, 60, 20, undefined, 8);
+    const lines = renderOverlay(spec(["a"]), ["a"], 0, 60, 20, {
+      minDetailRows: 8,
+    });
     expect(lines).toHaveLength(12);
     expect(lines.some((line) => line.includes("detail of a"))).toBe(true);
     // The floor never exceeds the height budget.
-    const capped = renderOverlay(spec(["a"]), ["a"], 0, 60, 10, undefined, 99);
+    const capped = renderOverlay(spec(["a"]), ["a"], 0, 60, 10, {
+      minDetailRows: 99,
+    });
     expect(capped.length).toBeLessThanOrEqual(10);
+  });
+
+  test("detail offset scrolls the window and reports its geometry", () => {
+    const detail = Array.from({ length: 50 }, (_, i) => `line ${i}`);
+    const scrolled: { offset: number; maxOffset: number }[] = [];
+    const lines = renderOverlay(
+      spec(["a"], () => detail),
+      ["a"],
+      0,
+      60,
+      16,
+      {
+        detailOffset: 20,
+        onDetailGeometry: (geometry) => scrolled.push(geometry),
+      },
+    );
+    expect(lines.some((line) => line.includes("line 20"))).toBe(true);
+    expect(lines.some((line) => line.includes("line 19"))).toBe(false);
+    // Both directions are reported in the single marker row.
+    const marker = lines.find((line) => line.includes("earlier lines"));
+    expect(marker).toContain("more lines");
+    expect(scrolled[0]?.offset).toBe(20);
+    expect(scrolled[0]?.maxOffset).toBeGreaterThan(20);
+    // Past-the-end offsets clamp to the last window.
+    const end = renderOverlay(
+      spec(["a"], () => detail),
+      ["a"],
+      0,
+      60,
+      16,
+      {
+        detailOffset: 999,
+        onDetailGeometry: (geometry) => scrolled.push(geometry),
+      },
+    );
+    expect(end.some((line) => line.includes("line 49"))).toBe(true);
+    expect(end.some((line) => line.includes("more lines"))).toBe(false);
+    expect(scrolled[1]?.offset).toBe(scrolled[1]?.maxOffset);
+  });
+
+  test("the footer advertises scrolling only when the detail overflows", () => {
+    const detail = Array.from({ length: 50 }, (_, i) => `line ${i}`);
+    const overflowing = renderOverlay(
+      spec(["a"], () => detail),
+      ["a"],
+      0,
+      60,
+      16,
+    );
+    expect(overflowing.at(-1)).toContain("scroll");
+    const fitting = renderOverlay(spec(["a"]), ["a"], 0, 60, 16);
+    expect(fitting.at(-1)).not.toContain("scroll");
   });
 
   test("empty list renders the empty text", () => {
@@ -133,17 +189,10 @@ describe("renderOverlay", () => {
   });
 
   test("reserves a composer row and replaces the footer hints", () => {
-    const lines = renderOverlay(
-      spec(["a"]),
-      ["a"],
-      0,
-      60,
-      14,
-      undefined,
-      0,
-      ["Steer: revise the result"],
-      "enter send · esc cancel",
-    );
+    const lines = renderOverlay(spec(["a"]), ["a"], 0, 60, 14, {
+      composerLines: ["Steer: revise the result"],
+      footerOverride: "enter send · esc cancel",
+    });
     expect(
       lines.some((line) => line.includes("Steer: revise the result")),
     ).toBe(true);
@@ -172,8 +221,8 @@ describe("renderOverlay", () => {
       () => {},
     );
     const lines = big.render(60);
-    // Fills the budget (~60% of rows), leaving the transcript above visible.
-    expect(lines).toHaveLength(30);
+    // Fills the budget (~80% of rows), leaving the transcript above visible.
+    expect(lines).toHaveLength(40);
     expect(lines.at(-1)).toContain("hints");
     expect(lines.some((line) => line.includes("more lines"))).toBe(true);
     big.dispose();
@@ -249,6 +298,76 @@ describe("renderOverlay", () => {
       openOverlay(ctx as never, spec(["a"]), widget),
     ).rejects.toThrow("panel exploded");
     expect(calls).toEqual([true, false]);
+  });
+
+  test("shift+arrows scroll the detail pane, plain arrows move the table", () => {
+    const tui = {
+      terminal: { rows: 30 },
+      requestRender: () => {},
+    } as unknown as TUI;
+    const detail = Array.from({ length: 100 }, (_, i) => `line ${i}`);
+    const panel = new SplitPaneOverlay(
+      tui,
+      (_color, text) => text,
+      spec(["a", "b"], () => detail),
+      () => {},
+    );
+    const first = panel.render(60);
+    expect(first.some((line) => line.includes("line 0 "))).toBe(true);
+
+    panel.handleInput("\x1b[1;2B"); // shift+down
+    const scrolled = panel.render(60);
+    expect(scrolled.some((line) => line.includes("line 0 "))).toBe(false);
+    expect(scrolled.some((line) => line.includes("1 earlier lines"))).toBe(
+      true,
+    );
+
+    panel.handleInput("\x04"); // ctrl+d: one pane down
+    const paged = panel.render(60);
+    expect(paged.some((line) => line.includes("line 20"))).toBe(true);
+
+    panel.handleInput("\x1b[1;2H"); // shift+home: back to the top
+    expect(panel.render(60).some((line) => line.includes("line 0 "))).toBe(
+      true,
+    );
+
+    // Changing rows resets the window, so a fresh pane starts at its top.
+    panel.handleInput("\x1b[1;2B");
+    panel.handleInput("\x1b[B"); // plain down: table selection
+    const other = panel.render(60);
+    expect(other.find((line) => line.includes("▸"))).toContain("row b");
+    expect(other.some((line) => line.includes("line 0 "))).toBe(true);
+    panel.dispose();
+  });
+
+  test("a live tail follows the newest line until the user scrolls up", () => {
+    const tui = {
+      terminal: { rows: 30 },
+      requestRender: () => {},
+    } as unknown as TUI;
+    const detail = Array.from({ length: 100 }, (_, i) => `line ${i}`);
+    const tailSpec: OverlaySpec<string> = {
+      ...spec(["a"], () => detail),
+      detailWindow: () => "tail",
+    };
+    const panel = new SplitPaneOverlay(
+      tui,
+      (_color, text) => text,
+      tailSpec,
+      () => {},
+    );
+    expect(panel.render(60).some((line) => line.includes("line 99"))).toBe(
+      true,
+    );
+    panel.handleInput("\x1b[1;2A"); // shift+up
+    const scrolled = panel.render(60);
+    expect(scrolled.some((line) => line.includes("line 99"))).toBe(false);
+    expect(scrolled.some((line) => line.includes("more lines"))).toBe(true);
+    panel.handleInput("\x1b[1;2B"); // shift+down re-arms follow mode
+    expect(panel.render(60).some((line) => line.includes("line 99"))).toBe(
+      true,
+    );
+    panel.dispose();
   });
 
   test("composer captures text and submits without closing the overlay", async () => {

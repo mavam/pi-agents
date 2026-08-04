@@ -90,6 +90,45 @@ function renderInlineInput(input: Input, width: number): string {
   return line.startsWith("> ") ? line.slice(2) : line;
 }
 
+/** Window the detail lines into the pane, honouring a scroll offset.
+ *
+ * When the detail overflows, one row is spent on a marker that reports what is
+ * hidden. The marker sits on the side content continues on, so the window
+ * always touches the edge it is scrolled against: at the bottom while more
+ * lines follow (including the unscrolled default), at the top once the last
+ * line is visible — which keeps a followed live tail pinned to the bottom.
+ * `offset` is the first detail line to show; "end" pins the window to the last
+ * line. The resolved offset is returned so the caller can clamp its state. */
+export function windowDetail(
+  detail: string[],
+  rows: number,
+  offset: number | "end" = 0,
+  color: Colorize = plainColorize,
+): { shown: string[]; offset: number; maxOffset: number } {
+  if (rows <= 0) return { shown: [], offset: 0, maxOffset: 0 };
+  if (detail.length <= rows) return { shown: detail, offset: 0, maxOffset: 0 };
+  const contentRows = Math.max(1, rows - 1);
+  const maxOffset = detail.length - contentRows;
+  const start = clamp(offset === "end" ? maxOffset : offset, 0, maxOffset);
+  const hiddenAbove = start;
+  const hiddenBelow = detail.length - start - contentRows;
+  const marker = color(
+    "dim",
+    [
+      hiddenAbove > 0 ? `… ${hiddenAbove} earlier lines` : undefined,
+      hiddenBelow > 0 ? `… +${hiddenBelow} more lines` : undefined,
+    ]
+      .filter(Boolean)
+      .join("  "),
+  );
+  const content = detail.slice(start, start + contentRows);
+  return {
+    shown: hiddenBelow === 0 ? [marker, ...content] : [...content, marker],
+    offset: start,
+    maxOffset,
+  };
+}
+
 /** Split the height budget between the table and the detail pane. */
 function paneRows(
   itemCount: number,
@@ -131,6 +170,23 @@ function edgeLine(
   );
 }
 
+/** Render-time knobs the stateful component supplies; all optional so tests
+ * can render a bare snapshot. */
+export interface OverlayView {
+  color?: Colorize;
+  /** High-water mark of detail rows, so the pane never shrinks. */
+  minDetailRows?: number;
+  /** Extra rows below the detail pane (the steer composer). */
+  composerLines?: string[];
+  /** Replaces the footer hints (e.g. while composing). */
+  footerOverride?: string;
+  /** First detail line to show; "end" follows the newest line. Defaults to
+   * the natural edge for the item's `detailWindow`. */
+  detailOffset?: number | "end";
+  /** Receives the resolved scroll geometry, so the caller can clamp state. */
+  onDetailGeometry?: (geometry: { offset: number; maxOffset: number }) => void;
+}
+
 /**
  * Pure layout: title border, scrolling table window with a ▸ marker,
  * separator with the selected item's metadata, detail pane, footer border.
@@ -142,11 +198,16 @@ export function renderOverlay<T>(
   selected: number,
   width: number,
   height: number,
-  color: Colorize = plainColorize,
-  minDetailRows = 0,
-  composerLines: string[] = [],
-  footerOverride?: string,
+  view: OverlayView = {},
 ): string[] {
+  const {
+    color = plainColorize,
+    minDetailRows = 0,
+    composerLines = [],
+    footerOverride,
+    detailOffset,
+    onDetailGeometry,
+  } = view;
   const lines: string[] = [];
   if (items.length === 0) {
     lines.push(
@@ -190,25 +251,13 @@ export function renderOverlay<T>(
   lines.push(edgeLine(["├", "┤"], spec.headerLine(item, color), width, color));
 
   const detail = spec.detail(item, color);
-  const detailWindow = spec.detailWindow?.(item) ?? "head";
-  let shown: string[];
-  if (detailRows === 0) {
-    shown = [];
-  } else if (detail.length > detailRows) {
-    const contentRows = Math.max(0, detailRows - 1);
-    shown =
-      detailWindow === "tail"
-        ? [
-            color("dim", `… ${detail.length - contentRows} earlier lines`),
-            ...(contentRows > 0 ? detail.slice(-contentRows) : []),
-          ]
-        : [
-            ...detail.slice(0, contentRows),
-            color("dim", `… +${detail.length - contentRows} more lines`),
-          ];
-  } else {
-    shown = detail;
-  }
+  const { shown, offset, maxOffset } = windowDetail(
+    detail,
+    detailRows,
+    detailOffset ?? (spec.detailWindow?.(item) === "tail" ? "end" : 0),
+    color,
+  );
+  onDetailGeometry?.({ offset, maxOffset });
   // Pad to the floor so the pane never shrinks while browsing (no layout
   // shift on the rows above; the box only ever grows downward).
   const floor = clamp(minDetailRows, 0, detailRows);
@@ -218,12 +267,16 @@ export function renderOverlay<T>(
 
   for (const line of composerLines) lines.push(boxLine(line, width, color));
 
+  const hints = footerOverride ?? spec.footerFor?.(item) ?? chrome(spec.footer);
   lines.push(
     edgeLine(
       ["╰", "╯"],
       color(
         "dim",
-        footerOverride ?? spec.footerFor?.(item) ?? chrome(spec.footer),
+        // Only advertise scrolling when there is something to scroll to.
+        maxOffset > 0 && footerOverride === undefined
+          ? `${hints} · ⇧↑↓ scroll`
+          : hints,
       ),
       width,
       color,
@@ -243,6 +296,15 @@ export class SplitPaneOverlay<T> implements Component {
   private composer: { spec: OverlayComposer; input: Input } | undefined;
   /** High-water mark of detail rows shown, so the pane never shrinks. */
   private detailFloor = 0;
+  /** First detail line to show; "end" follows the newest line. Reset when the
+   * selection or drill level changes, so a new pane starts at its natural
+   * edge instead of inheriting a stale offset. */
+  private detailOffset: number | "end" = 0;
+  /** Scroll geometry from the last render, so key handling can clamp without
+   * recomputing the layout. */
+  private detailScroll = { offset: 0, maxOffset: 0, rows: 1 };
+  /** Identity the current offset belongs to (selection + window mode). */
+  private detailAnchor: string | undefined;
 
   constructor(
     tui: TUI,
@@ -269,6 +331,23 @@ export class SplitPaneOverlay<T> implements Component {
     this.selectedKey = item !== undefined ? this.spec.keyOf(item) : undefined;
   }
 
+  /** Move the detail window by `delta` rows (page-sized when |delta| > 1). */
+  private scrollDetail(delta: number): void {
+    const { offset, maxOffset } = this.detailScroll;
+    if (maxOffset === 0) return;
+    const next = clamp(offset + delta, 0, maxOffset);
+    // Sticking to the bottom re-arms follow mode, so a live tail keeps
+    // tracking new output after the user scrolls back down to it.
+    this.detailOffset = next >= maxOffset && this.follows() ? "end" : next;
+  }
+
+  /** Whether the selected item's detail pane is a followed live tail. */
+  private follows(): boolean {
+    const items = this.spec.items();
+    const item = items[this.currentIndex(items)];
+    return item !== undefined && this.spec.detailWindow?.(item) === "tail";
+  }
+
   private close(): void {
     this.dispose();
     this.done();
@@ -291,47 +370,60 @@ export class SplitPaneOverlay<T> implements Component {
     const index = this.currentIndex(items);
     this.select(items, index);
     // Self-cap: the panel mounts in the editor slot, so every row it renders
-    // pushes the transcript up. Stay under ~60% of the terminal to keep the
+    // pushes the transcript up. Stay under ~80% of the terminal to keep some
     // conversation visible above, with an 8-row floor so the split pane is
     // still usable on short terminals (it always fits: the floor only wins
     // when the terminal is tiny, where there is nothing to preserve anyway).
+    // Detail longer than the budget scrolls (shift+↑↓, page keys) rather than
+    // pushing the panel taller.
     const height = Math.max(
       8,
       Math.min(
         this.tui.terminal.rows - 6,
-        Math.floor(this.tui.terminal.rows * 0.6),
+        Math.floor(this.tui.terminal.rows * 0.8),
       ),
     );
     const item = items[index];
+    let detailRows = 1;
     if (item !== undefined) {
-      const { detailRows } = paneRows(
+      detailRows = paneRows(
         items.length,
         height,
         this.composer ? 1 : 0,
-      );
+      ).detailRows;
       const needed = this.spec.detail(item, this.color).length;
       this.detailFloor = clamp(
         Math.max(this.detailFloor, needed),
         0,
         detailRows,
       );
+      // A different row (or a tail toggle) gets a fresh window.
+      const anchor = `${this.spec.keyOf(item)}\u0000${this.spec.detailWindow?.(item) ?? "head"}`;
+      if (anchor !== this.detailAnchor) {
+        this.detailAnchor = anchor;
+        this.detailOffset =
+          this.spec.detailWindow?.(item) === "tail" ? "end" : 0;
+      }
     }
     const composerLines = this.composer
       ? [
           `${this.color("accent", `${this.composer.spec.label}:`)} ${renderInlineInput(this.composer.input, Math.max(1, width - this.composer.spec.label.length - 8))}`,
         ]
       : [];
-    return renderOverlay(
-      this.spec,
-      items,
-      index,
-      width,
-      height,
-      this.color,
-      this.detailFloor,
+    return renderOverlay(this.spec, items, index, width, height, {
+      color: this.color,
+      minDetailRows: this.detailFloor,
       composerLines,
-      this.composer ? "enter send · esc cancel" : undefined,
-    );
+      footerOverride: this.composer ? "enter send · esc cancel" : undefined,
+      detailOffset: this.detailOffset,
+      onDetailGeometry: ({ offset, maxOffset }) => {
+        this.detailScroll = {
+          offset,
+          maxOffset,
+          rows: Math.max(1, detailRows),
+        };
+      },
+    });
   }
 
   handleInput(data: string): void {
@@ -349,7 +441,24 @@ export class SplitPaneOverlay<T> implements Component {
     const items = this.spec.items();
     if (items.length === 0) return;
     const index = this.currentIndex(items);
-    if (keybindings.matches(data, "tui.select.up") || data === "k") {
+    // Detail-pane scrolling: shift+arrows by a line, page keys by a pane.
+    // Plain arrows and j/k stay on the table so the primary navigation and
+    // the single-letter actions keep their meaning.
+    const key = parseKey(data) ?? data;
+    const page = Math.max(1, this.detailScroll.rows - 1);
+    if (key === "shift+up" || key === "ctrl+y") {
+      this.scrollDetail(-1);
+    } else if (key === "shift+down" || key === "ctrl+e") {
+      this.scrollDetail(1);
+    } else if (key === "shift+pageUp" || key === "ctrl+u") {
+      this.scrollDetail(-page);
+    } else if (key === "shift+pageDown" || key === "ctrl+d") {
+      this.scrollDetail(page);
+    } else if (key === "shift+home") {
+      this.detailOffset = 0;
+    } else if (key === "shift+end") {
+      this.detailOffset = this.follows() ? "end" : this.detailScroll.maxOffset;
+    } else if (keybindings.matches(data, "tui.select.up") || data === "k") {
       this.select(items, index - 1);
     } else if (keybindings.matches(data, "tui.select.down") || data === "j") {
       this.select(items, index + 1);
@@ -360,7 +469,6 @@ export class SplitPaneOverlay<T> implements Component {
     } else if (keybindings.matches(data, "tui.select.confirm")) {
       this.act("enter", items[index] as T);
     } else {
-      const key = parseKey(data) ?? data;
       if (/^[a-z]$/.test(key)) this.act(key, items[index] as T);
     }
     this.tui.requestRender();

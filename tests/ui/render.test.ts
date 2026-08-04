@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
+  formatRunNotificationControls,
   type RunNotificationDetails,
   renderRunNotification,
 } from "../../src/ui/render.js";
@@ -74,6 +75,20 @@ function render(
   return component.render(300).join("\n");
 }
 
+describe("run notification controls", () => {
+  test("renders a compact glyph-prefixed usage line", () => {
+    expect(formatRunNotificationControls("9a7eb000-full")).toBe(
+      "❖ `/workflow 9a7eb000` [result|agents]",
+    );
+  });
+
+  test("dims the whole line when a theme is supplied", () => {
+    expect(formatRunNotificationControls("9a7eb000-full", markerTheme)).toBe(
+      "<muted>❖</muted> <dim>/workflow 9a7eb000 [result|agents]</dim>",
+    );
+  });
+});
+
 describe("run notification renderer", () => {
   test("styles completion cards with the custom message background", () => {
     const output = render(details({ usage: "3 turns ↑12.0k ↓4.0k $0.0500" }));
@@ -88,10 +103,12 @@ describe("run notification renderer", () => {
     expect(output).toContain(
       "<dim> · 3 turns ↑12.0k ↓4.0k $0.0500 · 4 agents</dim>",
     );
-    expect(output).toContain("/workflow 9a7eb000 result");
+    expect(output).toContain(
+      "<muted>❖</muted> <dim>/workflow 9a7eb000 [result|agents]</dim>",
+    );
     expect(output).toContain("done");
     expect(output.indexOf("done")).toBeLessThan(
-      output.indexOf("/workflow 9a7eb000 result"),
+      output.indexOf("/workflow 9a7eb000 [result|agents]"),
     );
     expect(output).not.toContain("Continue your task");
   });

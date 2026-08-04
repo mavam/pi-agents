@@ -7,6 +7,7 @@ import {
   type ExtensionAPI,
   getMarkdownTheme,
   type MessageRenderer,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
@@ -15,6 +16,7 @@ import { valueText } from "../model/value.js";
 import type { RunSource } from "../run/events.js";
 import type { NodeView, RunView } from "../run/state.js";
 import { STATUS_STYLES } from "./status.js";
+import { KIND_ICONS } from "./tree.js";
 
 export const MESSAGE_TYPE = "pi-agents:message";
 
@@ -79,9 +81,23 @@ export function formatAgentCount(agents: number): string {
   return `${agents} agent${agents === 1 ? "" : "s"}`;
 }
 
-export function formatRunNotificationControls(runId: string): string {
-  const id = shortId(runId);
-  return `Run details: \`/workflow ${id}\` · raw data: \`/workflow ${id} result\` · agent output: \`/workflow ${id} agents\``;
+/**
+ * Compact control bar for a finished run: `❖ /workflow <id> [result|agents]`.
+ * The workflow glyph marks the line as injected UI chrome, and the bracketed
+ * suffixes advertise the real `/workflow` sub-commands. Without a theme the
+ * command is wrapped in a code span so it stays copy-pasteable in Markdown;
+ * with a theme the whole line renders dim for a TUI card.
+ */
+export function formatRunNotificationControls(
+  runId: string,
+  theme?: Theme,
+): string {
+  const command = `/workflow ${shortId(runId)}`;
+  if (!theme) return `${KIND_ICONS.workflow} \`${command}\` [result|agents]`;
+  return `${theme.fg("muted", KIND_ICONS.workflow)} ${theme.fg(
+    "dim",
+    `${command} [result|agents]`,
+  )}`;
 }
 
 const renderMarkdownMessage: MessageRenderer = (message) =>
@@ -121,12 +137,7 @@ export const renderRunNotification: MessageRenderer = (
   }
   card.addChild(new Spacer(1));
   card.addChild(
-    new Markdown(
-      formatRunNotificationControls(details.runId),
-      0,
-      0,
-      getMarkdownTheme(),
-    ),
+    new Text(formatRunNotificationControls(details.runId, theme), 0, 0),
   );
   return card;
 };

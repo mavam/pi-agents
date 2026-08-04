@@ -1,0 +1,10 @@
+created: 2026-08-04
+title: Terminal delegated workflow agents
+intro: >-
+  Pi-agents now executes delegated workflow agents as terminal leaves in the originating
+  process, preventing recursive workflow execution while preserving static workflow
+  composition. This makes delegation safer and removes the obsolete PI_AGENTS_BUDGETS
+  environment variable.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.11.0

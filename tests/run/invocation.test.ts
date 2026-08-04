@@ -158,6 +158,30 @@ describe("skills and tools precedence", () => {
     expect(invocation.disableSkillDiscovery).toBe(true);
   });
 
+  test("rejects orchestration tools inherited from a named profile", () => {
+    writeAgent(projectDir, "reviewer", {
+      tools: "[read, workflow]",
+    });
+    const resolution = resolve({ agent: "reviewer" });
+    expect(resolution.ok).toBe(false);
+    if (resolution.ok) throw new Error("expected resolution failure");
+    expect(resolution.problems.join("\n")).toContain(
+      "delegated agents cannot use orchestration tools (workflow)",
+    );
+    expect(resolution.problems.join("\n")).toContain(
+      "compose the work in the parent flow",
+    );
+  });
+
+  test("a call-site tool list replaces a forbidden profile list", () => {
+    writeAgent(projectDir, "reviewer", {
+      tools: "[workflow]",
+    });
+    expect(resolveOk({ agent: "reviewer", tools: ["read"] }).tools).toEqual([
+      "read",
+    ]);
+  });
+
   test("model and thinking follow call → profile → session default", () => {
     writeAgent(projectDir, "reviewer", {
       model: "profile-model",

@@ -24,6 +24,7 @@ import {
   bodyPath,
   branchPath,
   casePath,
+  DELEGATED_AGENT_FORBIDDEN_TOOLS,
   elsePath,
   type FlowNode,
   IDENTIFIER_RE,
@@ -363,11 +364,21 @@ function parseAgentExecutionOptions(
   path: string,
   issues: Issues,
 ): AgentExecutionOptions {
+  const tools = optionalStringList(obj, "tools", path, issues);
+  const forbiddenTools = tools?.filter((tool) =>
+    DELEGATED_AGENT_FORBIDDEN_TOOLS.some((forbidden) => forbidden === tool),
+  );
+  if (forbiddenTools && forbiddenTools.length > 0) {
+    issues.push({
+      path,
+      message: `delegated agents cannot use orchestration tools (${forbiddenTools.join(", ")}); compose the work in the parent flow with workflow, parallel, map, loop, or while nodes`,
+    });
+  }
   return {
     model: optionalString(obj, "model", path, issues),
     thinking: optionalEnum(obj, "thinking", THINKING_LEVELS, path, issues),
     skills: optionalStringList(obj, "skills", path, issues),
-    tools: optionalStringList(obj, "tools", path, issues),
+    tools,
     cwd: optionalString(obj, "cwd", path, issues),
     scope: optionalEnum(
       obj,

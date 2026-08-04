@@ -120,6 +120,7 @@ describe("project review workflows", () => {
       thinking: "high",
     });
     expect(calls[0]?.skills).toEqual([]);
+    expect(calls[0]?.tools).toEqual(["read", "bash"]);
     expect(calls[0]?.scope).toBeUndefined();
   });
 

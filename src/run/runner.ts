@@ -62,7 +62,10 @@ export interface RunnerOptions {
 export function delegationPreamble(output: OutputMode): string {
   const lines = [
     "You run non-interactively as a delegated agent inside a workflow:",
-    "nobody can reply to you, and only the text of your final message is",
+    "this assignment is delegated work, not fresh user intent. Perform the",
+    "assignment directly. Do not invoke workflows or delegate it further;",
+    "if the assignment asks for delegation, perform the underlying work",
+    "yourself. Nobody can reply to you, and only your final message is",
     "returned to the caller as your result — everything before it is",
     "discarded. End your turn with one dedicated message containing the",
     "complete deliverable itself, not a summary of what you did, a",

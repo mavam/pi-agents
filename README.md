@@ -41,6 +41,15 @@ Delegated agents use the `pi` executable on `PATH` through Pi's current RPC
 protocol. pi-agents intentionally follows the latest Pi release instead of
 pinning or maintaining a legacy execution fallback, so keep Pi up to date.
 
+The originating Pi process owns workflow orchestration. A delegated process is
+a terminal workflow leaf: pi-agents does not register its tools, commands,
+hooks, RPC endpoint, catalogs, run manager, or UI there. The parent interpreter
+expands the complete static graph before execution, so saved `workflow` nodes
+still compose normally and every agent remains part of the originating run's
+budget, history, and progress display. Put any fan-out, reduction, iteration,
+or saved-workflow composition in the parent flow rather than asking a child
+agent to start another workflow.
+
 ## 📖 Concepts
 
 Three nouns carry the whole framework:
@@ -173,6 +182,7 @@ task: |-
   Return the structured review JSON contract.
 thinking: high
 output: json
+tools: [read, bash]
 ```
 
 The flat form normalizes to a bare agent leaf while retaining workflow powers:
@@ -200,6 +210,9 @@ report keeps fixed emoji-coded severity and category headings plus a verdict
 table for quick scanning, while the accompanying JSON fields remain plain for
 machine consumers. Both workflows declare `display: report`, so people see the
 Markdown review instead of the JSON routing contract.
+The reviewer allowlist removes Pi's direct editing tools as an
+accident-reduction measure. It is not a read-only sandbox: `bash` can still
+modify the checkout, so the review contract also explicitly prohibits writes.
 The maximum run executes seven agents: one initial Reviewer and three
 Implementer/Reviewer pairs. Its flat final result includes `outcome`, `reason`,
 `round_index`, `report`, `actionable`, and `implementation`; `outcome` is
@@ -248,7 +261,7 @@ workflow overrides `review`, disabling bundled `review` also disables bundled
 
 Workflows fire from four surfaces:
 
-1. **The model.** Saved workflows (name, description, `trigger`, params)
+1. **The root model.** Saved workflows (name, description, `trigger`, params)
    are advertised in the system prompt; the model runs them — or composes
    ad-hoc flows — through the single `workflow` tool. The tool is
    **opt-in**: the model may only reach for it when you affirmatively ask
@@ -266,12 +279,13 @@ Workflows fire from four surfaces:
    and the workflow fires on those pi events, always in the background,
    with the event payload bound as `{params.event}`. Hooks run only in the
    root pi process, never inside delegated children.
-4. **Other extensions.** Co-loaded pi extensions can start, stop, and inspect
-   runs over the in-process event bus. See [Event bus and RPC](#-event-bus-and-rpc).
+4. **Other extensions.** Co-loaded pi extensions in the root process can start,
+   stop, and inspect runs over the in-process event bus. See
+   [Event bus and RPC](#-event-bus-and-rpc).
 
 ## 🛠️ The `workflow` tool: ad-hoc flows from the model
 
-The model is a first-class workflow author, not just an invoker. The single
+The root model is a first-class workflow author, not just an invoker. The single
 `workflow` tool takes either a saved workflow by name or a **complete inline
 flow expression**, and its tool description embeds the full algebra — node
 kinds, value semantics, binding rules, predicates — so the model can
@@ -352,7 +366,10 @@ omit `skills` to retain the child Pi process's normal ambient skill discovery.
 Any explicit list is closed: a non-empty list injects exactly those skills,
 and `skills: []` disables skill discovery. `tools` follows the same replacement
 precedence, and `tools: []` leaves the agent no way to read files — pair it
-with skill selection deliberately.
+with skill selection deliberately. `workflow` and `steer` are orchestration
+tools owned by the parent process, so agent and reducer allowlists cannot name
+them. Express that work with `workflow`, `parallel`, `map`, `loop`, or `while`
+nodes in the parent flow.
 
 Skills are named, not inlined: `skills: [my-review-guide]` resolves against
 the user and project catalogs below. In precedence order, first match wins:
@@ -546,7 +563,7 @@ Every run enforces limits (tool parameter `budgets`, all optional):
 | `maxAgents`        | 50      | Total agent and reducer executions; `0` prohibits them.      |
 | `maxParallelism`   | 8       | Simultaneously running agents, global across nested pools.   |
 | `maxIterations`    | 10      | Cap applied to every `loop` and `while`.                     |
-| `maxDepth`         | 5       | Cross-process delegation depth.                              |
+| `maxDepth`         | 5       | Maximum process depth allowed before an agent spawn.         |
 | `maxTurns`         | 100     | Assistant turns a single delegated agent may take.           |
 | `maxAgentDuration` | —       | Wall-clock seconds a single delegated agent may run.         |
 | `maxDuration`      | —       | Wall-clock seconds the whole run may take.                   |
@@ -556,10 +573,11 @@ Every run enforces limits (tool parameter `budgets`, all optional):
 `maxAgents` is a non-negative integer. The other count budgets are positive
 integers; in particular, `maxDepth` starts at `1`. Durations (seconds) and
 `maxCost` (USD) accept fractional values. Budgets without a default are
-unbounded unless set. The effective limits are inherited by delegated pi
-processes (via `PI_AGENTS_BUDGETS`), so a child that runs pi-agents itself starts
-from the parent's limits rather than the defaults; run-scoped limits apply per
-process, not aggregated across the delegation tree.
+unbounded unless set. The root interpreter accounts for every statically
+composed node in one run. It also propagates depth and effective limits to each
+delegated process. The depth marker keeps pi-agents inert if a child launches
+another Pi process that inherits its environment; `maxDepth` remains a final
+circuit breaker rather than a mechanism for dynamic child orchestration.
 
 Set `maxAgents: 0` when a workflow must remain data-only:
 
@@ -755,9 +773,9 @@ is steerable.
 
 ## 🔌 Event bus and RPC
 
-pi-agents exposes its live run stream and a small control protocol through
-`pi.events`. The raw channels require no import from this package; an optional
-typed client is exported from `pi-agents/api`.
+In the originating Pi process, pi-agents exposes its live run stream and a small
+control protocol through `pi.events`. The raw channels require no import from
+this package; an optional typed client is exported from `pi-agents/api`.
 
 | Channel | Payload |
 |---|---|
@@ -819,13 +837,12 @@ budgets, and obey the active session's project-trust decision. In untrusted
 projects only user agents and workflows resolve. A `start` request made outside
 an active session returns an error.
 
-The RPC listener is installed at every delegation depth. Because the bus is
-process-local, the root session and each delegated pi process expose independent
-RPC endpoints and run lists. A subscriber may issue a guarded RPC request while
-handling a run event, but listeners that automatically start work must filter
-specific transitions or deduplicate run IDs to avoid creating their own event
-loop. Workflows cannot declare pi-agents' public channels in `on:`; that
-integration remains deliberately unsupported.
+The RPC listener exists only in the root process. Delegated processes expose no
+pi-agents event stream, control endpoint, or independent run list. A subscriber
+may issue a guarded RPC request while handling a run event, but listeners that
+automatically start work must filter specific transitions or deduplicate run
+IDs to avoid creating their own event loop. Workflows cannot declare pi-agents'
+public channels in `on:`; that integration remains deliberately unsupported.
 
 ## 📄 License
 

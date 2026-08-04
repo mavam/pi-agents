@@ -142,4 +142,5 @@ task: |-
   human-readable Markdown review in report despite returning JSON.
 thinking: high
 output: json
+tools: [read, bash]
 skills: []

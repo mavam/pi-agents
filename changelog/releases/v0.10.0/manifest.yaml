@@ -1,0 +1,10 @@
+created: 2026-08-04
+title: Bundled review workflows
+intro: >-
+  This release bundles the review and review-fix workflows with pi-agents, making
+  them available in every directory while preserving project and user overrides. It
+  also improves workflow run visibility with complete results, clearer control flow,
+  and width-aware summaries.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.9.0

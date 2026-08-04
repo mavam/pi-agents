@@ -572,12 +572,16 @@ usage only in their final outcome cannot be cut off mid-run.
 `/workflow` resolves a saved workflow name first, then a run id; run ids are
 hex, workflow names are slugs, so the two never collide in practice.
 
-A completed workflow can send up to 200,000 characters to the calling model.
-Larger values include a truncation notice and remain available in full through
-`/workflow <id> result`. When a saved workflow declares `display`, completion
-cards render that complete Markdown string; other values use a compact preview
-to keep the transcript responsive. Step-to-step interpolation uses the same
-200,000-character ceiling.
+Completion cards render the complete presented result. String results use
+Markdown, structured results use fenced JSON, and a saved workflow's `display`
+path still selects its human-facing Markdown value. Run and agent detail panes
+also receive complete results, while their terminal viewport controls how much
+is visible at once.
+
+The payload sent to the calling model remains subject to a 200,000-character
+safety ceiling. Larger values include a truncation notice and remain available
+in full through `/workflow <id> result`. Step-to-step interpolation uses the
+same 200,000-character ceiling.
 
 ### Interactive browsing
 

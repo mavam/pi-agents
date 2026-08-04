@@ -227,6 +227,30 @@ describe("buildWorkflowsSpec", () => {
     expect((spec.title as () => string)()).toBe("Runs");
   });
 
+  test("run and agent detail panes receive complete results", async () => {
+    const { spec, done } = await fixture();
+    const workflow = spec
+      .items()
+      .find((item) => item.kind === "workflow" && item.wf.name === "triage");
+    if (!workflow) throw new Error("expected workflow row");
+    spec.onAction("enter", workflow);
+
+    const runItem = spec
+      .items()
+      .find((item) => item.kind === "run" && item.run === done);
+    if (runItem?.kind !== "run") throw new Error("expected completed run row");
+    const runResult = `${"r".repeat(700)}run-tail`;
+    done.value = runResult;
+    expect(spec.detail(runItem, color).join("\n")).toContain(runResult);
+
+    spec.onAction("a", runItem);
+    const nodeItem = spec.items()[0];
+    if (nodeItem?.kind !== "node") throw new Error("expected node row");
+    const nodeResult = `${"n".repeat(700)}node-tail`;
+    nodeItem.node.value = nodeResult;
+    expect(spec.detail(nodeItem, color).join("\n")).toContain(nodeResult);
+  });
+
   test("a on a run drills into its agents; esc pops one tier at a time", async () => {
     const { spec, live } = await fixture();
     const wf = spec.items().find((item) => item.kind === "workflow");

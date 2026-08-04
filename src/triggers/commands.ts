@@ -428,9 +428,9 @@ function nodeDetail(node: NodeView, color: Colorize): string[] {
       ? [...steering, ...tail.map((line) => color("dim", line))]
       : [...steering, color("dim", "running…")];
   }
-  const preview = formatValuePreview(node.value, 600);
-  const lines = preview
-    ? preview.split("\n")
+  const output = valueText(node.value);
+  const lines = output
+    ? output.split("\n")
     : [color("dim", "(no output value)")];
   lines.push("", color("dim", "⏎ post full output"));
   return [...steering, ...(steering.length > 0 ? [""] : []), ...lines];
@@ -492,8 +492,7 @@ function runDetail(run: RunView, color: Colorize): string[] {
   const lines = (renderRunTree(run, color) || "(no nodes yet)").split("\n");
   if (run.error) lines.push(color("error", `✗ ${run.error}`));
   const display = selectDisplayValue(run.value, run.header.display);
-  const value =
-    run.status !== "running" ? formatValuePreview(display.value, 300) : "";
+  const value = run.status !== "running" ? valueText(display.value) : undefined;
   if (value) lines.push("", ...value.split("\n"));
   return lines;
 }

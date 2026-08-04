@@ -17,7 +17,6 @@ import {
   formatAgentCount,
   formatRunNotificationControls,
   formatUsage,
-  formatValuePreview,
   NOTIFICATION_TYPE,
   type RunNotificationDetails,
   renderResultValue,
@@ -27,7 +26,7 @@ import {
 import { STATUS_STYLES } from "./status.js";
 
 export type RunNotification = RunNotificationDetails & {
-  /** Model-facing body, kept separate from the bounded TUI preview. */
+  /** Model-facing body, kept separate from the TUI presentation. */
   modelBody?: string;
 };
 
@@ -107,9 +106,7 @@ export class NotificationManager {
     if (event.status === "completed") {
       const result = valueText(event.value) ?? "";
       const display = selectDisplayValue(event.value, run?.header.display);
-      const preview = display.selected
-        ? (valueText(display.value) ?? "")
-        : formatValuePreview(event.value, 600);
+      const presented = valueText(display.value) ?? "";
       return {
         kind: "run_final",
         version: 2,
@@ -119,8 +116,8 @@ export class NotificationManager {
         usage,
         agents: event.agents,
         bodyKind: "result",
-        body: preview
-          ? renderResultValue(display.value, preview)
+        body: presented
+          ? renderResultValue(display.value, presented)
           : "(no output)",
         modelBody: result
           ? renderResultValue(

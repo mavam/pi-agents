@@ -1,0 +1,10 @@
+created: 2026-08-04
+title: Model catalog and preflight validation
+intro: >-
+  Workflow agents now validate model overrides against a provider-aware model catalog
+  before they start, resolving bare IDs and reporting available alternatives for unknown
+  models. The workflows and agents panels now provide taller, scrollable detail panes
+  with keyboard navigation instead of clipping long content.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.10.0

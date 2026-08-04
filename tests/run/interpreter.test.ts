@@ -663,6 +663,29 @@ describe("workflow refs", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("undefined exact-reference roots normalize to null", async () => {
+    const identityDef: WorkflowLike = {
+      name: "identity",
+      params: [{ name: "input", required: true }],
+      flow: { kind: "value", value: "{params.input}" },
+    };
+    const { outcome } = await run(
+      {
+        kind: "loop",
+        max: 1,
+        body: {
+          kind: "workflow",
+          name: "identity",
+          params: { input: "{last.missing}" },
+        },
+      },
+      () => "unused",
+      { budgets: { maxAgents: 0 } },
+      (name) => (name === "identity" ? identityDef : undefined),
+    );
+    expect(outcome).toMatchObject({ status: "completed", value: null });
+  });
+
   test("mixed-text params still interpolate as strings", async () => {
     const identityDef: WorkflowLike = {
       name: "identity",

@@ -3,7 +3,10 @@ import type { WorkflowLike } from "../../src/model/ast.js";
 import { validateFlow } from "../../src/model/validate.js";
 import type { RunEvent } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
-import { rebuildRunState } from "../../src/run/state.js";
+import {
+  markRunningRunsStopped,
+  rebuildRunState,
+} from "../../src/run/state.js";
 import { renderFlowTree, renderRunTree } from "../../src/ui/tree.js";
 
 describe("renderFlowTree", () => {
@@ -346,6 +349,42 @@ describe("renderRunTree", () => {
     );
   });
 
+  test("iteration rows summarize dynamic round ranges", async () => {
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        { kind: "value", value: [1, 3], as: "targets" },
+        {
+          kind: "map",
+          over: "{targets}",
+          body: {
+            kind: "loop",
+            max: 5,
+            until: { eq: ["done", true] },
+            body: {
+              kind: "agent",
+              task: "{item}:{iteration}",
+              output: "json",
+            },
+          },
+        },
+      ],
+    });
+    const events: RunEvent[] = [];
+    await executeFlow({
+      runId: "round-ranges",
+      flow,
+      runAgent: async (call) => {
+        const [target = 0, round = 0] = call.task.split(":").map(Number);
+        return { text: JSON.stringify({ done: round + 1 >= target }) };
+      },
+      emit: (event) => events.push(event),
+    });
+    const run = rebuildRunState(events).runs.get("round-ranges");
+    if (!run) throw new Error("missing ranged run");
+    expect(renderRunTree(run)).toContain("[2/2 · #1–3/5]");
+  });
+
   test("the executed switch arm completes; the others are skipped", async () => {
     const flow = validateFlow({
       kind: "sequence",
@@ -386,32 +425,33 @@ describe("renderRunTree", () => {
       flow,
       runAgent: async (call) =>
         call.agent === "gate"
-          ? { text: '{"status": "approved"}' }
-          : { text: "shipped" },
+          ? { text: '{"status": "rejected"}' }
+          : { text: "done" },
       emit: (event) => events.push(event),
     });
     const chosenStarted = events.findIndex(
       (event) =>
         event.type === "node_started" &&
-        event.instance === "$.steps[1].cases[0].then",
+        event.instance === "$.steps[1].cases[1].then",
     );
     const live = rebuildRunState(events.slice(0, chosenStarted + 1)).runs.get(
       "r5",
     );
     if (!live) throw new Error("missing live run");
     const liveTree = renderRunTree(live);
+    expect(liveTree).toContain('◉ when status == "rejected":');
     expect(liveTree).toContain(
-      'when status == "approved" → ◉ ✦ shipper · ship',
+      'when status == "approved" → ⊖ ✦ shipper · ship',
     );
     expect(liveTree).toContain("else → ⊖ ✦ reporter · report");
-    expect(liveTree).toContain("⊖ ✦ auditor · audit");
-    expect(liveTree).toContain("⊖ ✦ notifier · notify");
 
     const run = rebuildRunState(events).runs.get("r5");
     if (!run) throw new Error("missing run");
     const tree = renderRunTree(run);
     expect(tree).toContain("● ⎇ switch {gate}");
-    expect(tree).toContain('when status == "approved" → ● ✦ shipper · ship');
+    expect(tree).toContain('● when status == "rejected":');
+    expect(tree).toContain("● ✦ auditor · audit");
+    expect(tree).toContain("● ✦ notifier · notify");
     expect(tree).toContain("else → ⊖ ✦ reporter · report");
     const mark = (color: string, text: string) =>
       `<${color}>${text}</${color}>`;
@@ -453,10 +493,11 @@ describe("renderRunTree", () => {
         event.type === "node_started" &&
         event.instance === "$.steps[1].body@0.cases[0].then",
     );
-    const live = rebuildRunState(events.slice(0, firstChoice + 1)).runs.get(
-      "dynamic-switch",
-    );
+    const liveState = rebuildRunState(events.slice(0, firstChoice + 1));
+    const live = liveState.runs.get("dynamic-switch");
     if (!live) throw new Error("missing live dynamic run");
+    expect(renderRunTree(live)).toContain("else → ○ ✦ reporter · report");
+    markRunningRunsStopped(liveState);
     expect(renderRunTree(live)).toContain("else → ○ ✦ reporter · report");
 
     const completed = rebuildRunState(events).runs.get("dynamic-switch");

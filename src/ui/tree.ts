@@ -194,7 +194,7 @@ function build(
           const only = subs[0] as DisplayNode;
           return { ...only, prefixText: `${key}${color("dim", " → ")}` };
         }
-        return { text: `${key}:`, children: subs };
+        return { text: `${key}:`, path: subPath, children: subs };
       };
       const children = node.cases.map((c, index) =>
         arm(`when ${formatPredicate(c.when)}`, c.then, casePath(path, index)),
@@ -244,7 +244,7 @@ export interface PathStatus {
   completed: number;
   total: number;
   /** True when no unseen dynamic instance can choose a different switch arm. */
-  instancesFinal?: boolean;
+  dynamicInstancesFinal?: boolean;
   /** e.g. "3/5" for map items or "#2/4" for iterative progress. */
   detail?: string;
   error?: string;
@@ -320,8 +320,8 @@ export function aggregateStatuses(run: RunView): Map<string, PathStatus> {
       kind: (nodes[0] as NodeView).kind,
       completed: counts.completed,
       total: nodes.length,
-      instancesFinal:
-        run.status !== "running" ||
+      dynamicInstancesFinal:
+        run.status === "completed" ||
         nodes.every((node) => node.instance === node.path),
       detail,
       error,
@@ -383,9 +383,9 @@ function renderLines(
     const connector = top ? "" : last ? "└─ " : "├─ ";
     const childPrefix = top ? "" : prefix + (last ? "   " : "│  ");
     const status = node.path ? statuses?.get(node.path) : undefined;
-    const observed = statuses ? hasObservedStatus(node, statuses) : false;
     const skipped =
-      statuses !== undefined && (forceSkipped || (skipUnobserved && !observed));
+      statuses !== undefined &&
+      (forceSkipped || (skipUnobserved && !hasObservedStatus(node, statuses)));
     // Static trees mute the kind glyphs. Status overlays keep the kind
     // glyph so fork/join/map structure stays readable mid-run and encode
     // the outcome in its color (matching the run rows and the live
@@ -415,7 +415,7 @@ function renderLines(
     const exclusiveResolved =
       statuses !== undefined &&
       node.exclusiveChildren === true &&
-      status?.instancesFinal === true &&
+      status?.dynamicInstancesFinal === true &&
       node.children.some((child) => hasObservedStatus(child, statuses));
     lines.push(
       ...renderLines(

@@ -533,8 +533,9 @@ as: rev
 Inlined at validation time with cycle detection; budgets apply to the whole
 expanded tree. A parameter value that is exactly one reference preserves the
 referenced JSON type, so `params: {state: "{current}"}` can pass an object or
-array to a value-only sub-workflow. Mixed text such as
-`params: {label: "state: {current}"}` still interpolates to a string.
+array to a value-only sub-workflow. An exact reference whose frame root is
+undefined normalizes to `null`. Mixed text and declared parameter defaults
+remain strings.
 
 ## 🎛️ Budgets
 

@@ -163,6 +163,25 @@ function resolveSingleRef(template: string, env: Env, what: string): unknown {
   return resolved.value;
 }
 
+/** Preserve an exact parameter reference as JSON. An available but undefined
+ * frame root (notably `{last}` before loop iteration 0) normalizes to null
+ * before dot-path traversal, matching value-node JSON semantics. */
+function resolveWorkflowParam(
+  template: string,
+  env: Env,
+  name: string,
+): unknown {
+  if (!isSingleReference(template)) {
+    return renderTemplate(template, envResolver(env));
+  }
+  const ref = templateRefs(template)[0];
+  if (ref) {
+    const root = envResolver(env)(ref.root);
+    if (root.found && root.value === undefined) return null;
+  }
+  return resolveSingleRef(template, env, `workflow param '${name}'`) ?? null;
+}
+
 /**
  * Deep-interpolate a value node's JSON: a string that is exactly one
  * reference substitutes the referenced value itself (type-preserving); any
@@ -990,10 +1009,7 @@ class Interpreter {
       const raw = node.params?.[def.name];
       params[def.name] =
         raw !== undefined
-          ? isSingleReference(raw)
-            ? (resolveSingleRef(raw, env, `workflow param '${def.name}'`) ??
-              null)
-            : renderTemplate(raw, envResolver(env))
+          ? resolveWorkflowParam(raw, env, def.name)
           : (def.default ?? "");
     }
     return await this.evaluate(

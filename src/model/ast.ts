@@ -10,6 +10,9 @@
 
 export type Source = "user" | "project";
 
+/** Provenance for a saved workflow, including package-provided defaults. */
+export type WorkflowSource = Source | "bundled";
+
 export type Scope = Source | "both";
 
 /**
@@ -311,7 +314,7 @@ export interface WorkflowLike {
   flow: FlowNode;
 }
 
-/** A saved workflow definition discovered from a .pi/workflows/*.md file. */
+/** A saved workflow definition discovered from bundled, user, or project data. */
 export interface WorkflowDef extends WorkflowLike {
   description: string;
   trigger?: string;
@@ -323,7 +326,7 @@ export interface WorkflowDef extends WorkflowLike {
   debounce?: number;
   /** Documentation prose from the file body. */
   doc: string;
-  source: Source;
+  source: WorkflowSource;
   filePath: string;
 }
 

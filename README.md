@@ -14,8 +14,10 @@ itself a valid workflow.
 pi install npm:pi-agents
 ```
 
-Zero configuration required. Right after installing, the model can delegate
-and compose work with anonymous **ad-hoc agents** — no agent files needed:
+Zero configuration required. The package includes `/review` for read-only code
+review and `/review-fix` for iterative review and repair. Right after installing,
+the model can also delegate and compose work with anonymous **ad-hoc agents** —
+no agent files needed:
 
 ```json
 {
@@ -187,9 +189,9 @@ calling model, `/workflow <id> result`, and parent workflows. A nested workflow
 always passes its complete value to its caller. If the path is missing or does
 not resolve to a string, rendering falls back to the raw value.
 
-Saved workflows compose like functions through `workflow` nodes. This
-repository's project-local `/review-fix` workflow uses that composition to
-invoke `/review`, then sends validated P1–P3 findings to an anonymous
+Saved workflows compose like functions through `workflow` nodes. The bundled
+`/review-fix` workflow uses that composition to invoke `/review`, then sends
+validated P1–P3 findings to an anonymous
 Implementer, and ends every implementation round with a fresh review. It stops
 when the change is approved, cannot proceed, or reaches three complete
 implementation-and-review rounds. The review rubric is part of the workflow,
@@ -205,13 +207,42 @@ Implementer/Reviewer pairs. Its flat final result includes `outcome`, `reason`,
 Markdown because only reviewer output controls routing: forcing strict JSON
 there would turn a malformed status report into a mid-cycle hard failure.
 
-These two workflows are dogfood for this repository checkout. The npm package
-does not include them.
+These two workflow files are also shipped unchanged in the npm package as
+bundled defaults. A workflow with the same name in
+`~/.pi/agent/workflows` or `.pi/workflows` overrides its bundled definition.
+Every definition is fully validated at discovery (references, cycles, binding
+scopes); invalid files are listed in `/workflows` diagnostics and never run.
 
-Workflows live in `~/.pi/agent/workflows` and `.pi/workflows`, discovered like
-agents. Every definition is fully validated at discovery (references, cycles,
-binding scopes); invalid files are listed in `/workflows` diagnostics and
-never run.
+You can disable every bundled workflow globally in
+`~/.pi/agent/workflows.json`:
+
+```json
+{
+  "bundledWorkflows": false
+}
+```
+
+Set individual names to control them separately; unspecified names inherit the
+current default:
+
+```json
+{
+  "bundledWorkflows": {
+    "review": true,
+    "review-fix": false
+  }
+}
+```
+
+A trusted project can put the same setting in `.pi/workflows.json`. Project
+settings layer over user settings, so an object can selectively re-enable a
+workflow after a global `false`. A scalar `true` or `false` resets the setting
+for every bundled workflow at that scope. Omit `bundledWorkflows` or set it to
+`true` to enable all bundled defaults.
+
+The bundled `review-fix` workflow invokes `review`. If no user or project
+workflow overrides `review`, disabling bundled `review` also disables bundled
+`review-fix` and reports the dependency in `/workflows` diagnostics.
 
 ### 3. Trigger it
 

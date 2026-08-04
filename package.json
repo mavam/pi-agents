@@ -5,6 +5,7 @@
   "type": "module",
   "files": [
     "src",
+    ".pi/workflows",
     "README.md"
   ],
   "keywords": [

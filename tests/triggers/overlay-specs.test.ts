@@ -23,6 +23,10 @@ let projectDir: string;
 beforeEach(() => {
   projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agents-overlay-"));
   fs.mkdirSync(path.join(projectDir, ".pi", "workflows"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, ".pi", "workflows.json"),
+    JSON.stringify({ bundledWorkflows: false }),
+  );
 });
 
 afterEach(() => {

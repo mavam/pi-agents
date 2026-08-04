@@ -8,7 +8,7 @@ import {
   getMarkdownTheme,
   type MessageRenderer,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
 import { resolvePath } from "../model/interpolate.js";
 import { valueText } from "../model/value.js";
@@ -113,17 +113,17 @@ export const renderRunNotification: MessageRenderer = (
 
   // Keep this renderer pure: the host re-invokes it with the current theme
   // whenever the transcript is invalidated.
-  const card = new Container();
-  card.addChild(new Text(header, 1, 0));
+  const card = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+  card.addChild(new Text(header, 0, 0));
   if (details.bodyKind !== "none" && details.body !== undefined) {
     card.addChild(new Spacer(1));
-    card.addChild(new Markdown(details.body, 1, 0, getMarkdownTheme()));
+    card.addChild(new Markdown(details.body, 0, 0, getMarkdownTheme()));
   }
   card.addChild(new Spacer(1));
   card.addChild(
     new Markdown(
       formatRunNotificationControls(details.runId),
-      1,
+      0,
       0,
       getMarkdownTheme(),
     ),

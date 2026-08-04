@@ -9,6 +9,7 @@ beforeAll(() => initTheme(undefined, false));
 
 const markerTheme = {
   fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  bg: (color: string, text: string) => `<${color}>${text}</${color}>`,
   bold: (text: string) => `<bold>${text}</bold>`,
 } as unknown as Theme;
 
@@ -74,9 +75,12 @@ function render(
 }
 
 describe("run notification renderer", () => {
-  test("styles the workflow headline and complete status token", () => {
+  test("styles completion cards with the custom message background", () => {
     const output = render(details({ usage: "3 turns ↑12.0k ↓4.0k $0.0500" }));
 
+    expect(
+      output.split("\n").every((line) => line.startsWith("<customMessageBg>")),
+    ).toBe(true);
     expect(output).toContain("<muted>❖</muted>");
     expect(output).toContain("<bold>dummy-node-exploration-2</bold>");
     expect(output).toContain("<dim> · 9a7eb000 · </dim>");

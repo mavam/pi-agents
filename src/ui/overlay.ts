@@ -30,9 +30,14 @@ import { type Colorize, plainColorize, type RunWidget } from "./widget.js";
 
 const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
-/** Rows the frame itself owns: title border, table/detail separator, the
- * breathing room above the footer, and the footer border. */
+/** Rows the frame itself owns: title border, table/detail separator, footer
+ * border, and the blank row below the box. */
 const CHROME_ROWS = 4;
+
+/** Blank row under the closing border, so the panel does not butt against
+ * whatever pi renders beneath it (status line, footer). Empty rather than a
+ * padded box row: it is outside the frame. */
+const TRAILING_BLANK = "";
 
 /** Border text; a function makes it dynamic (e.g. per drill-down mode). */
 export type OverlayChrome = string | (() => string);
@@ -217,7 +222,6 @@ export function renderOverlay<T>(
       edgeLine(["╭", "╮"], color("accent", chrome(spec.title)), width, color),
     );
     lines.push(boxLine(color("dim", chrome(spec.emptyText)), width, color));
-    lines.push(boxLine("", width, color));
     lines.push(
       edgeLine(
         ["╰", "╯"],
@@ -226,6 +230,7 @@ export function renderOverlay<T>(
         color,
       ),
     );
+    lines.push(TRAILING_BLANK);
     return lines;
   }
 
@@ -271,10 +276,6 @@ export function renderOverlay<T>(
 
   for (const line of composerLines) lines.push(boxLine(line, width, color));
 
-  // Breathing room: the footer hints are chrome, not content, and butting them
-  // straight against the last detail row makes the two hard to tell apart.
-  lines.push(boxLine("", width, color));
-
   const hints = footerOverride ?? spec.footerFor?.(item) ?? chrome(spec.footer);
   lines.push(
     edgeLine(
@@ -290,6 +291,7 @@ export function renderOverlay<T>(
       color,
     ),
   );
+  lines.push(TRAILING_BLANK);
   return lines;
 }
 

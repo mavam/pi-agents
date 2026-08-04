@@ -41,8 +41,8 @@ describe("renderOverlay", () => {
     expect(lines.filter((line) => line.includes("▸"))).toHaveLength(1);
     expect(lines.find((line) => line.startsWith("├"))).toContain("header b");
     expect(lines.some((line) => line.includes("detail of b"))).toBe(true);
-    expect(lines.at(-1)).toContain("hints");
-    expect(lines.at(-1)?.endsWith("╯")).toBe(true);
+    expect(lines.at(-2)).toContain("hints");
+    expect(lines.at(-2)?.endsWith("╯")).toBe(true);
   });
 
   test("every line fits the requested width", () => {
@@ -98,7 +98,7 @@ describe("renderOverlay", () => {
 
   test("detail pane pads to the floor so rows above never shift", () => {
     // 1 table row + 1 detail line, but a floor of 8 detail rows: top border +
-    // table + separator + 8 detail rows + footer spacer + bottom border.
+    // table + separator + 8 detail rows + bottom border + trailing gap.
     const lines = renderOverlay(spec(["a"]), ["a"], 0, 60, 20, {
       minDetailRows: 8,
     });
@@ -158,24 +158,26 @@ describe("renderOverlay", () => {
       60,
       16,
     );
-    expect(overflowing.at(-1)).toContain("scroll");
+    expect(overflowing.at(-2)).toContain("scroll");
     const fitting = renderOverlay(spec(["a"]), ["a"], 0, 60, 16);
-    expect(fitting.at(-1)).not.toContain("scroll");
+    expect(fitting.at(-2)).not.toContain("scroll");
   });
 
   test("empty list renders the empty text", () => {
     const lines = renderOverlay(spec([]), [], 0, 40, 20);
+    // Title, text, footer border, trailing gap.
     expect(lines).toHaveLength(4);
     expect(lines[1]).toContain("Nothing here.");
   });
 
-  test("a blank row separates the content from the footer hints", () => {
+  test("a blank row separates the panel from whatever renders below it", () => {
     const lines = renderOverlay(spec(["a", "b"]), ["a", "b"], 0, 40, 20);
-    // Last content row before the bottom border carries nothing but padding.
-    expect(lines.at(-2)?.replaceAll(" ", "")).toBe("││");
-    expect(lines.at(-3)).toContain("detail of a");
-    // Still exact-width, like every other row.
-    expect(visibleWidth(lines.at(-2) as string)).toBe(40);
+    expect(lines.at(-1)).toBe("");
+    expect(lines.at(-2)?.endsWith("╯")).toBe(true);
+    // The empty state gets the same trailing gap.
+    const empty = renderOverlay(spec([]), [], 0, 40, 20);
+    expect(empty.at(-1)).toBe("");
+    expect(empty.at(-2)?.endsWith("╯")).toBe(true);
   });
 
   test("selection index is clamped", () => {
@@ -192,7 +194,7 @@ describe("renderOverlay", () => {
     };
     const lines = renderOverlay(dynamic, ["a"], 0, 50, 20);
     expect(lines[0]).toContain("Mode A (1/1)");
-    expect(lines.at(-1)).toContain("keys A");
+    expect(lines.at(-2)).toContain("keys A");
     const empty = renderOverlay(dynamic, [], 0, 50, 20);
     expect(empty[1]).toContain("empty A");
   });
@@ -205,7 +207,7 @@ describe("renderOverlay", () => {
     expect(
       lines.some((line) => line.includes("Steer: revise the result")),
     ).toBe(true);
-    expect(lines.at(-1)).toContain("enter send · esc cancel");
+    expect(lines.at(-2)).toContain("enter send · esc cancel");
     expect(lines.length).toBeLessThanOrEqual(14);
   });
 
@@ -232,7 +234,7 @@ describe("renderOverlay", () => {
     const lines = big.render(60);
     // Fills the budget (~80% of rows), leaving the transcript above visible.
     expect(lines).toHaveLength(40);
-    expect(lines.at(-1)).toContain("hints");
+    expect(lines.at(-2)).toContain("hints");
     expect(lines.some((line) => line.includes("more lines"))).toBe(true);
     big.dispose();
   });
@@ -251,8 +253,10 @@ describe("renderOverlay", () => {
     const lines = panel.render(60);
     expect(lines.length).toBeGreaterThanOrEqual(5);
     expect(lines.length).toBeLessThanOrEqual(8);
-    expect(lines.at(-1)).toContain("hints");
-    for (const line of lines) expect(visibleWidth(line)).toBe(60);
+    expect(lines.at(-2)).toContain("hints");
+    // Every framed row is exact-width; the trailing gap is outside the box.
+    for (const line of lines.slice(0, -1)) expect(visibleWidth(line)).toBe(60);
+    expect(lines.at(-1)).toBe("");
     panel.dispose();
   });
 
@@ -413,13 +417,13 @@ describe("renderOverlay", () => {
     const composing = overlay.render(60);
     expect(composing.some((line) => line.includes("Steer:"))).toBe(true);
     expect(composing.some((line) => line.includes("Steer: >"))).toBe(false);
-    expect(composing.at(-1)).toContain("enter send · esc cancel");
+    expect(composing.at(-2)).toContain("enter send · esc cancel");
     overlay.handleInput("revise the result");
     overlay.handleInput("\r");
     await Promise.resolve();
     expect(submitted).toBe("revise the result");
     expect(closed).toBe(false);
-    expect(overlay.render(60).at(-1)).toContain("hints");
+    expect(overlay.render(60).at(-2)).toContain("hints");
     overlay.dispose();
   });
 });

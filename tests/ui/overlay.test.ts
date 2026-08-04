@@ -401,6 +401,32 @@ describe("renderOverlay", () => {
     panel.dispose();
   });
 
+  test("shift+j/k scroll the detail pane without moving the table", () => {
+    const tui = {
+      terminal: { rows: 30 },
+      requestRender: () => {},
+    } as unknown as TUI;
+    const detail = Array.from({ length: 100 }, (_, i) => `line ${i}`);
+    const panel = new SplitPaneOverlay(
+      tui,
+      (_color, text) => text,
+      spec(["a", "b"], () => detail),
+      () => {},
+    );
+    panel.render(60);
+
+    panel.handleInput("J"); // shift+j: one line down
+    const scrolled = panel.render(60);
+    expect(scrolled.some((line) => line.includes("line 0 "))).toBe(false);
+    expect(scrolled.find((line) => line.includes("▸"))).toContain("row a");
+
+    panel.handleInput("K"); // shift+k: one line up
+    const restored = panel.render(60);
+    expect(restored.some((line) => line.includes("line 0 "))).toBe(true);
+    expect(restored.find((line) => line.includes("▸"))).toContain("row a");
+    panel.dispose();
+  });
+
   test("a live tail follows the newest line until the user scrolls up", () => {
     const tui = {
       terminal: { rows: 30 },

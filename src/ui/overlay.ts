@@ -21,6 +21,7 @@ import {
   type Component,
   getKeybindings,
   Input,
+  matchesKey,
   parseKey,
   type TUI,
   truncateToWidth,
@@ -292,7 +293,7 @@ export function renderOverlay<T>(
         "dim",
         // Keep the scroll hint first so long action lists cannot truncate it.
         maxOffset > 0 && footerOverride === undefined
-          ? `⇧↑↓ scroll · ${hints}`
+          ? `⇧↑↓/JK scroll · ${hints}`
           : hints,
       ),
       width,
@@ -462,14 +463,18 @@ export class SplitPaneOverlay<T> implements Component {
     const items = this.spec.items();
     if (items.length === 0) return;
     const index = this.currentIndex(items);
-    // Detail-pane scrolling: shift+arrows by a line, page keys by a pane.
-    // Plain arrows and j/k stay on the table so the primary navigation and
-    // the single-letter actions keep their meaning.
+    // Detail-pane scrolling: shift+arrows or shifted j/k by a line, page keys
+    // by a pane. Plain arrows and j/k stay on the table so the primary
+    // navigation and the single-letter actions keep their meaning.
     const key = parseKey(data) ?? data;
     const page = Math.max(1, this.detailScroll.rows - 1);
-    if (key === "shift+up" || key === "ctrl+y") {
+    if (key === "shift+up" || key === "ctrl+y" || matchesKey(data, "shift+k")) {
       this.scrollDetail(-1);
-    } else if (key === "shift+down" || key === "ctrl+e") {
+    } else if (
+      key === "shift+down" ||
+      key === "ctrl+e" ||
+      matchesKey(data, "shift+j")
+    ) {
       this.scrollDetail(1);
     } else if (key === "shift+pageUp" || key === "ctrl+u") {
       this.scrollDetail(-page);

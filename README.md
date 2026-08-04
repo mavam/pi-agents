@@ -88,7 +88,7 @@ Every surface that shows a flow — the tool call display, `/workflow <name>`,
 Sequences are transparent — their steps appear at the parent level without
 extra nesting. When inspecting a run, the kind icons are replaced by live
 status icons (`○` pending, `◉` running, `●` completed, `✗` failed,
-`⊘` cancelled), with dynamic fan-out aggregated in place:
+`⊘` cancelled, `⊖` skipped), with dynamic fan-out aggregated in place:
 
 ```
 ● scout → {files} · List files to review
@@ -446,7 +446,8 @@ until: { eq: ["done", true] }
 `loop` is a bounded do-until: its body executes at least once, `{last}` is
 empty for that first iteration, and `until` is evaluated against each body
 result. The node returns the last result when the predicate matches or `max`
-is reached.
+is reached. Live and completed run trees show rounds started against the
+effective cap, for example `[#2/3]`.
 
 ### `while`
 
@@ -468,7 +469,9 @@ carried `{current}` value; its result becomes the next carried value. If the
 initial condition is false, the node runs zero iterations and returns `on`
 unchanged. If `max` is reached, it returns the current value without adding a
 termination flag, so callers that distinguish convergence from exhaustion
-must encode that state in the carried value.
+must encode that state in the carried value. Run trees show `[#0/3]` when the
+initial condition is false and otherwise update the round count as bodies
+start.
 
 Predicates address their subject's JSON value by dot path (`""` is the whole
 value): `eq`, `ne`, `gt`, `lt`, `exists`, `empty`, composed with `and`, `or`,
@@ -497,7 +500,10 @@ The switch yields the chosen arm's value directly, like a ternary, so an
 `as` binding on the switch never dangles. Arms see the enclosing scope
 unchanged — no new frame roots — and the switch itself spawns no agent.
 Missing predicate paths follow `evaluatePredicate` semantics: `eq`, `gt`,
-`lt`, and `exists` are false, while `ne` and `empty` are true.
+`lt`, and `exists` are false, while `ne` and `empty` are true. Run trees mark
+unselected arms as skipped (`⊖`) instead of leaving them pending. Dynamically
+repeated switches wait until all choices are final before marking arms that no
+instance selected.
 
 ### `value`
 
@@ -525,7 +531,10 @@ as: rev
 ```
 
 Inlined at validation time with cycle detection; budgets apply to the whole
-expanded tree.
+expanded tree. A parameter value that is exactly one reference preserves the
+referenced JSON type, so `params: {state: "{current}"}` can pass an object or
+array to a value-only sub-workflow. Mixed text such as
+`params: {label: "state: {current}"}` still interpolates to a string.
 
 ## 🎛️ Budgets
 

@@ -639,6 +639,52 @@ describe("workflow refs", () => {
     expect(calls[1]?.task).toBe("review src/core at shallow");
   });
 
+  test("exact-reference params preserve JSON values", async () => {
+    const identityDef: WorkflowLike = {
+      name: "identity",
+      params: [{ name: "input", required: true }],
+      flow: { kind: "value", value: "{params.input}" },
+    };
+    const input = { outcome: "changes_required", findings: [1, 2] };
+    const { outcome, calls } = await run(
+      seq(
+        { kind: "value", value: input, as: "state" },
+        {
+          kind: "workflow",
+          name: "identity",
+          params: { input: "{state}" },
+        },
+      ),
+      () => "unused",
+      { budgets: { maxAgents: 0 } },
+      (name) => (name === "identity" ? identityDef : undefined),
+    );
+    expect(outcome).toMatchObject({ status: "completed", value: input });
+    expect(calls).toHaveLength(0);
+  });
+
+  test("mixed-text params still interpolate as strings", async () => {
+    const identityDef: WorkflowLike = {
+      name: "identity",
+      params: [{ name: "input", required: true }],
+      flow: { kind: "value", value: "{params.input}" },
+    };
+    const { outcome } = await run(
+      seq(
+        { kind: "value", value: { count: 2 }, as: "state" },
+        {
+          kind: "workflow",
+          name: "identity",
+          params: { input: "state: {state}" },
+        },
+      ),
+      () => "unused",
+      { budgets: { maxAgents: 0 } },
+      (name) => (name === "identity" ? identityDef : undefined),
+    );
+    expect(outcome.value).toBe('state: {\n  "count": 2\n}');
+  });
+
   test("inlined body runs at .body paths", async () => {
     const { events } = await run(
       { kind: "workflow", name: "review", params: { target: "x" } },

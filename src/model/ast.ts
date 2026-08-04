@@ -218,8 +218,9 @@ export interface ValueNode extends BaseNode {
 /**
  * Invoke a saved workflow by name. Expanded (inlined) at validation time with
  * cycle detection; inside the inlined body only `{params.*}` and its own
- * bindings resolve — caller bindings are invisible. The `params` values are
- * template strings interpolated in the caller's scope.
+ * bindings resolve — caller bindings are invisible. Parameter templates use
+ * the caller's scope; an exact reference preserves its JSON value, while mixed
+ * text renders as a string.
  */
 export interface WorkflowRefNode extends BaseNode {
   kind: "workflow";

@@ -990,7 +990,10 @@ class Interpreter {
       const raw = node.params?.[def.name];
       params[def.name] =
         raw !== undefined
-          ? renderTemplate(raw, envResolver(env))
+          ? isSingleReference(raw)
+            ? (resolveSingleRef(raw, env, `workflow param '${def.name}'`) ??
+              null)
+            : renderTemplate(raw, envResolver(env))
           : (def.default ?? "");
     }
     return await this.evaluate(

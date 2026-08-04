@@ -1,6 +1,6 @@
 ---
 title: Terminal delegated workflow agents
-type: breaking
+type: change
 authors:
   - mavam
   - codex

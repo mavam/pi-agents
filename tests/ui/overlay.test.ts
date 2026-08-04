@@ -97,12 +97,12 @@ describe("renderOverlay", () => {
   });
 
   test("detail pane pads to the floor so rows above never shift", () => {
-    // 1 table row + 1 detail line, but a floor of 8 detail rows:
-    // top border + table + separator + 8 detail rows + bottom border.
+    // 1 table row + 1 detail line, but a floor of 8 detail rows: top border +
+    // table + separator + 8 detail rows + footer spacer + bottom border.
     const lines = renderOverlay(spec(["a"]), ["a"], 0, 60, 20, {
       minDetailRows: 8,
     });
-    expect(lines).toHaveLength(12);
+    expect(lines).toHaveLength(13);
     expect(lines.some((line) => line.includes("detail of a"))).toBe(true);
     // The floor never exceeds the height budget.
     const capped = renderOverlay(spec(["a"]), ["a"], 0, 60, 10, {
@@ -165,8 +165,17 @@ describe("renderOverlay", () => {
 
   test("empty list renders the empty text", () => {
     const lines = renderOverlay(spec([]), [], 0, 40, 20);
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(4);
     expect(lines[1]).toContain("Nothing here.");
+  });
+
+  test("a blank row separates the content from the footer hints", () => {
+    const lines = renderOverlay(spec(["a", "b"]), ["a", "b"], 0, 40, 20);
+    // Last content row before the bottom border carries nothing but padding.
+    expect(lines.at(-2)?.replaceAll(" ", "")).toBe("││");
+    expect(lines.at(-3)).toContain("detail of a");
+    // Still exact-width, like every other row.
+    expect(visibleWidth(lines.at(-2) as string)).toBe(40);
   });
 
   test("selection index is clamped", () => {
@@ -211,7 +220,7 @@ describe("renderOverlay", () => {
       spec(["a"], () => ["one", "two"]),
       () => {},
     );
-    expect(small.render(60)).toHaveLength(6);
+    expect(small.render(60)).toHaveLength(7);
     small.dispose();
 
     const big = new SplitPaneOverlay(

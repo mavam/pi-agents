@@ -30,6 +30,9 @@ import { type Colorize, plainColorize, type RunWidget } from "./widget.js";
 
 const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
+/** Rows the frame itself owns: title border, table/detail separator, the
+ * breathing room above the footer, and the footer border. */
+const CHROME_ROWS = 4;
 
 /** Border text; a function makes it dynamic (e.g. per drill-down mode). */
 export type OverlayChrome = string | (() => string);
@@ -135,7 +138,7 @@ function paneRows(
   height: number,
   reservedRows = 0,
 ): { tableRows: number; detailRows: number } {
-  const available = Math.max(2, height - 3 - reservedRows);
+  const available = Math.max(2, height - CHROME_ROWS - reservedRows);
   const tableRows = Math.min(
     itemCount,
     MAX_TABLE_ROWS,
@@ -214,6 +217,7 @@ export function renderOverlay<T>(
       edgeLine(["╭", "╮"], color("accent", chrome(spec.title)), width, color),
     );
     lines.push(boxLine(color("dim", chrome(spec.emptyText)), width, color));
+    lines.push(boxLine("", width, color));
     lines.push(
       edgeLine(
         ["╰", "╯"],
@@ -266,6 +270,10 @@ export function renderOverlay<T>(
     lines.push(boxLine("", width, color));
 
   for (const line of composerLines) lines.push(boxLine(line, width, color));
+
+  // Breathing room: the footer hints are chrome, not content, and butting them
+  // straight against the last detail row makes the two hard to tell apart.
+  lines.push(boxLine("", width, color));
 
   const hints = footerOverride ?? spec.footerFor?.(item) ?? chrome(spec.footer);
   lines.push(

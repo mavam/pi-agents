@@ -633,8 +633,7 @@ opens in place of the composer — where pi shows `/settings` and `/model` — s
 it appears right where you were typing instead of a screenful away on tall
 terminals. It caps itself at roughly 80% of the terminal height to keep the
 conversation visible above, the table never moves, and the detail pane only
-ever grows downward. A blank row below the closing border keeps the panel from
-butting against pi's status line.
+ever grows downward.
 
 Detail longer than that budget scrolls instead of pushing the panel taller:
 

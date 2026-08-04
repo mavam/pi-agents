@@ -426,7 +426,7 @@ describe("budgets", () => {
     expect(peak).toBeLessThanOrEqual(2);
   });
 
-  test("effective budget limits propagate to children via env", async () => {
+  test("children receive only the delegation depth marker via env", async () => {
     const { engine, specs } = fakeEngine();
     const manager = new RunManager({ engine });
     const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
@@ -440,27 +440,7 @@ describe("budgets", () => {
     await done;
     const env = specs[0]?.env ?? {};
     expect(env.PI_AGENTS_DEPTH).toBe("1");
-    const inherited = JSON.parse(env.PI_AGENTS_BUDGETS ?? "{}");
-    expect(inherited).toMatchObject({ maxDepth: 1, maxAgents: 7 });
-  });
-
-  test("inherited defaults apply but per-run budgets win", async () => {
-    const { engine, specs } = fakeEngine();
-    const manager = new RunManager({
-      engine,
-      defaultBudgets: { maxAgents: 3, maxIterations: 2 },
-    });
-    const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
-    const { done } = manager.start({
-      flow,
-      cwd: projectDir,
-      scope: "project",
-      source: { kind: "tool" },
-      budgets: { maxAgents: 9 },
-    });
-    await done;
-    const inherited = JSON.parse(specs[0]?.env?.PI_AGENTS_BUDGETS ?? "{}");
-    expect(inherited).toMatchObject({ maxAgents: 9, maxIterations: 2 });
+    expect(env.PI_AGENTS_BUDGETS).toBeUndefined();
   });
 });
 

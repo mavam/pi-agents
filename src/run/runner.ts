@@ -8,7 +8,7 @@
  */
 
 import { renderSkillsPrompt } from "../catalog/skills.js";
-import { BUDGETS_ENV_VAR, DEPTH_ENV_VAR } from "../engine/subprocess.js";
+import { DEPTH_ENV_VAR } from "../engine/subprocess.js";
 import {
   SpawnAborted,
   type SpawnEngine,
@@ -40,13 +40,11 @@ export interface RunnerOptions {
   scope?: Scope;
   /** Project trust; when false, per-call scope overrides clamp to user. */
   trusted?: boolean;
-  /** Cross-process delegation depth of the current process. */
-  depth?: number;
   /** Active session model/thinking, used when the agent file sets none. */
   defaults?: SpawnDefaults;
   /** Resolve explicit node/profile models to provider-qualified ids. */
   resolveModel?: ResolveModel;
-  /** Effective budget limits, inherited by delegated processes. */
+  /** Effective budget limits enforced by the per-agent watchdog. */
   budgetLimits?: EffectiveBudgets;
   /** Discovery caches shared with preflight, so resolution happens once. */
   catalogs?: CatalogCache;
@@ -62,7 +60,10 @@ export interface RunnerOptions {
 export function delegationPreamble(output: OutputMode): string {
   const lines = [
     "You run non-interactively as a delegated agent inside a workflow:",
-    "nobody can reply to you, and only the text of your final message is",
+    "this assignment is delegated work, not fresh user intent. Perform the",
+    "assignment directly. Do not invoke workflows or delegate it further;",
+    "if the assignment asks for delegation, perform the underlying work",
+    "yourself. Nobody can reply to you, and only your final message is",
     "returned to the caller as your result — everything before it is",
     "discarded. End your turn with one dedicated message containing the",
     "complete deliverable itself, not a summary of what you did, a",
@@ -80,7 +81,6 @@ export function delegationPreamble(output: OutputMode): string {
 }
 
 export function createAgentRunner(options: RunnerOptions): AgentRunner {
-  const depth = options.depth ?? 0;
   const trusted = options.trusted ?? true;
   const catalogs = options.catalogs ?? new CatalogCache();
   return async (call: AgentCall) => {
@@ -102,12 +102,12 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
     parts.push(delegationPreamble(call.output));
     const systemPrompt = parts.filter(Boolean).join("\n\n");
 
+    // pi-agents registers only in the root process (depth 0), so every
+    // delegated child sits at depth 1. The marker keeps pi-agents inert in
+    // any Pi process the child may launch with an inherited environment.
     const env: Record<string, string> = {
-      [DEPTH_ENV_VAR]: String(depth + 1),
+      [DEPTH_ENV_VAR]: "1",
     };
-    if (options.budgetLimits) {
-      env[BUDGETS_ENV_VAR] = JSON.stringify(options.budgetLimits);
-    }
 
     const handle = options.engine.spawn({
       agent: profile?.name ?? ADHOC_LABEL,

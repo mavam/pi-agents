@@ -31,6 +31,12 @@ export function effectiveScope(
 export type OutputMode = "text" | "json";
 
 /**
+ * Extension-owned orchestration tools that delegated agents cannot receive.
+ * Saved workflow composition belongs to the originating interpreter instead.
+ */
+export const DELEGATED_AGENT_FORBIDDEN_TOOLS = ["workflow", "steer"] as const;
+
+/**
  * Thinking levels, in ascending order. Lives here (not in the catalog) so
  * structural validation can check a level without importing anything from pi.
  */

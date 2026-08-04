@@ -1,8 +1,7 @@
 /**
- * pi-agents extension entry point: constructs the engine, run manager, and
- * UI managers; registers the workflow tool, slash commands, event hooks,
- * cross-extension RPC, and the system-prompt catalogs; and rebuilds run
- * history from the sidecar store next to the session file.
+ * pi-agents extension entry point: keeps delegated processes inert, while the
+ * originating process constructs the run infrastructure and registers every
+ * orchestration surface.
  */
 
 import { createRequire } from "node:module";
@@ -13,11 +12,9 @@ import type {
 import { buildModelCatalog, createModelRefresher } from "./catalog/models.js";
 import { buildSystemPromptAppendix } from "./catalog/prompt.js";
 import {
-  BUDGETS_ENV_VAR,
   createSubprocessSpawnEngine,
   DEPTH_ENV_VAR,
 } from "./engine/subprocess.js";
-import type { Budgets } from "./model/ast.js";
 import {
   getSessionFile,
   isProjectTrusted,
@@ -52,21 +49,13 @@ function currentDepth(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-/** Budget limits inherited from a parent pi-agents process, if any. */
-function inheritedBudgets(): Budgets | undefined {
-  const raw = process.env[BUDGETS_ENV_VAR];
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as Budgets;
-    return typeof parsed === "object" && parsed !== null ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
+/** Register pi-agents only in the originating Pi process. */
+export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
+  // Delegated agents are terminal workflow leaves. Their parent interpreter
+  // already owns the complete static graph, lifecycle, budget, and result.
+  if (depth > 0) return;
 
-export default function agentExtension(pi: ExtensionAPI): void {
   const engine = createSubprocessSpawnEngine();
-  const depth = currentDepth();
 
   // Assigned right below; the manager's callbacks fire only once runs exist.
   let notifications: NotificationManager;
@@ -75,8 +64,6 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   const manager = new RunManager({
     engine,
-    depth,
-    defaultBudgets: inheritedBudgets(),
     onEvent: (event) => notifications.handleRunEvent(event),
     onStateChanged: () => {
       widget.update();
@@ -96,9 +83,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
   pi.registerTool(createSteerTool(deps));
   registerCommands(pi, deps);
 
-  // Event hooks only run in the root process: delegated children would
-  // otherwise re-trigger the same workflows from their own lifecycle events.
-  const hooks = depth === 0 ? new HookManager(pi, deps) : undefined;
+  const hooks = new HookManager(pi, deps);
   const rpc = new RpcManager(pi, deps, PACKAGE_VERSION);
   rpc.install();
 
@@ -131,7 +116,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     reloadRunState(ctx);
     const trusted = isProjectTrusted(ctx);
     registerWorkflowCommands(pi, ctx.cwd, deps, trusted);
-    hooks?.refresh(ctx.cwd, trusted);
+    hooks.refresh(ctx.cwd, trusted);
     publishReady(pi, PACKAGE_VERSION);
   });
 
@@ -162,7 +147,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", () => {
     rpc.dispose();
-    hooks?.dispose();
+    hooks.dispose();
     widget.dispose();
     footerReporter.dispose();
     manager.stopAll();
@@ -171,7 +156,11 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   // Register hooks after core lifecycle handlers so session context and the
   // ready signal are established before a session_start workflow can run.
-  hooks?.install();
+  hooks.install();
+}
+
+export default function agentExtension(pi: ExtensionAPI): void {
+  registerAgentExtension(pi, currentDepth());
 }
 
 export { MESSAGE_TYPE, NOTIFICATION_TYPE };

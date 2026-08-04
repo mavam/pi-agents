@@ -28,6 +28,7 @@ import {
 } from "../catalog/skills.js";
 import {
   type AgentExecutionOptions,
+  DELEGATED_AGENT_FORBIDDEN_TOOLS,
   effectiveScope,
   type Scope,
 } from "../model/ast.js";
@@ -215,6 +216,16 @@ export function resolveInvocation(
     else problems.push(`${resolution.message} ${where(cwd, scope)}`);
   }
 
+  const tools = call.tools !== undefined ? call.tools : profile?.tools;
+  const forbiddenTools = tools?.filter((tool) =>
+    DELEGATED_AGENT_FORBIDDEN_TOOLS.some((forbidden) => forbidden === tool),
+  );
+  if (forbiddenTools && forbiddenTools.length > 0) {
+    problems.push(
+      `delegated agents cannot use orchestration tools (${forbiddenTools.join(", ")}) ${where(cwd, scope)}; compose the work in the parent flow with workflow, parallel, map, loop, or while nodes`,
+    );
+  }
+
   if (problems.length > 0) return { ok: false, cwd, scope, problems };
 
   return {
@@ -230,7 +241,7 @@ export function resolveInvocation(
       // An anonymous call with no selection retains normal Pi discovery.
       // Every explicit call-site list and every named profile is closed.
       disableSkillDiscovery: call.skills !== undefined || profile !== undefined,
-      tools: call.tools !== undefined ? call.tools : profile?.tools,
+      tools,
     },
   };
 }

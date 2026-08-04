@@ -42,6 +42,9 @@ function call(overrides: Partial<AgentCall> = {}): AgentCall {
 describe("delegationPreamble", () => {
   test("states the final-message result contract", () => {
     const text = delegationPreamble("text");
+    expect(text).toContain("not fresh user intent");
+    expect(text).toContain("Do not invoke workflows or delegate it further");
+    expect(text).toContain("perform the underlying work");
     expect(text).toContain("final message");
     expect(text).toContain("deliverable");
     expect(text).not.toContain("JSON");

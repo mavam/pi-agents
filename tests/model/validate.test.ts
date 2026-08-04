@@ -858,6 +858,24 @@ describe("execution options", () => {
     );
   });
 
+  test("agent nodes cannot request orchestration tools", () => {
+    expectIssue(
+      { kind: "agent", task: "t", tools: ["read", "workflow"] },
+      "delegated agents cannot use orchestration tools (workflow)",
+    );
+  });
+
+  test("reducers cannot request orchestration tools", () => {
+    expectIssue(
+      {
+        kind: "parallel",
+        branches: { a: { kind: "value", value: "a" } },
+        reduce: { task: "merge {branches}", tools: ["steer"] },
+      },
+      "delegated agents cannot use orchestration tools (steer)",
+    );
+  });
+
   test("thinking is checked against the known levels", () => {
     expectValid({ kind: "agent", task: "t", thinking: "xhigh" });
     expectIssue(

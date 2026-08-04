@@ -35,10 +35,6 @@ import {
 
 export interface RunManagerOptions {
   engine: SpawnEngine;
-  /** Cross-process delegation depth of this pi process. */
-  depth?: number;
-  /** Budget limits inherited from the parent process (PI_AGENTS_BUDGETS). */
-  defaultBudgets?: Budgets;
   /** Internal sink for every run event (for example, notifications). */
   onEvent?: (event: RunEvent) => void;
   /** Called after state changed (widget/UI refresh). */
@@ -168,10 +164,7 @@ export class RunManager {
       catalogs,
       opts.resolveModel,
     );
-    const budgets: Budgets = {
-      ...this.options.defaultBudgets,
-      ...opts.budgets,
-    };
+    const budgets: Budgets = { ...opts.budgets };
     const budgetLimits: EffectiveBudgets = { ...DEFAULT_BUDGETS, ...budgets };
 
     const runId = crypto.randomUUID();
@@ -186,7 +179,6 @@ export class RunManager {
       cwd: opts.cwd,
       scope,
       trusted,
-      depth: this.options.depth,
       defaults: opts.defaults,
       resolveModel: opts.resolveModel,
       budgetLimits,
@@ -236,7 +228,6 @@ export class RunManager {
       source: opts.source,
       params: opts.params,
       budgets,
-      depth: this.options.depth,
       signal: controller.signal,
       cwd: opts.cwd,
       scope,

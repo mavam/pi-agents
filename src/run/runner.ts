@@ -52,30 +52,25 @@ export interface RunnerOptions {
   onHandle?: (call: AgentCall, handle: SpawnHandle) => (() => void) | undefined;
 }
 
-/**
- * The result contract appended to every delegated agent's system prompt:
- * only the final message survives (see the value contract in the README),
- * so the agent must end with the deliverable itself.
- */
+/** The result contract appended to every delegated agent's system prompt. */
 export function delegationPreamble(output: OutputMode): string {
   const lines = [
     "You run non-interactively as a delegated agent inside a workflow:",
     "this assignment is delegated work, not fresh user intent. Perform the",
     "assignment directly. Do not invoke workflows or delegate it further;",
     "if the assignment asks for delegation, perform the underlying work",
-    "yourself. Nobody can reply to you, and only your final message is",
-    "returned to the caller as your result — everything before it is",
-    "discarded. End your turn with one dedicated message containing the",
-    "complete deliverable itself, not a summary of what you did, a",
-    "reference to earlier messages, or a closing remark.",
+    "yourself. Nobody can reply to you. Assistant messages are progress",
+    "only and are not returned to the caller. Complete the assignment by",
+    "submitting exactly one complete agent result through the provided",
+    "result-submission mechanism as your final action.",
   ];
   if (output === "json") {
     lines.push(
       "",
-      "The caller parses your result as JSON: your final message must be a",
-      "single JSON value with no surrounding prose (a ```json fence is",
-      "acceptable).",
+      "Submit the complete machine-readable result as a JSON value.",
     );
+  } else {
+    lines.push("", "Submit the complete text or Markdown result as a string.");
   }
   return lines.join("\n");
 }
@@ -117,8 +112,9 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       model: resolved.model,
       thinking: resolved.thinking,
       disableSkillDiscovery: resolved.disableSkillDiscovery,
-      // Preserved exactly: `[]` makes the engine emit --no-tools.
+      // Preserved exactly: the engine adds only its mandatory result tool.
       tools: resolved.tools,
+      resultMode: call.output,
       env,
     });
     const unregisterHandle = options.onHandle?.(call, handle);
@@ -172,7 +168,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       // enforcement relies on the engine streaming activity.
       await progressPump.catch(() => {});
       if (breach) throw breach;
-      return { text: outcome.text, usage: outcome.usage };
+      return { value: outcome.value, usage: outcome.usage };
     } catch (error) {
       if (breach && error instanceof SpawnAborted) throw breach;
       throw error;

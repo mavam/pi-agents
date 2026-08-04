@@ -313,7 +313,7 @@ describe("renderRunTree", () => {
       runId: "r1",
       flow,
       runAgent: async (call) =>
-        call.agent === "scout" ? { text: '["a","b","c"]' } : { text: "ok" },
+        call.agent === "scout" ? { value: ["a", "b", "c"] } : { value: "ok" },
       emit: (event) => events.push(event),
     });
     const run = rebuildRunState(events).runs.get("r1");
@@ -373,7 +373,7 @@ describe("renderRunTree", () => {
       runId: "loop-progress",
       flow: loop,
       runAgent: async (call) => ({
-        text: call.task === "round 0" ? '{"done":false}' : '{"done":true}',
+        value: { done: call.task !== "round 0" },
       }),
       budgets: { maxIterations: 2 },
       emit: (event) => loopEvents.push(event),
@@ -401,7 +401,7 @@ describe("renderRunTree", () => {
     await executeFlow({
       runId: "while-progress",
       flow: whileFlow,
-      runAgent: async () => ({ text: "unused" }),
+      runAgent: async () => ({ value: "unused" }),
       emit: (event) => whileEvents.push(event),
     });
     const whileRun = rebuildRunState(whileEvents).runs.get("while-progress");
@@ -438,7 +438,7 @@ describe("renderRunTree", () => {
       flow,
       runAgent: async (call) => {
         const [target = 0, round = 0] = call.task.split(":").map(Number);
-        return { text: JSON.stringify({ done: round + 1 >= target }) };
+        return { value: { done: round + 1 >= target } };
       },
       emit: (event) => events.push(event),
     });
@@ -487,8 +487,8 @@ describe("renderRunTree", () => {
       flow,
       runAgent: async (call) =>
         call.agent === "gate"
-          ? { text: '{"status": "rejected"}' }
-          : { text: "done" },
+          ? { value: { status: "rejected" } }
+          : { value: "done" },
       emit: (event) => events.push(event),
     });
     const chosenStarted = events.findIndex(
@@ -547,7 +547,7 @@ describe("renderRunTree", () => {
     await executeFlow({
       runId: "dynamic-switch",
       flow,
-      runAgent: async () => ({ text: "ok" }),
+      runAgent: async () => ({ value: "ok" }),
       emit: (event) => events.push(event),
     });
     const firstChoice = events.findIndex(
@@ -579,7 +579,7 @@ describe("renderRunTree", () => {
     await executeFlow({
       runId: "r3",
       flow,
-      runAgent: async () => ({ text: "ok" }),
+      runAgent: async () => ({ value: "ok" }),
       emit: (event) => events.push(event),
     });
     // Round-trip through JSON exactly like the sidecar persistence does.
@@ -612,7 +612,7 @@ describe("renderRunTree", () => {
       flow,
       runAgent: async (call) => {
         if (call.agent === "b") throw new Error("kaput");
-        return { text: "ok" };
+        return { value: "ok" };
       },
       emit: (event) => events.push(event),
     });

@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import {
+  RESULT_MODE_ENV_VAR,
+  RESULT_TOOL_NAME,
+} from "../../src/engine/result-tool.js";
+import {
   createSubprocessSpawnEngine,
   formatFailureReason,
   isChildProcessRunning,
@@ -164,8 +168,31 @@ async function ready(proc: FakeProc): Promise<void> {
   throw new Error("fake RPC process never received prompt");
 }
 
-function finish(proc: FakeProc, text = "ok"): void {
+let resultCallSequence = 0;
+
+function submitResult(proc: FakeProc, value: unknown = "ok"): void {
+  const toolCallId = `result-${++resultCallSequence}`;
+  proc.emitRecord({
+    type: "tool_execution_start",
+    toolCallId,
+    toolName: RESULT_TOOL_NAME,
+    args: { value },
+  });
+  proc.emitRecord({
+    type: "tool_execution_end",
+    toolCallId,
+    toolName: RESULT_TOOL_NAME,
+    result: {
+      content: [{ type: "text", text: "Agent result accepted." }],
+      details: { value },
+    },
+    isError: false,
+  });
+}
+
+function finish(proc: FakeProc, text = "ok", value: unknown = text): void {
   proc.emitAssistant(text);
+  submitResult(proc, value);
   proc.emitRecord({ type: "agent_end", messages: [], willRetry: false });
   proc.settle();
   proc.close(0);
@@ -178,6 +205,7 @@ describe("subprocess spawn engine", () => {
       agent: "scout",
       task: "find things",
       cwd: "/tmp/x",
+      resultMode: "text",
       model: "some-model",
       thinking: "low",
       tools: ["read", "grep"],
@@ -188,8 +216,12 @@ describe("subprocess spawn engine", () => {
     expect(spawned.args).not.toContain("-p");
     expect(spawned.args).toContain("some-model");
     expect(spawned.args).toContain("--thinking");
+    expect(spawned.args).toContain("--extension");
     expect(spawned.args).toContain("--tools");
-    expect(spawned.args).toContain("read,grep");
+    expect(spawned.args).toContain(`read,grep,${RESULT_TOOL_NAME}`);
+    expect(spawned.options.env).toMatchObject({
+      [RESULT_MODE_ENV_VAR]: "text",
+    });
 
     await ready(spawned.proc);
     expect(spawned.proc.stdin.records.map((record) => record.type)).toEqual([
@@ -201,7 +233,7 @@ describe("subprocess spawn engine", () => {
 
     finish(spawned.proc, "hello");
     const outcome = await handle.wait();
-    expect(outcome.text).toBe("hello");
+    expect(outcome.value).toBe("hello");
     expect(outcome.usage.turns).toBe(1);
     expect(outcome.usage.input).toBe(10);
     expect(outcome.usage.cost).toBeCloseTo(0.03);
@@ -216,9 +248,11 @@ describe("subprocess spawn engine", () => {
       agent: "locked",
       task: "t",
       cwd: "/tmp",
+      resultMode: "text",
       tools: [],
     });
-    expect(empty.procs[0]?.args).toContain("--no-tools");
+    expect(empty.procs[0]?.args).not.toContain("--no-tools");
+    expect(empty.procs[0]?.args).toContain(RESULT_TOOL_NAME);
     finish(empty.procs[0]?.proc as FakeProc);
     await emptyHandle.wait();
 
@@ -227,6 +261,7 @@ describe("subprocess spawn engine", () => {
       agent: "open",
       task: "t",
       cwd: "/tmp",
+      resultMode: "text",
     });
     expect(open.procs[0]?.args).not.toContain("--no-tools");
     expect(open.procs[0]?.args).not.toContain("--tools");
@@ -240,6 +275,7 @@ describe("subprocess spawn engine", () => {
       agent: "closed",
       task: "t",
       cwd: "/tmp",
+      resultMode: "text",
       disableSkillDiscovery: true,
     });
     expect(closed.procs[0]?.args).toContain("--no-skills");
@@ -251,6 +287,7 @@ describe("subprocess spawn engine", () => {
       agent: "ambient",
       task: "t",
       cwd: "/tmp",
+      resultMode: "text",
     });
     expect(ambient.procs[0]?.args).not.toContain("--no-skills");
     finish(ambient.procs[0]?.proc as FakeProc);
@@ -263,6 +300,7 @@ describe("subprocess spawn engine", () => {
       agent: "scout",
       task: "t",
       cwd: "/tmp",
+      resultMode: "text",
       systemPrompt: "You are a scout.",
     });
     const args = procs[0]?.args ?? [];
@@ -276,18 +314,121 @@ describe("subprocess spawn engine", () => {
 
   test("agent_end is not completion; agent_settled is", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     proc.emitAssistant("first");
     proc.emitRecord({ type: "agent_end", messages: [], willRetry: true });
     expect(proc.stdin.ended).toBe(false);
     proc.emitAssistant("second");
+    submitResult(proc, "submitted");
     proc.settle();
     expect(proc.stdin.ended).toBe(true);
     proc.close(0);
     const outcome = await handle.wait();
-    expect(outcome.text).toBe("second");
+    expect(outcome.value).toBe("submitted");
     expect(outcome.usage.turns).toBe(2);
+  });
+
+  test("assistant prose without a submitted result fails", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitAssistant("This is not a submitted result.");
+    proc.settle();
+    proc.close(0);
+    await expect(handle.wait()).rejects.toThrow(
+      "Agent w finished without submitting a result.",
+    );
+  });
+
+  test("a rejected submission can be corrected", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "json",
+    });
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "rejected",
+      toolName: RESULT_TOOL_NAME,
+      args: {},
+    });
+    proc.emitRecord({
+      type: "tool_execution_end",
+      toolCallId: "rejected",
+      toolName: RESULT_TOOL_NAME,
+      result: { content: [{ type: "text", text: "Validation failed" }] },
+      isError: true,
+    });
+    submitResult(proc, { ok: true });
+    proc.settle();
+    proc.close(0);
+    await expect(handle.wait()).resolves.toMatchObject({
+      value: { ok: true },
+    });
+    expect(procs[0]?.options.env).toMatchObject({
+      [RESULT_MODE_ENV_VAR]: "json",
+    });
+  });
+
+  test("a successful submission without details fails the protocol", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "invalid",
+      toolName: RESULT_TOOL_NAME,
+      args: { value: "result" },
+    });
+    proc.emitRecord({
+      type: "tool_execution_end",
+      toolCallId: "invalid",
+      toolName: RESULT_TOOL_NAME,
+      result: { content: [{ type: "text", text: "accepted" }] },
+      isError: false,
+    });
+    proc.settle();
+    proc.close(0);
+    await expect(handle.wait()).rejects.toThrow(
+      "result submission completed without a value",
+    );
+  });
+
+  test("more than one accepted submission fails the protocol", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
+    const proc = procs[0]?.proc as FakeProc;
+    submitResult(proc, "first");
+    submitResult(proc, "second");
+    proc.settle();
+    proc.close(0);
+    await expect(handle.wait()).rejects.toThrow(
+      "submitted more than one result",
+    );
   });
 
   test("accepted extension commands without an agent run fail promptly", async () => {
@@ -304,7 +445,12 @@ describe("subprocess spawn engine", () => {
         },
       ],
     });
-    const handle = engine.spawn({ agent: "w", task: "/noop", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "/noop",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     for (let i = 0; i < 10 && !proc.stdin.ended; i++) {
       await Promise.resolve();
@@ -323,7 +469,12 @@ describe("subprocess spawn engine", () => {
     const { engine, procs } = makeEngine(undefined, undefined, {
       promptStartsAgent: false,
     });
-    const handle = engine.spawn({ agent: "w", task: "handled", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "handled",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     for (let i = 0; i < 10 && !proc.stdin.ended; i++) {
       await Promise.resolve();
@@ -340,7 +491,12 @@ describe("subprocess spawn engine", () => {
       promptStartsAgent: false,
       manualGetState: true,
     });
-    const handle = engine.spawn({ agent: "w", task: "fast", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "fast",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     let getState: Record<string, unknown> | undefined;
     for (let i = 0; i < 10 && !getState; i++) {
@@ -359,7 +515,7 @@ describe("subprocess spawn engine", () => {
       data: { isStreaming: false, pendingMessageCount: 0 },
     });
     finish(proc, "done");
-    await expect(handle.wait()).resolves.toMatchObject({ text: "done" });
+    await expect(handle.wait()).resolves.toMatchObject({ value: "done" });
   });
 
   test("settled children that ignore stdin EOF escalate to TERM then KILL", async () => {
@@ -367,22 +523,33 @@ describe("subprocess spawn engine", () => {
       terminateAfterMs: 1,
       forceKillAfterMs: 1,
     });
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     await ready(proc);
     await Promise.resolve();
     proc.emitAssistant("done");
+    submitResult(proc, "done");
     proc.settle();
     expect(proc.stdin.ended).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(proc.killed).toEqual(["SIGTERM", "SIGKILL"]);
     proc.close(0, "SIGKILL");
-    await expect(handle.wait()).resolves.toMatchObject({ text: "done" });
+    await expect(handle.wait()).resolves.toMatchObject({ value: "done" });
   });
 
   test("failed RPC initialization rejects with the command error", async () => {
     const { engine, procs } = makeEngine("set_steering_mode");
-    const handle = engine.spawn({ agent: "worker", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "worker",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     for (let i = 0; i < 10 && !procs[0]?.proc.stdin.ended; i++) {
       await Promise.resolve();
     }
@@ -398,7 +565,12 @@ describe("subprocess spawn engine", () => {
 
   test("nonzero exit before settlement rejects with SpawnFailure", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "worker", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "worker",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     procs[0]?.proc.stderr.emit("data", "something broke");
     procs[0]?.proc.close(2);
     await expect(handle.wait()).rejects.toThrow(SpawnFailure);
@@ -410,7 +582,12 @@ describe("subprocess spawn engine", () => {
 
   test("stopReason error rejects even after settlement", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     proc.emitAssistant("partial", {
       stopReason: "error",
@@ -423,7 +600,12 @@ describe("subprocess spawn engine", () => {
 
   test("abort uses RPC after readiness and rejects with SpawnAborted", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     await ready(proc);
     await Promise.resolve();
@@ -440,7 +622,12 @@ describe("subprocess spawn engine", () => {
 
   test("steer waits for readiness and receives correlated acknowledgement", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     await handle.steer?.("change course");
     expect(
@@ -455,7 +642,12 @@ describe("subprocess spawn engine", () => {
 
   test("streams progress updates", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const seen: string[] = [];
     const reader = (async () => {
       for await (const update of handle.updates) seen.push(update.text);
@@ -463,16 +655,22 @@ describe("subprocess spawn engine", () => {
     const proc = procs[0]?.proc as FakeProc;
     proc.emitAssistant("first");
     proc.emitAssistant("second");
+    submitResult(proc, "result");
     proc.settle();
     proc.close(0);
     await handle.wait();
     await reader;
-    expect(seen).toEqual(["first", "second"]);
+    expect(seen.slice(0, 2)).toEqual(["first", "second"]);
   });
 
   test("keeps a bounded chronological tail of assistant and tool activity", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const tails: string[] = [];
     const reader = (async () => {
       for await (const update of handle.updates) {
@@ -505,6 +703,7 @@ describe("subprocess spawn engine", () => {
     });
     proc.emitRecord({ type: "turn_start" });
     proc.emitAssistant("Everything passes.");
+    submitResult(proc, "result");
     proc.settle();
     proc.close(0);
     await handle.wait();
@@ -519,25 +718,40 @@ describe("subprocess spawn engine", () => {
 
   test("bounds a single oversized activity entry", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
-    let tail = "";
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
+    let longestTail = "";
     const reader = (async () => {
-      for await (const update of handle.updates) tail = update.tail ?? tail;
+      for await (const update of handle.updates) {
+        if ((update.tail?.length ?? 0) > longestTail.length) {
+          longestTail = update.tail ?? longestTail;
+        }
+      }
     })();
     const proc = procs[0]?.proc as FakeProc;
     proc.emitRecord({ type: "turn_start" });
     proc.emitAssistant("x".repeat(MAX_ACTIVITY_TAIL_CHARS + 1_000));
+    submitResult(proc, "result");
     proc.settle();
     proc.close(0);
     await handle.wait();
     await reader;
-    expect(tail.length).toBe(MAX_ACTIVITY_TAIL_CHARS);
-    expect(tail).toStartWith("… earlier activity omitted …\n");
+    expect(longestTail.length).toBe(MAX_ACTIVITY_TAIL_CHARS);
+    expect(longestTail).toStartWith("… earlier activity omitted …\n");
   });
 
   test("strict JSONL preserves chunking, CRLF, and Unicode separators", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     const text = "chunked still-one-line done";
     const line = `${JSON.stringify({
@@ -548,15 +762,21 @@ describe("subprocess spawn engine", () => {
     const mid = bytes.indexOf(Buffer.from(" ")) + 1;
     proc.stdout.emit("data", bytes.subarray(0, mid));
     proc.stdout.emit("data", bytes.subarray(mid));
+    submitResult(proc, text);
     proc.settle();
     proc.close(0);
     const outcome = await handle.wait();
-    expect(outcome.text).toBe(text);
+    expect(outcome.value).toBe(text);
   });
 
   test("blocking extension UI requests are cancelled", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     proc.emitRecord({
       type: "extension_ui_request",
@@ -575,7 +795,12 @@ describe("subprocess spawn engine", () => {
 
   test("malformed RPC output fails the spawn", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     proc.settle();
     proc.stdout.emit("data", "{broken");
@@ -585,7 +810,12 @@ describe("subprocess spawn engine", () => {
 
   test("malformed assistant content fails only the delegated spawn", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const proc = procs[0]?.proc as FakeProc;
     expect(() =>
       proc.emitRecord({
@@ -627,7 +857,12 @@ describe("failure formatting", () => {
 describe("turn and tool activity", () => {
   test("turn_start and tool execution events stream as updates", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const seen: Array<{ turnsStarted?: number; currentTool?: string }> = [];
     const reader = (async () => {
       for await (const update of handle.updates) {
@@ -653,11 +888,12 @@ describe("turn and tool activity", () => {
       isError: false,
     });
     proc.emitAssistant("worked");
+    submitResult(proc, "result");
     proc.settle();
     proc.close(0);
     await handle.wait();
     await reader;
-    expect(seen).toEqual([
+    expect(seen.slice(0, 4)).toEqual([
       { turnsStarted: 1, currentTool: undefined },
       { turnsStarted: 1, currentTool: "bash" },
       { turnsStarted: 1, currentTool: undefined },
@@ -667,7 +903,12 @@ describe("turn and tool activity", () => {
 
   test("completed turns back up turnsStarted for older engines", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const seen: number[] = [];
     const reader = (async () => {
       for await (const update of handle.updates) {
@@ -677,18 +918,24 @@ describe("turn and tool activity", () => {
     const proc = procs[0]?.proc as FakeProc;
     proc.emitAssistant("one");
     proc.emitAssistant("two");
+    submitResult(proc, "result");
     proc.settle();
     proc.close(0);
     await handle.wait();
     await reader;
-    expect(seen).toEqual([1, 2]);
+    expect(seen.slice(0, 2)).toEqual([1, 2]);
   });
 });
 
 describe("overlapping tools and streamed text", () => {
   test("concurrent tool executions correlate by toolCallId", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const seen: Array<string | undefined> = [];
     const reader = (async () => {
       for await (const update of handle.updates) seen.push(update.currentTool);
@@ -721,16 +968,22 @@ describe("overlapping tools and streamed text", () => {
       result: {},
       isError: false,
     });
+    submitResult(proc, "result");
     proc.settle();
     proc.close(0);
     await handle.wait();
     await reader;
-    expect(seen).toEqual(["bash", "read", "read", undefined]);
+    expect(seen.slice(0, 4)).toEqual(["bash", "read", "read", undefined]);
   });
 
   test("message_update streams in-flight text, throttled", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const seen: string[] = [];
     const reader = (async () => {
       for await (const update of handle.updates) seen.push(update.text);
@@ -745,17 +998,23 @@ describe("overlapping tools and streamed text", () => {
     partial("half an");
     partial("half an answer"); // within the throttle window: not pushed
     proc.emitAssistant("the full answer");
+    submitResult(proc, "submitted answer");
     proc.settle();
     proc.close(0);
     const outcome = await handle.wait();
     await reader;
-    expect(seen).toEqual(["half an", "the full answer"]);
-    expect(outcome.text).toBe("the full answer");
+    expect(seen.slice(0, 2)).toEqual(["half an", "the full answer"]);
+    expect(outcome.value).toBe("submitted answer");
   });
 
   test("flushes the newest assistant tail when the stream is cut off", async () => {
     const { engine, procs } = makeEngine();
-    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+      resultMode: "text",
+    });
     const tails: string[] = [];
     const reader = (async () => {
       for await (const update of handle.updates) {

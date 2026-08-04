@@ -68,7 +68,7 @@ and saved workflows inline like function calls.
 
 | Icon | Node       | Meaning                                                   | Value                                      |
 | :--: | ---------- | --------------------------------------------------------- | ------------------------------------------ |
-| `✦`  | `agent`    | Run one delegated agent on a task (the only leaf).        | Its final message's text, or parsed JSON.  |
+| `✦`  | `agent`    | Run one delegated agent on a task (the only leaf).        | Its explicitly submitted result.          |
 | `≡`  | `sequence` | Run steps in order.                                       | The last step's value.                     |
 | `⑃`  | `parallel` | Run named branches concurrently, optionally `⑂` reduce.   | `{branch: value}`, or the reducer's value. |
 | `⇶`  | `map`      | Fan out a body per element of a runtime array.            | Array of body values, or the reducer's.    |
@@ -145,7 +145,7 @@ description: Maps a codebase and proposes implementation plans
 model: openai-codex/gpt-5.6-terra  # optional; defaults to the active session model
 thinking: medium           # optional: off|minimal|low|medium|high|xhigh
 skills: []                 # closed skill set for this profile
-tools: [read, grep, find]  # optional allowlist; [] means NO tools at all
+tools: [read, grep, find]  # optional working-tool allowlist; [] means none
 ---
 
 You are a planning agent. Map the relevant code and return a concrete plan with
@@ -181,7 +181,7 @@ task: |-
   Review {params.target}.
   Focus: {params.focus}
   Context: {params.context}
-  Return the structured review JSON contract.
+  Submit the structured review contract as the complete agent result.
 thinking: high
 output: json
 tools: [read, bash]
@@ -347,11 +347,11 @@ saved profile).
 kind: agent
 task: "Analyze {previous}"
 name: specialist        # optional; must match a discovered agent profile
-output: text            # or "json": parse the result (fences tolerated)
+output: text            # "text" requires a string; "json" accepts any JSON value
 model: some-model       # optional override (wins over the agent file)
 thinking: low           # optional override (wins over the agent file)
 skills: [my-review-guide] # optional closed set; [] disables skill discovery
-tools: [read, grep]     # optional allowlist; [] means NO tools at all
+tools: [read, grep]     # optional working-tool allowlist; [] means none
 as: findings            # binding name; only legal on direct sequence steps
 cwd: /path/override     # optional
 scope: both             # profile and skill discovery: user|project|both
@@ -367,11 +367,11 @@ skills as a closed set unless the node replaces them. On an anonymous call,
 omit `skills` to retain the child Pi process's normal ambient skill discovery.
 Any explicit list is closed: a non-empty list injects exactly those skills,
 and `skills: []` disables skill discovery. `tools` follows the same replacement
-precedence, and `tools: []` leaves the agent no way to read files — pair it
-with skill selection deliberately. `workflow` and `steer` are orchestration
-tools owned by the parent process, so agent and reducer allowlists cannot name
-them. Express that work with `workflow`, `parallel`, `map`, `loop`, or `while`
-nodes in the parent flow.
+precedence, and `tools: []` leaves the agent with no working tools. Pi-agents
+still supplies its mandatory result-submission tool. `workflow` and `steer` are
+orchestration tools owned by the parent process, so agent and reducer
+allowlists cannot name them. Express that work with `workflow`, `parallel`,
+`map`, `loop`, or `while` nodes in the parent flow.
 
 Skills are named, not inlined: `skills: [my-review-guide]` resolves against
 the user and project catalogs below. In precedence order, first match wins:
@@ -390,17 +390,18 @@ Pi packages can bundle skills through `pi.skills`, but pi-agents does not yet
 include package resources in delegated-node skill resolution. Put skills used
 by workflow nodes in one of the user or project locations above.
 
-**Value contract.** An agent's value is the text of its *last* assistant
-message — nothing else. Thinking, tool calls, tool output, and earlier
-messages are discarded (they only feed the live progress display), and the
-subprocess runs without a session, so no transcript exists anywhere: the
-final message is the delegated agent's sole artifact. With `output: json`
-that text is parsed into a JSON value (code fences tolerated; a parse
-failure fails the node). Write tasks so the agent *ends* with the complete
-deliverable — an agent that reports findings mid-session and closes with
-"done" yields the value `"done"`. Every delegated agent — ad-hoc ones
-included — has this contract appended to its system prompt, and `output:
-json` additionally instructs it to reply with a single raw JSON value.
+**Value contract.** An agent completes by using the provided **Submit Agent
+Result** tool exactly once. The accepted `value` becomes the node's value and
+terminates the delegated process. Assistant messages, thinking, working-tool
+calls, and tool output are transient activity for the live display; none of
+them can become the result. The subprocess runs without a session, so no
+transcript is retained.
+
+The `output` field selects the submitted value's schema. `output: text`
+requires one complete string, including any Markdown. `output: json` accepts
+any JSON value without parsing assistant prose. Pi returns rejected submissions
+to the agent for correction. If the process settles without one accepted
+submission, the agent fails. There is no final-message fallback.
 
 ### `sequence`
 

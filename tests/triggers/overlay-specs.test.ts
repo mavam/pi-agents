@@ -52,7 +52,7 @@ async function makeRun(
     flow,
     label: source.workflow,
     source,
-    runAgent: async () => ({ text: "ok" }),
+    runAgent: async () => ({ value: "ok" }),
     emit: (event) => events.push(event),
   });
   const kept = opts.running

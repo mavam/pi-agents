@@ -50,7 +50,7 @@ function immediateEngine(specs: SpawnSpec[]): SpawnEngine {
       return {
         status: "completed",
         updates: emptyUpdates(),
-        wait: async () => ({ text: "ok", exitCode: 0, usage: emptyUsage() }),
+        wait: async () => ({ value: "ok", exitCode: 0, usage: emptyUsage() }),
         abort: () => {},
       };
     },

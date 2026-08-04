@@ -36,6 +36,8 @@ export function addUsage(total: SpawnUsage, delta: SpawnUsage): void {
   total.turns += delta.turns;
 }
 
+export type ResultMode = "text" | "json";
+
 export interface SpawnSpec {
   /** Agent name, for labels and error messages. */
   agent: string;
@@ -49,8 +51,10 @@ export interface SpawnSpec {
   /** Disable the child Pi process's ambient skill discovery. Instructions
    * already included in `systemPrompt` remain available. */
   disableSkillDiscovery?: boolean;
-  /** Tool allowlist passed as `--tools a,b,c`. */
+  /** Working-tool allowlist; the engine always adds result submission. */
   tools?: string[];
+  /** Required schema for the delegated agent's submitted result. */
+  resultMode: ResultMode;
   /** Extra environment variables for the child process. */
   env?: Record<string, string>;
 }
@@ -70,7 +74,8 @@ export interface SpawnProgress {
 }
 
 export interface SpawnOutcome {
-  text: string;
+  /** Value accepted through the delegated agent's result-submission tool. */
+  value: unknown;
   exitCode: number;
   usage: SpawnUsage;
   /** Model that actually served the run, when reported. */

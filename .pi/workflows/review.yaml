@@ -118,7 +118,7 @@ task: |-
   approved and changes_required, and use a non-empty reason for
   cannot_proceed.
 
-  End with exactly one raw JSON object using this contract:
+  The complete submitted agent result must be one object using this contract:
   {
     "outcome": "changes_required",
     "reason": null,
@@ -139,7 +139,7 @@ task: |-
 
   Include every P1-P3 finding in actionable and no P4 findings there. Keep
   outcome, reason, and actionable mutually consistent. Put the complete
-  human-readable Markdown review in report despite returning JSON.
+  human-readable Markdown review in report.
 thinking: high
 output: json
 tools: [read, bash]

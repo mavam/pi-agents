@@ -65,7 +65,7 @@ export interface AgentExecutionOptions {
   /** Closed set of skills to inject; replaces ambient/profile skills. `[]`
    * disables skill discovery for the delegated process. */
   skills?: string[];
-  /** Tool allowlist for the delegated process; `[]` means no tools at all. */
+  /** Working-tool allowlist; `[]` leaves only result submission available. */
   tools?: string[];
   /** Working directory override for the delegated process. */
   cwd?: string;

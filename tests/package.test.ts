@@ -9,6 +9,16 @@ import {
 const packageRoot = path.resolve(import.meta.dir, "..");
 
 describe("npm package contents", () => {
+  test("ships the internal agent result extension", () => {
+    const extensionPath = path.join(
+      packageRoot,
+      "src",
+      "engine",
+      "result-tool.ts",
+    );
+    expect(fs.existsSync(extensionPath)).toBe(true);
+  });
+
   test("ships the standard bundled workflow files", () => {
     const packageJson = JSON.parse(
       fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8"),

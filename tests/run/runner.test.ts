@@ -21,7 +21,7 @@ function captureEngine(specs: SpawnSpec[]): SpawnEngine {
       return {
         status: "completed",
         updates: (async function* () {})(),
-        wait: async () => ({ text: "ok", exitCode: 0, usage: emptyUsage() }),
+        wait: async () => ({ value: "ok", exitCode: 0, usage: emptyUsage() }),
         abort: () => {},
       };
     },
@@ -40,19 +40,22 @@ function call(overrides: Partial<AgentCall> = {}): AgentCall {
 }
 
 describe("delegationPreamble", () => {
-  test("states the final-message result contract", () => {
+  test("states the explicit result-submission contract", () => {
     const text = delegationPreamble("text");
     expect(text).toContain("not fresh user intent");
     expect(text).toContain("Do not invoke workflows or delegate it further");
     expect(text).toContain("perform the underlying work");
-    expect(text).toContain("final message");
-    expect(text).toContain("deliverable");
+    expect(text).toContain("submitting exactly one complete agent result");
+    expect(text).toContain("Assistant messages are progress");
+    expect(text).toContain("text or Markdown result as a string");
+    expect(text).not.toContain("pi_agents_submit_result");
     expect(text).not.toContain("JSON");
   });
 
-  test("json mode adds the raw-JSON requirement", () => {
+  test("json mode requires a submitted JSON value", () => {
     const text = delegationPreamble("json");
-    expect(text).toContain("single JSON value");
+    expect(text).toContain("machine-readable result as a JSON value");
+    expect(text).not.toContain("pi_agents_submit_result");
   });
 });
 
@@ -66,6 +69,7 @@ describe("createAgentRunner system prompt", () => {
     await runner(call());
     expect(specs[0]?.systemPrompt).toContain(delegationPreamble("text"));
     expect(specs[0]?.disableSkillDiscovery).toBe(false);
+    expect(specs[0]?.resultMode).toBe("text");
   });
 
   test("json calls get the JSON variant", async () => {
@@ -75,7 +79,10 @@ describe("createAgentRunner system prompt", () => {
       cwd: process.cwd(),
     });
     await runner(call({ output: "json" }));
-    expect(specs[0]?.systemPrompt).toContain("single JSON value");
+    expect(specs[0]?.systemPrompt).toContain(
+      "machine-readable result as a JSON value",
+    );
+    expect(specs[0]?.resultMode).toBe("json");
   });
 
   test("an anonymous call renders the skills it asked for", async () => {
@@ -181,7 +188,7 @@ function streamingEngine(script: SpawnProgress[]): SpawnEngine {
         wait: async () => {
           await released;
           if (aborted) throw new SpawnAborted("w");
-          return { text: "final", exitCode: 0, usage: emptyUsage() };
+          return { value: "final", exitCode: 0, usage: emptyUsage() };
         },
         abort: () => {
           aborted = true;
@@ -261,7 +268,7 @@ describe("createAgentRunner budget watchdog", () => {
               yield progress(1, "one");
             })(),
             wait: async () => ({
-              text: "done",
+              value: "done",
               exitCode: 0,
               usage: emptyUsage(),
             }),
@@ -275,7 +282,7 @@ describe("createAgentRunner budget watchdog", () => {
       budgetLimits: { ...DEFAULT_BUDGETS, maxTurns: 2 },
     });
     await expect(runner(call())).resolves.toEqual({
-      text: "done",
+      value: "done",
       usage: emptyUsage(),
     });
   });
@@ -305,7 +312,7 @@ describe("createAgentRunner breach/settle races", () => {
             yield progress(3, "late partial");
           })(),
           wait: async () => ({
-            text: "done",
+            value: "done",
             exitCode: 0,
             usage: emptyUsage(),
           }),
@@ -337,7 +344,7 @@ describe("createAgentRunner breach/settle races", () => {
         return {
           status: "completed",
           updates: (async function* () {})(),
-          wait: async () => ({ text: "done", exitCode: 0, usage: over }),
+          wait: async () => ({ value: "done", exitCode: 0, usage: over }),
           abort: () => {},
         };
       },
@@ -348,7 +355,7 @@ describe("createAgentRunner breach/settle races", () => {
       budgetLimits: { ...DEFAULT_BUDGETS, maxTurns: 2 },
     });
     await expect(runner(call())).resolves.toEqual({
-      text: "done",
+      value: "done",
       usage: over,
     });
   });

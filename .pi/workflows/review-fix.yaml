@@ -22,7 +22,7 @@ flow:
       as: initial_review
 
     # Normalize every reviewer response before downstream nodes dereference
-    # it. The result has one guaranteed flat shape even for malformed JSON.
+    # it. The result has one guaranteed flat shape even when malformed.
     - kind: switch
       on: "{initial_review}"
       as: initial_state
@@ -125,7 +125,8 @@ flow:
               type checks, and lint checks. Do not claim that the result is
               clean; the next Reviewer makes that determination.
 
-              End with a concise Markdown summary containing:
+              Submit a concise Markdown summary as the complete agent result,
+              containing:
               - the implementation status;
               - changed files and what changed;
               - checks run and their results;

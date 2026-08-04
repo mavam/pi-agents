@@ -49,9 +49,9 @@ function reviewResult(
     actionable?: unknown[];
     reason?: string | null;
   } = {},
-): string {
+): Record<string, unknown> {
   const outcome = options.outcome ?? "approved";
-  return JSON.stringify({
+  return {
     outcome,
     reason:
       options.reason ??
@@ -61,10 +61,10 @@ function reviewResult(
     actionable:
       options.actionable ?? (outcome === "changes_required" ? [finding] : []),
     report: "# Code Review\n\nReview report.",
-  });
+  };
 }
 
-async function runReviewFix(reviewResults: string[]) {
+async function runReviewFix(reviewResults: unknown[]) {
   const calls: AgentCall[] = [];
   const pendingReviews = [...reviewResults];
   const outcome = await executeFlow({
@@ -73,12 +73,11 @@ async function runReviewFix(reviewResults: string[]) {
     params: { target: "local changes" },
     runAgent: async (call) => {
       calls.push(call);
-      const text =
+      const value =
         call.output === "json"
-          ? pendingReviews.shift()
+          ? (pendingReviews.shift() ?? null)
           : "## Implementation summary\n\nApplied the requested fixes.";
-      if (text === undefined) throw new Error("missing stub review result");
-      return { text, usage: emptyUsage() };
+      return { value, usage: emptyUsage() };
     },
     emit: () => {},
   });
@@ -141,6 +140,9 @@ describe("project review workflows", () => {
     expect(outcome.value).not.toHaveProperty("review");
     expect(calls).toHaveLength(3);
     expect(calls[1]?.task).toContain("Act as the Implementer");
+    expect(calls[1]?.task).toContain(
+      "Submit a concise Markdown summary as the complete agent result",
+    );
     expect(calls[1]?.skills).toEqual([]);
     expect(calls[1]?.output).toBe("text");
     expect(calls[2]?.task).toContain("Implementer summary:");
@@ -149,7 +151,7 @@ describe("project review workflows", () => {
 
   test("fails closed when the initial review contract is malformed", async () => {
     for (const invalidReview of [
-      "{}",
+      {},
       reviewResult({ outcome: "changes_required", actionable: [] }),
     ]) {
       const { calls, outcome } = await runReviewFix([invalidReview]);

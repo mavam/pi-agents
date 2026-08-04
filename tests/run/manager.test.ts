@@ -40,7 +40,7 @@ function fakeEngine(
           status: "completed",
           updates: emptyUpdates(),
           wait: async () => ({
-            text: await handler(spec),
+            value: await handler(spec),
             exitCode: 0,
             usage: emptyUsage(),
           }),
@@ -77,7 +77,7 @@ function steerableEngine(): {
           updates: emptyUpdates(),
           async wait() {
             await completion;
-            return { text: "ok", exitCode: 0, usage: emptyUsage() };
+            return { value: "ok", exitCode: 0, usage: emptyUsage() };
           },
           async steer(message) {
             messages.push(message);
@@ -525,7 +525,7 @@ describe("ad-hoc agents", () => {
       const outcome = await done;
       expect(outcome.status).toBe("completed");
       expect(specs[0]?.agent).toBe("ad-hoc");
-      expect(specs[0]?.systemPrompt).toContain("final message"); // result contract only, no persona
+      expect(specs[0]?.systemPrompt).toContain("result-submission mechanism"); // result contract only, no persona
       expect(specs[0]?.tools).toBeUndefined();
     } finally {
       fs.rmSync(bareDir, { recursive: true, force: true });

@@ -2,7 +2,8 @@
  * Subprocess spawn engine: each spawn runs a fresh `pi` process in RPC mode,
  * sends one initial prompt, and keeps stdin open for steering and aborts.
  *
- *   pi --mode rpc --no-session [--model M] [--thinking T] [--tools a,b]
+ *   pi --mode rpc --no-session --extension <result-tool>
+ *      [--model M] [--thinking T] [--tools a,b]
  *      [--append-system-prompt <tmpfile>]
  */
 
@@ -11,6 +12,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { fileURLToPath } from "node:url";
+import { RESULT_MODE_ENV_VAR, RESULT_TOOL_NAME } from "./result-tool.js";
 import {
   emptyUsage,
   SpawnAborted,
@@ -33,11 +36,14 @@ const TERMINATE_AFTER_MS = 1_000;
 const FORCE_KILL_AFTER_MS = 5_000;
 /** Minimum spacing between updates driven by streaming text deltas. */
 export const STREAM_PUSH_INTERVAL_MS = 250;
-/** Live tails are deliberately ephemeral and bounded: the final assistant
- * message remains the delegated agent's only durable artifact. */
+/** Live tails are deliberately ephemeral and bounded. Only an accepted agent
+ * result submission becomes a durable workflow value. */
 export const MAX_ACTIVITY_TAIL_CHARS = 64_000;
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 const MAX_TOOL_LABEL_CHARS = 240;
+const RESULT_TOOL_EXTENSION_PATH = fileURLToPath(
+  new URL("./result-tool.ts", import.meta.url),
+);
 
 class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -334,6 +340,7 @@ export function createSubprocessSpawnEngine(options?: {
   /** Test hooks; production uses the conservative defaults above. */
   terminateAfterMs?: number;
   forceKillAfterMs?: number;
+  extraExtensionPaths?: string[];
 }): SpawnEngine {
   const spawnProcess = options?.spawnProcess ?? spawn;
   const terminateAfterMs = options?.terminateAfterMs ?? TERMINATE_AFTER_MS;
@@ -355,6 +362,8 @@ export function createSubprocessSpawnEngine(options?: {
       let sentTerminationSignal = false;
       let wasAborted = false;
       let terminalFailure: Error | undefined;
+      let resultSubmitted = false;
+      let resultValue: unknown;
 
       const usage: SpawnUsage = emptyUsage();
       let latestText = "";
@@ -375,14 +384,24 @@ export function createSubprocessSpawnEngine(options?: {
       const pendingCommands = new Map<string, PendingCommand>();
       let requestId = 0;
 
-      const args: string[] = ["--mode", "rpc", "--no-session"];
+      const args: string[] = [
+        "--mode",
+        "rpc",
+        "--no-session",
+        "--extension",
+        RESULT_TOOL_EXTENSION_PATH,
+      ];
+      for (const extensionPath of options?.extraExtensionPaths ?? []) {
+        args.push("--extension", extensionPath);
+      }
       if (spec.model) args.push("--model", spec.model);
       if (spec.thinking) args.push("--thinking", spec.thinking);
       if (spec.disableSkillDiscovery) args.push("--no-skills");
-      // An explicit empty allowlist means "no tools", not "all tools".
+      // The result-submission tool is mandatory even when the working-tool
+      // allowlist is explicitly empty.
       if (spec.tools) {
-        if (spec.tools.length === 0) args.push("--no-tools");
-        else args.push("--tools", spec.tools.join(","));
+        const tools = [...new Set([...spec.tools, RESULT_TOOL_NAME])];
+        args.push("--tools", tools.join(","));
       }
       if (spec.systemPrompt?.trim()) {
         const tmp = writePromptToTempFile(spec.agent, spec.systemPrompt.trim());
@@ -692,6 +711,25 @@ export function createSubprocessSpawnEngine(options?: {
             record.type === "tool_execution_end" &&
             typeof record.toolCallId === "string"
           ) {
+            const toolName = activeTools.get(record.toolCallId);
+            if (toolName === RESULT_TOOL_NAME && record.isError !== true) {
+              if (resultSubmitted) {
+                throw new Error(
+                  "Delegated agent submitted more than one result.",
+                );
+              }
+              if (
+                !isRecord(record.result) ||
+                !isRecord(record.result.details) ||
+                !Object.hasOwn(record.result.details, "value")
+              ) {
+                throw new Error(
+                  "Delegated agent result submission completed without a value.",
+                );
+              }
+              resultValue = record.result.details.value;
+              resultSubmitted = true;
+            }
             activeTools.delete(record.toolCallId);
             const entry = toolTailEntries.get(record.toolCallId);
             if (entry) {
@@ -721,7 +759,11 @@ export function createSubprocessSpawnEngine(options?: {
       try {
         proc = spawnProcess("pi", args, {
           cwd: spec.cwd,
-          env: { ...process.env, ...(spec.env ?? {}) },
+          env: {
+            ...process.env,
+            ...(spec.env ?? {}),
+            [RESULT_MODE_ENV_VAR]: spec.resultMode,
+          },
           shell: false,
           stdio: ["pipe", "pipe", "pipe"],
         });
@@ -787,6 +829,26 @@ export function createSubprocessSpawnEngine(options?: {
           }
 
           const exitCode = signalCode ? 1 : (code ?? 0);
+          if (
+            terminalFailure === undefined &&
+            agentSettled &&
+            stopReason !== "error" &&
+            stopReason !== "aborted" &&
+            (exitCode === 0 || sentTerminationSignal) &&
+            !resultSubmitted
+          ) {
+            status = "failed";
+            cleanup();
+            rejectWait(
+              new SpawnFailure(
+                `Agent ${spec.agent} finished without submitting a result.`,
+                spec.agent,
+                exitCode,
+                stderr,
+              ),
+            );
+            return;
+          }
           const processFailed =
             terminalFailure !== undefined ||
             !agentSettled ||
@@ -822,7 +884,7 @@ export function createSubprocessSpawnEngine(options?: {
           status = "completed";
           cleanup();
           resolveWait({
-            text: latestText || "(no output)",
+            value: resultValue,
             exitCode,
             usage: { ...usage },
             model: resolvedModel,

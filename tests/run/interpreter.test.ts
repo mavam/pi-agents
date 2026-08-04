@@ -9,7 +9,6 @@ import {
   type AgentRunner,
   type ExecuteOptions,
   executeFlow,
-  parseJsonOutput,
 } from "../../src/run/interpreter.js";
 
 const agent = (
@@ -24,7 +23,7 @@ const agent = (
 });
 const seq = (...steps: unknown[]) => ({ kind: "sequence", steps });
 
-type Handler = (call: AgentCall) => string | Promise<string>;
+type Handler = (call: AgentCall) => unknown | Promise<unknown>;
 
 function makeRunner(handler: Handler): {
   runner: AgentRunner;
@@ -35,11 +34,11 @@ function makeRunner(handler: Handler): {
     calls,
     runner: async (call) => {
       calls.push(call);
-      const text = await handler(call);
+      const value = await handler(call);
       const usage = emptyUsage();
       usage.turns = 1;
       usage.cost = 0.01;
-      return { text, usage };
+      return { value, usage };
     },
   };
 }
@@ -111,22 +110,19 @@ describe("seq and bindings", () => {
         agent("scout", "list", { as: "scout", output: "json" }),
         agent("worker", "fix {scout.files.0}"),
       ),
-      (call) =>
-        call.agent === "scout" ? '{"files": ["a.ts", "b.ts"]}' : "done",
+      (call) => (call.agent === "scout" ? { files: ["a.ts", "b.ts"] } : "done"),
     );
     expect(calls[1]?.task).toBe("fix a.ts");
   });
 
-  test("json output tolerates fences and fails loudly otherwise", async () => {
-    expect(parseJsonOutput('```json\n{"ok": true}\n```')).toEqual({ ok: true });
-    expect(parseJsonOutput("[1, 2]")).toEqual([1, 2]);
-    const { outcome, events } = await run(
+  test("submitted JSON values pass through without text parsing", async () => {
+    const submitted = { ok: true, nested: [1, null, "two"] };
+    const { outcome } = await run(
       agent("a", "t", { output: "json" }),
-      () => "not json at all",
+      () => submitted,
     );
-    expect(outcome.status).toBe("failed");
-    expect(outcome.error).toContain("expected JSON output");
-    expect(eventTypes(events, "node_failed")).toHaveLength(1);
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toBe(submitted);
   });
 });
 
@@ -321,7 +317,7 @@ describe("map", () => {
         body: agent("reviewer", "review {item} at {index}"),
       }),
       (call) => {
-        if (call.agent === "scout") return '["a.ts", "b.ts", "c.ts"]';
+        if (call.agent === "scout") return ["a.ts", "b.ts", "c.ts"];
         return `reviewed ${call.task.split(" ")[1]}`;
       },
     );
@@ -347,7 +343,7 @@ describe("map", () => {
         over: "{files}",
         body: agent("r", "review {item}"),
       }),
-      (call) => (call.agent === "s" ? '["x", "y"]' : "ok"),
+      (call) => (call.agent === "s" ? ["x", "y"] : "ok"),
     );
     const instances = eventTypes(events, "node_started").map(
       (e) => (e as { instance: string }).instance,
@@ -363,7 +359,7 @@ describe("map", () => {
         over: "{files}",
         body: agent("r", "review {item}"),
       }),
-      (call) => (call.agent === "s" ? '{"not": "array"}' : "ok"),
+      (call) => (call.agent === "s" ? { not: "array" } : "ok"),
     );
     expect(outcome.status).toBe("failed");
     expect(outcome.error).toContain("must resolve to a JSON array, got object");
@@ -378,7 +374,7 @@ describe("map", () => {
         concurrency: 2,
       }),
       (call) => {
-        if (call.agent === "s") return '["a", "b"]';
+        if (call.agent === "s") return ["a", "b"];
         if (call.task === "review a") throw new Error("bad item");
         return hangUntilAbort(call.signal);
       },
@@ -396,7 +392,7 @@ describe("map", () => {
         reduce: { agent: "syn", task: "combine {items}" },
       }),
       (call) => {
-        if (call.agent === "s") return '["a"]';
+        if (call.agent === "s") return ["a"];
         if (call.agent === "syn") return "combined";
         return "r-a";
       },
@@ -420,9 +416,7 @@ describe("loop", () => {
       },
       () => {
         round += 1;
-        return round >= 3
-          ? '{"done": true, "round": 3}'
-          : `{"done": false, "round": ${round}}`;
+        return { done: round >= 3, round };
       },
     );
     expect(outcome.status).toBe("completed");
@@ -472,8 +466,8 @@ describe("while", () => {
       }),
       (call) =>
         call.agent === "seed"
-          ? '{"continue": false, "round": null}'
-          : '{"continue": false, "round": 0}',
+          ? { continue: false, round: null }
+          : { continue: false, round: 0 },
     );
     expect(outcome.value).toEqual({ continue: false, round: null });
     expect(calls.map((call) => call.agent)).toEqual(["seed"]);
@@ -493,9 +487,9 @@ describe("while", () => {
         }),
       }),
       (call) => {
-        if (call.agent === "seed") return '{"continue": true, "round": -1}';
+        if (call.agent === "seed") return { continue: true, round: -1 };
         round += 1;
-        return JSON.stringify({ continue: round < 3, round: round - 1 });
+        return { continue: round < 3, round: round - 1 };
       },
     );
     expect(outcome.value).toEqual({ continue: false, round: 2 });
@@ -521,8 +515,8 @@ describe("while", () => {
       }),
       (call) =>
         call.agent === "seed"
-          ? '{"continue": true, "round": -1}'
-          : '{"continue": true, "round": 0}',
+          ? { continue: true, round: -1 }
+          : { continue: true, round: 0 },
       { budgets: { maxIterations: 2 } },
     );
     expect(outcome.value).toEqual({ continue: true, round: 0 });
@@ -548,8 +542,8 @@ describe("while", () => {
       }),
       (call) =>
         call.agent === "seed"
-          ? '{"outer": true, "inner": true, "label": "outer"}'
-          : '{"outer": false, "inner": false, "label": "inner"}',
+          ? { outer: true, inner: true, label: "outer" }
+          : { outer: false, inner: false, label: "inner" },
     );
     expect(calls[1]?.task).toContain('"label": "outer"');
     expect(calls[1]?.task).toContain("inner 0");
@@ -577,8 +571,8 @@ describe("while", () => {
       }),
       (call) =>
         call.agent === "seed"
-          ? '[{"continue": true, "name": "a"}]'
-          : '{"continue": false}',
+          ? [{ continue: true, name: "a" }]
+          : { continue: false },
     );
     expect(calls[1]?.task).toContain("item 0");
     expect(calls[1]?.task).toContain('"name": "a"');
@@ -595,7 +589,7 @@ describe("while", () => {
         body: agent("worker", "work"),
       }),
       (call) => {
-        if (call.agent === "seed") return '{"continue": true}';
+        if (call.agent === "seed") return { continue: true };
         queueMicrotask(() => controller.abort());
         return hangUntilAbort(call.signal);
       },
@@ -812,7 +806,7 @@ describe("switch", () => {
         agent("fallback", "c"),
       ),
       (call) =>
-        call.agent === "gate" ? '{"status": "approved"}' : `${call.agent}-ran`,
+        call.agent === "gate" ? { status: "approved" } : `${call.agent}-ran`,
     );
     expect(outcome.status).toBe("completed");
     expect(outcome.value).toBe("first-ran");
@@ -826,7 +820,7 @@ describe("switch", () => {
         agent("fallback", "c"),
       ),
       (call) =>
-        call.agent === "gate" ? '{"status": "rejected"}' : `${call.agent}-ran`,
+        call.agent === "gate" ? { status: "rejected" } : `${call.agent}-ran`,
     );
     expect(outcome.value).toBe("fallback-ran");
     expect(calls.map((call) => call.agent)).toEqual(["gate", "fallback"]);
@@ -845,7 +839,7 @@ describe("switch", () => {
         },
         agent("closer", "wrap up {outcome}"),
       ),
-      (call) => (call.agent === "gate" ? '{"go": 1}' : `${call.agent}-done`),
+      (call) => (call.agent === "gate" ? { go: 1 } : `${call.agent}-done`),
     );
     expect(calls[2]?.task).toBe("wrap up worker-done");
   });
@@ -857,7 +851,7 @@ describe("switch", () => {
         agent("b", "t"),
         { on: "{gate.decision.state}" },
       ),
-      () => '{"status": "ok"}',
+      () => ({ status: "ok" }),
     );
     expect(outcome.status).toBe("failed");
     expect(outcome.error).toContain(
@@ -900,7 +894,7 @@ describe("switch", () => {
     const routed = async (when: unknown) => {
       const { calls } = await run(
         gateSwitch([{ when, then: agent("hit", "h") }], agent("miss", "m")),
-        (call) => (call.agent === "gate" ? "{}" : "done"),
+        (call) => (call.agent === "gate" ? {} : "done"),
       );
       return calls[1]?.agent;
     };
@@ -945,7 +939,7 @@ describe("switch", () => {
         [{ when: { eq: ["status", "approved"] }, then: agent("shipper", "s") }],
         agent("reporter", "r"),
       ),
-      (call) => (call.agent === "gate" ? '{"status": "approved"}' : "shipped"),
+      (call) => (call.agent === "gate" ? { status: "approved" } : "shipped"),
     );
     const started = eventTypes(events, "node_started") as {
       path: string;
@@ -974,7 +968,7 @@ describe("switch", () => {
         agent("idle", "idle"),
       ),
       (call) => {
-        if (call.agent === "gate") return '{"go": true}';
+        if (call.agent === "gate") return { go: true };
         queueMicrotask(() => controller.abort());
         return hangUntilAbort(call.signal);
       },
@@ -994,7 +988,7 @@ describe("switch", () => {
         [{ when: { exists: "go" }, then: agent("worker", "work") }],
         agent("idle", "idle"),
       ),
-      (call) => (call.agent === "gate" ? '{"go": 1}' : "ok"),
+      (call) => (call.agent === "gate" ? { go: 1 } : "ok"),
       { budgets: { maxAgents: 2 } },
     );
     expect(outcome.status).toBe("completed");
@@ -1082,7 +1076,7 @@ describe("value", () => {
           nested: [{ first: "{scout.files.0}" }, 42, true],
         },
       }),
-      () => '{"files": ["a.ts", "b.ts"], "count": 2}',
+      () => ({ files: ["a.ts", "b.ts"], count: 2 }),
     );
     expect(outcome.value).toEqual({
       files: ["a.ts", "b.ts"],
@@ -1098,7 +1092,7 @@ describe("value", () => {
         kind: "value",
         value: "{scout.nope}",
       }),
-      () => "{}",
+      () => ({}),
     );
     expect(outcome.status).toBe("failed");
     expect(outcome.error).toContain("value: path 'nope' not found in {scout}");
@@ -1134,7 +1128,7 @@ describe("value", () => {
         },
       ),
       (call) =>
-        call.agent === "review" ? '{"pr": false, "outcome": "clean"}' : "gated",
+        call.agent === "review" ? { pr: false, outcome: "clean" } : "gated",
     );
     expect(outcome.value).toEqual({ outcome: "clean", gated: false });
     expect(calls.map((call) => call.agent)).toEqual(["review"]);
@@ -1206,7 +1200,7 @@ describe("run-level execution budgets", () => {
         usage.output = 200;
         call.onProgress?.({ text: "streaming half an answer", usage });
         await hangUntilAbort(call.signal);
-        return { text: "unreachable" };
+        return { value: "unreachable" };
       },
     });
     expect(outcome.status).toBe("failed");
@@ -1288,7 +1282,7 @@ describe("budget cancellation reasons in pools", () => {
           { kind: "map", over: "{targets}", body: agent("m", "work {item}") },
         ],
       },
-      (call) => (call.task === "list" ? "[1, 2]" : hangUntilAbort(call.signal)),
+      (call) => (call.task === "list" ? [1, 2] : hangUntilAbort(call.signal)),
       { budgets: { maxDuration: 0.05 } },
     );
     expect(outcome.status).toBe("failed");

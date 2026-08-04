@@ -73,7 +73,7 @@ export interface AgentCall {
 }
 
 export interface AgentResult {
-  text: string;
+  value: unknown;
   usage?: SpawnUsage;
 }
 
@@ -207,25 +207,6 @@ function interpolateValue(value: unknown, env: Env): unknown {
     );
   }
   return value;
-}
-
-// ---------------------------------------------------------------------------
-// JSON output parsing
-
-/** Parse an agent's `output: "json"` text, tolerating ```json fences. */
-export function parseJsonOutput(text: string): unknown {
-  const trimmed = text.trim();
-  const fence = trimmed.match(/^```(?:json)?\s*\n([\s\S]*?)\n?```$/);
-  const body = (fence ? fence[1] : trimmed) as string;
-  try {
-    return JSON.parse(body);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    const preview = body.slice(0, 120).replace(/\s+/g, " ");
-    throw new Error(
-      `expected JSON output but parsing failed (${detail}); output starts with: ${preview}`,
-    );
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -581,9 +562,7 @@ class Interpreter {
           ? call.signal.reason
           : new CancelledError("stopped");
       }
-      const value =
-        call.output === "json" ? parseJsonOutput(result.text) : result.text;
-      return { value, usage: result.usage };
+      return { value: result.value, usage: result.usage };
     } finally {
       release();
     }

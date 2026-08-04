@@ -40,7 +40,7 @@ const REVIEW_FLOW = {
 
 async function recordedRun(
   raw: unknown,
-  handler: (agent: string | undefined, task: string) => string,
+  handler: (agent: string | undefined, task: string) => unknown,
   keep: (event: RunEvent) => boolean = () => true,
 ): Promise<RunView> {
   const flow = validateFlow(raw);
@@ -49,7 +49,7 @@ async function recordedRun(
     runId: "run-1234-abcd",
     flow,
     label: "review",
-    runAgent: async (call) => ({ text: handler(call.agent, call.task) }),
+    runAgent: async (call) => ({ value: handler(call.agent, call.task) }),
     emit: (event) => events.push(event),
   });
   const run = rebuildRunState(events.filter(keep)).runs.get("run-1234-abcd");
@@ -387,7 +387,7 @@ describe("formatRunDetails", () => {
     const report = `# Code Review\n\n${"Readable finding. ".repeat(30)}`;
     const run = await recordedRun(
       { kind: "agent", task: "review", output: "json" },
-      () => JSON.stringify({ outcome: "changes_required", report }),
+      () => ({ outcome: "changes_required", report }),
     );
     run.header.display = "report";
 

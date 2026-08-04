@@ -92,7 +92,7 @@ const WorkflowToolParams = Type.Object({
           Type.Integer({
             minimum: 1,
             description:
-              "Maximum cross-process delegation depth. Integer >= 1; default 5.",
+              "Maximum process depth allowed before an agent spawn. Integer >= 1; default 5.",
           }),
         ),
         maxParallelism: Type.Optional(

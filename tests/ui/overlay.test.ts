@@ -151,13 +151,14 @@ describe("renderOverlay", () => {
 
   test("the footer advertises scrolling only when the detail overflows", () => {
     const detail = Array.from({ length: 50 }, (_, i) => `line ${i}`);
-    const overflowing = renderOverlay(
-      spec(["a"], () => detail),
-      ["a"],
-      0,
-      60,
-      16,
-    );
+    const longFooter =
+      "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc back";
+    const overflowingSpec = {
+      ...spec(["a"], () => detail),
+      footer: longFooter,
+    };
+    const overflowing = renderOverlay(overflowingSpec, ["a"], 0, 60, 16);
+    // The scroll hint remains visible even when the action list is truncated.
     expect(overflowing.at(-2)).toContain("scroll");
     const fitting = renderOverlay(spec(["a"]), ["a"], 0, 60, 16);
     expect(fitting.at(-2)).not.toContain("scroll");
@@ -211,6 +212,23 @@ describe("renderOverlay", () => {
     expect(lines.length).toBeLessThanOrEqual(14);
   });
 
+  test("keeps an overflowing one-row detail pane within its height budget", () => {
+    const detail = Array.from({ length: 50 }, (_, i) => `line ${i}`);
+    const lines = renderOverlay(
+      spec(["a", "b"], () => detail),
+      ["a", "b"],
+      0,
+      60,
+      8,
+      {
+        composerLines: ["Steer:"],
+        footerOverride: "enter send · esc cancel",
+      },
+    );
+    expect(lines).toHaveLength(8);
+    expect(lines.some((line) => line.includes("line 0"))).toBe(true);
+  });
+
   test("height is elastic: grows with the detail up to the terminal budget", () => {
     const tui = {
       terminal: { rows: 50 },
@@ -257,6 +275,36 @@ describe("renderOverlay", () => {
     // Every framed row is exact-width; the trailing gap is outside the box.
     for (const line of lines.slice(0, -1)) expect(visibleWidth(line)).toBe(60);
     expect(lines.at(-1)).toBe("");
+    panel.dispose();
+  });
+
+  test("persists offsets clamped by terminal resizing", () => {
+    const terminal = { rows: 50 };
+    const tui = {
+      terminal,
+      requestRender: () => {},
+    } as unknown as TUI;
+    const detail = Array.from({ length: 100 }, (_, i) => `line ${i}`);
+    const panel = new SplitPaneOverlay(
+      tui,
+      (_color, text) => text,
+      spec(["a"], () => detail),
+      () => {},
+    );
+    panel.render(60);
+    panel.handleInput("\x1b[1;2F"); // shift+end
+    expect(panel.render(60).some((line) => line.includes("line 99"))).toBe(
+      true,
+    );
+
+    terminal.rows = 100;
+    const grown = panel.render(60);
+    expect(grown.some((line) => line.includes("line 26"))).toBe(true);
+
+    terminal.rows = 50;
+    const shrunk = panel.render(60);
+    expect(shrunk.some((line) => line.includes("line 26"))).toBe(true);
+    expect(shrunk.some((line) => line.includes("line 99"))).toBe(false);
     panel.dispose();
   });
 

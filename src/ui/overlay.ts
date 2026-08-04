@@ -100,13 +100,15 @@ function renderInlineInput(input: Input, width: number): string {
 
 /** Window the detail lines into the pane, honouring a scroll offset.
  *
- * When the detail overflows, one row is spent on a marker that reports what is
- * hidden. The marker sits on the side content continues on, so the window
- * always touches the edge it is scrolled against: at the bottom while more
- * lines follow (including the unscrolled default), at the top once the last
- * line is visible — which keeps a followed live tail pinned to the bottom.
- * `offset` is the first detail line to show; "end" pins the window to the last
- * line. The resolved offset is returned so the caller can clamp its state. */
+ * When the detail overflows and the pane has room, one row is spent on a
+ * marker that reports what is hidden. A one-row pane shows content instead;
+ * the footer still indicates that it can scroll. The marker sits on the side
+ * content continues on, so the window always touches the edge it is scrolled
+ * against: at the bottom while more lines follow (including the unscrolled
+ * default), at the top once the last line is visible — which keeps a followed
+ * live tail pinned to the bottom. `offset` is the first detail line to show;
+ * "end" pins the window to the last line. The resolved offset is returned so
+ * the caller can clamp its state. */
 export function windowDetail(
   detail: string[],
   rows: number,
@@ -115,7 +117,8 @@ export function windowDetail(
 ): { shown: string[]; offset: number; maxOffset: number } {
   if (rows <= 0) return { shown: [], offset: 0, maxOffset: 0 };
   if (detail.length <= rows) return { shown: detail, offset: 0, maxOffset: 0 };
-  const contentRows = Math.max(1, rows - 1);
+  const markerRows = rows > 1 ? 1 : 0;
+  const contentRows = rows - markerRows;
   const maxOffset = detail.length - contentRows;
   const start = clamp(offset === "end" ? maxOffset : offset, 0, maxOffset);
   const hiddenAbove = start;
@@ -131,7 +134,12 @@ export function windowDetail(
   );
   const content = detail.slice(start, start + contentRows);
   return {
-    shown: hiddenBelow === 0 ? [marker, ...content] : [...content, marker],
+    shown:
+      markerRows === 0
+        ? content
+        : hiddenBelow === 0
+          ? [marker, ...content]
+          : [...content, marker],
     offset: start,
     maxOffset,
   };
@@ -282,9 +290,9 @@ export function renderOverlay<T>(
       ["╰", "╯"],
       color(
         "dim",
-        // Only advertise scrolling when there is something to scroll to.
+        // Keep the scroll hint first so long action lists cannot truncate it.
         maxOffset > 0 && footerOverride === undefined
-          ? `${hints} · ⇧↑↓ scroll`
+          ? `⇧↑↓ scroll · ${hints}`
           : hints,
       ),
       width,
@@ -427,6 +435,9 @@ export class SplitPaneOverlay<T> implements Component {
       footerOverride: this.composer ? "enter send · esc cancel" : undefined,
       detailOffset: this.detailOffset,
       onDetailGeometry: ({ offset, maxOffset }) => {
+        // Persist render-time clamping across later geometry changes. Keep the
+        // sentinel for followed tails so they continue tracking new output.
+        if (this.detailOffset !== "end") this.detailOffset = offset;
         this.detailScroll = {
           offset,
           maxOffset,

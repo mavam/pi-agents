@@ -203,19 +203,24 @@ describe("NotificationManager", () => {
     expect(content).not.toContain(`\`\`\`\n${markdown}`);
   });
 
-  test("keeps complete structured results as fenced JSON", () => {
+  test("keeps complete long structured results as fenced JSON", () => {
     const { sent, pi, manager, makeCtx } = makeFakes();
     const notifications = new NotificationManager(pi, manager);
     notifications.setContext(makeCtx(true));
     notifications.track("run-1", "session.jsonl", false);
-    notifications.handleRunEvent(
-      completed("run-1", { findings: ["one", "two"] }),
-    );
+    const result = {
+      findings: ["one", "two"],
+      report: "x".repeat(700),
+      tail: "complete-tail",
+    };
+    notifications.handleRunEvent(completed("run-1", result));
     const content = sent[0]?.message.content ?? "";
-    expect(content.indexOf('```\n{\n  "findings": [')).toBeLessThan(
+    const json = JSON.stringify(result, null, 2);
+    const fenced = `\`\`\`\n${json}\n\`\`\``;
+    expect(sent[0]?.message.details?.body).toBe(fenced);
+    expect(content.indexOf(fenced)).toBeLessThan(
       content.indexOf("Run details:"),
     );
-    expect(content).toContain("\n}\n```");
   });
 
   test("renders a declared display field instead of structured data", () => {
@@ -251,8 +256,9 @@ describe("NotificationManager", () => {
     const content = sent[0]?.message.content ?? "";
     const resultStart = content.indexOf("```ts");
     expect(content.indexOf("Continue your task")).toBeLessThan(resultStart);
+    expect(content).toContain("complete-tail");
     expect(resultStart).toBeLessThan(content.indexOf("Run details:"));
-    expect(sent[0]?.message.details?.body).toBe(`${markdown.slice(0, 600)}…`);
+    expect(sent[0]?.message.details?.body).toBe(markdown);
   });
 
   test("completion while busy queues; flush when idle triggers a turn", () => {

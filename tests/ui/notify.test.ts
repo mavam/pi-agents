@@ -178,7 +178,9 @@ describe("NotificationManager", () => {
     expect(sent[0]?.message.content).toContain("agent exploded");
     expect(
       sent[0]?.message.content.indexOf("agent exploded") ?? Number.NaN,
-    ).toBeLessThan(sent[0]?.message.content.indexOf("Run details:") ?? -1);
+    ).toBeLessThan(
+      sent[0]?.message.content.indexOf("`/workflow run-fail`") ?? -1,
+    );
     expect(sent[0]?.message.content).not.toContain("```\nagent exploded");
     expect(sent[0]?.message.details?.bodyKind).toBe("error");
     expect(sent[1]?.message.content.split("\n")[0]).toBe(
@@ -198,7 +200,7 @@ describe("NotificationManager", () => {
     notifications.handleRunEvent(completed("run-1", markdown));
     const content = sent[0]?.message.content ?? "";
     expect(content.indexOf(markdown)).toBeLessThan(
-      content.indexOf("Run details:"),
+      content.indexOf("`/workflow run-1`"),
     );
     expect(content).not.toContain(`\`\`\`\n${markdown}`);
   });
@@ -219,7 +221,7 @@ describe("NotificationManager", () => {
     const fenced = `\`\`\`\n${json}\n\`\`\``;
     expect(sent[0]?.message.details?.body).toBe(fenced);
     expect(content.indexOf(fenced)).toBeLessThan(
-      content.indexOf("Run details:"),
+      content.indexOf("`/workflow run-1`"),
     );
   });
 
@@ -257,7 +259,7 @@ describe("NotificationManager", () => {
     const resultStart = content.indexOf("```ts");
     expect(content.indexOf("Continue your task")).toBeLessThan(resultStart);
     expect(content).toContain("complete-tail");
-    expect(resultStart).toBeLessThan(content.indexOf("Run details:"));
+    expect(resultStart).toBeLessThan(content.indexOf("`/workflow run-1`"));
     expect(sent[0]?.message.details?.body).toBe(markdown);
   });
 

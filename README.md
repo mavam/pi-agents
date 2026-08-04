@@ -631,9 +631,23 @@ top, the selected item's flow tree (or agent details) below. Scrolling moves
 the detail pane with the selection and live runs refresh in place. The panel
 opens in place of the composer — where pi shows `/settings` and `/model` — so
 it appears right where you were typing instead of a screenful away on tall
-terminals. It caps itself at roughly 60% of the terminal height to keep the
+terminals. It caps itself at roughly 80% of the terminal height to keep the
 conversation visible above, the table never moves, and the detail pane only
 ever grows downward.
+
+Detail longer than that budget scrolls instead of pushing the panel taller:
+
+| Key | Action |
+| --- | --- |
+| `↑`/`↓`, `j`/`k` | Move the table selection |
+| `⇧↑`/`⇧↓` (or `ctrl+y`/`ctrl+e`) | Scroll the detail pane one line |
+| `⇧PgUp`/`⇧PgDn` (or `ctrl+u`/`ctrl+d`) | Scroll the detail pane one pane |
+| `⇧Home`/`⇧End` | Jump to the start or end of the detail |
+
+The footer advertises `⇧↑↓ scroll` only while there is something hidden. Each
+row keeps its own window: moving the selection resets the offset, a live tail
+starts pinned to the newest line, and scrolling back to the bottom of a tail
+re-arms following.
 
 The workflows panel is three tiers deep, mirroring the framework's three
 nouns: workflows (with live run badges), one workflow's runs, and one run's

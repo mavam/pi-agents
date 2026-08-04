@@ -21,6 +21,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 export type ResourceKind = "agents" | "skills" | "workflows";
 
 const CONFIG_DIR = ".pi";
+const WORKFLOWS_CONFIG_FILE = "workflows.json";
 
 /**
  * The second skills convention pi honors, alongside `.pi/skills`: `.agents`
@@ -63,6 +64,16 @@ export function projectResourceDir(root: string, kind: ResourceKind): string {
 /** `<agentDir>/<kind>` — the user-scope location for a resource kind. */
 export function userResourceDir(kind: ResourceKind): string {
   return path.join(getAgentDir(), kind);
+}
+
+/** `<agentDir>/workflows.json` — user-scoped workflow configuration. */
+export function userConfigFile(): string {
+  return path.join(getAgentDir(), WORKFLOWS_CONFIG_FILE);
+}
+
+/** `<root>/.pi/workflows.json` — project-scoped workflow configuration. */
+export function projectConfigFile(root: string): string {
+  return path.join(root, CONFIG_DIR, WORKFLOWS_CONFIG_FILE);
 }
 
 /**

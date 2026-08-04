@@ -5,12 +5,14 @@
  * prose, and the flow expression (either a `flow:` tree or the flat
  * `agent:`/`task:` single-unit form).
  *
- * Discovery mirrors agents: user `~/.pi/agent/workflows` plus the nearest project
- * `.pi/workflows` walking up from cwd; project wins on name conflicts.
+ * Discovery layers package-bundled defaults, user
+ * `~/.pi/agent/workflows`, and the nearest project `.pi/workflows` walking up
+ * from cwd. Later layers win on name conflicts.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import type {
   FlowNode,
@@ -18,6 +20,7 @@ import type {
   Source,
   WorkflowDef,
   WorkflowParamDef,
+  WorkflowSource,
 } from "../model/ast.js";
 import { IDENTIFIER_RE } from "../model/ast.js";
 import {
@@ -26,11 +29,27 @@ import {
   validateFlow,
 } from "../model/validate.js";
 import type { Diagnostic } from "./agents.js";
-import { findProjectResourceDir, userResourceDir } from "./paths.js";
+import {
+  applyBundledWorkflowsSetting,
+  type BundledWorkflowPolicy,
+  bundledWorkflowEnabled,
+  readWorkflowConfig,
+} from "./config.js";
+import {
+  findProjectRoot,
+  projectConfigFile,
+  projectResourceDir,
+  userConfigFile,
+  userResourceDir,
+} from "./paths.js";
+
+export interface WorkflowDiagnostic extends Omit<Diagnostic, "source"> {
+  source: WorkflowSource;
+}
 
 export interface WorkflowDiscoveryResult {
   workflows: WorkflowDef[];
-  diagnostics: Diagnostic[];
+  diagnostics: WorkflowDiagnostic[];
   projectWorkflowsDir: string | null;
 }
 
@@ -84,6 +103,11 @@ const ALLOWED_KEYS = new Set([
 
 /** The file extension decides the parser. */
 const WORKFLOW_EXTENSIONS = [".yaml", ".yml", ".json"];
+
+/** Standard workflow files shipped unchanged in the npm package. */
+export const BUNDLED_WORKFLOWS_DIR = fileURLToPath(
+  new URL("../../.pi/workflows/", import.meta.url),
+);
 
 /** Flat-form keys that carry list values; everything else is a string. */
 const FLAT_LIST_KEYS = new Set(["skills", "tools"]);
@@ -254,7 +278,7 @@ interface ParsedWorkflowFile extends Omit<WorkflowDef, "flow"> {
 /** Returns a parsed workflow on success, or an error message string. */
 export function parseWorkflowFile(
   filePath: string,
-  source: Source,
+  source: WorkflowSource,
 ): ParsedWorkflowFile | string {
   let raw: string;
   try {
@@ -367,10 +391,10 @@ export function parseWorkflowFile(
 
 function loadWorkflowsFromDir(
   dir: string,
-  source: Source,
-): { workflows: ParsedWorkflowFile[]; diagnostics: Diagnostic[] } {
+  source: WorkflowSource,
+): { workflows: ParsedWorkflowFile[]; diagnostics: WorkflowDiagnostic[] } {
   const workflows: ParsedWorkflowFile[] = [];
-  const diagnostics: Diagnostic[] = [];
+  const diagnostics: WorkflowDiagnostic[] = [];
   if (!fs.existsSync(dir)) return { workflows, diagnostics };
   let entries: fs.Dirent[];
   try {
@@ -404,26 +428,209 @@ function loadWorkflowsFromDir(
   return { workflows, diagnostics };
 }
 
+interface ConfigOrigin {
+  source: Source;
+  filePath: string;
+}
+
+interface BundledPolicyState {
+  policy: BundledWorkflowPolicy;
+  defaultOrigin?: ConfigOrigin;
+  overrideOrigins: Map<string, ConfigOrigin>;
+}
+
+function applyConfigFile(
+  inherited: BundledPolicyState,
+  filePath: string,
+  source: Source,
+  bundledNames: ReadonlySet<string>,
+  diagnostics: WorkflowDiagnostic[],
+): BundledPolicyState {
+  const config = readWorkflowConfig(filePath);
+  if (typeof config === "string") {
+    diagnostics.push({ source, filePath, message: config });
+    return inherited;
+  }
+  const setting = config?.bundledWorkflows;
+  if (setting === undefined) return inherited;
+
+  const origin = { source, filePath };
+  if (typeof setting === "object") {
+    for (const name of Object.keys(setting)) {
+      if (!bundledNames.has(name)) {
+        diagnostics.push({
+          source,
+          filePath,
+          message: `Unknown bundled workflow '${name}'. Available: ${[...bundledNames].sort().join(", ") || "none"}.`,
+        });
+      }
+    }
+  }
+
+  const policy = applyBundledWorkflowsSetting(inherited.policy, setting);
+  if (typeof setting === "boolean") {
+    return { policy, defaultOrigin: origin, overrideOrigins: new Map() };
+  }
+  const overrideOrigins = new Map(inherited.overrideOrigins);
+  for (const name of Object.keys(setting)) overrideOrigins.set(name, origin);
+  return {
+    policy,
+    defaultOrigin: inherited.defaultOrigin,
+    overrideOrigins,
+  };
+}
+
+function workflowReferences(node: FlowNode): Set<string> {
+  const names = new Set<string>();
+  const visit = (current: FlowNode): void => {
+    switch (current.kind) {
+      case "agent":
+      case "value":
+        return;
+      case "sequence":
+        for (const step of current.steps) visit(step);
+        return;
+      case "parallel":
+        for (const branch of Object.values(current.branches)) visit(branch);
+        return;
+      case "map":
+      case "loop":
+      case "while":
+        visit(current.body);
+        return;
+      case "switch":
+        for (const arm of current.cases) visit(arm.then);
+        visit(current.else);
+        return;
+      case "workflow":
+        names.add(current.name);
+        return;
+    }
+  };
+  visit(node);
+  return names;
+}
+
+interface DisableCause extends ConfigOrigin {
+  rootName: string;
+}
+
+function pruneDisabledBundledDependents(
+  merged: Map<string, ParsedWorkflowFile>,
+  allBundled: ParsedWorkflowFile[],
+  state: BundledPolicyState,
+  diagnostics: WorkflowDiagnostic[],
+): void {
+  const bundledNames = new Set(allBundled.map((workflow) => workflow.name));
+  const causes = new Map<string, DisableCause>();
+  for (const workflow of allBundled) {
+    if (bundledWorkflowEnabled(state.policy, workflow.name)) continue;
+    const origin =
+      state.overrideOrigins.get(workflow.name) ?? state.defaultOrigin;
+    if (origin)
+      causes.set(workflow.name, { ...origin, rootName: workflow.name });
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const workflow of allBundled) {
+      if (merged.get(workflow.name) !== workflow) continue;
+      const missing = [...workflowReferences(workflow.flow)].find(
+        (name) => bundledNames.has(name) && !merged.has(name),
+      );
+      if (!missing) continue;
+
+      merged.delete(workflow.name);
+      changed = true;
+      const cause = causes.get(missing);
+      if (!cause) continue;
+      causes.set(workflow.name, cause);
+      diagnostics.push({
+        source: cause.source,
+        filePath: cause.filePath,
+        message: `Disabling bundled workflow '${cause.rootName}' also disables dependent bundled workflow '${workflow.name}'.`,
+      });
+    }
+  }
+}
+
+const EMPTY_WORKFLOW_LOAD = {
+  workflows: [] as ParsedWorkflowFile[],
+  diagnostics: [] as WorkflowDiagnostic[],
+};
+
 export function discoverWorkflows(
   cwd: string,
   scope: Scope,
 ): WorkflowDiscoveryResult {
-  const projectWorkflowsDir = findProjectResourceDir(cwd, "workflows");
+  const projectRoot = findProjectRoot(cwd);
+  const projectWorkflowsDir =
+    projectRoot === null ? null : projectResourceDir(projectRoot, "workflows");
+  const userWorkflowsDir = userResourceDir("workflows");
+  const diagnostics: WorkflowDiagnostic[] = [];
+
+  const bundled =
+    scope !== "project"
+      ? loadWorkflowsFromDir(BUNDLED_WORKFLOWS_DIR, "bundled")
+      : EMPTY_WORKFLOW_LOAD;
+  const bundledNames = new Set(
+    bundled.workflows.map((workflow) => workflow.name),
+  );
+  let policyState: BundledPolicyState = {
+    policy: { defaultEnabled: true, overrides: new Map() },
+    overrideOrigins: new Map(),
+  };
+  if (scope !== "project") {
+    policyState = applyConfigFile(
+      policyState,
+      userConfigFile(),
+      "user",
+      bundledNames,
+      diagnostics,
+    );
+    if (scope !== "user" && projectRoot !== null) {
+      policyState = applyConfigFile(
+        policyState,
+        projectConfigFile(projectRoot),
+        "project",
+        bundledNames,
+        diagnostics,
+      );
+    }
+  }
+
   const user =
     scope !== "project"
-      ? loadWorkflowsFromDir(userResourceDir("workflows"), "user")
-      : { workflows: [], diagnostics: [] };
+      ? loadWorkflowsFromDir(userWorkflowsDir, "user")
+      : EMPTY_WORKFLOW_LOAD;
   const project =
     scope !== "user" && projectWorkflowsDir
       ? loadWorkflowsFromDir(projectWorkflowsDir, "project")
-      : { workflows: [], diagnostics: [] };
+      : EMPTY_WORKFLOW_LOAD;
 
-  // Merge by name; project wins.
+  // Merge by name: user definitions override bundled defaults, and project
+  // definitions override both.
   const merged = new Map<string, ParsedWorkflowFile>();
+  for (const workflow of bundled.workflows) {
+    if (bundledWorkflowEnabled(policyState.policy, workflow.name)) {
+      merged.set(workflow.name, workflow);
+    }
+  }
   for (const wf of user.workflows) merged.set(wf.name, wf);
   for (const wf of project.workflows) merged.set(wf.name, wf);
 
-  const diagnostics = [...user.diagnostics, ...project.diagnostics];
+  pruneDisabledBundledDependents(
+    merged,
+    bundled.workflows,
+    policyState,
+    diagnostics,
+  );
+  diagnostics.push(
+    ...bundled.diagnostics,
+    ...user.diagnostics,
+    ...project.diagnostics,
+  );
 
   // Cross-validate every definition against the merged set (references,
   // cycles, binding scopes). Invalid definitions are excluded so they can

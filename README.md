@@ -658,11 +658,11 @@ Detail longer than that budget scrolls instead of pushing the panel taller:
 | Key | Action |
 | --- | --- |
 | `↑`/`↓`, `j`/`k` | Move the table selection |
-| `⇧↑`/`⇧↓` (or `ctrl+y`/`ctrl+e`) | Scroll the detail pane one line |
+| `⇧↑`/`⇧↓`, `J`/`K` (or `ctrl+y`/`ctrl+e`) | Scroll the detail pane one line |
 | `⇧PgUp`/`⇧PgDn` (or `ctrl+u`/`ctrl+d`) | Scroll the detail pane one pane |
 | `⇧Home`/`⇧End` | Jump to the start or end of the detail |
 
-The footer advertises `⇧↑↓ scroll` only while there is something hidden. Each
+The footer advertises `⇧↑↓/JK scroll` only while there is something hidden. Each
 row keeps its own window: moving the selection resets the offset, a live tail
 starts pinned to the newest line, and scrolling back to the bottom of a tail
 re-arms following.

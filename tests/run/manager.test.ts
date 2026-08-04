@@ -159,6 +159,47 @@ describe("preflight with node overrides", () => {
   });
 });
 
+describe("preflight over models", () => {
+  test("an unknown node model fails before any spawn, naming the node", () => {
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        { kind: "agent", name: "echo", task: "first" },
+        { kind: "agent", task: "second", model: "missing" },
+      ],
+    });
+    expect(() =>
+      manager.start({
+        flow,
+        cwd: projectDir,
+        scope: "project",
+        source: { kind: "tool" },
+        resolveModel: (ref) => ({
+          ok: false,
+          message: `unknown model '${ref}' — available: openai-codex/terra`,
+        }),
+      }),
+    ).toThrow(/at \$\.steps\[1\], unknown model 'missing'/);
+    expect(specs).toHaveLength(0);
+  });
+
+  test("passes a canonical model to the spawn engine", async () => {
+    const { engine, specs } = fakeEngine();
+    const manager = new RunManager({ engine });
+    const flow = validateFlow({ kind: "agent", task: "t", model: "terra" });
+    await manager.start({
+      flow,
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+      resolveModel: () => ({ ok: true, model: "openai-codex/terra" }),
+    }).done;
+    expect(specs[0]?.model).toBe("openai-codex/terra");
+  });
+});
+
 describe("preflight over skills", () => {
   function writeSkill(dir: string, name: string): void {
     const skillDir = path.join(dir, ".pi", "skills", name);

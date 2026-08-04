@@ -962,6 +962,34 @@ describe("collectInvocations", () => {
     ]);
   });
 
+  test("collects model-only anonymous calls and reducers", () => {
+    const flow = validateFlow({
+      kind: "parallel",
+      branches: {
+        a: { kind: "agent", task: "t", model: "terra" },
+      },
+      reduce: { task: "merge {branches}", model: "spark" },
+    });
+    expect(collectInvocations(flow)).toEqual([
+      {
+        path: "$.branches.a",
+        agent: undefined,
+        model: "terra",
+        skills: undefined,
+        cwd: undefined,
+        scope: undefined,
+      },
+      {
+        path: "$.reduce",
+        agent: undefined,
+        model: "spark",
+        skills: undefined,
+        cwd: undefined,
+        scope: undefined,
+      },
+    ]);
+  });
+
   test("a flow with nothing to resolve yields no requirements", () => {
     const flow = validateFlow(
       {

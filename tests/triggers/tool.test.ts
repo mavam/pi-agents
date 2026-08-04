@@ -1127,6 +1127,14 @@ describe("workflow tool description", () => {
     expect(tool.description).toContain("{previous}");
     expect(tool.description).toContain("{current}");
     expect(tool.description).toContain('"as"');
+    expect(tool.description).toContain(
+      '"model":"provider/id from <models> (bare id resolves to the earliest listed provider)"',
+    );
+    expect(
+      tool.promptGuidelines?.some((line) =>
+        line.includes("An unknown model fails the run before anything spawns"),
+      ),
+    ).toBe(true);
   });
 
   test("the description gates the tool on an explicit request", () => {

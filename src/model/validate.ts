@@ -1295,6 +1295,7 @@ export interface InvocationRequirement {
   path: string;
   /** Profile name; absent for anonymous (ad-hoc) calls. */
   agent?: string;
+  model?: string;
   skills?: string[];
   cwd?: string;
   scope?: Scope;
@@ -1303,8 +1304,8 @@ export interface InvocationRequirement {
 /**
  * Every invocation an expanded flow can spawn that needs resolving before the
  * run starts: named calls (a profile must exist) and anonymous calls that
- * request skills. Reducers carry their own cwd/scope overrides, so they are
- * collected exactly like agent nodes. Identical invocations collapse, keeping
+ * request a model or skills. Reducers carry their own cwd/scope overrides, so
+ * they are collected exactly like agent nodes. Identical invocations collapse, keeping
  * the first path as the representative one for error messages.
  */
 export function collectInvocations(
@@ -1314,10 +1315,15 @@ export function collectInvocations(
   const seen = new Set<string>();
   const requirements: InvocationRequirement[] = [];
   const add = (requirement: InvocationRequirement): void => {
-    if (requirement.agent === undefined && requirement.skills === undefined)
+    if (
+      requirement.agent === undefined &&
+      requirement.model === undefined &&
+      requirement.skills === undefined
+    )
       return;
     const key = [
       requirement.agent ?? "",
+      requirement.model ?? "",
       (requirement.skills ?? []).join(","),
       requirement.cwd ?? "",
       requirement.scope ?? "",
@@ -1330,6 +1336,7 @@ export function collectInvocations(
     add({
       path: reducePath(path),
       agent: reduce.agent,
+      ...(reduce.model !== undefined ? { model: reduce.model } : {}),
       skills: reduce.skills,
       cwd: reduce.cwd,
       scope: reduce.scope,
@@ -1340,6 +1347,7 @@ export function collectInvocations(
         add({
           path,
           agent: current.name,
+          ...(current.model !== undefined ? { model: current.model } : {}),
           skills: current.skills,
           cwd: current.cwd,
           scope: current.scope,

@@ -19,15 +19,21 @@ import {
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
 import { type Budgets, effectiveScope, type Scope } from "../model/ast.js";
-import { parseFlowNode, validateFlow } from "../model/validate.js";
+import { validateFlow } from "../model/validate.js";
 import { truncateModelResult, valueText } from "../model/value.js";
 import type { RunStatus } from "../run/events.js";
 import type { RunOutcome } from "../run/interpreter.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { MAX_STEERING_MESSAGE_CHARS } from "../run/runs.js";
-import { formatUsage, shortId } from "../ui/render.js";
-import { STATUS_STYLES } from "../ui/status.js";
-import { KIND_ICONS, renderFlowTree } from "../ui/tree.js";
+import {
+  formatUsage,
+  formatWorkflowCallPreview,
+  formatWorkflowResultPreview,
+  shortId,
+  type WorkflowPreviewColorize,
+  type WorkflowPreviewState,
+} from "../ui/render.js";
+import { renderFlowTree } from "../ui/tree.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
 /**
@@ -265,30 +271,11 @@ export function createSteerTool(
   };
 }
 
-/** Minimal color hook so the pure formatters are testable without a theme. */
-export type ToolColorize = (
-  color: "dim" | "accent" | "success" | "warning" | "error" | "muted",
-  text: string,
-) => string;
-
-const plain: ToolColorize = (_color, text) => text;
-
-const PARAM_PREVIEW_CHARS = 72;
-
-/** Per-tool-row state shared across workflow call renders. */
-export interface WorkflowToolRenderState {
-  /** Last successfully rendered inline flow tree. */
-  lastValidFlowTree?: string;
-  /** Memoized saved-workflow tree; null means resolution failed. */
-  savedFlowTree?: string | null;
-  /** Text currently held by the reusable call component. */
-  callText?: string;
-}
-
-function oneLine(value: string, max: number): string {
-  const flat = value.replace(/\s+/g, " ").trim();
-  return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
-}
+/** Backwards-compatible names for the workflow tool's shared UI formatters. */
+export type ToolColorize = WorkflowPreviewColorize;
+export type WorkflowToolRenderState = WorkflowPreviewState;
+export const formatCallPreview = formatWorkflowCallPreview;
+export const formatResultPreview = formatWorkflowResultPreview;
 
 /**
  * Resolve a saved workflow's expanded flow tree for display. Filesystem
@@ -313,79 +300,6 @@ export function resolveSavedFlowTree(
   } catch {
     return undefined;
   }
-}
-
-/**
- * Icon tree preview of the tool call — tolerant of partial/invalid args.
- * One header line (icon, name, dim label), params each on their own dim
- * line, then the full vertical structure (resolved by the caller for saved
- * workflows, parsed from args for inline flows).
- */
-export function formatCallPreview(
-  params: WorkflowToolParamsType,
-  color: ToolColorize = plain,
-  savedFlowTree?: string,
-  streamingState?: WorkflowToolRenderState,
-): string {
-  const lines: string[] = [];
-  const label = params.label ? color("dim", ` · ${params.label}`) : "";
-  try {
-    if (params.name !== undefined) {
-      lines.push(
-        `${color("muted", KIND_ICONS.workflow)} ${params.name}${label}`,
-      );
-      for (const [key, value] of Object.entries(params.params ?? {})) {
-        lines.push(
-          color("dim", `   ${key}: ${oneLine(value, PARAM_PREVIEW_CHARS)}`),
-        );
-      }
-      if (savedFlowTree) lines.push(savedFlowTree);
-    } else if (params.flow !== undefined) {
-      if (params.label) lines.push(color("dim", params.label));
-      const issues: { path: string; message: string }[] = [];
-      const parsed = parseFlowNode(params.flow, "$", issues);
-      if (parsed && issues.length === 0) {
-        const tree = renderFlowTree(parsed, color);
-        if (streamingState) streamingState.lastValidFlowTree = tree;
-        lines.push(tree);
-      } else if (streamingState?.lastValidFlowTree) {
-        lines.push(streamingState.lastValidFlowTree);
-      } else if (!streamingState) {
-        lines.push(`${JSON.stringify(params.flow)?.slice(0, 200) ?? ""}…`);
-      }
-    }
-  } catch {
-    // Streaming args may be incomplete; the caller supplies a stable fallback.
-  }
-  return lines.join("\n");
-}
-
-/**
- * The user-facing result line — blank-line separated from the tree so it
- * reads as run metadata, not another node of the algebra. While the run is
- * live the widget below carries all liveness, so this line is icon-less and
- * fully dim; once the run settles (and the widget disappears) it gains its
- * outcome glyph as the scrollback record. The tool's content string stays
- * model-facing (it carries the continuation instruction).
- */
-export function formatResultPreview(
-  result: { details: WorkflowToolDetails; text: string },
-  expanded: boolean,
-  color: ToolColorize = plain,
-): string {
-  const { runId, status, error } = result.details;
-  const id = shortId(runId);
-  if (status === "running") {
-    return `\n${color("dim", `running in background · /workflow ${id}`)}`;
-  }
-  if (status === "completed") {
-    const presentation = STATUS_STYLES.completed;
-    const head = `\n${color(presentation.color, presentation.icon)} completed ${color("dim", `· /workflow ${id} result`)}`;
-    return expanded ? `${head}\n${result.text}` : head;
-  }
-  const presentation = STATUS_STYLES[status];
-  const head = `\n${color(presentation.color, presentation.icon)} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""} ${color("dim", `· /workflow ${id}`)}`;
-  return expanded ? `${head}\n${result.text}` : head;
 }
 
 export function formatRunResult(

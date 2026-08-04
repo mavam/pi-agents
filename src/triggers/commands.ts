@@ -38,6 +38,7 @@ import {
   formatRunSource,
   formatUsage,
   formatValuePreview,
+  formatWorkflowStartPreview,
   nodeDisplayName,
   renderResultValue,
   selectDisplayValue,
@@ -1436,9 +1437,17 @@ async function runWorkflowCommand(
       ctx,
       background: true,
     });
+    const savedFlowTree =
+      flow.kind === "workflow" && flow.body
+        ? renderFlowTree(flow.body)
+        : renderFlowTree(flow);
     sendInfo(
       pi,
-      `Started run \`${shortId(started.runId)}\` (${wf.name}). Inspect with \`/workflow ${shortId(started.runId)}\`.`,
+      formatWorkflowStartPreview(
+        { name: wf.name, params: values },
+        started.runId,
+        savedFlowTree,
+      ),
     );
   } catch (error) {
     sendInfo(pi, `⚠ ${error instanceof Error ? error.message : String(error)}`);

@@ -1,4 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  RegisteredCommand,
+} from "@earendil-works/pi-coding-agent";
 import { validateFlow } from "../../src/model/validate.js";
 import type { RunEvent } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
@@ -15,6 +23,7 @@ import {
   formatNodeResultFull,
   formatRunDetails,
   formatRunNodesList,
+  registerWorkflowCommands,
   steeringMarker,
 } from "../../src/triggers/commands.js";
 import { formatRunSource, nodeDisplayName } from "../../src/ui/render.js";
@@ -57,6 +66,75 @@ function node(instance: string, extra: Partial<NodeView> = {}): NodeView {
     ...extra,
   };
 }
+
+describe("saved workflow commands", () => {
+  test("render the same invocation tree as the workflow tool", async () => {
+    const projectDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pi-agents-command-preview-"),
+    );
+    try {
+      const workflowsDir = path.join(projectDir, ".pi", "workflows");
+      fs.mkdirSync(workflowsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(workflowsDir, "greet.yaml"),
+        `name: greet
+description: Greet a target
+params:
+  - name: target
+    required: true
+task: greet {params.target}
+`,
+      );
+
+      const commands = new Map<string, RegisteredCommand>();
+      const messages: Array<{ content: string }> = [];
+      const pi = {
+        registerCommand: (name: string, command: RegisteredCommand) =>
+          commands.set(name, command),
+        sendMessage: (message: { content: string }) => messages.push(message),
+        getThinkingLevel: () => "off",
+      } as unknown as ExtensionAPI;
+      const done = Promise.resolve({
+        status: "completed",
+        value: null,
+        usage: {},
+        agents: 0,
+      });
+      const deps = {
+        pi,
+        manager: {
+          start: () => ({ runId: "12345678-full", done }),
+          markBackgrounded: () => {},
+        },
+        notifications: { setContext: () => {}, track: () => {} },
+        widget: { update: () => {} },
+      } as never;
+      const ctx = {
+        cwd: projectDir,
+        mode: "tui",
+        isProjectTrusted: () => true,
+        sessionManager: { getSessionFile: () => undefined },
+      } as unknown as ExtensionCommandContext;
+
+      registerWorkflowCommands(pi, projectDir, deps);
+      const greet = commands.get("greet");
+      if (!greet) throw new Error("greet command was not registered");
+      await greet.handler("world", ctx);
+
+      expect(messages).toHaveLength(1);
+      const preview = messages[0]?.content ?? "";
+      expect(preview).toContain("❖ greet");
+      expect(preview).toContain("   target: world");
+      expect(preview).toContain("✦ ad-hoc · greet {params.target}");
+      expect(preview).toContain(
+        "\n\nrunning in background · /workflow 12345678",
+      );
+      expect(preview).not.toContain("Started run");
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("nodeDisplayName", () => {
   test.each([

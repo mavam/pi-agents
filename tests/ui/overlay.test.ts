@@ -164,6 +164,21 @@ describe("renderOverlay", () => {
     expect(fitting.at(-2)).not.toContain("scroll");
   });
 
+  test("renders footer key hints in the normal foreground", () => {
+    const color = (tone: string, text: string) => `<${tone}>${text}</>`;
+    const populated = renderOverlay(spec(["a"]), ["a"], 0, 50, 20, {
+      color,
+    });
+    const populatedFooter = populated.at(-2);
+    expect(populatedFooter).toContain("</> hints <dim>");
+    expect(populatedFooter).not.toContain("<dim>hints</>");
+
+    const empty = renderOverlay(spec([]), [], 0, 50, 20, { color });
+    const emptyFooter = empty.at(-2);
+    expect(emptyFooter).toContain("</> hints <dim>");
+    expect(emptyFooter).not.toContain("<dim>hints</>");
+  });
+
   test("empty list renders the empty text", () => {
     const lines = renderOverlay(spec([]), [], 0, 40, 20);
     // Title, text, footer border, trailing gap.

@@ -231,12 +231,7 @@ export function renderOverlay<T>(
     );
     lines.push(boxLine(color("dim", chrome(spec.emptyText)), width, color));
     lines.push(
-      edgeLine(
-        ["╰", "╯"],
-        color("dim", footerOverride ?? chrome(spec.footer)),
-        width,
-        color,
-      ),
+      edgeLine(["╰", "╯"], footerOverride ?? chrome(spec.footer), width, color),
     );
     lines.push(TRAILING_BLANK);
     return lines;
@@ -288,13 +283,11 @@ export function renderOverlay<T>(
   lines.push(
     edgeLine(
       ["╰", "╯"],
-      color(
-        "dim",
-        // Keep the scroll hint first so long action lists cannot truncate it.
-        maxOffset > 0 && footerOverride === undefined
-          ? `⇧↑↓ scroll · ${hints}`
-          : hints,
-      ),
+      // Keep the scroll hint first so long action lists cannot truncate it.
+      // Key hints use the normal foreground so they remain easy to discover.
+      maxOffset > 0 && footerOverride === undefined
+        ? `⇧↑↓ scroll · ${hints}`
+        : hints,
       width,
       color,
     ),

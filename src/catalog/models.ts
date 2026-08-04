@@ -9,6 +9,24 @@ export interface ModelCatalog {
   }>;
 }
 
+/** Start one model refresh, allowing a later event to retry after failure. */
+export function createModelRefresher(): (
+  registry: Pick<ModelRegistry, "refresh">,
+) => void {
+  let started = false;
+  return (registry) => {
+    if (started) return;
+    started = true;
+    try {
+      void registry.refresh().catch(() => {
+        started = false;
+      });
+    } catch {
+      started = false;
+    }
+  };
+}
+
 /**
  * Build a synchronous snapshot of the models whose providers are configured.
  * The caller is responsible for starting the registry's asynchronous refresh.
@@ -102,17 +120,13 @@ function suggestions(ref: string, available: string[]): string[] {
     .map(({ model }) => model);
 }
 
-function unknownModelMessage(
-  ref: string,
-  available: string[],
-  includeSuggestions: boolean,
-): string {
+function unknownModelMessage(ref: string, available: string[]): string {
   const fullList = available.join(", ") || "none";
   const nearby = suggestions(ref, available);
-  if (includeSuggestions && nearby.length > 0) {
+  if (nearby.length > 0) {
     return `unknown model '${ref}' — suggestions: ${nearby.join(", ")}; available: ${fullList}`;
   }
-  return `unknown model '${ref}' — available: ${nearby.join(", ") || fullList}`;
+  return `unknown model '${ref}' — available: ${fullList}`;
 }
 
 /** Resolve a bare or provider-qualified model reference against the catalog. */
@@ -131,7 +145,7 @@ export function resolveModelReference(
     }
     return {
       ok: false,
-      message: unknownModelMessage(ref, available, false),
+      message: unknownModelMessage(ref, available),
     };
   }
 
@@ -142,6 +156,6 @@ export function resolveModelReference(
   }
   return {
     ok: false,
-    message: unknownModelMessage(ref, available, true),
+    message: unknownModelMessage(ref, available),
   };
 }

@@ -1128,7 +1128,7 @@ describe("workflow tool description", () => {
     expect(tool.description).toContain("{current}");
     expect(tool.description).toContain('"as"');
     expect(tool.description).toContain(
-      '"model":"provider/id from <models> (bare id allowed when unambiguous)"',
+      '"model":"provider/id from <models> (bare id resolves to the earliest listed provider)"',
     );
     expect(
       tool.promptGuidelines?.some((line) =>

@@ -3,6 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import {
   buildModelCatalog,
+  createModelRefresher,
   type ModelCatalog,
   resolveModelReference,
 } from "../../src/catalog/models.js";
@@ -20,6 +21,33 @@ function fakeRegistry(
       oauthProviders.includes(model.provider),
   } as unknown as ModelRegistry;
 }
+
+describe("createModelRefresher", () => {
+  test("retries after failure and stops after success", async () => {
+    let calls = 0;
+    const refresh = createModelRefresher();
+    const registry = {
+      refresh: () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new Error("temporary failure"))
+          : Promise.resolve();
+      },
+    };
+
+    refresh(registry);
+    refresh(registry);
+    expect(calls).toBe(1);
+
+    await Promise.resolve();
+    refresh(registry);
+    expect(calls).toBe(2);
+
+    await Promise.resolve();
+    refresh(registry);
+    expect(calls).toBe(2);
+  });
+});
 
 describe("buildModelCatalog", () => {
   test("groups available models and sorts provider and model ids", () => {
@@ -101,10 +129,16 @@ describe("resolveModelReference", () => {
     expect(result.message).toContain("available:");
   });
 
-  test("an unknown qualified reference prefers models from that provider", () => {
+  test("an unknown qualified reference labels nearby models as suggestions", () => {
     const result = resolveModelReference("openai/gpt-missing", catalog);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toContain("openai/gpt-api");
+    if (result.ok) return;
+    expect(result.message).toContain(
+      "suggestions: openai/gpt-shared, openai/gpt-api",
+    );
+    expect(result.message).toContain(
+      "available: openai-codex/gpt-shared, openai-codex/gpt-terra, openai/gpt-shared, openai/gpt-api",
+    );
   });
 
   test("an empty catalog reports no available models", () => {

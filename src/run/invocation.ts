@@ -208,8 +208,7 @@ export function resolveInvocation(
 
   let model = call.model ?? profile?.model ?? context.defaults?.model;
   const modelNeedsValidation =
-    call.model !== undefined ||
-    (call.model === undefined && profile?.model !== undefined);
+    call.model !== undefined || profile?.model !== undefined;
   if (model !== undefined && modelNeedsValidation && context.resolveModel) {
     const resolution = context.resolveModel(model);
     if (resolution.ok) model = resolution.model;

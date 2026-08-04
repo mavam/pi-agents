@@ -22,7 +22,7 @@ ellipsis toward an eight-column floor, and the output excerpt tail absorbs
 any final truncation as before.
 
 ```
-❖ 100% · review-and-fix-the-parser · w1a2b3c4 · 1m32s · 4.5k · ◆◆⑂   (wide)
-❖ 100% · review-and-fix-t… · 1m32s · 4.5k · ◆◆⑂                      (80 cols)
-❖ 100% · review-a… · ◆◆⑂                                             (minimal)
+❖ 100% · review-and-fix-the-parser · w1a2b3c4 · 1m32s · 4.5k · ✦✦⑂   (wide)
+❖ 100% · review-and-fix-t… · 1m32s · 4.5k · ✦✦⑂                      (80 cols)
+❖ 100% · review-a… · ✦✦⑂                                             (minimal)
 ```

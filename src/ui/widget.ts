@@ -1,7 +1,7 @@
 /**
  * The above-editor widget for live runs: one line per run.
  *
- *   ❖ 67% · review · c9e5799 · 1m32s · 15.5k · ◆⑃⟨◆◆⑂⟩⇶↺ · merging…
+ *   ❖ 67% · review · c9e5799 · 1m32s · 15.5k · ✦⑃⟨✦✦⑂⟩⇶↺ · merging…
  *
  * The static ❖ run mark (shared with completion cards and notifications),
  * completion percent (done agents over known agents — the denominator grows
@@ -9,7 +9,7 @@
  * (completed usage + streaming usage), the glyph strip, then the latest
  * output excerpt —
  * replaced by a "no output for …" stall hint when agents have been silent.
- * The strip shows one kind glyph per top-level unit (◆ marks an agent),
+ * The strip shows one kind glyph per top-level unit (✦ marks an agent),
  * colored by status; failed units render ✗ so failures survive without
  * color. Running composites expand their children in ⟨…⟩ — recursively, so
  * the strip zooms into the active spine — while map items and loop
@@ -36,7 +36,7 @@ import type { RunManager } from "../run/runs.js";
 import { type RunView, workNodes } from "../run/state.js";
 import { formatTokens, shortId } from "./render.js";
 import { STATUS_STYLES } from "./status.js";
-import { aggregateStatuses, type PathStatus } from "./tree.js";
+import { aggregateStatuses, KIND_ICONS, type PathStatus } from "./tree.js";
 
 const WIDGET_KEY = "pi-agents:runs";
 const MAX_RUNS = 4;
@@ -61,9 +61,9 @@ export interface WidgetSegment {
 /** Fan-out wider than this collapses into a dim ellipsis glyph. */
 const MAX_ITEM_GLYPHS = 8;
 
-/** Kind glyphs for the strip; ◆ marks an agent, ⑂ a parallel reducer. */
+/** Kind glyphs for the strip; ✦ marks an agent, ⑂ a parallel reducer. */
 const KIND_GLYPHS: Record<FlowNode["kind"], string> = {
-  agent: "◆",
+  agent: KIND_ICONS.agent,
   sequence: "≡",
   parallel: "⑃",
   map: "⇶",

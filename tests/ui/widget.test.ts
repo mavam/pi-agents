@@ -54,7 +54,7 @@ describe("formatRunWidget", () => {
     expect(line).toContain("review");
     expect(line).toContain("1m32s");
     // Two agent branches plus the reducer, all completed.
-    expect(line).toContain("<success>◆</><success>◆</><success>⑂</>");
+    expect(line).toContain("<success>✦</><success>✦</><success>⑂</>");
     // Nothing is running, so nothing expands.
     expect(line).not.toContain("⟨");
   });
@@ -76,7 +76,7 @@ describe("formatRunWidget", () => {
     const [line] = formatRunWidget(run, run.createdAt + 5_000, tagged);
     expect(line).toContain("67%");
     // Finished branches are green; the running reducer is the warning glyph.
-    expect(line).toContain("<success>◆</><success>◆</><warning>⑂</>");
+    expect(line).toContain("<success>✦</><success>✦</><warning>⑂</>");
   });
 
   test("pending skeleton leaves keep the denominator honest before start", async () => {
@@ -91,7 +91,7 @@ describe("formatRunWidget", () => {
     expect(total).toBe(3);
     const [line] = formatRunWidget(run, run.createdAt, tagged);
     expect(line).toContain("0%");
-    expect(line).toContain("<dim>◆</><dim>◆</><dim>⑂</>");
+    expect(line).toContain("<dim>✦</><dim>✦</><dim>⑂</>");
   });
 
   test("map fan-out aggregates counts into one segment", async () => {
@@ -116,7 +116,7 @@ describe("formatRunWidget", () => {
       (agent) => (agent === "scout" ? '["a","b","c"]' : "ok"),
     );
     const [line] = formatRunWidget(run, run.createdAt + 1000);
-    expect(line).toContain("◆⇶");
+    expect(line).toContain("✦⇶");
     // 1 scout + 3 map items = 4 agents total.
     expect(widgetProgress(run)).toEqual({ done: 4, total: 4 });
     expect(line).toContain("100%");
@@ -167,7 +167,7 @@ describe("formatRunWidget", () => {
     expect(widgetProgress(run)).toEqual({ done: 3, total: 3 });
     const [line] = formatRunWidget(run, run.createdAt);
     expect(line).toContain("100%");
-    expect(line).toContain("◆⎇");
+    expect(line).toContain("✦⎇");
   });
 
   test("value nodes add no work: zero leaves, ≔ segment", async () => {
@@ -190,7 +190,7 @@ describe("formatRunWidget", () => {
     expect(widgetProgress(run)).toEqual({ done: 1, total: 1 });
     const [line] = formatRunWidget(run, run.createdAt);
     expect(line).toContain("100%");
-    expect(line).toContain("◆≔");
+    expect(line).toContain("✦≔");
   });
 
   test("failed units replace their glyph with ✗", async () => {
@@ -207,7 +207,7 @@ describe("formatRunWidget", () => {
       return "ok";
     });
     const [line] = formatRunWidget(run, run.createdAt, tagged);
-    expect(line).toContain("<success>◆</><error>✗</>");
+    expect(line).toContain("<success>✦</><error>✗</>");
   });
 
   test("live tokens sum completed and streaming usage", async () => {
@@ -292,7 +292,7 @@ describe("formatRunWidget", () => {
     );
     const [line] = formatRunWidget(run, run.createdAt);
     // Four top-level steps, not one glyph per structural agent.
-    expect(line).toContain("◆⑃⇶↺");
+    expect(line).toContain("✦⑃⇶↺");
     expect(line).not.toContain("bugs");
   });
 
@@ -333,8 +333,8 @@ describe("formatRunWidget", () => {
     );
     const [line] = formatRunWidget(run, run.createdAt, tagged);
     expect(line).toContain(
-      "<warning>⑃</><dim>⟨</><success>◆</><warning>≡</><dim>⟨</>" +
-        "<success>◆</><warning>◆</><dim>⟩</><dim>⟩</>",
+      "<warning>⑃</><dim>⟨</><success>✦</><warning>≡</><dim>⟨</>" +
+        "<success>✦</><warning>✦</><dim>⟩</><dim>⟩</>",
     );
   });
 
@@ -375,7 +375,7 @@ describe("formatRunWidget", () => {
     const [line] = formatRunWidget(run, run.createdAt, tagged);
     // Gate done; the switch expands to exactly the running chosen arm.
     expect(line).toContain(
-      "<success>◆</><warning>⎇</><dim>⟨</><warning>◆</><dim>⟩</>",
+      "<success>✦</><warning>⎇</><dim>⟨</><warning>✦</><dim>⟩</>",
     );
   });
 
@@ -412,7 +412,7 @@ describe("formatRunWidget", () => {
     const [line] = formatRunWidget(run, run.createdAt, tagged);
     // 10 items: 8 collapsed glyphs plus a dim ellipsis inside the brackets.
     expect(line).toContain(
-      `<warning>⇶</><dim>⟨</>${"<success>◆</>".repeat(8)}<dim>…</><dim>⟩</>`,
+      `<warning>⇶</><dim>⟨</>${"<success>✦</>".repeat(8)}<dim>…</><dim>⟩</>`,
     );
   });
 
@@ -450,7 +450,7 @@ describe("formatRunWidget", () => {
     // Without the reducer glyph the expansion would read all-green while
     // the map still runs; the yellow ⑂ names the unfinished work.
     expect(line).toContain(
-      "<warning>⇶</><dim>⟨</><success>◆</><success>◆</><warning>⑂</><dim>⟩</>",
+      "<warning>⇶</><dim>⟨</><success>✦</><success>✦</><warning>⑂</><dim>⟩</>",
     );
   });
 
@@ -467,7 +467,7 @@ describe("formatRunWidget", () => {
       () => "ok",
     );
     const [line] = formatRunWidget(run, run.createdAt);
-    expect(line).toContain("◆◆◆◆◆◆◆◆");
+    expect(line).toContain("✦✦✦✦✦✦✦✦");
     expect(line).not.toContain("…+");
   });
 });
@@ -487,7 +487,7 @@ describe("formatRunWidget width budgeting", () => {
     expect(line).toContain(longLabel);
     expect(line).toContain("w1"); // id
     expect(line).toContain("1m32s");
-    expect(line).toContain("◆◆⑂");
+    expect(line).toContain("✦✦⑂");
   });
 
   test("the glyph strip survives narrow widths", async () => {
@@ -500,7 +500,7 @@ describe("formatRunWidget width budgeting", () => {
         width,
       );
       expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-      expect(line).toContain("◆◆⑂");
+      expect(line).toContain("✦✦⑂");
     }
   });
 
@@ -535,7 +535,7 @@ describe("formatRunWidget width budgeting", () => {
     expect(minimal).not.toContain("1m32s");
     // truncateToWidth may emit a style reset before the ellipsis.
     expect(minimal.replaceAll("\u001b[0m", "")).toContain("a-very-…");
-    expect(minimal).toContain("◆◆⑂");
+    expect(minimal).toContain("✦✦⑂");
   });
 
   test("long labels shrink with an ellipsis but keep a readable floor", async () => {
@@ -578,7 +578,7 @@ describe("live activity", () => {
     // every tool switch. Only the token volume aggregates meaningfully.
     expect(line1).not.toContain("turn");
     expect(line1).not.toContain("bash");
-    expect(line1).toContain("◆◆⑂");
+    expect(line1).toContain("✦✦⑂");
   });
 
   test("a long silence replaces the excerpt with a stall hint", async () => {

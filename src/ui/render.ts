@@ -12,11 +12,12 @@ import {
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
 import { resolvePath } from "../model/interpolate.js";
+import { parseFlowNode } from "../model/validate.js";
 import { valueText } from "../model/value.js";
-import type { RunSource } from "../run/events.js";
+import type { RunSource, RunStatus } from "../run/events.js";
 import type { NodeView, RunView } from "../run/state.js";
 import { STATUS_STYLES } from "./status.js";
-import { KIND_ICONS } from "./tree.js";
+import { KIND_ICONS, renderFlowTree } from "./tree.js";
 
 export const MESSAGE_TYPE = "pi-agents:message";
 
@@ -98,6 +99,126 @@ export function formatRunNotificationControls(
     "dim",
     `${command} [result|agents]`,
   )}`;
+}
+
+/** Minimal color hook so workflow previews stay testable without a theme. */
+export type WorkflowPreviewColorize = (
+  color: "dim" | "accent" | "success" | "warning" | "error" | "muted",
+  text: string,
+) => string;
+
+const plainPreview: WorkflowPreviewColorize = (_color, text) => text;
+const PARAM_PREVIEW_CHARS = 72;
+
+/** Inputs shared by model tool calls and direct saved-workflow commands. */
+export interface WorkflowCallPreview {
+  name?: string;
+  params?: Record<string, string>;
+  flow?: unknown;
+  label?: string;
+}
+
+/** Mutable state used only while an inline tool call streams its arguments. */
+export interface WorkflowPreviewState {
+  lastValidFlowTree?: string;
+  savedFlowTree?: string | null;
+  callText?: string;
+}
+
+function oneLine(value: string, max: number): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
+}
+
+/**
+ * Render a workflow invocation consistently for tool calls and slash commands.
+ * Saved workflows supply their already-expanded tree; inline tool calls parse
+ * the partial flow and retain the newest valid tree while arguments stream.
+ */
+export function formatWorkflowCallPreview(
+  params: WorkflowCallPreview,
+  color: WorkflowPreviewColorize = plainPreview,
+  savedFlowTree?: string,
+  streamingState?: WorkflowPreviewState,
+): string {
+  const lines: string[] = [];
+  const label = params.label ? color("dim", ` · ${params.label}`) : "";
+  try {
+    if (params.name !== undefined) {
+      lines.push(
+        `${color("muted", KIND_ICONS.workflow)} ${params.name}${label}`,
+      );
+      for (const [key, value] of Object.entries(params.params ?? {})) {
+        lines.push(
+          color("dim", `   ${key}: ${oneLine(value, PARAM_PREVIEW_CHARS)}`),
+        );
+      }
+      if (savedFlowTree) lines.push(savedFlowTree);
+    } else if (params.flow !== undefined) {
+      if (params.label) lines.push(color("dim", params.label));
+      const issues: { path: string; message: string }[] = [];
+      const parsed = parseFlowNode(params.flow, "$", issues);
+      if (parsed && issues.length === 0) {
+        const tree = renderFlowTree(parsed, color);
+        if (streamingState) streamingState.lastValidFlowTree = tree;
+        lines.push(tree);
+      } else if (streamingState?.lastValidFlowTree) {
+        lines.push(streamingState.lastValidFlowTree);
+      } else if (!streamingState) {
+        lines.push(`${JSON.stringify(params.flow)?.slice(0, 200) ?? ""}…`);
+      }
+    }
+  } catch {
+    // Streaming args may be incomplete; the caller supplies a stable fallback.
+  }
+  return lines.join("\n");
+}
+
+export interface WorkflowResultPreviewDetails {
+  runId: string;
+  status: RunStatus;
+  error?: string;
+}
+
+/** Render the metadata below a workflow invocation or completed tool call. */
+export function formatWorkflowResultPreview(
+  result: { details: WorkflowResultPreviewDetails; text: string },
+  expanded: boolean,
+  color: WorkflowPreviewColorize = plainPreview,
+): string {
+  const { runId, status, error } = result.details;
+  const id = shortId(runId);
+  if (status === "running") {
+    return `\n${color("dim", `running in background · /workflow ${id}`)}`;
+  }
+  if (status === "completed") {
+    const presentation = STATUS_STYLES.completed;
+    const head = `\n${color(presentation.color, presentation.icon)} completed ${color("dim", `· /workflow ${id} result`)}`;
+    return expanded ? `${head}\n${result.text}` : head;
+  }
+  const presentation = STATUS_STYLES[status];
+  const head = `\n${color(presentation.color, presentation.icon)} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""} ${color("dim", `· /workflow ${id}`)}`;
+  return expanded ? `${head}\n${result.text}` : head;
+}
+
+/** Complete start message for direct slash-command invocations. */
+export function formatWorkflowStartPreview(
+  call: WorkflowCallPreview,
+  runId: string,
+  savedFlowTree: string,
+  color: WorkflowPreviewColorize = plainPreview,
+): string {
+  const preview =
+    formatWorkflowCallPreview(call, color, savedFlowTree) || "workflow";
+  const result = formatWorkflowResultPreview(
+    { details: { runId, status: "running" }, text: "" },
+    false,
+    color,
+  );
+  // The result formatter starts with one newline because tool calls render it
+  // in a separate component. Add another here to preserve the same gap when
+  // both slots share one command message.
+  return `${preview}\n${result}`;
 }
 
 const renderMarkdownMessage: MessageRenderer = (message) =>

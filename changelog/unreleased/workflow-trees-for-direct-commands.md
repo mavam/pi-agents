@@ -4,6 +4,8 @@ type: bugfix
 authors:
   - mavam
   - codex
+prs:
+  - 44
 created: 2026-08-04T18:13:34.332064Z
 ---
 

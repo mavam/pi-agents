@@ -45,6 +45,12 @@ export interface InvocationCall extends AgentExecutionOptions {
 }
 
 /** Run-level context every invocation resolves against. */
+export type ModelResolution =
+  | { ok: true; model: string }
+  | { ok: false; message: string };
+
+export type ResolveModel = (ref: string) => ModelResolution;
+
 export interface InvocationContext {
   /** Run-level working directory; a call may override it. */
   cwd: string;
@@ -53,6 +59,8 @@ export interface InvocationContext {
   /** Project trust; when false, scope clamps to user. */
   trusted: boolean;
   defaults?: SpawnDefaults;
+  /** Validate explicit node/profile models and return their canonical form. */
+  resolveModel?: ResolveModel;
   /** Shared discovery caches; pass one instance per run. */
   catalogs: CatalogCache;
 }
@@ -198,6 +206,16 @@ export function resolveInvocation(
     }
   }
 
+  let model = call.model ?? profile?.model ?? context.defaults?.model;
+  const modelNeedsValidation =
+    call.model !== undefined ||
+    (call.model === undefined && profile?.model !== undefined);
+  if (model !== undefined && modelNeedsValidation && context.resolveModel) {
+    const resolution = context.resolveModel(model);
+    if (resolution.ok) model = resolution.model;
+    else problems.push(`${resolution.message} ${where(cwd, scope)}`);
+  }
+
   if (problems.length > 0) return { ok: false, cwd, scope, problems };
 
   return {
@@ -206,7 +224,7 @@ export function resolveInvocation(
       profile,
       cwd,
       scope,
-      model: call.model ?? profile?.model ?? context.defaults?.model,
+      model,
       thinking:
         call.thinking ?? profile?.thinking ?? context.defaults?.thinking,
       skills: resolved,

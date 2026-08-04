@@ -189,6 +189,90 @@ describe("skills and tools precedence", () => {
   });
 });
 
+describe("model resolution", () => {
+  const resolveModel = (ref: string) =>
+    ref === "terra"
+      ? ({ ok: true, model: "openai-codex/terra" } as const)
+      : ({
+          ok: false,
+          message: `unknown model '${ref}' — available: openai-codex/terra`,
+        } as const);
+
+  test("validates and canonicalizes a node model", () => {
+    const resolution = resolveInvocation(
+      { model: "terra" },
+      {
+        cwd: projectDir,
+        scope: "both",
+        trusted: true,
+        resolveModel,
+        catalogs: new CatalogCache(),
+      },
+    );
+    if (!resolution.ok) throw new Error(resolution.problems.join("; "));
+    expect(resolution.invocation.model).toBe("openai-codex/terra");
+  });
+
+  test("validates and canonicalizes a profile model", () => {
+    writeAgent(projectDir, "terra-agent", { model: "terra" });
+    const resolution = resolveInvocation(
+      { agent: "terra-agent" },
+      {
+        cwd: projectDir,
+        scope: "both",
+        trusted: true,
+        resolveModel,
+        catalogs: new CatalogCache(),
+      },
+    );
+    if (!resolution.ok) throw new Error(resolution.problems.join("; "));
+    expect(resolution.invocation.model).toBe("openai-codex/terra");
+  });
+
+  test("does not validate the session-default model", () => {
+    let calls = 0;
+    const resolution = resolveInvocation(
+      {},
+      {
+        cwd: projectDir,
+        scope: "both",
+        trusted: true,
+        defaults: { model: "session/model" },
+        resolveModel: (ref) => {
+          calls += 1;
+          return resolveModel(ref);
+        },
+        catalogs: new CatalogCache(),
+      },
+    );
+    if (!resolution.ok) throw new Error(resolution.problems.join("; "));
+    expect(resolution.invocation.model).toBe("session/model");
+    expect(calls).toBe(0);
+  });
+
+  test("puts model failures in problems with resolution context", () => {
+    const resolution = resolveInvocation(
+      { model: "missing" },
+      {
+        cwd: projectDir,
+        scope: "both",
+        trusted: true,
+        resolveModel,
+        catalogs: new CatalogCache(),
+      },
+    );
+    expect(resolution.ok).toBe(false);
+    if (resolution.ok) return;
+    expect(resolution.problems[0]).toContain("unknown model 'missing'");
+    expect(resolution.problems[0]).toContain(`cwd: ${projectDir}`);
+    expect(resolution.problems[0]).toContain("scope: both");
+  });
+
+  test("keeps existing behavior when no resolver is supplied", () => {
+    expect(resolveOk({ model: "anything" }).model).toBe("anything");
+  });
+});
+
 describe("skill resolution", () => {
   test("resolved skills carry their instructions", () => {
     const invocation = resolveOk({ skills: ["code-review"] });

@@ -10,6 +10,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { buildModelCatalog } from "./catalog/models.js";
 import { buildSystemPromptAppendix } from "./catalog/prompt.js";
 import {
   BUDGETS_ENV_VAR,
@@ -88,6 +89,12 @@ export default function agentExtension(pi: ExtensionAPI): void {
   footerReporter = new FancyFooterRunReporter(pi, manager);
 
   const deps: TriggerDeps = { pi, manager, notifications, widget };
+  let modelRefreshStarted = false;
+  const refreshModels = (ctx: ExtensionContext): void => {
+    if (modelRefreshStarted) return;
+    modelRefreshStarted = true;
+    void ctx.modelRegistry.refresh().catch(() => {});
+  };
 
   registerRenderers(pi);
   pi.registerTool(createWorkflowTool(deps));
@@ -116,12 +123,15 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", (event, ctx) => {
     notifications.setContext(ctx);
+    refreshModels(ctx);
+    const modelCatalog = buildModelCatalog(ctx.modelRegistry);
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPromptAppendix(ctx.cwd, isProjectTrusted(ctx))}`,
+      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPromptAppendix(ctx.cwd, isProjectTrusted(ctx), modelCatalog)}`,
     };
   });
 
   pi.on("session_start", (_event, ctx) => {
+    refreshModels(ctx);
     rpc.setContext(ctx);
     reloadRunState(ctx);
     const trusted = isProjectTrusted(ctx);

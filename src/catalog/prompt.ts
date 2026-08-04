@@ -6,6 +6,7 @@
 
 import type { Scope } from "../model/ast.js";
 import { buildAgentsPrompt } from "./agents.js";
+import type { ModelCatalog } from "./models.js";
 import { discoverWorkflows } from "./workflows.js";
 
 function escapeXmlText(value: string): string {
@@ -19,6 +20,24 @@ function escapeXmlAttribute(value: string): string {
   return escapeXmlText(value)
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
+}
+
+export function buildModelsPrompt(catalog: ModelCatalog): string {
+  const note =
+    "valid values for agent-node 'model' (omit to inherit the session model); when an id exists under several providers, prefer the earlier provider";
+  const lines = [`<models note="${escapeXmlAttribute(note)}">`];
+  if (catalog.providers.length === 0) {
+    lines.push("  <none>No available models were discovered.</none>");
+  } else {
+    for (const provider of catalog.providers) {
+      const auth = provider.subscription ? "subscription" : "api-key";
+      lines.push(
+        `  <provider id="${escapeXmlAttribute(provider.id)}" auth="${auth}">${escapeXmlText(provider.modelIds.join(", "))}</provider>`,
+      );
+    }
+  }
+  lines.push("</models>");
+  return lines.join("\n");
 }
 
 export function buildWorkflowsPrompt(
@@ -75,7 +94,11 @@ export function buildWorkflowsPrompt(
 }
 
 /** The full appendix injected into the system prompt every turn. */
-export function buildSystemPromptAppendix(cwd: string, trusted = true): string {
+export function buildSystemPromptAppendix(
+  cwd: string,
+  trusted = true,
+  catalog?: ModelCatalog,
+): string {
   const scope: Scope = trusted ? "both" : "user";
   const agents = buildAgentsPrompt(cwd, scope);
   const workflows = buildWorkflowsPrompt(cwd, scope);
@@ -86,6 +109,13 @@ export function buildSystemPromptAppendix(cwd: string, trusted = true): string {
     "The following saved workflows can be invoked with `workflow({name, params})` when the user asks for a workflow or for delegation. This catalog is a reference, not an invitation: a workflow existing for a task is never by itself a reason to run one.",
     workflows,
   ];
+  if (catalog) {
+    parts.push(
+      "",
+      "The following models are available to delegated agents:",
+      buildModelsPrompt(catalog),
+    );
+  }
   if (!trusted) {
     parts.push(
       "",

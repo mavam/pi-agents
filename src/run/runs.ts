@@ -20,7 +20,11 @@ import {
   executeFlow,
   type RunOutcome,
 } from "./interpreter.js";
-import { CatalogCache, resolveInvocation } from "./invocation.js";
+import {
+  CatalogCache,
+  type ResolveModel,
+  resolveInvocation,
+} from "./invocation.js";
 import { createAgentRunner, type SpawnDefaults } from "./runner.js";
 import {
   applyRunEvent,
@@ -57,6 +61,8 @@ export interface StartRunOptions {
   originSessionFile?: string;
   /** Session defaults for agents without explicit model/thinking frontmatter. */
   defaults?: SpawnDefaults;
+  /** Resolve explicit node/profile models to provider-qualified ids. */
+  resolveModel?: ResolveModel;
   /**
    * Project trust (ctx.isProjectTrusted()). When false, all agent discovery —
    * run-level and per-node overrides alike — clamps to user scope.
@@ -127,6 +133,7 @@ export class RunManager {
     scope: Scope,
     trusted = true,
     catalogs: CatalogCache = new CatalogCache(),
+    resolveModel?: ResolveModel,
   ): void {
     const problems: string[] = [];
     for (const requirement of collectInvocations(flow)) {
@@ -134,6 +141,7 @@ export class RunManager {
         cwd,
         scope,
         trusted,
+        resolveModel,
         catalogs,
       });
       if (resolution.ok) continue;
@@ -152,7 +160,14 @@ export class RunManager {
     // One cache for the whole run: preflight's profile and skill reads serve
     // every later spawn, so nothing is discovered or read twice.
     const catalogs = new CatalogCache();
-    this.preflight(opts.flow, opts.cwd, scope, trusted, catalogs);
+    this.preflight(
+      opts.flow,
+      opts.cwd,
+      scope,
+      trusted,
+      catalogs,
+      opts.resolveModel,
+    );
     const budgets: Budgets = {
       ...this.options.defaultBudgets,
       ...opts.budgets,
@@ -173,6 +188,7 @@ export class RunManager {
       trusted,
       depth: this.options.depth,
       defaults: opts.defaults,
+      resolveModel: opts.resolveModel,
       budgetLimits,
       catalogs,
       onHandle: (call, handle) => {

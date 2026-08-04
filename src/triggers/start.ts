@@ -9,6 +9,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { buildModelCatalog, resolveModelReference } from "../catalog/models.js";
 import type { Budgets, FlowNode, Scope } from "../model/ast.js";
 import type { RunSource } from "../run/events.js";
 import {
@@ -61,6 +62,9 @@ export function startTriggeredRun(
   opts: StartTriggeredRunOptions,
 ): StartedRun {
   const origin = createOrigin(opts.ctx);
+  const modelCatalog = opts.ctx.modelRegistry
+    ? buildModelCatalog(opts.ctx.modelRegistry)
+    : undefined;
   const started = deps.manager.start({
     flow: opts.flow,
     cwd: opts.cwd,
@@ -71,6 +75,9 @@ export function startTriggeredRun(
     source: opts.source,
     originSessionFile: origin.sessionFile,
     defaults: sessionDefaults(deps.pi, opts.ctx),
+    resolveModel: modelCatalog
+      ? (ref) => resolveModelReference(ref, modelCatalog)
+      : undefined,
     trusted: isProjectTrusted(opts.ctx),
     onEvent: createPersister(origin),
   });

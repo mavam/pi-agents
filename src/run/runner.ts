@@ -25,6 +25,7 @@ import { BudgetExceededError } from "./budgets.js";
 import type { AgentCall, AgentRunner } from "./interpreter.js";
 import {
   CatalogCache,
+  type ResolveModel,
   resolveInvocationOrThrow,
   type SpawnDefaults,
 } from "./invocation.js";
@@ -43,6 +44,8 @@ export interface RunnerOptions {
   depth?: number;
   /** Active session model/thinking, used when the agent file sets none. */
   defaults?: SpawnDefaults;
+  /** Resolve explicit node/profile models to provider-qualified ids. */
+  resolveModel?: ResolveModel;
   /** Effective budget limits, inherited by delegated processes. */
   budgetLimits?: EffectiveBudgets;
   /** Discovery caches shared with preflight, so resolution happens once. */
@@ -86,6 +89,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       scope: options.scope ?? "both",
       trusted,
       defaults: options.defaults,
+      resolveModel: options.resolveModel,
       catalogs,
     });
     const { cwd, profile } = resolved;

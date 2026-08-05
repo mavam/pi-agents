@@ -183,12 +183,39 @@ describe("NotificationManager", () => {
     );
     expect(sent[0]?.message.content).not.toContain("```\nagent exploded");
     expect(sent[0]?.message.details?.bodyKind).toBe("error");
+    expect(sent[0]?.message.details?.copyable).toBe(false);
+    expect(sent[0]?.message.content).toContain("[result|raw|agents]");
+    expect(sent[0]?.message.content).not.toContain("[copy|");
     expect(sent[1]?.message.content.split("\n")[0]).toBe(
       "❖ `run-stop` · ⊘ stopped",
     );
     expect(sent[1]?.message.content).not.toContain("Run stopped.");
     expect(sent[1]?.message.details?.bodyKind).toBe("none");
     expect(sent[1]?.message.details?.body).toBeUndefined();
+    expect(sent[1]?.message.details?.copyable).toBe(false);
+    expect(sent[1]?.message.content).toContain("[result|raw|agents]");
+    expect(sent[1]?.message.content).not.toContain("[copy|");
+  });
+
+  test("omits copy from completed notifications without output", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    const absent = completed("run-absent");
+    absent.value = undefined;
+    for (const event of [absent, completed("run-empty", "")]) {
+      notifications.track(event.runId, "session.jsonl", false);
+      notifications.handleRunEvent(event);
+    }
+
+    expect(sent).toHaveLength(2);
+    for (const { message } of sent) {
+      expect(message.details?.status).toBe("completed");
+      expect(message.details?.body).toBe("(no output)");
+      expect(message.details?.copyable).toBe(false);
+      expect(message.content).toContain("[result|raw|agents]");
+      expect(message.content).not.toContain("[copy|");
+    }
   });
 
   test("renders complete string results as Markdown", () => {
@@ -203,6 +230,8 @@ describe("NotificationManager", () => {
       content.indexOf("`/workflow run-1`"),
     );
     expect(content).not.toContain(`\`\`\`\n${markdown}`);
+    expect(sent[0]?.message.details?.copyable).toBe(true);
+    expect(content).toContain("[copy|result|raw|agents]");
   });
 
   test("keeps complete long structured results as highlighted JSON", () => {

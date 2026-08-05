@@ -28,6 +28,7 @@ function details(overrides: Partial<CompletedDetails> = {}): CompletedDetails {
     label: "dummy-node-exploration-2",
     status: "completed",
     agents: 4,
+    copyable: true,
     bodyKind: "result",
     body: "done",
     at: 1,
@@ -44,6 +45,7 @@ function finalDetails(
     runId: "9a7eb000-full",
     label: "dummy-node-exploration-2",
     agents: 1,
+    copyable: false,
     at: 1,
   };
   return outcome.status === "failed"
@@ -87,14 +89,19 @@ describe("structured result rendering", () => {
 
 describe("run notification controls", () => {
   test("renders a compact glyph-prefixed usage line", () => {
-    expect(formatRunNotificationControls("9a7eb000-full")).toBe(
+    expect(formatRunNotificationControls("9a7eb000-full", true)).toBe(
+      "❖ `/workflow 9a7eb000` [copy|result|raw|agents]",
+    );
+    expect(formatRunNotificationControls("9a7eb000-full", false)).toBe(
       "❖ `/workflow 9a7eb000` [result|raw|agents]",
     );
   });
 
   test("dims the whole line when a theme is supplied", () => {
-    expect(formatRunNotificationControls("9a7eb000-full", markerTheme)).toBe(
-      "<muted>❖</muted> <dim>/workflow 9a7eb000 [result|raw|agents]</dim>",
+    expect(
+      formatRunNotificationControls("9a7eb000-full", true, markerTheme),
+    ).toBe(
+      "<muted>❖</muted> <dim>/workflow 9a7eb000 [copy|result|raw|agents]</dim>",
     );
   });
 });
@@ -114,11 +121,11 @@ describe("run notification renderer", () => {
       "<dim> · 3 turns ↑12.0k ↓4.0k $0.0500 · 4 agents</dim>",
     );
     expect(output).toContain(
-      "<muted>❖</muted> <dim>/workflow 9a7eb000 [result|raw|agents]</dim>",
+      "<muted>❖</muted> <dim>/workflow 9a7eb000 [copy|result|raw|agents]</dim>",
     );
     expect(output).toContain("done");
     expect(output.indexOf("done")).toBeLessThan(
-      output.indexOf("/workflow 9a7eb000 [result|raw|agents]"),
+      output.indexOf("/workflow 9a7eb000 [copy|result|raw|agents]"),
     );
     expect(output).not.toContain("Continue your task");
   });
@@ -129,11 +136,33 @@ describe("run notification renderer", () => {
     );
     expect(failed).toContain("<error>✗ failed</error>");
     expect(failed).toContain("agent exploded");
+    expect(failed).toContain("[result|raw|agents]");
+    expect(failed).not.toContain("[copy|");
 
     const stopped = render(finalDetails({ status: "stopped" }));
     expect(stopped).toContain("<dim>⊘ stopped</dim>");
     expect(stopped).not.toContain("agent exploded");
     expect(stopped).not.toContain("Run stopped.");
+    expect(stopped).toContain("[result|raw|agents]");
+    expect(stopped).not.toContain("[copy|");
+  });
+
+  test("omits copy from completed cards without output", () => {
+    const output = render(details({ body: "(no output)", copyable: false }));
+
+    expect(output).toContain("<success>● completed</success>");
+    expect(output).toContain("(no output)");
+    expect(output).toContain("[result|raw|agents]");
+    expect(output).not.toContain("[copy|");
+  });
+
+  test("treats earlier version-2 cards without a copyable flag as read-only", () => {
+    const { copyable: _copyable, ...earlierDetails } = details();
+    const output = render(earlierDetails);
+
+    expect(output).toContain("<success>● completed</success>");
+    expect(output).toContain("[result|raw|agents]");
+    expect(output).not.toContain("[copy|");
   });
 
   test("rejects inconsistent version-2 details and falls back to content", () => {

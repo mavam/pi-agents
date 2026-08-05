@@ -659,6 +659,7 @@ usage only in their final outcome cannot be cut off mid-run.
 | `/workflow <name>`    | Show one workflow: params, triggers, docs, flow.     |
 | `/<name> [argument]`  | Run a saved workflow with one text argument.          |
 | `/workflow <id>`      | Inspect a run (unique id prefixes work).             |
+| `/workflow <id> copy`   | Copy the human-facing result to the clipboard in the TUI. |
 | `/workflow <id> result` | Show the complete human-facing result.            |
 | `/workflow <id> raw`    | Show the complete result value as highlighted JSON. |
 | `/workflow <id> agents` | Per-agent status and output previews.              |
@@ -677,10 +678,13 @@ hex, workflow names are slugs, so the two never collide in practice.
 Completion cards render the complete presented result. String results use
 Markdown, structured results use highlighted fenced JSON, and a saved workflow's
 `display` path selects its human-facing Markdown value. `/workflow <id> result`
-uses the same presentation, while `/workflow <id> raw` always serializes the
-complete value as highlighted JSON. Run and agent detail panes also receive
-complete results, while their terminal viewport controls how much is visible at
-once.
+uses the same presentation, and `/workflow <id> copy` copies that value without
+the completion card's metadata or controls. If the workflow has no valid
+`display` path, both actions use the complete result instead.
+`/workflow <id> raw` always serializes the complete value as highlighted JSON.
+Run and agent
+detail panes also receive complete results, while their terminal viewport
+controls how much is visible at once.
 
 The payload sent to the calling model remains subject to a 200,000-character
 safety ceiling. Larger values include a truncation notice and remain available
@@ -749,8 +753,9 @@ composer. If a later parameter is required, both actions keep the panel open
 and direct you to the `workflow` tool or an RPC invocation. The `n` key starts
 a new workflow or agent: you name it and describe the intent, and the model
 drafts the definition file. Run tier: `⏎` posts the run details with the full
-presented result to the chat, `a` drills into the run's
-agents, `c` cancels a live run, `r` starts the same flow again, and `h`
+presented result to the chat, and `a` drills into the run's agents. The `c` key
+cancels a running run or copies a settled run's presented result; settled runs
+without a result omit it. The `r` key starts the same flow again, and `h`
 shows/hides that run in the live summary above the composer (useful for
 long-running flows). Agent tier: `⏎` posts the agent's full output, while `t`
 opens a live, auto-following tail of its assistant output and tool activity.

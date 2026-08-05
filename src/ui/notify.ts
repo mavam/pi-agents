@@ -115,6 +115,7 @@ export class NotificationManager {
         status: event.status,
         usage,
         agents: event.agents,
+        copyable: Boolean(presented),
         bodyKind: "result",
         body: presented
           ? renderResultValue(display.value, presented)
@@ -140,6 +141,7 @@ export class NotificationManager {
         status: event.status,
         usage,
         agents: event.agents,
+        copyable: false,
         bodyKind: "error",
         body: event.error ?? "unknown error",
         at: event.at,
@@ -153,6 +155,7 @@ export class NotificationManager {
       status: event.status,
       usage,
       agents: event.agents,
+      copyable: false,
       bodyKind: "none",
       at: event.at,
     };
@@ -213,7 +216,13 @@ export class NotificationManager {
     if (notification.bodyKind !== "none" && notification.body !== undefined) {
       lines.push("", notification.modelBody ?? notification.body);
     }
-    lines.push("", formatRunNotificationControls(notification.runId));
+    lines.push(
+      "",
+      formatRunNotificationControls(
+        notification.runId,
+        notification.copyable === true,
+      ),
+    );
     return lines.join("\n");
   }
 }

@@ -9,7 +9,11 @@ import type {
 import { validateFlow } from "../../src/model/validate.js";
 import type { RunEvent, RunSource } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
-import { type RunView, rebuildRunState } from "../../src/run/state.js";
+import {
+  type RunView,
+  rebuildRunState,
+  workNodes,
+} from "../../src/run/state.js";
 import {
   buildWorkflowsSpec,
   type CommandDeps,
@@ -96,17 +100,22 @@ interface FakeDeps {
   deps: CommandDeps;
   toggles: string[];
   suppressions: boolean[];
+  stops: string[];
 }
 
 function fakeDeps(runs: RunView[]): FakeDeps {
   const state = { runs: new Map(runs.map((run) => [run.header.id, run])) };
   const toggles: string[] = [];
   const suppressions: boolean[] = [];
+  const stops: string[] = [];
   const deps = {
     manager: {
       state,
       steerableInstances: () => [] as string[],
-      stop: () => false,
+      stop: (runId: string) => {
+        stops.push(runId);
+        return true;
+      },
       find: (idOrPrefix: string) => {
         const exact = state.runs.get(idOrPrefix);
         if (exact) return { kind: "found", run: exact };
@@ -129,7 +138,7 @@ function fakeDeps(runs: RunView[]): FakeDeps {
     },
     notifications: { setContext: () => {} },
   } as unknown as CommandDeps;
-  return { deps, toggles, suppressions };
+  return { deps, toggles, suppressions, stops };
 }
 
 function fakeCtx(): ExtensionCommandContext {
@@ -142,13 +151,18 @@ function fakeCtx(): ExtensionCommandContext {
   } as unknown as ExtensionCommandContext;
 }
 
-function fakeTuiCtx(): ExtensionCommandContext {
+function fakeTuiCtx(
+  notify: (
+    message: string,
+    level: "info" | "warning" | "error",
+  ) => void = () => {},
+): ExtensionCommandContext {
   return {
     ...fakeCtx(),
     hasUI: true,
     mode: "tui",
     ui: {
-      notify: () => {},
+      notify,
       setEditorText: () => {},
       custom: async () => undefined,
     },
@@ -170,9 +184,9 @@ describe("buildWorkflowsSpec", () => {
       { running: true },
     );
     const adhoc = await makeRun("cccc3333-run", { kind: "tool" });
-    const { deps } = fakeDeps([done, live, adhoc]);
+    const { deps, stops } = fakeDeps([done, live, adhoc]);
     const spec = buildWorkflowsSpec(fakePi().pi, deps, fakeCtx());
-    return { spec, done, live, adhoc };
+    return { spec, done, live, adhoc, deps, stops };
   }
 
   test("tier 1 lists the all-runs group, workflows with badges, and ad-hoc", async () => {
@@ -229,6 +243,43 @@ describe("buildWorkflowsSpec", () => {
     spec.onAction("enter", group);
     expect(spec.items()).toHaveLength(3);
     expect((spec.title as () => string)()).toBe("Runs");
+  });
+
+  test("c copies settled runs and cancels live runs", async () => {
+    const { spec, done, live, deps, stops } = await fixture();
+    const copied: string[] = [];
+    deps.copyText = async (text) => {
+      copied.push(text);
+    };
+    const workflow = spec
+      .items()
+      .find((item) => item.kind === "workflow" && item.wf.name === "triage");
+    if (!workflow) throw new Error("expected workflow row");
+    spec.onAction("enter", workflow);
+    const doneItem = spec
+      .items()
+      .find((item) => item.kind === "run" && item.run === done);
+    const liveItem = spec
+      .items()
+      .find((item) => item.kind === "run" && item.run === live);
+    if (doneItem?.kind !== "run") throw new Error("expected completed run row");
+    if (liveItem?.kind !== "run") throw new Error("expected live run row");
+
+    expect(spec.footerFor?.(doneItem)).toContain("c copy");
+    expect(spec.footerFor?.(doneItem)).not.toContain("c cancel");
+    expect(spec.footerFor?.(liveItem)).toContain("c cancel");
+    expect(spec.footerFor?.(liveItem)).not.toContain("c copy");
+
+    spec.onAction("c", doneItem);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(copied).toEqual(["ok"]);
+    expect(stops).toEqual([]);
+
+    spec.onAction("c", liveItem);
+    expect(stops).toEqual([live.header.id]);
+
+    done.value = undefined;
+    expect(spec.footerFor?.(doneItem)).not.toContain(" · c ");
   });
 
   test("run and agent detail panes receive complete results", async () => {
@@ -414,6 +465,78 @@ describe("command registration", () => {
 
     await commands.get("workflow")?.handler("bbbb2222 raw", fakeCtx());
     expect(messages.at(-1)).toContain('```json\n"ok"\n```');
+  });
+
+  test("/workflow result addresses nodes whose names match run verbs", async () => {
+    const run = await makeRun("aaaa1111-run", { kind: "tool" });
+    run.value = "raw run output";
+    const root = workNodes(run)[0];
+    if (!root) throw new Error("expected root agent");
+    root.label = "copy";
+    root.value = "copy node output";
+    const { pi, commands, messages } = fakePi();
+    registerCommands(pi, fakeDeps([run]).deps);
+    const workflow = commands.get("workflow");
+
+    await workflow?.handler("aaaa1111 result copy", fakeCtx());
+
+    expect(messages.at(-1)).toContain("— copy (ad-hoc)");
+    expect(messages.at(-1)).toContain("copy node output");
+    expect(messages.at(-1)).not.toContain("raw run output");
+
+    await workflow?.handler("aaaa1111 result copy extra", fakeCtx());
+    expect(messages.at(-1)).toContain("Usage: `/workflow <name>`");
+  });
+
+  test("/workflow <run-id> copy copies only the presented result", async () => {
+    const report = "# Review\n\nCopy this Markdown only.";
+    const run = await makeRun("aaaa1111-run", { kind: "tool" });
+    run.header.display = "report";
+    run.value = { outcome: "changes_required", report };
+    const copied: string[] = [];
+    const notices: Array<[string, string]> = [];
+    const { pi, commands } = fakePi();
+    const { deps } = fakeDeps([run]);
+    deps.copyText = async (text) => {
+      copied.push(text);
+    };
+    registerCommands(pi, deps);
+
+    await commands.get("workflow")?.handler(
+      "aaaa1111 copy",
+      fakeTuiCtx((message, level) => notices.push([message, level])),
+    );
+
+    expect(copied).toEqual([report]);
+    expect(notices).toEqual([
+      ["Copied run aaaa1111 result to clipboard.", "info"],
+    ]);
+  });
+
+  test("/workflow <run-id> copy waits for a final result", async () => {
+    const run = await makeRun(
+      "aaaa1111-run",
+      { kind: "tool" },
+      { running: true },
+    );
+    const copied: string[] = [];
+    const notices: Array<[string, string]> = [];
+    const { pi, commands } = fakePi();
+    const { deps } = fakeDeps([run]);
+    deps.copyText = async (text) => {
+      copied.push(text);
+    };
+    registerCommands(pi, deps);
+
+    await commands.get("workflow")?.handler(
+      "aaaa1111 copy",
+      fakeTuiCtx((message, level) => notices.push([message, level])),
+    );
+
+    expect(copied).toEqual([]);
+    expect(notices).toEqual([
+      ["Run aaaa1111 is still running — no final result to copy.", "warning"],
+    ]);
   });
 
   test("/workflow rejects run verbs on a workflow name", async () => {

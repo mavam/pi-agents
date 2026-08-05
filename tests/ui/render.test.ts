@@ -88,13 +88,13 @@ describe("structured result rendering", () => {
 describe("run notification controls", () => {
   test("renders a compact glyph-prefixed usage line", () => {
     expect(formatRunNotificationControls("9a7eb000-full")).toBe(
-      "❖ `/workflow 9a7eb000` [result|raw|agents]",
+      "❖ `/workflow 9a7eb000` [copy|result|raw|agents]",
     );
   });
 
   test("dims the whole line when a theme is supplied", () => {
     expect(formatRunNotificationControls("9a7eb000-full", markerTheme)).toBe(
-      "<muted>❖</muted> <dim>/workflow 9a7eb000 [result|raw|agents]</dim>",
+      "<muted>❖</muted> <dim>/workflow 9a7eb000 [copy|result|raw|agents]</dim>",
     );
   });
 });
@@ -114,11 +114,11 @@ describe("run notification renderer", () => {
       "<dim> · 3 turns ↑12.0k ↓4.0k $0.0500 · 4 agents</dim>",
     );
     expect(output).toContain(
-      "<muted>❖</muted> <dim>/workflow 9a7eb000 [result|raw|agents]</dim>",
+      "<muted>❖</muted> <dim>/workflow 9a7eb000 [copy|result|raw|agents]</dim>",
     );
     expect(output).toContain("done");
     expect(output.indexOf("done")).toBeLessThan(
-      output.indexOf("/workflow 9a7eb000 [result|raw|agents]"),
+      output.indexOf("/workflow 9a7eb000 [copy|result|raw|agents]"),
     );
     expect(output).not.toContain("Continue your task");
   });

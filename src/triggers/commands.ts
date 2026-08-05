@@ -6,10 +6,11 @@
  * of their own: browse them via /workflows, inspect one via /workflow <run-id>.
  */
 
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
+import {
+  copyToClipboard,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { type Agent, discoverAgents } from "../catalog/agents.js";
 import {
@@ -65,10 +66,21 @@ export const RESERVED_COMMAND_NAMES = new Set([
   "run",
 ]);
 
-export type CommandDeps = TriggerDeps;
+export interface CommandDeps extends TriggerDeps {
+  /** Clipboard adapter; defaults to Pi's cross-platform helper. */
+  copyText?: (text: string) => Promise<void>;
+}
 
 /** Run-inspection verbs accepted by `/workflow <run-id> …`. */
-const RUN_ACTIONS = ["result", "raw", "agents", "watch", "mermaid", "stop"];
+const RUN_ACTIONS = [
+  "copy",
+  "result",
+  "raw",
+  "agents",
+  "watch",
+  "mermaid",
+  "stop",
+];
 
 /** Discovery scope for a context: untrusted projects contribute nothing. */
 function scopeFor(ctx: Pick<ExtensionContext, "isProjectTrusted">): Scope {
@@ -210,7 +222,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
 
   pi.registerCommand("workflow", {
     description:
-      "Show a workflow, or inspect a run: /workflow <name>, /workflow <run-id> [result [node]|raw|agents|watch|mermaid|stop]",
+      "Show a workflow, or inspect a run: /workflow <name>, /workflow <run-id> [copy|result [node]|raw|agents|watch|mermaid|stop]",
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.split(/\s+/);
       const { workflows } = discoverWorkflows(process.cwd(), "both");
@@ -242,7 +254,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       if (!target) {
         sendInfo(
           pi,
-          "Usage: `/workflow <name>` or `/workflow <run-id> [result [node]|raw|agents|watch|mermaid|stop]`",
+          "Usage: `/workflow <name>` or `/workflow <run-id> [copy|result [node]|raw|agents|watch|mermaid|stop]`",
         );
         return;
       }
@@ -289,6 +301,51 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       }
       if (action === "agents") {
         sendInfo(pi, formatRunNodesList(run));
+        return;
+      }
+      if (action === "copy") {
+        if (nodeRef) {
+          sendInfo(
+            pi,
+            "Usage: `/workflow <run-id> copy` — `copy` applies to the run's final presented result.",
+          );
+          return;
+        }
+        if (ctx.mode !== "tui") {
+          sendInfo(
+            pi,
+            "`/workflow <run-id> copy` is available only in the TUI.",
+          );
+          return;
+        }
+        if (run.status === "running") {
+          ctx.ui.notify(
+            `Run ${shortId(run.header.id)} is still running — no final result to copy.`,
+            "warning",
+          );
+          return;
+        }
+        const display = selectDisplayValue(run.value, run.header.display);
+        const text = valueText(display.value);
+        if (!text) {
+          ctx.ui.notify(
+            `Run ${shortId(run.header.id)} has no result to copy.`,
+            "warning",
+          );
+          return;
+        }
+        try {
+          await (deps.copyText ?? copyToClipboard)(text);
+          ctx.ui.notify(
+            `Copied run ${shortId(run.header.id)} result to clipboard.`,
+            "info",
+          );
+        } catch (error) {
+          ctx.ui.notify(
+            `Could not copy run ${shortId(run.header.id)} result: ${error instanceof Error ? error.message : String(error)}`,
+            "error",
+          );
+        }
         return;
       }
       if (action === "result") {

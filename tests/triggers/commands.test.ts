@@ -453,6 +453,7 @@ describe("completeRunArgs", () => {
   test("second token completes verbs", async () => {
     const completions = completeRunArgs("run-1234 ", await runs());
     expect(completions.map((c) => c.label)).toEqual([
+      "copy",
       "result",
       "raw",
       "agents",
@@ -460,7 +461,7 @@ describe("completeRunArgs", () => {
       "mermaid",
       "stop",
     ]);
-    expect(completions[0]?.value).toBe("run-1234 result");
+    expect(completions[0]?.value).toBe("run-1234 copy");
   });
 
   test("third token after result completes node names", async () => {

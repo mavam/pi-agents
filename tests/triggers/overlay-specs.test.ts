@@ -142,13 +142,18 @@ function fakeCtx(): ExtensionCommandContext {
   } as unknown as ExtensionCommandContext;
 }
 
-function fakeTuiCtx(): ExtensionCommandContext {
+function fakeTuiCtx(
+  notify: (
+    message: string,
+    level: "info" | "warning" | "error",
+  ) => void = () => {},
+): ExtensionCommandContext {
   return {
     ...fakeCtx(),
     hasUI: true,
     mode: "tui",
     ui: {
-      notify: () => {},
+      notify,
       setEditorText: () => {},
       custom: async () => undefined,
     },
@@ -414,6 +419,57 @@ describe("command registration", () => {
 
     await commands.get("workflow")?.handler("bbbb2222 raw", fakeCtx());
     expect(messages.at(-1)).toContain('```json\n"ok"\n```');
+  });
+
+  test("/workflow <run-id> copy copies only the presented result", async () => {
+    const report = "# Review\n\nCopy this Markdown only.";
+    const run = await makeRun("aaaa1111-run", { kind: "tool" });
+    run.header.display = "report";
+    run.value = { outcome: "changes_required", report };
+    const copied: string[] = [];
+    const notices: Array<[string, string]> = [];
+    const { pi, commands } = fakePi();
+    const { deps } = fakeDeps([run]);
+    deps.copyText = async (text) => {
+      copied.push(text);
+    };
+    registerCommands(pi, deps);
+
+    await commands.get("workflow")?.handler(
+      "aaaa1111 copy",
+      fakeTuiCtx((message, level) => notices.push([message, level])),
+    );
+
+    expect(copied).toEqual([report]);
+    expect(notices).toEqual([
+      ["Copied run aaaa1111 result to clipboard.", "info"],
+    ]);
+  });
+
+  test("/workflow <run-id> copy waits for a final result", async () => {
+    const run = await makeRun(
+      "aaaa1111-run",
+      { kind: "tool" },
+      { running: true },
+    );
+    const copied: string[] = [];
+    const notices: Array<[string, string]> = [];
+    const { pi, commands } = fakePi();
+    const { deps } = fakeDeps([run]);
+    deps.copyText = async (text) => {
+      copied.push(text);
+    };
+    registerCommands(pi, deps);
+
+    await commands.get("workflow")?.handler(
+      "aaaa1111 copy",
+      fakeTuiCtx((message, level) => notices.push([message, level])),
+    );
+
+    expect(copied).toEqual([]);
+    expect(notices).toEqual([
+      ["Run aaaa1111 is still running — no final result to copy.", "warning"],
+    ]);
   });
 
   test("/workflow rejects run verbs on a workflow name", async () => {

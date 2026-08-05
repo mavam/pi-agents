@@ -83,7 +83,7 @@ export function formatAgentCount(agents: number): string {
 }
 
 /**
- * Compact control bar for a finished run: `❖ /workflow <id> [result|raw|agents]`.
+ * Compact control bar for a finished run: `❖ /workflow <id> [copy|result|raw|agents]`.
  * The workflow glyph marks the line as injected UI chrome, and the bracketed
  * suffixes advertise the real `/workflow` sub-commands. Without a theme the
  * command is wrapped in a code span so it stays copy-pasteable in Markdown;
@@ -95,10 +95,10 @@ export function formatRunNotificationControls(
 ): string {
   const command = `/workflow ${shortId(runId)}`;
   if (!theme)
-    return `${KIND_ICONS.workflow} \`${command}\` [result|raw|agents]`;
+    return `${KIND_ICONS.workflow} \`${command}\` [copy|result|raw|agents]`;
   return `${theme.fg("muted", KIND_ICONS.workflow)} ${theme.fg(
     "dim",
-    `${command} [result|raw|agents]`,
+    `${command} [copy|result|raw|agents]`,
   )}`;
 }
 

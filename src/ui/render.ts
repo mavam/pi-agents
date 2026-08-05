@@ -132,8 +132,9 @@ function oneLine(value: string, max: number): string {
 
 /**
  * Render a workflow invocation consistently for tool calls and slash commands.
- * Saved workflows supply their already-expanded tree; inline tool calls parse
- * the partial flow and retain the newest valid tree while arguments stream.
+ * Saved workflows supply their already-expanded tree, including its workflow
+ * root; inline tool calls parse the partial flow and retain the newest valid
+ * tree while arguments stream.
  */
 export function formatWorkflowCallPreview(
   params: WorkflowCallPreview,
@@ -145,15 +146,25 @@ export function formatWorkflowCallPreview(
   const label = params.label ? color("dim", ` · ${params.label}`) : "";
   try {
     if (params.name !== undefined) {
+      // Render the invocation-specific title ourselves, then keep the rooted
+      // tree's children. This preserves labels and parameter previews while
+      // making every flow node a visible child of the workflow title.
+      const flowChildren = savedFlowTree
+        ? savedFlowTree.split("\n").slice(1)
+        : [];
       lines.push(
         `${color("muted", KIND_ICONS.workflow)} ${params.name}${label}`,
       );
+      const paramPrefix = flowChildren.length > 0 ? "│  " : "   ";
       for (const [key, value] of Object.entries(params.params ?? {})) {
         lines.push(
-          color("dim", `   ${key}: ${oneLine(value, PARAM_PREVIEW_CHARS)}`),
+          color(
+            "dim",
+            `${paramPrefix}${key}: ${oneLine(value, PARAM_PREVIEW_CHARS)}`,
+          ),
         );
       }
-      if (savedFlowTree) lines.push(savedFlowTree);
+      lines.push(...flowChildren);
     } else if (params.flow !== undefined) {
       if (params.label) lines.push(color("dim", params.label));
       const issues: { path: string; message: string }[] = [];

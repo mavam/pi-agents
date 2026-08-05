@@ -33,7 +33,7 @@ import {
   type WorkflowPreviewColorize,
   type WorkflowPreviewState,
 } from "../ui/render.js";
-import { renderFlowTree } from "../ui/tree.js";
+import { renderWorkflowTree } from "../ui/tree.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
 /**
@@ -296,7 +296,7 @@ export function resolveSavedFlowTree(
       selfName: def.name,
       params: def.params,
     });
-    return renderFlowTree(expanded, color);
+    return renderWorkflowTree(def.name, expanded, color);
   } catch {
     return undefined;
   }

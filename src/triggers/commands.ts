@@ -46,7 +46,12 @@ import {
   shortId,
 } from "../ui/render.js";
 import { STATUS_STYLES } from "../ui/status.js";
-import { KIND_ICONS, renderFlowTree, renderRunTree } from "../ui/tree.js";
+import {
+  KIND_ICONS,
+  renderFlowTree,
+  renderRunTree,
+  renderWorkflowTree,
+} from "../ui/tree.js";
 import { type Colorize, formatElapsed } from "../ui/widget.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
 
@@ -809,7 +814,10 @@ export function buildWorkflowsSpec(
             );
           }
         }
-        lines.push("", ...renderFlowTree(wf.flow, color).split("\n"));
+        lines.push(
+          "",
+          ...renderWorkflowTree(wf.name, wf.flow, color).split("\n"),
+        );
         return lines;
       }
       const recent = groupRuns(item.kind).reverse().slice(0, 8);
@@ -1079,7 +1087,14 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
     }
   }
   if (wf.doc) lines.push("", wf.doc);
-  lines.push("", "### Flow", "", "```", renderFlowTree(wf.flow), "```");
+  lines.push(
+    "",
+    "### Flow",
+    "",
+    "```",
+    renderWorkflowTree(wf.name, wf.flow),
+    "```",
+  );
   lines.push(
     "",
     "### Flow (JSON)",
@@ -1437,10 +1452,7 @@ async function runWorkflowCommand(
       ctx,
       background: true,
     });
-    const savedFlowTree =
-      flow.kind === "workflow" && flow.body
-        ? renderFlowTree(flow.body)
-        : renderFlowTree(flow);
+    const savedFlowTree = renderFlowTree(flow);
     sendInfo(
       pi,
       formatWorkflowStartPreview(

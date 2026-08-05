@@ -75,6 +75,17 @@ function scopeFor(ctx: Pick<ExtensionContext, "isProjectTrusted">): Scope {
   return isProjectTrusted(ctx as ExtensionContext) ? "both" : "user";
 }
 
+/** Explain why a workflow cannot be represented by one command argument. */
+function directCommandBlocker(
+  wf: Pick<WorkflowDef, "name" | "params">,
+): string | undefined {
+  const required = wf.params
+    .slice(1)
+    .filter((param) => param.required && param.default === undefined);
+  if (required.length === 0) return undefined;
+  return `/${wf.name} requires additional named parameters: ${required.map((param) => param.name).join(", ")}. Use the workflow tool or RPC to supply them.`;
+}
+
 // ---------------------------------------------------------------------------
 // Static commands
 
@@ -877,16 +888,17 @@ export function buildWorkflowsSpec(
         setTimeout(() => ctx.ui.setEditorText(`/${item.wf.name} `), 0);
         return "close";
       };
-      if (key === "c") return compose();
+      const blocker = directCommandBlocker(item.wf);
+      const warnBlocked = (): undefined => {
+        if (blocker) ctx.ui.notify(blocker, "warning");
+        return undefined;
+      };
+      if (key === "c") return blocker ? warnBlocked() : compose();
       if (key === "r") {
-        const missing = item.wf.params.filter(
-          (param) => param.required && param.default === undefined,
-        );
-        if (missing.length > 0) {
-          ctx.ui.notify(
-            `/${item.wf.name} needs: ${missing.map((param) => param.name).join(", ")}`,
-            "warning",
-          );
+        if (blocker) return warnBlocked();
+        const parameter = item.wf.params[0];
+        if (parameter?.required && parameter.default === undefined) {
+          ctx.ui.notify(`/${item.wf.name} needs: ${parameter.name}`, "warning");
           return compose();
         }
         void runWorkflowCommand(pi, item.wf.name, "", ctx, deps);
@@ -1367,14 +1379,9 @@ async function runWorkflowCommand(
   }
   const argument = args.trim();
   const parameter = wf.params[0];
-  const additionalRequired = wf.params
-    .slice(1)
-    .filter((param) => param.required && param.default === undefined);
-  if (additionalRequired.length > 0) {
-    sendInfo(
-      pi,
-      `⚠ \`/${wf.name}\` cannot run directly because it requires additional parameters: ${additionalRequired.map((param) => `'${param.name}'`).join(", ")}. Use the workflow tool or RPC to supply named parameters.`,
-    );
+  const blocker = directCommandBlocker(wf);
+  if (blocker) {
+    sendInfo(pi, `⚠ ${blocker}`);
     return;
   }
   if (!parameter && argument) {

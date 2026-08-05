@@ -740,12 +740,13 @@ and `(ad-hoc)` (inline and tool-started flows).
 
 Keys — all tiers: `↑`/`↓` (or `k`/`j`) move, `esc` closes or backs out
 one tier. Workflow tier: `⏎` drills into the selected workflow's runs, `c`
-puts `/<name> ` into the composer so you can add arguments, `r` runs it
-immediately and keeps the panel open so you can watch it start (workflows
-with required parameters fall back to composing),
-and `n` starts a new workflow or agent: you name it and describe the
-intent, the model drafts the definition file. Run tier: `⏎` posts the run
-details with the full presented result to the chat, `a` drills into the run's
+puts `/<name> ` into the composer, and `r` runs it immediately while the panel
+stays open. If the first parameter requires input, `r` falls back to the
+composer. If a later parameter is required, both actions keep the panel open
+and direct you to the `workflow` tool or an RPC invocation. The `n` key starts
+a new workflow or agent: you name it and describe the intent, and the model
+drafts the definition file. Run tier: `⏎` posts the run details with the full
+presented result to the chat, `a` drills into the run's
 agents, `c` cancels a live run, `r` starts the same flow again, and `h`
 shows/hides that run in the live summary above the composer (useful for
 long-running flows). Agent tier: `⏎` posts the agent's full output, while `t`

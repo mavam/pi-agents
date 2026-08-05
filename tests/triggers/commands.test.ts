@@ -166,7 +166,7 @@ task: compare {params.left} with {params.right}
       await compare.handler("left side", ctx);
       expect(messages).toHaveLength(3);
       expect(messages[2]?.content).toContain(
-        "cannot run directly because it requires additional parameters: 'right'",
+        "/compare requires additional named parameters: right",
       );
       expect(starts).toBe(2);
 
@@ -533,5 +533,23 @@ describe("workflows panel actions", () => {
     expect(editorText).toEqual(["/deep-test "]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(editorText).toEqual(["/deep-test ", "/deep-test "]);
+  });
+
+  test("keeps commands needing named parameters in the panel", async () => {
+    const { spec, notices, editorText } = harness();
+    const required = [
+      { name: "left", required: true },
+      { name: "right", required: true },
+    ];
+    const item = workflowItem(required);
+
+    expect(spec.onAction("c", item)).toBeUndefined();
+    expect(spec.onAction("r", item)).toBeUndefined();
+    expect(notices).toEqual([
+      "/deep-test requires additional named parameters: right. Use the workflow tool or RPC to supply them.",
+      "/deep-test requires additional named parameters: right. Use the workflow tool or RPC to supply them.",
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(editorText).toEqual([]);
   });
 });

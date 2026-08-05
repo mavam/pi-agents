@@ -688,7 +688,6 @@ describe("call and result previews", () => {
           investigate: {
             kind: "agent",
             task: "Investigate the rendering lifecycle and flicker source",
-            output: "text",
           },
           reproduce: {
             kind: "sequence",
@@ -696,7 +695,16 @@ describe("call and result previews", () => {
               {
                 kind: "agent",
                 task: "Build a minimal streaming reproduction",
-                output: "json",
+                json: {
+                  type: [
+                    "null",
+                    "boolean",
+                    "number",
+                    "string",
+                    "array",
+                    "object",
+                  ],
+                },
                 as: "case",
               },
               {

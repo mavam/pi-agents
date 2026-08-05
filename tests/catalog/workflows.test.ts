@@ -112,7 +112,11 @@ skills: [code-review, gh]
 tools: []
 cwd: /elsewhere
 scope: user
-output: json
+json:
+  type: object
+  properties: { ok: { type: boolean } }
+  required: [ok]
+  additionalProperties: false
 `;
     const flat = parseWorkflowFile(
       writeWorkflow(
@@ -136,7 +140,11 @@ flow:
   tools: []
   cwd: /elsewhere
   scope: user
-  output: json
+  json:
+    type: object
+    properties: { ok: { type: boolean } }
+    required: [ok]
+    additionalProperties: false
 `,
       ),
       "project",
@@ -161,6 +169,18 @@ flow:
         "project",
       ),
     ).toContain("Invalid 'skills' (must be an array of strings)");
+  });
+
+  test("rejects the removed flat output field with migration guidance", () => {
+    expect(
+      parseWorkflowFile(
+        writeWorkflow(
+          "legacy-output.yaml",
+          "name: legacy-output\ndescription: d\ntask: t\noutput: json\n",
+        ),
+        "project",
+      ),
+    ).toContain("'output' field was removed");
   });
 
   test("flat form requires a task", () => {

@@ -17,6 +17,9 @@ describe("npm package contents", () => {
       "result-tool.ts",
     );
     expect(fs.existsSync(extensionPath)).toBe(true);
+    expect(
+      fs.existsSync(path.join(packageRoot, "src", "model", "json-schema.ts")),
+    ).toBe(true);
   });
 
   test("ships the standard bundled workflow files", () => {

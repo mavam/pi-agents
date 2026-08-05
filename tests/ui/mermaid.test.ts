@@ -11,7 +11,9 @@ describe("toMermaid", () => {
           kind: "agent",
           name: "scout",
           task: "list",
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
           as: "files",
         },
         {
@@ -30,7 +32,14 @@ describe("toMermaid", () => {
         },
         {
           kind: "loop",
-          body: { kind: "agent", name: "fixer", task: "fix", output: "json" },
+          body: {
+            kind: "agent",
+            name: "fixer",
+            task: "fix",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
+          },
           max: 3,
           until: { eq: ["done", true] },
           as: "state",
@@ -43,7 +52,9 @@ describe("toMermaid", () => {
             kind: "agent",
             name: "finisher",
             task: "finish {current}",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
           },
           max: 2,
         },

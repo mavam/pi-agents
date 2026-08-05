@@ -3,6 +3,7 @@ import path from "node:path";
 import { discoverWorkflows } from "../src/catalog/workflows.js";
 import { emptyUsage } from "../src/engine/types.js";
 import type { WorkflowDef } from "../src/model/ast.js";
+import { resultValueError } from "../src/model/json-schema.js";
 import {
   collectAgentNames,
   collectInvocations,
@@ -73,10 +74,11 @@ async function runReviewFix(reviewResults: unknown[]) {
     params: { target: "local changes" },
     runAgent: async (call) => {
       calls.push(call);
-      const value =
-        call.output === "json"
-          ? (pendingReviews.shift() ?? null)
-          : "## Implementation summary\n\nApplied the requested fixes.";
+      const value = call.resultSchema
+        ? (pendingReviews.shift() ?? null)
+        : "## Implementation summary\n\nApplied the requested fixes.";
+      const validationError = resultValueError(value, call.resultSchema);
+      if (validationError) throw new Error(validationError);
       return { value, usage: emptyUsage() };
     },
     emit: () => {},
@@ -115,9 +117,9 @@ describe("project review workflows", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       agent: undefined,
-      output: "json",
       thinking: "high",
     });
+    expect(calls[0]?.resultSchema).toMatchObject({ type: "object" });
     expect(calls[0]?.skills).toEqual([]);
     expect(calls[0]?.tools).toEqual(["read", "bash"]);
     expect(calls[0]?.scope).toBeUndefined();
@@ -144,27 +146,32 @@ describe("project review workflows", () => {
       "Submit a concise Markdown summary as the complete agent result",
     );
     expect(calls[1]?.skills).toEqual([]);
-    expect(calls[1]?.output).toBe("text");
+    expect(calls[1]?.resultSchema).toBeUndefined();
     expect(calls[2]?.task).toContain("Implementer summary:");
-    expect(calls[2]?.output).toBe("json");
+    expect(calls[2]?.resultSchema).toMatchObject({ type: "object" });
   });
 
-  test("fails closed when the initial review contract is malformed", async () => {
-    for (const invalidReview of [
-      {},
+  test("rejects a structurally malformed initial review before routing", async () => {
+    const { calls, outcome } = await runReviewFix([{}]);
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("required properties");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("fails closed when the initial review is semantically inconsistent", async () => {
+    const { calls, outcome } = await runReviewFix([
       reviewResult({ outcome: "changes_required", actionable: [] }),
-    ]) {
-      const { calls, outcome } = await runReviewFix([invalidReview]);
-      expect(outcome.status).toBe("completed");
-      expect(outcome.value).toMatchObject({
-        outcome: "cannot_proceed",
-        round_index: null,
-        report: null,
-        actionable: [],
-        implementation: null,
-      });
-      expect(calls).toHaveLength(1);
-    }
+    ]);
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toMatchObject({
+      outcome: "cannot_proceed",
+      reason: "The Reviewer returned semantically inconsistent review data.",
+      round_index: null,
+      report: null,
+      actionable: [],
+      implementation: null,
+    });
+    expect(calls).toHaveLength(1);
   });
 
   test("returns a flat initial cannot_proceed review without repairing", async () => {
@@ -183,20 +190,13 @@ describe("project review workflows", () => {
     expect(calls).toHaveLength(1);
   });
 
-  test("fails closed with round metadata when verification is malformed", async () => {
+  test("fails when a verification review is structurally malformed", async () => {
     const { calls, outcome } = await runReviewFix([
       reviewResult({ outcome: "changes_required" }),
       "{}",
     ]);
-    expect(outcome.status).toBe("completed");
-    expect(outcome.value).toMatchObject({
-      outcome: "cannot_proceed",
-      round_index: 0,
-      report: null,
-      actionable: [],
-      implementation:
-        "## Implementation summary\n\nApplied the requested fixes.",
-    });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("must be object");
     expect(calls).toHaveLength(3);
   });
 
@@ -233,8 +233,8 @@ describe("project review workflows", () => {
     });
     expect(outcome.value).not.toHaveProperty("review");
     expect(calls).toHaveLength(7);
-    expect(calls.filter((call) => call.output === "json")).toHaveLength(4);
-    expect(calls.filter((call) => call.output === "text")).toHaveLength(3);
-    expect(calls.at(-1)?.output).toBe("json");
+    expect(calls.filter((call) => call.resultSchema)).toHaveLength(4);
+    expect(calls.filter((call) => !call.resultSchema)).toHaveLength(3);
+    expect(calls.at(-1)?.resultSchema).toMatchObject({ type: "object" });
   });
 });

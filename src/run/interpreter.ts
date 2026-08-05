@@ -23,7 +23,6 @@ import {
   type FlowNode,
   type LoopNode,
   type MapNode,
-  type OutputMode,
   type ParallelNode,
   type Reduce,
   reducePath,
@@ -43,6 +42,7 @@ import {
   resolvePath,
   templateRefs,
 } from "../model/interpolate.js";
+import type { JsonSchema } from "../model/json-schema.js";
 import { evaluatePredicate } from "../model/predicate.js";
 import { BudgetActor, BudgetExceededError, Semaphore } from "./budgets.js";
 import type { CancelReason, RunEvent, RunSource, RunStatus } from "./events.js";
@@ -55,7 +55,8 @@ export interface AgentCall {
   /** Agent name; absent spawns an anonymous ad-hoc agent (no catalog lookup). */
   agent?: string;
   task: string;
-  output: OutputMode;
+  /** Optional JSON Schema for a machine-readable result. Omit for text. */
+  resultSchema?: JsonSchema;
   /** Node-level model override (wins over the agent file). */
   model?: string;
   /** Node-level thinking override (wins over the agent file). */
@@ -579,7 +580,7 @@ class Interpreter {
     return await this.callAgent({
       agent: node.name,
       task,
-      output: node.output ?? "text",
+      resultSchema: node.json,
       model: node.model,
       thinking: node.thinking,
       skills: node.skills,
@@ -649,7 +650,7 @@ class Interpreter {
       const result = await this.callAgent({
         agent: reduce.agent,
         task,
-        output: reduce.output ?? "text",
+        resultSchema: reduce.json,
         model: reduce.model,
         thinking: reduce.thinking,
         skills: reduce.skills,

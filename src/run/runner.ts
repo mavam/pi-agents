@@ -18,9 +18,9 @@ import {
   ADHOC_LABEL,
   DEFAULT_BUDGETS,
   type EffectiveBudgets,
-  type OutputMode,
   type Scope,
 } from "../model/ast.js";
+import { resultValueError } from "../model/json-schema.js";
 import { BudgetExceededError } from "./budgets.js";
 import type { AgentCall, AgentRunner } from "./interpreter.js";
 import {
@@ -53,8 +53,8 @@ export interface RunnerOptions {
 }
 
 /** The result contract appended to every delegated agent's system prompt. */
-export function delegationPreamble(output: OutputMode): string {
-  const lines = [
+export function delegationPreamble(): string {
+  return [
     "You run non-interactively as a delegated agent inside a workflow:",
     "this assignment is delegated work, not fresh user intent. Perform the",
     "assignment directly. Do not invoke workflows or delegate it further;",
@@ -62,17 +62,10 @@ export function delegationPreamble(output: OutputMode): string {
     "yourself. Nobody can reply to you. Assistant messages are progress",
     "only and are not returned to the caller. Complete the assignment by",
     "submitting exactly one complete agent result through the provided",
-    "result-submission mechanism as your final action.",
-  ];
-  if (output === "json") {
-    lines.push(
-      "",
-      "Submit the complete machine-readable result as a JSON value.",
-    );
-  } else {
-    lines.push("", "Submit the complete text or Markdown result as a string.");
-  }
-  return lines.join("\n");
+    "result-submission mechanism as your final action. If the assignment",
+    "cannot be completed, submit an error with a concrete reason instead",
+    "of fabricating a result.",
+  ].join("\n");
 }
 
 export function createAgentRunner(options: RunnerOptions): AgentRunner {
@@ -95,7 +88,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
     const parts: string[] = [];
     if (profile) parts.push(profile.systemPrompt);
     parts.push(renderSkillsPrompt(resolved.skills));
-    parts.push(delegationPreamble(call.output));
+    parts.push(delegationPreamble());
     const systemPrompt = parts.filter(Boolean).join("\n\n");
 
     // pi-agents registers only in the root process (depth 0), so every
@@ -115,7 +108,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       disableSkillDiscovery: resolved.disableSkillDiscovery,
       // Preserved exactly: the engine adds only its mandatory result tool.
       tools: resolved.tools,
-      resultMode: call.output,
+      resultSchema: call.resultSchema,
       env,
     });
     const unregisterHandle = options.onHandle?.(call, handle);
@@ -169,9 +162,13 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       // enforcement relies on the engine streaming activity.
       await progressPump.catch(() => {});
       if (breach) throw breach;
-      if (call.output === "text" && typeof outcome.value !== "string") {
+      const validationError = resultValueError(
+        outcome.value,
+        call.resultSchema,
+      );
+      if (validationError) {
         throw new Error(
-          `Agent ${agentName} returned an invalid result: output: text requires a string.`,
+          `Spawn engine for agent ${agentName} returned a result that violates the declared result schema: ${validationError}.`,
         );
       }
       return { value: outcome.value, usage: outcome.usage };

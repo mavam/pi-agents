@@ -84,7 +84,7 @@ const FLAT_ONLY_KEYS = [
   "tools",
   "cwd",
   "scope",
-  "output",
+  "json",
 ];
 
 const ALLOWED_KEYS = new Set([
@@ -168,6 +168,10 @@ function extractRawFlow(
     for (const key of FLAT_ONLY_KEYS) {
       const value = fm[key];
       if (value === undefined) continue;
+      if (key === "json") {
+        node.json = value;
+        continue;
+      }
       if (FLAT_LIST_KEYS.has(key)) {
         if (!Array.isArray(value) || value.some((e) => typeof e !== "string")) {
           return {
@@ -302,6 +306,10 @@ export function parseWorkflowFile(
     fm = parsed as Record<string, unknown>;
   } catch (e) {
     return `Could not parse ${path.extname(filePath).slice(1)}: ${toErrorMessage(e)}`;
+  }
+
+  if (Object.hasOwn(fm, "output")) {
+    return "The 'output' field was removed; omit it for string results or replace it with a concrete 'json' schema";
   }
 
   const unknownKeys = Object.keys(fm).filter((k) => !ALLOWED_KEYS.has(k));

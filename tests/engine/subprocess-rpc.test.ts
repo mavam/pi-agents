@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createSubprocessSpawnEngine } from "../../src/engine/subprocess.js";
+import { AgentErrorResult } from "../../src/engine/types.js";
 
 const tempDirs: string[] = [];
 
@@ -30,7 +31,15 @@ describe("real Pi RPC result submission", () => {
       cwd: path.resolve(import.meta.dir, "../.."),
       model: "faux/faux-1",
       tools: [],
-      resultMode: "json",
+      resultSchema: {
+        type: "object",
+        properties: {
+          source: { type: "string" },
+          ok: { type: "boolean" },
+        },
+        required: ["source", "ok"],
+        additionalProperties: false,
+      },
       env: {
         PATH: `${path.resolve(import.meta.dir, "../../node_modules/.bin")}:${process.env.PATH ?? ""}`,
         PI_CODING_AGENT_DIR: piHome,
@@ -58,5 +67,15 @@ describe("real Pi RPC result submission", () => {
       usage: { turns: 2 },
     });
     expect(handle.status).toBe("completed");
+  }, 10_000);
+
+  test("surfaces an accepted agent error as a typed rejection", async () => {
+    const handle = spawnFixture({ PI_AGENTS_FAUX_ERROR: "1" });
+    await expect(handle.wait()).rejects.toBeInstanceOf(AgentErrorResult);
+    await handle.wait().catch((error: AgentErrorResult) => {
+      expect(error.agent).toBe("rpc-test");
+      expect(error.reason).toBe("fixture cannot complete");
+    });
+    expect(handle.status).toBe("failed");
   }, 10_000);
 });

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import {
-  RESULT_MODE_ENV_VAR,
+  RESULT_SCHEMA_FILE_ENV_VAR,
   RESULT_TOOL_NAME,
 } from "../../src/engine/result-tool.js";
 import {
@@ -12,7 +12,11 @@ import {
   MAX_ACTIVITY_TAIL_CHARS,
   type SpawnProcess,
 } from "../../src/engine/subprocess.js";
-import { SpawnAborted, SpawnFailure } from "../../src/engine/types.js";
+import {
+  AgentErrorResult,
+  SpawnAborted,
+  SpawnFailure,
+} from "../../src/engine/types.js";
 
 class FakeStdin extends EventEmitter {
   readonly records: Array<Record<string, unknown>> = [];
@@ -176,7 +180,7 @@ function submitResult(proc: FakeProc, value: unknown = "ok"): void {
     type: "tool_execution_start",
     toolCallId,
     toolName: RESULT_TOOL_NAME,
-    args: { value },
+    args: { result: value },
   });
   proc.emitRecord({
     type: "tool_execution_end",
@@ -184,7 +188,27 @@ function submitResult(proc: FakeProc, value: unknown = "ok"): void {
     toolName: RESULT_TOOL_NAME,
     result: {
       content: [{ type: "text", text: "Agent result accepted." }],
-      details: { value },
+      details: { result: value },
+    },
+    isError: false,
+  });
+}
+
+function submitError(proc: FakeProc, reason: string): void {
+  const toolCallId = `result-${++resultCallSequence}`;
+  proc.emitRecord({
+    type: "tool_execution_start",
+    toolCallId,
+    toolName: RESULT_TOOL_NAME,
+    args: { error: { reason } },
+  });
+  proc.emitRecord({
+    type: "tool_execution_end",
+    toolCallId,
+    toolName: RESULT_TOOL_NAME,
+    result: {
+      content: [{ type: "text", text: "Agent error accepted." }],
+      details: { error: { reason } },
     },
     isError: false,
   });
@@ -205,10 +229,10 @@ describe("subprocess spawn engine", () => {
       agent: "scout",
       task: "find things",
       cwd: "/tmp/x",
-      resultMode: "text",
       model: "some-model",
       thinking: "low",
       tools: ["read", "grep"],
+      env: { [RESULT_SCHEMA_FILE_ENV_VAR]: "/caller/cannot-override.json" },
     });
     const spawned = procs[0] as (typeof procs)[number];
     expect(spawned.command).toBe("pi");
@@ -219,8 +243,11 @@ describe("subprocess spawn engine", () => {
     expect(spawned.args).toContain("--extension");
     expect(spawned.args).toContain("--tools");
     expect(spawned.args).toContain(`read,grep,${RESULT_TOOL_NAME}`);
-    expect(spawned.options.env).toMatchObject({
-      [RESULT_MODE_ENV_VAR]: "text",
+    const env = spawned.options.env as Record<string, string>;
+    const schemaFile = env[RESULT_SCHEMA_FILE_ENV_VAR] as string;
+    expect(schemaFile).not.toBe("/caller/cannot-override.json");
+    expect(JSON.parse(fs.readFileSync(schemaFile, "utf8"))).toEqual({
+      type: "string",
     });
 
     await ready(spawned.proc);
@@ -234,6 +261,7 @@ describe("subprocess spawn engine", () => {
     finish(spawned.proc, "hello");
     const outcome = await handle.wait();
     expect(outcome.value).toBe("hello");
+    expect(fs.existsSync(schemaFile)).toBe(false);
     expect(outcome.usage.turns).toBe(1);
     expect(outcome.usage.input).toBe(10);
     expect(outcome.usage.cost).toBeCloseTo(0.03);
@@ -248,7 +276,6 @@ describe("subprocess spawn engine", () => {
       agent: "locked",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
       tools: [],
     });
     expect(empty.procs[0]?.args).not.toContain("--no-tools");
@@ -261,7 +288,6 @@ describe("subprocess spawn engine", () => {
       agent: "open",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     expect(open.procs[0]?.args).not.toContain("--no-tools");
     expect(open.procs[0]?.args).not.toContain("--tools");
@@ -275,7 +301,6 @@ describe("subprocess spawn engine", () => {
       agent: "closed",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
       disableSkillDiscovery: true,
     });
     expect(closed.procs[0]?.args).toContain("--no-skills");
@@ -287,7 +312,6 @@ describe("subprocess spawn engine", () => {
       agent: "ambient",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     expect(ambient.procs[0]?.args).not.toContain("--no-skills");
     finish(ambient.procs[0]?.proc as FakeProc);
@@ -300,7 +324,6 @@ describe("subprocess spawn engine", () => {
       agent: "scout",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
       systemPrompt: "You are a scout.",
     });
     const args = procs[0]?.args ?? [];
@@ -318,7 +341,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     proc.emitAssistant("first");
@@ -340,7 +362,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     proc.emitAssistant("This is not a submitted result.");
@@ -357,7 +378,9 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "json",
+      resultSchema: {
+        type: ["null", "boolean", "number", "string", "array", "object"],
+      },
     });
     const proc = procs[0]?.proc as FakeProc;
     proc.emitRecord({
@@ -373,14 +396,19 @@ describe("subprocess spawn engine", () => {
       result: { content: [{ type: "text", text: "Validation failed" }] },
       isError: true,
     });
+    const env = procs[0]?.options.env as Record<string, string>;
+    expect(
+      JSON.parse(
+        fs.readFileSync(env[RESULT_SCHEMA_FILE_ENV_VAR] as string, "utf8"),
+      ),
+    ).toEqual({
+      type: ["null", "boolean", "number", "string", "array", "object"],
+    });
     submitResult(proc, { ok: true });
     proc.settle();
     proc.close(0);
     await expect(handle.wait()).resolves.toMatchObject({
       value: { ok: true },
-    });
-    expect(procs[0]?.options.env).toMatchObject({
-      [RESULT_MODE_ENV_VAR]: "json",
     });
   });
 
@@ -390,14 +418,13 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     proc.emitRecord({
       type: "tool_execution_start",
       toolCallId: "invalid",
       toolName: RESULT_TOOL_NAME,
-      args: { value: "result" },
+      args: { result: "result" },
     });
     proc.emitRecord({
       type: "tool_execution_end",
@@ -409,8 +436,24 @@ describe("subprocess spawn engine", () => {
     proc.settle();
     proc.close(0);
     await expect(handle.wait()).rejects.toThrow(
-      "result submission completed without a value",
+      "result submission completed without an envelope",
     );
+  });
+
+  test("an accepted error submission rejects with AgentErrorResult", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    submitError(proc, "required context is unavailable");
+    proc.settle();
+    proc.close(0);
+    await expect(handle.wait()).rejects.toBeInstanceOf(AgentErrorResult);
+    await handle.wait().catch((error: AgentErrorResult) => {
+      expect(error.agent).toBe("w");
+      expect(error.reason).toBe("required context is unavailable");
+      expect(error.message).toBe("required context is unavailable");
+    });
+    expect(handle.status).toBe("failed");
   });
 
   test("more than one accepted submission fails the protocol", async () => {
@@ -419,7 +462,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     submitResult(proc, "first");
@@ -449,7 +491,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "/noop",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     for (let i = 0; i < 10 && !proc.stdin.ended; i++) {
@@ -473,7 +514,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "handled",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     for (let i = 0; i < 10 && !proc.stdin.ended; i++) {
@@ -495,7 +535,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "fast",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     let getState: Record<string, unknown> | undefined;
@@ -527,7 +566,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     await ready(proc);
@@ -548,7 +586,6 @@ describe("subprocess spawn engine", () => {
       agent: "worker",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     for (let i = 0; i < 10 && !procs[0]?.proc.stdin.ended; i++) {
       await Promise.resolve();
@@ -569,7 +606,6 @@ describe("subprocess spawn engine", () => {
       agent: "worker",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     procs[0]?.proc.stderr.emit("data", "something broke");
     procs[0]?.proc.close(2);
@@ -586,7 +622,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     proc.emitAssistant("partial", {
@@ -604,7 +639,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     await ready(proc);
@@ -626,7 +660,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     await handle.steer?.("change course");
@@ -646,7 +679,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const seen: string[] = [];
     const reader = (async () => {
@@ -669,7 +701,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const tails: string[] = [];
     const reader = (async () => {
@@ -722,7 +753,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     let longestTail = "";
     const reader = (async () => {
@@ -750,7 +780,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     const text = "chunked still-one-line done";
@@ -775,7 +804,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     proc.emitRecord({
@@ -799,7 +827,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     proc.settle();
@@ -814,7 +841,6 @@ describe("subprocess spawn engine", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const proc = procs[0]?.proc as FakeProc;
     expect(() =>
@@ -861,7 +887,6 @@ describe("turn and tool activity", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const seen: Array<{ turnsStarted?: number; currentTool?: string }> = [];
     const reader = (async () => {
@@ -907,7 +932,6 @@ describe("turn and tool activity", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const seen: number[] = [];
     const reader = (async () => {
@@ -934,7 +958,6 @@ describe("overlapping tools and streamed text", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const seen: Array<string | undefined> = [];
     const reader = (async () => {
@@ -982,7 +1005,6 @@ describe("overlapping tools and streamed text", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const seen: string[] = [];
     const reader = (async () => {
@@ -1013,7 +1035,6 @@ describe("overlapping tools and streamed text", () => {
       agent: "w",
       task: "t",
       cwd: "/tmp",
-      resultMode: "text",
     });
     const tails: string[] = [];
     const reader = (async () => {

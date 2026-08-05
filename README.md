@@ -123,7 +123,7 @@ Nothing flows between nodes implicitly. To pass data:
   invisible, and param values are interpolated in the caller's scope.
 
 Unknown references are validation errors with node paths, caught before
-anything spawns. Use `output: json` on an upstream agent when downstream
+anything spawns. Declare a `json` schema on an upstream agent when downstream
 steps need dot-path access or predicates. Escape literal braces as `{{`/`}}`.
 
 ## ⚡ Quick start
@@ -181,9 +181,15 @@ task: |-
   Review {params.target}.
   Focus: {params.focus}
   Context: {params.context}
-  Submit the structured review contract as the complete agent result.
+  Keep outcome and report semantically consistent.
+json:
+  type: object
+  required: [outcome, report]
+  properties:
+    outcome: { enum: [approved, changes_required, cannot_proceed] }
+    report: { type: string, minLength: 1 }
+  additionalProperties: false
 thinking: high
-output: json
 tools: [read, bash]
 ```
 
@@ -191,7 +197,7 @@ The flat form normalizes to a bare agent leaf while retaining workflow powers:
 parameters, a slash command, event hooks, and composition through a `workflow`
 node. `agent:` is optional; omitting it runs an ad-hoc agent. The flat form
 accepts every agent-node option (`model`, `thinking`, `skills`, `tools`, `cwd`,
-`scope`, `output`). Mixing the flat form with `flow:` is an error; put execution
+`scope`, `json`). Mixing the flat form with `flow:` is an error; put execution
 options on the relevant agent node when `flow:` is present.
 
 When a workflow returns structured data with a human-readable Markdown field,
@@ -320,7 +326,10 @@ and an existing run is inspected or stopped with `/workflow <run-id>`.
           "run":  { "kind": "workflow", "name": "review", "params": { "target": "src/run" } },
           "ui":   { "kind": "workflow", "name": "review", "params": { "target": "src/ui" } }
         },
-        "reduce": { "task": "List findings all reviews agree on:\n{branches}", "output": "json" } },
+        "reduce": {
+          "task": "List findings all reviews agree on:\n{branches}",
+          "json": { "type": "array", "items": { "type": "string" } }
+        } },
       { "kind": "agent", "task": "Fix these agreed findings: {previous}" }
     ]
   },
@@ -347,7 +356,12 @@ saved profile).
 kind: agent
 task: "Analyze {previous}"
 name: specialist        # optional; must match a discovered agent profile
-output: text            # "text" requires a string; "json" accepts any JSON value
+json:                   # optional; omit for a string result
+  type: object          # substantive JSON Schema Draft 7 object
+  required: [summary]
+  properties:
+    summary: { type: string }
+  additionalProperties: false
 model: some-model       # optional override (wins over the agent file)
 thinking: low           # optional override (wins over the agent file)
 skills: [my-review-guide] # optional closed set; [] disables skill discovery
@@ -391,17 +405,24 @@ include package resources in delegated-node skill resolution. Put skills used
 by workflow nodes in one of the user or project locations above.
 
 **Value contract.** An agent completes by using the provided **Submit Agent
-Result** tool exactly once. The accepted `value` becomes the node's value and
-terminates the delegated process. Assistant messages, thinking, working-tool
-calls, and tool output are transient activity for the live display; none of
-them can become the result. The subprocess runs without a session, so no
-transcript is retained.
+Result** tool exactly once. It submits one closed envelope: `{result: payload}`
+for success or `{error: {reason: "..."}}` when it cannot complete the
+assignment. A successful node receives only the unwrapped payload. An error
+submission fails the node with the supplied reason.
 
-The `output` field selects the submitted value's schema. `output: text`
-requires one complete string, including any Markdown. `output: json` accepts
-any JSON value without parsing assistant prose. Pi returns rejected submissions
-to the agent for correction. If the process settles without one accepted
-submission, the agent fails. There is no final-message fallback.
+Omit `json` when the payload is one complete string, including any Markdown.
+For a machine-readable payload, set `json` to a substantive JSON Schema Draft
+7 object. Pi validates the payload against that schema and returns rejected
+submissions to the agent for correction. Arbitrary `json: true` payloads and
+empty schemas are not accepted; every structured result must state its
+contract.
+
+Use the native error envelope only when the agent cannot produce a conforming
+result. Keep domain outcomes that a workflow routes on, such as a review's
+`cannot_proceed`, inside the result payload. Assistant messages, thinking,
+working-tool calls, and tool output remain transient activity for the live
+display. If the process settles without an accepted submission, the agent
+fails. There is no final-message fallback or retained child transcript.
 
 ### `sequence`
 
@@ -458,7 +479,14 @@ input order, and any item failure cancels the rest and fails the node.
 
 ```yaml
 kind: loop
-body: { kind: agent, name: fixer, task: "Iteration {iteration}; prior: {last}", output: json }
+body:
+  kind: agent
+  name: fixer
+  task: "Iteration {iteration}; prior: {last}"
+  json:
+    type: object
+    required: [done]
+    properties: { done: { type: boolean } }
 max: 3
 until: { eq: ["done", true] }
 ```
@@ -479,7 +507,12 @@ max: 3
 body:
   kind: agent
   task: "Round {iteration}; fix {current.actionable}"
-  output: json
+  json:
+    type: object
+    required: [outcome, actionable]
+    properties:
+      outcome: { enum: [changes_required, approved] }
+      actionable: { type: array }
 ```
 
 `while` is a bounded, pre-checked fold. It resolves `on` once in the enclosing

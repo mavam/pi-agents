@@ -386,7 +386,13 @@ describe("formatRunDetails", () => {
   test("renders a workflow's declared display field", async () => {
     const report = `# Code Review\n\n${"Readable finding. ".repeat(30)}`;
     const run = await recordedRun(
-      { kind: "agent", task: "review", output: "json" },
+      {
+        kind: "agent",
+        task: "review",
+        json: {
+          type: ["null", "boolean", "number", "string", "array", "object"],
+        },
+      },
       () => ({ outcome: "changes_required", report }),
     );
     run.header.display = "report";

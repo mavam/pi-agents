@@ -56,7 +56,9 @@ describe("renderFlowTree", () => {
           kind: "agent",
           name: "scout",
           task: "List files",
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
           as: "files",
         },
         {
@@ -93,7 +95,9 @@ describe("renderFlowTree", () => {
           kind: "agent",
           name: "scout",
           task: "List files",
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
           as: "files",
         },
         {
@@ -121,7 +125,9 @@ describe("renderFlowTree", () => {
           kind: "agent",
           name: "reviewer",
           task: "Review",
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
           as: "review",
         },
         {
@@ -133,7 +139,9 @@ describe("renderFlowTree", () => {
             kind: "agent",
             name: "fixer",
             task: "Fix round {iteration} from {current}",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
           },
           as: "result",
         },
@@ -176,7 +184,9 @@ describe("renderFlowTree", () => {
           kind: "agent",
           name: "gate",
           task: "inspect",
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
           as: "gate",
         },
         {
@@ -262,7 +272,9 @@ describe("renderFlowTree coloring", () => {
           kind: "agent",
           name: "scout",
           task: "List files",
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
           as: "files",
         },
         {
@@ -298,7 +310,9 @@ describe("renderRunTree", () => {
           kind: "agent",
           name: "scout",
           task: "list",
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
           as: "files",
         },
         {
@@ -365,7 +379,9 @@ describe("renderRunTree", () => {
         kind: "agent",
         name: "worker",
         task: "round {iteration}",
-        output: "json",
+        json: {
+          type: ["null", "boolean", "number", "string", "array", "object"],
+        },
       },
     });
     const loopEvents: RunEvent[] = [];
@@ -426,7 +442,16 @@ describe("renderRunTree", () => {
             body: {
               kind: "agent",
               task: "{item}:{iteration}",
-              output: "json",
+              json: {
+                type: [
+                  "null",
+                  "boolean",
+                  "number",
+                  "string",
+                  "array",
+                  "object",
+                ],
+              },
             },
           },
         },
@@ -455,7 +480,9 @@ describe("renderRunTree", () => {
           kind: "agent",
           name: "gate",
           task: "inspect",
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
           as: "gate",
         },
         {

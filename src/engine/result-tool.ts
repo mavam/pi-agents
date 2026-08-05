@@ -1,55 +1,81 @@
+import * as fs from "node:fs";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-import type { ResultMode } from "./types.js";
+import {
+  type AgentResultEnvelope,
+  buildAgentResultEnvelopeSchema,
+  validateJsonSchema,
+} from "../model/json-schema.js";
 
 export const RESULT_TOOL_NAME = "pi_agents_submit_result";
-export const RESULT_MODE_ENV_VAR = "PI_AGENTS_RESULT_MODE";
+export const RESULT_SCHEMA_FILE_ENV_VAR = "PI_AGENTS_RESULT_SCHEMA_FILE";
 
-function resultMode(): ResultMode {
-  const value = process.env[RESULT_MODE_ENV_VAR];
-  if (value === "text" || value === "json") return value;
-  throw new Error(
-    `${RESULT_MODE_ENV_VAR} must be set to either 'text' or 'json'`,
-  );
+function resultSchema() {
+  const filePath = process.env[RESULT_SCHEMA_FILE_ENV_VAR];
+  if (!filePath) {
+    throw new Error(`${RESULT_SCHEMA_FILE_ENV_VAR} must name a schema file`);
+  }
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not read ${RESULT_SCHEMA_FILE_ENV_VAR} file '${filePath}': ${message}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not parse ${RESULT_SCHEMA_FILE_ENV_VAR} file '${filePath}': ${message}`,
+    );
+  }
+  try {
+    return validateJsonSchema(parsed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Invalid result schema in ${RESULT_SCHEMA_FILE_ENV_VAR} file '${filePath}': ${message}`,
+    );
+  }
 }
 
 export default function resultToolExtension(pi: ExtensionAPI): void {
-  const mode = resultMode();
-  const valueDescription =
-    mode === "text"
-      ? "The complete textual result, including any Markdown."
-      : "The complete JSON result.";
-  const valueSchema =
-    mode === "text"
-      ? Type.String({ description: valueDescription })
-      : Type.Unknown({ description: valueDescription });
+  const parameters = buildAgentResultEnvelopeSchema(resultSchema());
 
   pi.registerTool(
     defineTool({
       name: RESULT_TOOL_NAME,
       label: "Submit Agent Result",
       description:
-        "Submit the complete result of this delegated assignment. This is " +
-        "the only way to complete the assignment successfully. An accepted " +
-        "submission becomes the workflow value and ends the agent.",
+        "Submit the complete result of this delegated assignment, or report " +
+        "that the assignment cannot be completed. This is the only way to " +
+        "finish the assignment. An accepted submission ends the agent.",
       promptSnippet: "Submit the complete agent result as the final action",
       promptGuidelines: [
-        "Submit exactly one complete agent result as your final action.",
+        "Submit exactly one complete result or one concrete error as your final action.",
+        "Use result for the assignment's complete deliverable.",
+        "Use error only when the assignment cannot be completed; explain the blocker in reason.",
         "Assistant messages are progress only and are not returned as the result.",
         "If a submission is rejected, correct it and submit again.",
-        mode === "text"
-          ? "Submit the complete text or Markdown result as a string."
-          : "Submit the complete machine-readable result as a JSON value.",
       ],
-      parameters: Type.Object(
-        { value: valueSchema },
-        { additionalProperties: false },
-      ),
+      parameters,
 
-      async execute(_toolCallId, params) {
+      async execute(_toolCallId, rawParams) {
+        const envelope = rawParams as AgentResultEnvelope;
+        const isError = "error" in envelope;
         return {
-          content: [{ type: "text", text: "Agent result accepted." }],
-          details: { value: params.value },
+          content: [
+            {
+              type: "text",
+              text: isError
+                ? "Agent error accepted."
+                : "Agent result accepted.",
+            },
+          ],
+          details: envelope,
           terminate: true,
         };
       },

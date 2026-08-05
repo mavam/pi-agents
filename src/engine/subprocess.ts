@@ -5,6 +5,9 @@
  *   pi --mode rpc --no-session --extension <result-tool>
  *      [--model M] [--thinking T] [--tools a,b]
  *      [--append-system-prompt <tmpfile>]
+ *
+ * The result payload schema travels through a private per-spawn file named by
+ * PI_AGENTS_RESULT_SCHEMA_FILE.
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
@@ -13,8 +16,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
-import { RESULT_MODE_ENV_VAR, RESULT_TOOL_NAME } from "./result-tool.js";
 import {
+  effectiveResultSchema,
+  validateJsonSchema,
+} from "../model/json-schema.js";
+import { RESULT_SCHEMA_FILE_ENV_VAR, RESULT_TOOL_NAME } from "./result-tool.js";
+import {
+  AgentErrorResult,
   emptyUsage,
   SpawnAborted,
   type SpawnEngine,
@@ -285,15 +293,32 @@ function messageText(message: AssistantMessage): string {
   return chunks.join("\n").trim();
 }
 
-function writePromptToTempFile(
+function writeSpawnFiles(
   agentName: string,
-  prompt: string,
-): { dir: string; filePath: string } {
+  schema: unknown,
+  prompt?: string,
+): { dir: string; schemaFilePath: string; promptFilePath?: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agents-"));
   const safeName = agentName.replace(/[^\w.-]+/g, "_") || "agent";
-  const filePath = path.join(dir, `append-system-${safeName}.md`);
-  fs.writeFileSync(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
-  return { dir, filePath };
+  try {
+    const schemaFilePath = path.join(dir, `result-schema-${safeName}.json`);
+    fs.writeFileSync(schemaFilePath, JSON.stringify(schema), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+    let promptFilePath: string | undefined;
+    if (prompt) {
+      promptFilePath = path.join(dir, `append-system-${safeName}.md`);
+      fs.writeFileSync(promptFilePath, prompt, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+    }
+    return { dir, schemaFilePath, promptFilePath };
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 export function isChildProcessRunning(
@@ -363,8 +388,9 @@ export function createSubprocessSpawnEngine(options?: {
       let sentTerminationSignal = false;
       let wasAborted = false;
       let terminalFailure: Error | undefined;
-      let resultSubmitted = false;
+      let submissionAccepted = false;
       let resultValue: unknown;
+      let agentErrorReason: string | undefined;
 
       const usage: SpawnUsage = emptyUsage();
       let latestText = "";
@@ -404,10 +430,17 @@ export function createSubprocessSpawnEngine(options?: {
         const tools = [...new Set([...spec.tools, RESULT_TOOL_NAME])];
         args.push("--tools", tools.join(","));
       }
-      if (spec.systemPrompt?.trim()) {
-        const tmp = writePromptToTempFile(spec.agent, spec.systemPrompt.trim());
-        tempDir = tmp.dir;
-        args.push("--append-system-prompt", tmp.filePath);
+      const schema = validateJsonSchema(
+        effectiveResultSchema(spec.resultSchema),
+      );
+      const spawnFiles = writeSpawnFiles(
+        spec.agent,
+        schema,
+        spec.systemPrompt?.trim() || undefined,
+      );
+      tempDir = spawnFiles.dir;
+      if (spawnFiles.promptFilePath) {
+        args.push("--append-system-prompt", spawnFiles.promptFilePath);
       }
 
       let resolveWait!: (outcome: SpawnOutcome) => void;
@@ -714,22 +747,37 @@ export function createSubprocessSpawnEngine(options?: {
           ) {
             const toolName = activeTools.get(record.toolCallId);
             if (toolName === RESULT_TOOL_NAME && record.isError !== true) {
-              if (resultSubmitted) {
+              if (submissionAccepted) {
                 throw new Error(
                   "Delegated agent submitted more than one result.",
                 );
               }
               if (
                 !isRecord(record.result) ||
-                !isRecord(record.result.details) ||
-                !Object.hasOwn(record.result.details, "value")
+                !isRecord(record.result.details)
               ) {
                 throw new Error(
-                  "Delegated agent result submission completed without a value.",
+                  "Delegated agent result submission completed without an envelope.",
                 );
               }
-              resultValue = record.result.details.value;
-              resultSubmitted = true;
+              const details = record.result.details;
+              const detailKeys = Object.keys(details);
+              if (detailKeys.length === 1 && Object.hasOwn(details, "result")) {
+                resultValue = details.result;
+              } else if (
+                detailKeys.length === 1 &&
+                isRecord(details.error) &&
+                Object.keys(details.error).length === 1 &&
+                typeof details.error.reason === "string" &&
+                details.error.reason.length > 0
+              ) {
+                agentErrorReason = details.error.reason;
+              } else {
+                throw new Error(
+                  "Delegated agent result submission completed with an invalid envelope.",
+                );
+              }
+              submissionAccepted = true;
             }
             activeTools.delete(record.toolCallId);
             const entry = toolTailEntries.get(record.toolCallId);
@@ -763,7 +811,7 @@ export function createSubprocessSpawnEngine(options?: {
           env: {
             ...process.env,
             ...(spec.env ?? {}),
-            [RESULT_MODE_ENV_VAR]: spec.resultMode,
+            [RESULT_SCHEMA_FILE_ENV_VAR]: spawnFiles.schemaFilePath,
           },
           shell: false,
           stdio: ["pipe", "pipe", "pipe"],
@@ -836,7 +884,7 @@ export function createSubprocessSpawnEngine(options?: {
             stopReason !== "error" &&
             stopReason !== "aborted" &&
             (exitCode === 0 || sentTerminationSignal) &&
-            !resultSubmitted
+            !submissionAccepted
           ) {
             status = "failed";
             cleanup();
@@ -879,6 +927,13 @@ export function createSubprocessSpawnEngine(options?: {
                 stderr,
               ),
             );
+            return;
+          }
+
+          if (agentErrorReason !== undefined) {
+            status = "failed";
+            cleanup();
+            rejectWait(new AgentErrorResult(spec.agent, agentErrorReason));
             return;
           }
 

@@ -103,7 +103,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "scout",
             task: "list",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "files",
           },
           {
@@ -130,7 +132,9 @@ describe("formatRunWidget", () => {
           kind: "agent",
           name: "gate",
           task: "inspect",
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
           as: "gate",
         },
         {
@@ -179,7 +183,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "scout",
             task: "scan",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "scout",
           },
           { kind: "value", value: { seen: "{scout.count}" } },
@@ -258,7 +264,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "explorer",
             task: "map",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "map",
           },
           {
@@ -347,7 +355,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "gate",
             task: "inspect",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "gate",
           },
           {
@@ -388,7 +398,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "scout",
             task: "list",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "files",
           },
           {
@@ -425,7 +437,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "scout",
             task: "list",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "files",
           },
           {

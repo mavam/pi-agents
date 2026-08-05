@@ -31,7 +31,6 @@ function captureEngine(specs: SpawnSpec[], value: unknown = "ok"): SpawnEngine {
 function call(overrides: Partial<AgentCall> = {}): AgentCall {
   return {
     task: "do the thing",
-    output: "text",
     path: "$",
     instance: "$",
     signal: new AbortController().signal,
@@ -41,20 +40,13 @@ function call(overrides: Partial<AgentCall> = {}): AgentCall {
 
 describe("delegationPreamble", () => {
   test("states the explicit result-submission contract", () => {
-    const text = delegationPreamble("text");
+    const text = delegationPreamble();
     expect(text).toContain("not fresh user intent");
     expect(text).toContain("Do not invoke workflows or delegate it further");
     expect(text).toContain("perform the underlying work");
     expect(text).toContain("submitting exactly one complete agent result");
     expect(text).toContain("Assistant messages are progress");
-    expect(text).toContain("text or Markdown result as a string");
-    expect(text).not.toContain("pi_agents_submit_result");
-    expect(text).not.toContain("JSON");
-  });
-
-  test("json mode requires a submitted JSON value", () => {
-    const text = delegationPreamble("json");
-    expect(text).toContain("machine-readable result as a JSON value");
+    expect(text).toContain("submit an error with a concrete reason");
     expect(text).not.toContain("pi_agents_submit_result");
   });
 });
@@ -67,22 +59,25 @@ describe("createAgentRunner", () => {
       cwd: process.cwd(),
     });
     await runner(call());
-    expect(specs[0]?.systemPrompt).toContain(delegationPreamble("text"));
+    expect(specs[0]?.systemPrompt).toContain(delegationPreamble());
     expect(specs[0]?.disableSkillDiscovery).toBe(false);
-    expect(specs[0]?.resultMode).toBe("text");
+    expect(specs[0]?.resultSchema).toBeUndefined();
   });
 
-  test("json calls get the JSON variant", async () => {
+  test("structured calls forward their result schema", async () => {
     const specs: SpawnSpec[] = [];
+    const resultSchema = {
+      type: "object",
+      properties: { ok: { type: "boolean" } },
+      required: ["ok"],
+      additionalProperties: false,
+    };
     const runner = createAgentRunner({
-      engine: captureEngine(specs),
+      engine: captureEngine(specs, { ok: true }),
       cwd: process.cwd(),
     });
-    await runner(call({ output: "json" }));
-    expect(specs[0]?.systemPrompt).toContain(
-      "machine-readable result as a JSON value",
-    );
-    expect(specs[0]?.resultMode).toBe("json");
+    await runner(call({ resultSchema }));
+    expect(specs[0]?.resultSchema).toBe(resultSchema);
   });
 
   test("rejects non-string text outcomes from custom engines", async () => {
@@ -91,19 +86,53 @@ describe("createAgentRunner", () => {
       cwd: process.cwd(),
     });
     await expect(runner(call())).rejects.toThrow(
-      "output: text requires a string",
+      "violates the declared result schema",
     );
   });
 
   test("accepts structured JSON outcomes from custom engines", async () => {
     const value = { expected: true };
+    const resultSchema = {
+      type: "object",
+      properties: { expected: { type: "boolean" } },
+      required: ["expected"],
+      additionalProperties: false,
+    };
     const runner = createAgentRunner({
       engine: captureEngine([], value),
       cwd: process.cwd(),
     });
-    await expect(runner(call({ output: "json" }))).resolves.toMatchObject({
+    await expect(runner(call({ resultSchema }))).resolves.toMatchObject({
       value,
     });
+  });
+
+  test("rejects results that violate a concrete schema", async () => {
+    const runner = createAgentRunner({
+      engine: captureEngine([], { expected: "yes" }),
+      cwd: process.cwd(),
+    });
+    await expect(
+      runner(
+        call({
+          resultSchema: {
+            type: "object",
+            properties: { expected: { type: "boolean" } },
+            required: ["expected"],
+          },
+        }),
+      ),
+    ).rejects.toThrow("violates the declared result schema");
+  });
+
+  test("rejects non-JSON values even when the schema would accept objects", async () => {
+    const runner = createAgentRunner({
+      engine: captureEngine([], new Date(0)),
+      cwd: process.cwd(),
+    });
+    await expect(
+      runner(call({ resultSchema: { type: "object" } })),
+    ).rejects.toThrow("non-JSON Date");
   });
 
   test("an anonymous call renders the skills it asked for", async () => {
@@ -129,7 +158,7 @@ describe("createAgentRunner", () => {
       expect(prompt).toContain("Follow the runner rules.");
       // Order: skills first, result contract last; no profile persona exists.
       expect(prompt.indexOf("runner-skill")).toBeLessThan(
-        prompt.indexOf(delegationPreamble("text")),
+        prompt.indexOf(delegationPreamble()),
       );
       expect(specs[0]?.disableSkillDiscovery).toBe(true);
       expect(specs[0]?.agent).toBe("ad-hoc");

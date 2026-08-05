@@ -6,7 +6,7 @@ doc: >-
   Mutates the current working tree. Use `review` for a read-only pass. Runs
   that canonical review first, sends validated P1-P3 findings to an anonymous
   Implementer, and verifies every implementation with a fresh review. Stops
-  when approved, unable to proceed, malformed, or after three complete
+  when approved, unable to proceed, inconsistent, or after three complete
   implementation-and-review rounds.
 params:
   - name: target
@@ -21,8 +21,8 @@ flow:
         target: "{params.target}"
       as: initial_review
 
-    # Normalize every reviewer response before downstream nodes dereference
-    # it. The result has one guaranteed flat shape even when malformed.
+    # Normalize semantic relationships before downstream nodes dereference
+    # the structurally validated review result.
     - kind: switch
       on: "{initial_review}"
       as: initial_state
@@ -31,10 +31,7 @@ flow:
             and:
               - eq: [outcome, approved]
               - eq: [reason, null]
-              - exists: actionable
               - empty: actionable
-              - not:
-                  empty: report
           then:
             kind: value
             value:
@@ -51,8 +48,6 @@ flow:
               - eq: [reason, null]
               - not:
                   empty: actionable
-              - not:
-                  empty: report
           then:
             kind: value
             value:
@@ -66,9 +61,6 @@ flow:
         - when:
             and:
               - eq: [outcome, cannot_proceed]
-              - exists: actionable
-              - not:
-                  empty: report
               - not:
                   empty: reason
           then:
@@ -85,7 +77,7 @@ flow:
         kind: value
         value:
           outcome: cannot_proceed
-          reason: The Reviewer returned malformed or inconsistent review data.
+          reason: The Reviewer returned semantically inconsistent review data.
           round_index: null
           report: null
           actionable: []
@@ -155,7 +147,7 @@ flow:
                 {implementation}
             as: verified_review
 
-          # Recreate the same guaranteed flat state after each repair round.
+          # Recreate the same normalized state after each repair round.
           - kind: switch
             on: "{verified_review}"
             cases:
@@ -163,10 +155,7 @@ flow:
                   and:
                     - eq: [outcome, approved]
                     - eq: [reason, null]
-                    - exists: actionable
                     - empty: actionable
-                    - not:
-                        empty: report
                 then:
                   kind: value
                   value:
@@ -183,8 +172,6 @@ flow:
                     - eq: [reason, null]
                     - not:
                         empty: actionable
-                    - not:
-                        empty: report
                 then:
                   kind: value
                   value:
@@ -198,9 +185,6 @@ flow:
               - when:
                   and:
                     - eq: [outcome, cannot_proceed]
-                    - exists: actionable
-                    - not:
-                        empty: report
                     - not:
                         empty: reason
                 then:
@@ -217,7 +201,7 @@ flow:
               kind: value
               value:
                 outcome: cannot_proceed
-                reason: The Reviewer returned malformed or inconsistent verification data.
+                reason: The Reviewer returned semantically inconsistent verification data.
                 round_index: "{iteration}"
                 report: null
                 actionable: []

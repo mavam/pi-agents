@@ -10,19 +10,30 @@ export default function fauxResultProvider(pi: ExtensionAPI): void {
   const faux = fauxProvider();
   const accepted = fauxAssistantMessage(
     fauxToolCall(RESULT_TOOL_NAME, {
-      value: { source: "real-rpc", ok: true },
+      result: { source: "real-rpc", ok: true },
+    }),
+    { stopReason: "toolUse" },
+  );
+  const error = fauxAssistantMessage(
+    fauxToolCall(RESULT_TOOL_NAME, {
+      error: { reason: "fixture cannot complete" },
     }),
     { stopReason: "toolUse" },
   );
   const responses =
-    process.env.PI_AGENTS_FAUX_INVALID_FIRST === "1"
-      ? [
-          fauxAssistantMessage(fauxToolCall(RESULT_TOOL_NAME, {}), {
-            stopReason: "toolUse",
-          }),
-          accepted,
-        ]
-      : [accepted];
+    process.env.PI_AGENTS_FAUX_ERROR === "1"
+      ? [error]
+      : process.env.PI_AGENTS_FAUX_INVALID_FIRST === "1"
+        ? [
+            fauxAssistantMessage(
+              fauxToolCall(RESULT_TOOL_NAME, {
+                result: { source: 1, ok: "yes" },
+              }),
+              { stopReason: "toolUse" },
+            ),
+            accepted,
+          ]
+        : [accepted];
   faux.setResponses(responses);
   pi.registerProvider(faux.provider);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { emptyUsage } from "../../src/engine/types.js";
+import { AgentErrorResult, emptyUsage } from "../../src/engine/types.js";
 import type { FlowNode, WorkflowLike } from "../../src/model/ast.js";
 import { validateFlow } from "../../src/model/validate.js";
 import { BudgetExceededError } from "../../src/run/budgets.js";
@@ -107,18 +107,28 @@ describe("seq and bindings", () => {
   test("dot paths reach into JSON outputs", async () => {
     const { calls } = await run(
       seq(
-        agent("scout", "list", { as: "scout", output: "json" }),
+        agent("scout", "list", {
+          as: "scout",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
         agent("worker", "fix {scout.files.0}"),
       ),
       (call) => (call.agent === "scout" ? { files: ["a.ts", "b.ts"] } : "done"),
     );
     expect(calls[1]?.task).toBe("fix a.ts");
+    expect(calls[0]?.resultSchema).toMatchObject({ type: expect.anything() });
   });
 
   test("submitted JSON values pass through without text parsing", async () => {
     const submitted = { ok: true, nested: [1, null, "two"] };
     const { outcome } = await run(
-      agent("a", "t", { output: "json" }),
+      agent("a", "t", {
+        json: {
+          type: ["null", "boolean", "number", "string", "array", "object"],
+        },
+      }),
       () => submitted,
     );
     expect(outcome.status).toBe("completed");
@@ -273,6 +283,45 @@ describe("parallel", () => {
     expect(outcome.value).toEqual({ good: "fine", bad: { error: "boom" } });
   });
 
+  test("collect mode preserves an agent-submitted error reason", async () => {
+    const { outcome, events } = await run(
+      {
+        kind: "parallel",
+        onError: "collect",
+        branches: { good: agent("g", "ok"), bad: agent("b", "blocked") },
+      },
+      (call) => {
+        if (call.agent === "b") {
+          throw new AgentErrorResult("b", "required context is unavailable");
+        }
+        return "fine";
+      },
+    );
+    expect(outcome.value).toEqual({
+      good: "fine",
+      bad: { error: "required context is unavailable" },
+    });
+    expect(
+      events.find(
+        (event) =>
+          event.type === "node_failed" && event.instance === "$.branches.bad",
+      ),
+    ).toMatchObject({ error: "required context is unavailable" });
+  });
+
+  test("an agent-submitted error fails the run with its reason", async () => {
+    const { outcome, events } = await run(agent("a", "blocked"), () => {
+      throw new AgentErrorResult("a", "the target cannot be inspected");
+    });
+    expect(outcome).toMatchObject({
+      status: "failed",
+      error: "the target cannot be inspected",
+    });
+    expect(events.find((event) => event.type === "node_failed")).toMatchObject({
+      error: "the target cannot be inspected",
+    });
+  });
+
   test("collect mode fails when every branch fails", async () => {
     const { outcome } = await run(
       {
@@ -311,11 +360,19 @@ describe("parallel", () => {
 describe("map", () => {
   test("fans out per item, preserving input order", async () => {
     const { outcome, calls } = await run(
-      seq(agent("scout", "list files", { as: "files", output: "json" }), {
-        kind: "map",
-        over: "{files}",
-        body: agent("reviewer", "review {item} at {index}"),
-      }),
+      seq(
+        agent("scout", "list files", {
+          as: "files",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{files}",
+          body: agent("reviewer", "review {item} at {index}"),
+        },
+      ),
       (call) => {
         if (call.agent === "scout") return ["a.ts", "b.ts", "c.ts"];
         return `reviewed ${call.task.split(" ")[1]}`;
@@ -338,11 +395,19 @@ describe("map", () => {
 
   test("map body instances carry @index suffixes", async () => {
     const { events } = await run(
-      seq(agent("s", "list", { as: "files", output: "json" }), {
-        kind: "map",
-        over: "{files}",
-        body: agent("r", "review {item}"),
-      }),
+      seq(
+        agent("s", "list", {
+          as: "files",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{files}",
+          body: agent("r", "review {item}"),
+        },
+      ),
       (call) => (call.agent === "s" ? ["x", "y"] : "ok"),
     );
     const instances = eventTypes(events, "node_started").map(
@@ -354,11 +419,19 @@ describe("map", () => {
 
   test("non-array over fails the node", async () => {
     const { outcome } = await run(
-      seq(agent("s", "list", { as: "files", output: "json" }), {
-        kind: "map",
-        over: "{files}",
-        body: agent("r", "review {item}"),
-      }),
+      seq(
+        agent("s", "list", {
+          as: "files",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{files}",
+          body: agent("r", "review {item}"),
+        },
+      ),
       (call) => (call.agent === "s" ? { not: "array" } : "ok"),
     );
     expect(outcome.status).toBe("failed");
@@ -367,12 +440,20 @@ describe("map", () => {
 
   test("item failure fails the map and cancels siblings", async () => {
     const { outcome } = await run(
-      seq(agent("s", "list", { as: "files", output: "json" }), {
-        kind: "map",
-        over: "{files}",
-        body: agent("r", "review {item}"),
-        concurrency: 2,
-      }),
+      seq(
+        agent("s", "list", {
+          as: "files",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{files}",
+          body: agent("r", "review {item}"),
+          concurrency: 2,
+        },
+      ),
       (call) => {
         if (call.agent === "s") return ["a", "b"];
         if (call.task === "review a") throw new Error("bad item");
@@ -385,12 +466,20 @@ describe("map", () => {
 
   test("reduce sees {items}", async () => {
     const { calls, outcome } = await run(
-      seq(agent("s", "list", { as: "files", output: "json" }), {
-        kind: "map",
-        over: "{files}",
-        body: agent("r", "review {item}"),
-        reduce: { agent: "syn", task: "combine {items}" },
-      }),
+      seq(
+        agent("s", "list", {
+          as: "files",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{files}",
+          body: agent("r", "review {item}"),
+          reduce: { agent: "syn", task: "combine {items}" },
+        },
+      ),
       (call) => {
         if (call.agent === "s") return ["a"];
         if (call.agent === "syn") return "combined";
@@ -409,7 +498,9 @@ describe("loop", () => {
       {
         kind: "loop",
         body: agent("worker", "round {iteration}, prior: [{last}]", {
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
         }),
         max: 5,
         until: { eq: ["done", true] },
@@ -457,13 +548,25 @@ describe("loop", () => {
 describe("while", () => {
   test("returns the initial value when the condition is false", async () => {
     const { outcome, calls, events } = await run(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["continue", true] },
-        max: 3,
-        body: agent("worker", "use {current}", { output: "json" }),
-      }),
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "while",
+          on: "{state}",
+          condition: { eq: ["continue", true] },
+          max: 3,
+          body: agent("worker", "use {current}", {
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
+          }),
+        },
+      ),
       (call) =>
         call.agent === "seed"
           ? { continue: false, round: null }
@@ -477,15 +580,25 @@ describe("while", () => {
   test("carries body values through {current} until the condition is false", async () => {
     let round = 0;
     const { outcome, calls, events } = await run(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["continue", true] },
-        max: 5,
-        body: agent("worker", "round {iteration}, current: {current}", {
-          output: "json",
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
         }),
-      }),
+        {
+          kind: "while",
+          on: "{state}",
+          condition: { eq: ["continue", true] },
+          max: 5,
+          body: agent("worker", "round {iteration}, current: {current}", {
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
+          }),
+        },
+      ),
       (call) => {
         if (call.agent === "seed") return { continue: true, round: -1 };
         round += 1;
@@ -506,13 +619,25 @@ describe("while", () => {
 
   test("returns a still-matching value when the effective cap is reached", async () => {
     const { outcome, calls } = await run(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["continue", true] },
-        max: 9,
-        body: agent("worker", "round {iteration}", { output: "json" }),
-      }),
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "while",
+          on: "{state}",
+          condition: { eq: ["continue", true] },
+          max: 9,
+          body: agent("worker", "round {iteration}", {
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
+          }),
+        },
+      ),
       (call) =>
         call.agent === "seed"
           ? { continue: true, round: -1 }
@@ -525,21 +650,38 @@ describe("while", () => {
 
   test("an inner on resolves outer {current} before its body shadows it", async () => {
     const { outcome, calls } = await run(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["outer", true] },
-        max: 1,
-        body: {
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
           kind: "while",
-          on: "{current}",
-          condition: { eq: ["inner", true] },
+          on: "{state}",
+          condition: { eq: ["outer", true] },
           max: 1,
-          body: agent("worker", "inner {iteration}: {current}", {
-            output: "json",
-          }),
+          body: {
+            kind: "while",
+            on: "{current}",
+            condition: { eq: ["inner", true] },
+            max: 1,
+            body: agent("worker", "inner {iteration}: {current}", {
+              json: {
+                type: [
+                  "null",
+                  "boolean",
+                  "number",
+                  "string",
+                  "array",
+                  "object",
+                ],
+              },
+            }),
+          },
         },
-      }),
+      ),
       (call) =>
         call.agent === "seed"
           ? { outer: true, inner: true, label: "outer" }
@@ -556,19 +698,36 @@ describe("while", () => {
 
   test("preserves enclosing map item and index roots", async () => {
     const { calls } = await run(
-      seq(agent("seed", "items", { as: "list", output: "json" }), {
-        kind: "map",
-        over: "{list}",
-        body: {
-          kind: "while",
-          on: "{item}",
-          condition: { eq: ["continue", true] },
-          max: 1,
-          body: agent("worker", "item {index}: {item}; current: {current}", {
-            output: "json",
-          }),
+      seq(
+        agent("seed", "items", {
+          as: "list",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{list}",
+          body: {
+            kind: "while",
+            on: "{item}",
+            condition: { eq: ["continue", true] },
+            max: 1,
+            body: agent("worker", "item {index}: {item}; current: {current}", {
+              json: {
+                type: [
+                  "null",
+                  "boolean",
+                  "number",
+                  "string",
+                  "array",
+                  "object",
+                ],
+              },
+            }),
+          },
         },
-      }),
+      ),
       (call) =>
         call.agent === "seed"
           ? [{ continue: true, name: "a" }]
@@ -581,13 +740,21 @@ describe("while", () => {
   test("cancellation stops a running while body", async () => {
     const controller = new AbortController();
     const { outcome, events } = await run(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["continue", true] },
-        max: 3,
-        body: agent("worker", "work"),
-      }),
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "while",
+          on: "{state}",
+          condition: { eq: ["continue", true] },
+          max: 3,
+          body: agent("worker", "work"),
+        },
+      ),
       (call) => {
         if (call.agent === "seed") return { continue: true };
         queueMicrotask(() => controller.abort());
@@ -788,13 +955,21 @@ describe("switch", () => {
     elseArm: unknown,
     extra: Record<string, unknown> = {},
   ) =>
-    seq(agent("gate", "inspect", { as: "gate", output: "json" }), {
-      kind: "switch",
-      on: "{gate}",
-      cases,
-      else: elseArm,
-      ...extra,
-    });
+    seq(
+      agent("gate", "inspect", {
+        as: "gate",
+        json: {
+          type: ["null", "boolean", "number", "string", "array", "object"],
+        },
+      }),
+      {
+        kind: "switch",
+        on: "{gate}",
+        cases,
+        else: elseArm,
+        ...extra,
+      },
+    );
 
   test("first matching case wins; later truthy cases never run", async () => {
     const { outcome, calls } = await run(
@@ -829,7 +1004,12 @@ describe("switch", () => {
   test("the switch's value binds via as for later steps", async () => {
     const { calls } = await run(
       seq(
-        agent("gate", "inspect", { as: "gate", output: "json" }),
+        agent("gate", "inspect", {
+          as: "gate",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
         {
           kind: "switch",
           on: "{gate}",
@@ -1067,15 +1247,23 @@ describe("value", () => {
 
   test("single-reference strings substitute values; mixed strings interpolate", async () => {
     const { outcome } = await run(
-      seq(agent("scout", "scan", { as: "scout", output: "json" }), {
-        kind: "value",
-        value: {
-          files: "{scout.files}",
-          count: "{scout.count}",
-          summary: "found {scout.count} files",
-          nested: [{ first: "{scout.files.0}" }, 42, true],
+      seq(
+        agent("scout", "scan", {
+          as: "scout",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "value",
+          value: {
+            files: "{scout.files}",
+            count: "{scout.count}",
+            summary: "found {scout.count} files",
+            nested: [{ first: "{scout.files.0}" }, 42, true],
+          },
         },
-      }),
+      ),
       () => ({ files: ["a.ts", "b.ts"], count: 2 }),
     );
     expect(outcome.value).toEqual({
@@ -1088,10 +1276,18 @@ describe("value", () => {
 
   test("an unresolvable path fails the node", async () => {
     const { outcome } = await run(
-      seq(agent("scout", "scan", { as: "scout", output: "json" }), {
-        kind: "value",
-        value: "{scout.nope}",
-      }),
+      seq(
+        agent("scout", "scan", {
+          as: "scout",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "value",
+          value: "{scout.nope}",
+        },
+      ),
       () => ({}),
     );
     expect(outcome.status).toBe("failed");
@@ -1116,7 +1312,12 @@ describe("value", () => {
   test("a value arm yields an existing binding without an echo agent", async () => {
     const { outcome, calls } = await run(
       seq(
-        agent("review", "review the change", { as: "review", output: "json" }),
+        agent("review", "review the change", {
+          as: "review",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
         {
           kind: "switch",
           on: "{review}",
@@ -1278,7 +1479,12 @@ describe("budget cancellation reasons in pools", () => {
       {
         kind: "sequence",
         steps: [
-          agent("s", "list", { as: "targets", output: "json" }),
+          agent("s", "list", {
+            as: "targets",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
+          }),
           { kind: "map", over: "{targets}", body: agent("m", "work {item}") },
         ],
       },

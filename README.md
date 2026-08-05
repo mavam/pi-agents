@@ -280,9 +280,10 @@ Workflows fire from four surfaces:
    sessions runs go to the background: the widget shows progress and the
    result arrives as a notification.
 2. **You.** Every saved workflow registers a slash command. For a workflow
-   named `triage`, `/triage src/core` runs it directly, with args bound to
-   parameters and no model round-trip. Positional args and `key=value` pairs
-   both work.
+   named `triage`, `/triage src/core with spaces` runs it directly, passing the
+   complete text after the command to its first parameter with no model
+   round-trip. Remaining parameters use their defaults. Use the `workflow`
+   tool or RPC when you need to supply multiple named parameters.
 3. **Events.** Add `on: [turn_end]` (plus optional `debounce:` milliseconds)
    and the workflow fires on those pi events, always in the background,
    with the event payload bound as `{params.event}`. Hooks run only in the
@@ -656,13 +657,18 @@ usage only in their final outcome cannot be cut off mid-run.
 | `/agent <name>`       | Show one agent in full.                              |
 | `/workflows`          | Browse workflows, their runs, and each run's agents interactively (`list`/`runs` for plain text, `widget` to toggle the live summary). |
 | `/workflow <name>`    | Show one workflow: params, triggers, docs, flow.     |
-| `/<name> [args]`      | Run saved workflow `<name>` directly.                |
+| `/<name> [argument]`  | Run a saved workflow with one text argument.          |
 | `/workflow <id>`      | Inspect a run (unique id prefixes work).             |
 | `/workflow <id> result` | The complete raw result value of a finished run.   |
 | `/workflow <id> agents` | Per-agent status and output previews.              |
 | `/workflow <id> watch`  | Snapshot now, final tree when the run settles.     |
 | `/workflow <id> mermaid`| Deterministic Mermaid diagram of the run's flow.   |
 | `/workflow <id> stop`   | Abort a live run.                                  |
+
+A saved workflow command passes the complete text after its name to the first
+declared parameter. It does not parse quoting, positional arguments, or
+`key=value` pairs. A required parameter after the first must define a default
+because a slash command cannot supply it.
 
 `/workflow` resolves a saved workflow name first, then a run id; run ids are
 hex, workflow names are slugs, so the two never collide in practice.

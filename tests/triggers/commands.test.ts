@@ -69,7 +69,7 @@ function node(instance: string, extra: Partial<NodeView> = {}): NodeView {
 }
 
 describe("saved workflow commands", () => {
-  test("render the same invocation tree as the workflow tool", async () => {
+  test("pass one text argument and render the invocation tree", async () => {
     const projectDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "pi-agents-command-preview-"),
     );
@@ -83,7 +83,23 @@ description: Greet a target
 params:
   - name: target
     required: true
+  - name: style
+    default: friendly
+  - name: context
+    default: no prior context
 task: greet {params.target}
+`,
+      );
+      fs.writeFileSync(
+        path.join(workflowsDir, "compare.yaml"),
+        `name: compare
+description: Compare two targets
+params:
+  - name: left
+    required: true
+  - name: right
+    required: true
+task: compare {params.left} with {params.right}
 `,
       );
 
@@ -101,11 +117,15 @@ task: greet {params.target}
         usage: {},
         agents: 0,
       });
+      let starts = 0;
       const deps = {
         pi,
         manager: {
           state: { runs: new Map() },
-          start: () => ({ runId: "12345678-full", done }),
+          start: () => {
+            starts += 1;
+            return { runId: "12345678-full", done };
+          },
           markBackgrounded: () => {},
         },
         notifications: { setContext: () => {}, track: () => {} },
@@ -121,24 +141,41 @@ task: greet {params.target}
       registerWorkflowCommands(pi, projectDir, deps);
       const greet = commands.get("greet");
       if (!greet) throw new Error("greet command was not registered");
-      await greet.handler("world", ctx);
+      await greet.handler("this pull request", ctx);
 
       expect(messages).toHaveLength(1);
       const preview = messages[0]?.content ?? "";
       expect(preview).toContain("❖ greet");
-      expect(preview).toContain("│  target: world");
+      expect(preview).toContain("│  target: this pull request");
+      expect(preview).not.toContain("style:");
+      expect(preview).not.toContain("context:");
       expect(preview).toContain("└─ ✦ ad-hoc · greet {params.target}");
       expect(preview).toContain(
         "\n\nrunning in background · /workflow 12345678",
       );
       expect(preview).not.toContain("Started run");
 
+      await greet.handler('target="this pull request"', ctx);
+      expect(messages).toHaveLength(2);
+      expect(messages[1]?.content).toContain(
+        '│  target: target="this pull request"',
+      );
+
+      const compare = commands.get("compare");
+      if (!compare) throw new Error("compare command was not registered");
+      await compare.handler("left side", ctx);
+      expect(messages).toHaveLength(3);
+      expect(messages[2]?.content).toContain(
+        "cannot run directly because it requires additional parameters: 'right'",
+      );
+      expect(starts).toBe(2);
+
       registerCommands(pi, deps);
       const inspect = commands.get("workflow");
       if (!inspect) throw new Error("workflow command was not registered");
       await inspect.handler("greet", ctx);
-      expect(messages).toHaveLength(2);
-      expect(messages[1]?.content).toContain(
+      expect(messages).toHaveLength(4);
+      expect(messages[3]?.content).toContain(
         ["```", "❖ greet", "└─ ✦ ad-hoc · greet {params.target}", "```"].join(
           "\n",
         ),

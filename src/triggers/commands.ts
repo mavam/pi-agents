@@ -1,9 +1,9 @@
 /**
  * Slash commands: the static catalog commands (/agents, /agent, /workflows,
  * /workflow) plus dynamic per-workflow commands (each saved workflow
- * registers /<name>, running its graph directly with args bound to params —
- * no model round-trip). Runs have no top-level command of their own: browse
- * them via /workflows, inspect one via /workflow <run-id>.
+ * registers /<name>, running its graph directly with the command text bound
+ * to its first parameter — no model round-trip). Runs have no top-level command
+ * of their own: browse them via /workflows, inspect one via /workflow <run-id>.
  */
 
 import type {
@@ -16,7 +16,7 @@ import {
   discoverWorkflows,
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
-import type { Scope, WorkflowDef, WorkflowParamDef } from "../model/ast.js";
+import type { Scope, WorkflowDef } from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
 import { valueText } from "../model/value.js";
 import { isProjectTrusted } from "../run/persist.js";
@@ -1319,57 +1319,13 @@ function escapeBraces(value: string): string {
   return value.replaceAll("{", "{{").replaceAll("}", "}}");
 }
 
-/** Parse `/name` arguments: `key=value` pairs plus positional values bound in declaration order. */
-export function parseCommandArgs(
-  args: string,
-  params: WorkflowParamDef[],
-): { values: Record<string, string>; errors: string[] } {
-  const values: Record<string, string> = {};
-  const errors: string[] = [];
-  const trimmed = args.trim();
-  if (!trimmed) return { values, errors };
-
-  // Single-param workflows take the whole arg string verbatim.
-  if (params.length === 1 && !/^[A-Za-z_][A-Za-z0-9_-]*=/.test(trimmed)) {
-    values[(params[0] as WorkflowParamDef).name] = trimmed;
-    return { values, errors };
-  }
-
-  const tokens = trimmed.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
-  const positional: string[] = [];
-  for (const token of tokens) {
-    const match = token.match(/^([A-Za-z_][A-Za-z0-9_-]*)=(.*)$/s);
-    if (match) {
-      const key = match[1] as string;
-      const value = (match[2] as string).replace(/^"|"$/g, "");
-      if (!params.some((param) => param.name === key)) {
-        errors.push(
-          `unknown parameter '${key}' (declared: ${params.map((p) => p.name).join(", ") || "none"})`,
-        );
-        continue;
-      }
-      values[key] = value;
-    } else {
-      positional.push(token.replace(/^"|"$/g, ""));
-    }
-  }
-  const unfilled = params.filter((param) => values[param.name] === undefined);
-  positional.forEach((value, index) => {
-    const target = unfilled[index];
-    if (target) values[target.name] = value;
-    else errors.push(`too many positional arguments (extra: '${value}')`);
-  });
-  return { values, errors };
-}
-
 function usageFor(wf: WorkflowDef): string {
-  const argSpec = wf.params
-    .map((param) =>
-      param.required && param.default === undefined
-        ? `<${param.name}>`
-        : `[${param.name}]`,
-    )
-    .join(" ");
+  const param = wf.params[0];
+  const argSpec = param
+    ? param.required && param.default === undefined
+      ? `<${param.name}>`
+      : `[${param.name}]`
+    : "";
   return `Usage: \`/${wf.name}${argSpec ? ` ${argSpec}` : ""}\` — ${wf.description}`;
 }
 
@@ -1409,24 +1365,38 @@ async function runWorkflowCommand(
     );
     return;
   }
-  const { values, errors } = parseCommandArgs(args, wf.params);
-  const missing = wf.params.filter(
-    (param) =>
-      param.required &&
-      param.default === undefined &&
-      values[param.name] === undefined,
-  );
-  if (errors.length > 0 || missing.length > 0) {
-    const problems = [
-      ...errors,
-      ...missing.map((param) => `missing required parameter '${param.name}'`),
-    ];
+  const argument = args.trim();
+  const parameter = wf.params[0];
+  const additionalRequired = wf.params
+    .slice(1)
+    .filter((param) => param.required && param.default === undefined);
+  if (additionalRequired.length > 0) {
     sendInfo(
       pi,
-      `${problems.map((p) => `⚠ ${p}`).join("\n")}\n\n${usageFor(wf)}`,
+      `⚠ \`/${wf.name}\` cannot run directly because it requires additional parameters: ${additionalRequired.map((param) => `'${param.name}'`).join(", ")}. Use the workflow tool or RPC to supply named parameters.`,
     );
     return;
   }
+  if (!parameter && argument) {
+    sendInfo(
+      pi,
+      `⚠ \`/${wf.name}\` does not accept an argument.\n\n${usageFor(wf)}`,
+    );
+    return;
+  }
+  if (
+    parameter?.required &&
+    parameter.default === undefined &&
+    argument === ""
+  ) {
+    sendInfo(
+      pi,
+      `⚠ missing required argument '${parameter.name}'\n\n${usageFor(wf)}`,
+    );
+    return;
+  }
+  const values: Record<string, string> =
+    parameter && argument ? { [parameter.name]: argument } : {};
 
   const escaped = Object.fromEntries(
     Object.entries(values).map(([key, value]) => [key, escapeBraces(value)]),

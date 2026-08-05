@@ -88,6 +88,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       catalogs,
     });
     const { cwd, profile } = resolved;
+    const agentName = profile?.name ?? ADHOC_LABEL;
 
     // Persona (named calls only), then skills, then the result contract every
     // delegated agent gets — ad-hoc ones included.
@@ -105,7 +106,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
     };
 
     const handle = options.engine.spawn({
-      agent: profile?.name ?? ADHOC_LABEL,
+      agent: agentName,
       task: call.task,
       cwd,
       systemPrompt,
@@ -168,6 +169,11 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       // enforcement relies on the engine streaming activity.
       await progressPump.catch(() => {});
       if (breach) throw breach;
+      if (call.output === "text" && typeof outcome.value !== "string") {
+        throw new Error(
+          `Agent ${agentName} returned an invalid result: output: text requires a string.`,
+        );
+      }
       return { value: outcome.value, usage: outcome.usage };
     } catch (error) {
       if (breach && error instanceof SpawnAborted) throw breach;

@@ -14,14 +14,14 @@ import type { AgentCall } from "../../src/run/interpreter.js";
 import { createAgentRunner, delegationPreamble } from "../../src/run/runner.js";
 
 /** Engine fake that records the spec and returns a canned outcome. */
-function captureEngine(specs: SpawnSpec[]): SpawnEngine {
+function captureEngine(specs: SpawnSpec[], value: unknown = "ok"): SpawnEngine {
   return {
     spawn(spec) {
       specs.push(spec);
       return {
         status: "completed",
         updates: (async function* () {})(),
-        wait: async () => ({ value: "ok", exitCode: 0, usage: emptyUsage() }),
+        wait: async () => ({ value, exitCode: 0, usage: emptyUsage() }),
         abort: () => {},
       };
     },
@@ -59,7 +59,7 @@ describe("delegationPreamble", () => {
   });
 });
 
-describe("createAgentRunner system prompt", () => {
+describe("createAgentRunner", () => {
   test("ad-hoc agents get the result contract", async () => {
     const specs: SpawnSpec[] = [];
     const runner = createAgentRunner({
@@ -83,6 +83,27 @@ describe("createAgentRunner system prompt", () => {
       "machine-readable result as a JSON value",
     );
     expect(specs[0]?.resultMode).toBe("json");
+  });
+
+  test("rejects non-string text outcomes from custom engines", async () => {
+    const runner = createAgentRunner({
+      engine: captureEngine([], { unexpected: true }),
+      cwd: process.cwd(),
+    });
+    await expect(runner(call())).rejects.toThrow(
+      "output: text requires a string",
+    );
+  });
+
+  test("accepts structured JSON outcomes from custom engines", async () => {
+    const value = { expected: true };
+    const runner = createAgentRunner({
+      engine: captureEngine([], value),
+      cwd: process.cwd(),
+    });
+    await expect(runner(call({ output: "json" }))).resolves.toMatchObject({
+      value,
+    });
   });
 
   test("an anonymous call renders the skills it asked for", async () => {

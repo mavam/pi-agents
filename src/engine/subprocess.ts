@@ -340,6 +340,7 @@ export function createSubprocessSpawnEngine(options?: {
   /** Test hooks; production uses the conservative defaults above. */
   terminateAfterMs?: number;
   forceKillAfterMs?: number;
+  /** Test hook for loading provider fixtures in delegated processes. */
   extraExtensionPaths?: string[];
 }): SpawnEngine {
   const spawnProcess = options?.spawnProcess ?? spawn;

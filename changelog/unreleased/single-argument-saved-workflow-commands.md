@@ -1,6 +1,6 @@
 ---
 title: Single-argument saved workflow commands
-type: breaking
+type: change
 authors:
   - mavam
   - codex

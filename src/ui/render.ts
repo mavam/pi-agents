@@ -83,7 +83,7 @@ export function formatAgentCount(agents: number): string {
 }
 
 /**
- * Compact control bar for a finished run: `❖ /workflow <id> [result|agents]`.
+ * Compact control bar for a finished run: `❖ /workflow <id> [result|raw|agents]`.
  * The workflow glyph marks the line as injected UI chrome, and the bracketed
  * suffixes advertise the real `/workflow` sub-commands. Without a theme the
  * command is wrapped in a code span so it stays copy-pasteable in Markdown;
@@ -94,10 +94,11 @@ export function formatRunNotificationControls(
   theme?: Theme,
 ): string {
   const command = `/workflow ${shortId(runId)}`;
-  if (!theme) return `${KIND_ICONS.workflow} \`${command}\` [result|agents]`;
+  if (!theme)
+    return `${KIND_ICONS.workflow} \`${command}\` [result|raw|agents]`;
   return `${theme.fg("muted", KIND_ICONS.workflow)} ${theme.fg(
     "dim",
-    `${command} [result|agents]`,
+    `${command} [result|raw|agents]`,
   )}`;
 }
 
@@ -338,16 +339,16 @@ export function selectDisplayValue(
 }
 
 /** Wrap text in a code fence long enough to contain embedded backticks. */
-export function fenced(text: string): string {
+export function fenced(text: string, language?: string): string {
   const runs = text.match(/`+/g) ?? [];
   const longest = runs.reduce((max, run) => Math.max(max, run.length), 2);
   const fence = "`".repeat(longest + 1);
-  return `${fence}\n${text}\n${fence}`;
+  return `${fence}${language ?? ""}\n${text}\n${fence}`;
 }
 
-/** Let Pi render string results as Markdown; keep structured values literal. */
+/** Let Pi render string results as Markdown; highlight structured values as JSON. */
 export function renderResultValue(value: unknown, text: string): string {
-  return typeof value === "string" ? text : fenced(text);
+  return typeof value === "string" ? text : fenced(text, "json");
 }
 
 /**

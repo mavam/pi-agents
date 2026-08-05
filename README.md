@@ -203,7 +203,7 @@ options on the relevant agent node when `flow:` is present.
 When a workflow returns structured data with a human-readable Markdown field,
 set `display` to its dot path. A top-level run renders that string in completion
 cards and run details while preserving the complete structured value for the
-calling model, `/workflow <id> result`, and parent workflows. A nested workflow
+calling model, `/workflow <id> raw`, and parent workflows. A nested workflow
 always passes its complete value to its caller. If the path is missing or does
 not resolve to a string, rendering falls back to the raw value.
 
@@ -659,7 +659,8 @@ usage only in their final outcome cannot be cut off mid-run.
 | `/workflow <name>`    | Show one workflow: params, triggers, docs, flow.     |
 | `/<name> [argument]`  | Run a saved workflow with one text argument.          |
 | `/workflow <id>`      | Inspect a run (unique id prefixes work).             |
-| `/workflow <id> result` | The complete raw result value of a finished run.   |
+| `/workflow <id> result` | Show the complete human-facing result.            |
+| `/workflow <id> raw`    | Show the complete result value as highlighted JSON. |
 | `/workflow <id> agents` | Per-agent status and output previews.              |
 | `/workflow <id> watch`  | Snapshot now, final tree when the run settles.     |
 | `/workflow <id> mermaid`| Deterministic Mermaid diagram of the run's flow.   |
@@ -674,15 +675,17 @@ because a slash command cannot supply it.
 hex, workflow names are slugs, so the two never collide in practice.
 
 Completion cards render the complete presented result. String results use
-Markdown, structured results use fenced JSON, and a saved workflow's `display`
-path still selects its human-facing Markdown value. Run and agent detail panes
-also receive complete results, while their terminal viewport controls how much
-is visible at once.
+Markdown, structured results use highlighted fenced JSON, and a saved workflow's
+`display` path selects its human-facing Markdown value. `/workflow <id> result`
+uses the same presentation, while `/workflow <id> raw` always serializes the
+complete value as highlighted JSON. Run and agent detail panes also receive
+complete results, while their terminal viewport controls how much is visible at
+once.
 
 The payload sent to the calling model remains subject to a 200,000-character
 safety ceiling. Larger values include a truncation notice and remain available
-in full through `/workflow <id> result`. Step-to-step interpolation uses the
-same 200,000-character ceiling.
+in full through `/workflow <id> raw`. Step-to-step interpolation uses the same
+200,000-character ceiling.
 
 ### Interactive browsing
 

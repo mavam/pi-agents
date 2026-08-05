@@ -124,7 +124,7 @@ export class NotificationManager {
               event.value,
               truncateModelResult(
                 result,
-                `/workflow ${shortId(event.runId)} result`,
+                `/workflow ${shortId(event.runId)} raw`,
               ),
             )
           : undefined,

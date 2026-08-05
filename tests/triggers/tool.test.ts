@@ -491,7 +491,7 @@ describe("workflow tool", () => {
       agents: 2,
     });
     expect(text).toContain("[truncated");
-    expect(text).toContain("full result: /workflow run-stru result");
+    expect(text).toContain("full result: /workflow run-stru raw");
     expect(text).not.toContain("complete-tail");
   });
 

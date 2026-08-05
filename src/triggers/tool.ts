@@ -317,7 +317,7 @@ export function formatRunResult(
   if (outcome.status === "completed") {
     const value = truncateModelResult(
       valueText(outcome.value) ?? "",
-      `/workflow ${shortId(runId)} result`,
+      `/workflow ${shortId(runId)} raw`,
     );
     lines.push("<value>", value, "</value>");
   } else {

@@ -3,6 +3,7 @@ import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   formatRunNotificationControls,
   type RunNotificationDetails,
+  renderResultValue,
   renderRunNotification,
 } from "../../src/ui/render.js";
 
@@ -75,16 +76,25 @@ function render(
   return component.render(300).join("\n");
 }
 
+describe("structured result rendering", () => {
+  test("labels adaptive fences as JSON", () => {
+    const json = '{\n  "report": "```markdown"\n}';
+    expect(renderResultValue({ report: "```markdown" }, json)).toBe(
+      `\`\`\`\`json\n${json}\n\`\`\`\``,
+    );
+  });
+});
+
 describe("run notification controls", () => {
   test("renders a compact glyph-prefixed usage line", () => {
     expect(formatRunNotificationControls("9a7eb000-full")).toBe(
-      "❖ `/workflow 9a7eb000` [result|agents]",
+      "❖ `/workflow 9a7eb000` [result|raw|agents]",
     );
   });
 
   test("dims the whole line when a theme is supplied", () => {
     expect(formatRunNotificationControls("9a7eb000-full", markerTheme)).toBe(
-      "<muted>❖</muted> <dim>/workflow 9a7eb000 [result|agents]</dim>",
+      "<muted>❖</muted> <dim>/workflow 9a7eb000 [result|raw|agents]</dim>",
     );
   });
 });
@@ -104,11 +114,11 @@ describe("run notification renderer", () => {
       "<dim> · 3 turns ↑12.0k ↓4.0k $0.0500 · 4 agents</dim>",
     );
     expect(output).toContain(
-      "<muted>❖</muted> <dim>/workflow 9a7eb000 [result|agents]</dim>",
+      "<muted>❖</muted> <dim>/workflow 9a7eb000 [result|raw|agents]</dim>",
     );
     expect(output).toContain("done");
     expect(output.indexOf("done")).toBeLessThan(
-      output.indexOf("/workflow 9a7eb000 [result|agents]"),
+      output.indexOf("/workflow 9a7eb000 [result|raw|agents]"),
     );
     expect(output).not.toContain("Continue your task");
   });

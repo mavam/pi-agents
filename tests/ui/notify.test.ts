@@ -205,7 +205,7 @@ describe("NotificationManager", () => {
     expect(content).not.toContain(`\`\`\`\n${markdown}`);
   });
 
-  test("keeps complete long structured results as fenced JSON", () => {
+  test("keeps complete long structured results as highlighted JSON", () => {
     const { sent, pi, manager, makeCtx } = makeFakes();
     const notifications = new NotificationManager(pi, manager);
     notifications.setContext(makeCtx(true));
@@ -218,7 +218,7 @@ describe("NotificationManager", () => {
     notifications.handleRunEvent(completed("run-1", result));
     const content = sent[0]?.message.content ?? "";
     const json = JSON.stringify(result, null, 2);
-    const fenced = `\`\`\`\n${json}\n\`\`\``;
+    const fenced = `\`\`\`json\n${json}\n\`\`\``;
     expect(sent[0]?.message.details?.body).toBe(fenced);
     expect(content.indexOf(fenced)).toBeLessThan(
       content.indexOf("`/workflow run-1`"),

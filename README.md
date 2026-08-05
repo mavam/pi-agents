@@ -753,8 +753,9 @@ composer. If a later parameter is required, both actions keep the panel open
 and direct you to the `workflow` tool or an RPC invocation. The `n` key starts
 a new workflow or agent: you name it and describe the intent, and the model
 drafts the definition file. Run tier: `⏎` posts the run details with the full
-presented result to the chat, `a` drills into the run's
-agents, `c` cancels a live run, `r` starts the same flow again, and `h`
+presented result to the chat, and `a` drills into the run's agents. The `c` key
+cancels a running run or copies a settled run's presented result; settled runs
+without a result omit it. The `r` key starts the same flow again, and `h`
 shows/hides that run in the live summary above the composer (useful for
 long-running flows). Agent tier: `⏎` posts the agent's full output, while `t`
 opens a live, auto-following tail of its assistant output and tool activity.

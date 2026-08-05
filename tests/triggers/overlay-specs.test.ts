@@ -96,17 +96,22 @@ interface FakeDeps {
   deps: CommandDeps;
   toggles: string[];
   suppressions: boolean[];
+  stops: string[];
 }
 
 function fakeDeps(runs: RunView[]): FakeDeps {
   const state = { runs: new Map(runs.map((run) => [run.header.id, run])) };
   const toggles: string[] = [];
   const suppressions: boolean[] = [];
+  const stops: string[] = [];
   const deps = {
     manager: {
       state,
       steerableInstances: () => [] as string[],
-      stop: () => false,
+      stop: (runId: string) => {
+        stops.push(runId);
+        return true;
+      },
       find: (idOrPrefix: string) => {
         const exact = state.runs.get(idOrPrefix);
         if (exact) return { kind: "found", run: exact };
@@ -129,7 +134,7 @@ function fakeDeps(runs: RunView[]): FakeDeps {
     },
     notifications: { setContext: () => {} },
   } as unknown as CommandDeps;
-  return { deps, toggles, suppressions };
+  return { deps, toggles, suppressions, stops };
 }
 
 function fakeCtx(): ExtensionCommandContext {
@@ -175,9 +180,9 @@ describe("buildWorkflowsSpec", () => {
       { running: true },
     );
     const adhoc = await makeRun("cccc3333-run", { kind: "tool" });
-    const { deps } = fakeDeps([done, live, adhoc]);
+    const { deps, stops } = fakeDeps([done, live, adhoc]);
     const spec = buildWorkflowsSpec(fakePi().pi, deps, fakeCtx());
-    return { spec, done, live, adhoc };
+    return { spec, done, live, adhoc, deps, stops };
   }
 
   test("tier 1 lists the all-runs group, workflows with badges, and ad-hoc", async () => {
@@ -234,6 +239,43 @@ describe("buildWorkflowsSpec", () => {
     spec.onAction("enter", group);
     expect(spec.items()).toHaveLength(3);
     expect((spec.title as () => string)()).toBe("Runs");
+  });
+
+  test("c copies settled runs and cancels live runs", async () => {
+    const { spec, done, live, deps, stops } = await fixture();
+    const copied: string[] = [];
+    deps.copyText = async (text) => {
+      copied.push(text);
+    };
+    const workflow = spec
+      .items()
+      .find((item) => item.kind === "workflow" && item.wf.name === "triage");
+    if (!workflow) throw new Error("expected workflow row");
+    spec.onAction("enter", workflow);
+    const doneItem = spec
+      .items()
+      .find((item) => item.kind === "run" && item.run === done);
+    const liveItem = spec
+      .items()
+      .find((item) => item.kind === "run" && item.run === live);
+    if (doneItem?.kind !== "run") throw new Error("expected completed run row");
+    if (liveItem?.kind !== "run") throw new Error("expected live run row");
+
+    expect(spec.footerFor?.(doneItem)).toContain("c copy");
+    expect(spec.footerFor?.(doneItem)).not.toContain("c cancel");
+    expect(spec.footerFor?.(liveItem)).toContain("c cancel");
+    expect(spec.footerFor?.(liveItem)).not.toContain("c copy");
+
+    spec.onAction("c", doneItem);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(copied).toEqual(["ok"]);
+    expect(stops).toEqual([]);
+
+    spec.onAction("c", liveItem);
+    expect(stops).toEqual([live.header.id]);
+
+    done.value = undefined;
+    expect(spec.footerFor?.(doneItem)).not.toContain(" · c ");
   });
 
   test("run and agent detail panes receive complete results", async () => {

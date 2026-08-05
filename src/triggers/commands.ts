@@ -318,34 +318,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
           );
           return;
         }
-        if (run.status === "running") {
-          ctx.ui.notify(
-            `Run ${shortId(run.header.id)} is still running — no final result to copy.`,
-            "warning",
-          );
-          return;
-        }
-        const display = selectDisplayValue(run.value, run.header.display);
-        const text = valueText(display.value);
-        if (!text) {
-          ctx.ui.notify(
-            `Run ${shortId(run.header.id)} has no result to copy.`,
-            "warning",
-          );
-          return;
-        }
-        try {
-          await (deps.copyText ?? copyToClipboard)(text);
-          ctx.ui.notify(
-            `Copied run ${shortId(run.header.id)} result to clipboard.`,
-            "info",
-          );
-        } catch (error) {
-          ctx.ui.notify(
-            `Could not copy run ${shortId(run.header.id)} result: ${error instanceof Error ? error.message : String(error)}`,
-            "error",
-          );
-        }
+        await copyRunResult(run, deps, ctx);
         return;
       }
       if (action === "result") {
@@ -619,7 +592,60 @@ function nodeAction(
   return undefined;
 }
 
-/** Run-tier actions: post details, cancel, hide from the widget, rerun. */
+/** Whether a settled run has a presented value worth copying. */
+function canCopyRunResult(run: RunView): boolean {
+  if (run.status === "running") return false;
+  const display = selectDisplayValue(run.value, run.header.display);
+  return display.value !== undefined && display.value !== "";
+}
+
+/** Copy only the human-facing value selected for this run. */
+async function copyRunResult(
+  run: RunView,
+  deps: CommandDeps,
+  ctx: ExtensionCommandContext,
+): Promise<void> {
+  if (run.status === "running") {
+    ctx.ui.notify(
+      `Run ${shortId(run.header.id)} is still running — no final result to copy.`,
+      "warning",
+    );
+    return;
+  }
+  const display = selectDisplayValue(run.value, run.header.display);
+  const text = valueText(display.value);
+  if (!text) {
+    ctx.ui.notify(
+      `Run ${shortId(run.header.id)} has no result to copy.`,
+      "warning",
+    );
+    return;
+  }
+  try {
+    await (deps.copyText ?? copyToClipboard)(text);
+    ctx.ui.notify(
+      `Copied run ${shortId(run.header.id)} result to clipboard.`,
+      "info",
+    );
+  } catch (error) {
+    ctx.ui.notify(
+      `Could not copy run ${shortId(run.header.id)} result: ${error instanceof Error ? error.message : String(error)}`,
+      "error",
+    );
+  }
+}
+
+function runFooter(run: RunView): string {
+  const copyOrCancel =
+    run.status === "running"
+      ? " · c cancel"
+      : canCopyRunResult(run)
+        ? " · c copy"
+        : "";
+  return `↑↓ move · ⏎ inspect · a agents${copyOrCancel} · r rerun · h hide · esc back`;
+}
+
+/** Run-tier actions: post details, copy or cancel, hide, and rerun. */
 function runAction(
   key: string,
   run: RunView,
@@ -632,11 +658,18 @@ function runAction(
     return "close";
   }
   if (key === "c") {
-    const stopped = deps.manager.stop(run.header.id);
-    ctx.ui.notify(
-      stopped ? `Stopping run ${shortId(run.header.id)}…` : "Run is not live.",
-      stopped ? "info" : "warning",
-    );
+    if (run.status === "running") {
+      const stopped = deps.manager.stop(run.header.id);
+      ctx.ui.notify(
+        stopped
+          ? `Stopping run ${shortId(run.header.id)}…`
+          : "Run is not live.",
+        stopped ? "info" : "warning",
+      );
+    } else if (canCopyRunResult(run)) {
+      void copyRunResult(run, deps, ctx);
+    }
+    return undefined;
   }
   if (key === "h") {
     const hidden = deps.widget.toggleHidden(run.header.id);
@@ -739,7 +772,7 @@ export function buildWorkflowsSpec(
         : drillRunId
           ? "↑↓ move · ⏎ post output · t tail · esc back"
           : drillGroup
-            ? "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc back"
+            ? "↑↓ move · ⏎ inspect · a agents · r rerun · h hide · esc back"
             : "↑↓ move · ⏎ runs · c compose · r run · n new · esc close",
     footerFor: (item) => {
       if (item.kind === "node") {
@@ -751,8 +784,7 @@ export function buildWorkflowsSpec(
           ? `⏎ post output${steerable ? " · s steer" : ""} · t agents · esc back`
           : `↑↓ move · ⏎ post output${canTailNode(item.node) ? " · t tail" : ""}${steerable ? " · s steer" : ""} · esc back`;
       }
-      if (item.kind === "run")
-        return "↑↓ move · ⏎ inspect · a agents · c cancel · r rerun · h hide · esc back";
+      if (item.kind === "run") return runFooter(item.run);
       if (item.kind === "workflow")
         return "↑↓ move · ⏎ runs · c compose · r run · n new · esc close";
       return "↑↓ move · ⏎ runs · n new · esc close";

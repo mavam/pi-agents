@@ -9,7 +9,11 @@ import type {
 import { validateFlow } from "../../src/model/validate.js";
 import type { RunEvent, RunSource } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
-import { type RunView, rebuildRunState } from "../../src/run/state.js";
+import {
+  type RunView,
+  rebuildRunState,
+  workNodes,
+} from "../../src/run/state.js";
 import {
   buildWorkflowsSpec,
   type CommandDeps,
@@ -461,6 +465,27 @@ describe("command registration", () => {
 
     await commands.get("workflow")?.handler("bbbb2222 raw", fakeCtx());
     expect(messages.at(-1)).toContain('```json\n"ok"\n```');
+  });
+
+  test("/workflow result addresses nodes whose names match run verbs", async () => {
+    const run = await makeRun("aaaa1111-run", { kind: "tool" });
+    run.value = "raw run output";
+    const root = workNodes(run)[0];
+    if (!root) throw new Error("expected root agent");
+    root.label = "copy";
+    root.value = "copy node output";
+    const { pi, commands, messages } = fakePi();
+    registerCommands(pi, fakeDeps([run]).deps);
+    const workflow = commands.get("workflow");
+
+    await workflow?.handler("aaaa1111 result copy", fakeCtx());
+
+    expect(messages.at(-1)).toContain("— copy (ad-hoc)");
+    expect(messages.at(-1)).toContain("copy node output");
+    expect(messages.at(-1)).not.toContain("raw run output");
+
+    await workflow?.handler("aaaa1111 result copy extra", fakeCtx());
+    expect(messages.at(-1)).toContain("Usage: `/workflow <name>`");
   });
 
   test("/workflow <run-id> copy copies only the presented result", async () => {

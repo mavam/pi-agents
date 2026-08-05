@@ -80,7 +80,7 @@ const RUN_ACTIONS = [
   "watch",
   "mermaid",
   "stop",
-];
+] as const;
 
 /** Discovery scope for a context: untrusted projects contribute nothing. */
 function scopeFor(ctx: Pick<ExtensionContext, "isProjectTrusted">): Scope {
@@ -246,16 +246,21 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       return completions;
     },
     handler: async (args, ctx) => {
+      const usage =
+        "Usage: `/workflow <name>` or `/workflow <run-id> [copy|result [node]|raw|agents|watch|mermaid|stop]`";
       const tokens = args.trim().split(/\s+/).filter(Boolean);
-      const [target, actionToken, nodeRef] = tokens;
-      const action = RUN_ACTIONS.includes(actionToken ?? "")
-        ? actionToken
-        : undefined;
+      const [target, verb, nodeRef, ...extra] = tokens;
+      const action = RUN_ACTIONS.find((candidate) => candidate === verb);
       if (!target) {
-        sendInfo(
-          pi,
-          "Usage: `/workflow <name>` or `/workflow <run-id> [copy|result [node]|raw|agents|watch|mermaid|stop]`",
-        );
+        sendInfo(pi, usage);
+        return;
+      }
+      if (
+        (verb !== undefined && action === undefined) ||
+        (nodeRef !== undefined && action !== "result") ||
+        extra.length > 0
+      ) {
+        sendInfo(pi, usage);
         return;
       }
       // A saved workflow name wins over a run-id prefix; names are slugs

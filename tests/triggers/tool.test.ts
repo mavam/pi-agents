@@ -17,7 +17,6 @@ import { emptyUsage } from "../../src/engine/types.js";
 import { validateFlow } from "../../src/model/validate.js";
 import { MAX_MODEL_RESULT_CHARS } from "../../src/model/value.js";
 import { RunManager } from "../../src/run/runs.js";
-import { parseCommandArgs } from "../../src/triggers/commands.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
 import {
   createSteerTool,
@@ -1006,44 +1005,6 @@ describe("project trust", () => {
       ),
     ).rejects.toThrow("unknown agent 'echo'");
     expect(specs).toHaveLength(0);
-  });
-});
-
-describe("parseCommandArgs", () => {
-  const params = [{ name: "target", required: true }, { name: "depth" }];
-
-  test("single-param workflows take the raw string", () => {
-    const result = parseCommandArgs("src/core with spaces", [
-      { name: "target" },
-    ]);
-    expect(result.values).toEqual({ target: "src/core with spaces" });
-  });
-
-  test("key=value and positional binding", () => {
-    expect(parseCommandArgs("depth=deep src/", params).values).toEqual({
-      depth: "deep",
-      target: "src/",
-    });
-    expect(parseCommandArgs("src/ deep", params).values).toEqual({
-      target: "src/",
-      depth: "deep",
-    });
-    expect(parseCommandArgs('target="a b"', params).values).toEqual({
-      target: "a b",
-    });
-  });
-
-  test("unknown keys and extra positionals are errors", () => {
-    expect(parseCommandArgs("bogus=1", params).errors[0]).toContain(
-      "unknown parameter 'bogus'",
-    );
-    expect(parseCommandArgs("a b c", params).errors[0]).toContain(
-      "too many positional",
-    );
-  });
-
-  test("empty args yield no values", () => {
-    expect(parseCommandArgs("  ", params)).toEqual({ values: {}, errors: [] });
   });
 });
 

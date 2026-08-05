@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { Model } from "@earendil-works/pi-ai";
+import { stream as streamAnthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { Compile } from "typebox/compile";
@@ -76,17 +78,70 @@ describe("agent result tool", () => {
     expect(prompt).not.toContain(RESULT_TOOL_NAME);
   });
 
-  test("enforces the closed result-or-error envelope", () => {
-    const validator = Compile(register().parameters);
+  test("exposes a provider-safe closed envelope schema", () => {
+    const parameters = register().parameters;
+    const validator = Compile(parameters);
+    expect(parameters.type).toBe("object");
+    expect(Object.keys(parameters.properties)).toEqual(["result", "error"]);
     expect(validator.Check({ result: "report" })).toBe(true);
     expect(validator.Check({ result: { report: true } })).toBe(false);
     expect(validator.Check({ error: { reason: "blocked" } })).toBe(true);
     expect(validator.Check({ error: { reason: "" } })).toBe(false);
-    expect(validator.Check({})).toBe(false);
+    // Provider-safe schemas expose both alternatives as optional properties;
+    // execute() enforces that exactly one was supplied.
+    expect(validator.Check({})).toBe(true);
     expect(
       validator.Check({ result: "report", error: { reason: "blocked" } }),
-    ).toBe(false);
+    ).toBe(true);
     expect(validator.Check({ result: "report", extra: true })).toBe(false);
+  });
+
+  test("survives Anthropic's real tool-schema translation", async () => {
+    const tool = register();
+    const model: Model<"anthropic-messages"> = {
+      id: "claude-test",
+      name: "Claude Test",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 1_000,
+    };
+    let payload: unknown;
+    const events = streamAnthropic(
+      model,
+      {
+        messages: [{ role: "user", content: "Submit.", timestamp: 0 }],
+        tools: [tool],
+      },
+      {
+        client: {} as never,
+        onPayload(value) {
+          payload = value;
+          throw new Error("captured provider payload");
+        },
+      },
+    );
+    for await (const _event of events) {
+      // Drain the stream after the intentional onPayload error.
+    }
+
+    const translated = payload as {
+      tools: Array<{
+        input_schema: {
+          type: string;
+          properties: Record<string, unknown>;
+          required: string[];
+        };
+      }>;
+    };
+    expect(translated.tools[0]?.input_schema.type).toBe("object");
+    expect(
+      Object.keys(translated.tools[0]?.input_schema.properties ?? {}),
+    ).toEqual(["result", "error"]);
   });
 
   test("wires a concrete payload schema into result", () => {
@@ -117,6 +172,15 @@ describe("agent result tool", () => {
       details: { error: { reason: "blocked" } },
       terminate: true,
     });
+    await expect(tool.execute("empty-call", {})).rejects.toThrow(
+      "exactly one of 'result' or 'error'",
+    );
+    await expect(
+      tool.execute("ambiguous-call", {
+        result: "report",
+        error: { reason: "blocked" },
+      }),
+    ).rejects.toThrow("exactly one of 'result' or 'error'");
   });
 
   test("refuses to load without a schema file variable", () => {

@@ -9,6 +9,12 @@ export const DEFAULT_RESULT_SCHEMA: JsonSchema = Object.freeze({
   type: "string",
 });
 
+// Fingerprints avoid repeating Ajv/TypeBox compilation across a flow's fan-out
+// while still invalidating the cache if a custom caller mutates its schema.
+const validatedSchemaCache = new WeakMap<JsonSchema, string>([
+  [DEFAULT_RESULT_SCHEMA, JSON.stringify(DEFAULT_RESULT_SCHEMA)],
+]);
+
 const SUBSTANTIVE_SCHEMA_KEYS = new Set([
   "$ref",
   "type",
@@ -141,6 +147,8 @@ export function validateJsonSchema(value: unknown): JsonSchema {
   const jsonError = jsonValueError(value);
   if (jsonError) throw new Error(`must contain only JSON data: ${jsonError}`);
   const schema = value as JsonSchema;
+  const fingerprint = JSON.stringify(schema);
+  if (validatedSchemaCache.get(schema) === fingerprint) return schema;
   if (Object.keys(schema).length === 0) {
     throw new Error("must not be empty");
   }
@@ -173,6 +181,7 @@ export function validateJsonSchema(value: unknown): JsonSchema {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`cannot be compiled by TypeBox: ${message}`);
   }
+  validatedSchemaCache.set(schema, fingerprint);
   return schema;
 }
 
@@ -217,33 +226,23 @@ export type AgentResultEnvelope =
   | AgentResultSuccessEnvelope
   | AgentResultErrorEnvelope;
 
-/** Build the strict framework envelope around a workflow-owned payload. */
+/** Build a provider-safe framework envelope around a workflow-owned payload. */
 export function buildAgentResultEnvelopeSchema(
   payloadSchema: JsonSchema,
 ): TSchema {
   return {
-    oneOf: [
-      {
-        type: "object",
-        properties: { result: payloadSchema },
-        required: ["result"],
-        additionalProperties: false,
-      },
-      {
+    type: "object",
+    properties: {
+      result: payloadSchema,
+      error: {
         type: "object",
         properties: {
-          error: {
-            type: "object",
-            properties: {
-              reason: { type: "string", minLength: 1 },
-            },
-            required: ["reason"],
-            additionalProperties: false,
-          },
+          reason: { type: "string", minLength: 1 },
         },
-        required: ["error"],
+        required: ["reason"],
         additionalProperties: false,
       },
-    ],
+    },
+    additionalProperties: false,
   } as TSchema;
 }

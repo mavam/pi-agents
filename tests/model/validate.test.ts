@@ -131,6 +131,15 @@ describe("structural validation", () => {
     );
   });
 
+  test("reuses unchanged schema validation but detects later mutations", () => {
+    const schema = { type: "string" };
+    const node = agent("a", "t", { json: schema });
+    expectValid(node);
+    expectValid(node);
+    schema.type = "bogus";
+    expectIssue(node, "$.json: is not a supported JSON Schema Draft 7 schema");
+  });
+
   test("rejects boolean, empty, and metadata-only result schemas", () => {
     expectIssue(
       agent("a", "t", { json: true }),

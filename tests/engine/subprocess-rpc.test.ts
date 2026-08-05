@@ -69,6 +69,16 @@ describe("real Pi RPC result submission", () => {
     expect(handle.status).toBe("completed");
   }, 10_000);
 
+  test("lets the result tool reject an ambiguous envelope and accepts its retry", async () => {
+    const handle = spawnFixture({ PI_AGENTS_FAUX_AMBIGUOUS_FIRST: "1" });
+    await expect(handle.wait()).resolves.toMatchObject({
+      value: { source: "real-rpc", ok: true },
+      exitCode: 0,
+      usage: { turns: 2 },
+    });
+    expect(handle.status).toBe("completed");
+  }, 10_000);
+
   test("surfaces an accepted agent error as a typed rejection", async () => {
     const handle = spawnFixture({ PI_AGENTS_FAUX_ERROR: "1" });
     await expect(handle.wait()).rejects.toBeInstanceOf(AgentErrorResult);

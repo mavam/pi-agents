@@ -9,6 +9,18 @@ import {
 export const RESULT_TOOL_NAME = "pi_agents_submit_result";
 export const RESULT_SCHEMA_FILE_ENV_VAR = "PI_AGENTS_RESULT_SCHEMA_FILE";
 
+function resultEnvelope(rawParams: unknown): AgentResultEnvelope {
+  if (typeof rawParams !== "object" || rawParams === null) {
+    throw new Error("Submit exactly one of 'result' or 'error', then retry.");
+  }
+  const hasResult = Object.hasOwn(rawParams, "result");
+  const hasError = Object.hasOwn(rawParams, "error");
+  if (hasResult === hasError) {
+    throw new Error("Submit exactly one of 'result' or 'error', then retry.");
+  }
+  return rawParams as AgentResultEnvelope;
+}
+
 function resultSchema() {
   const filePath = process.env[RESULT_SCHEMA_FILE_ENV_VAR];
   if (!filePath) {
@@ -64,7 +76,10 @@ export default function resultToolExtension(pi: ExtensionAPI): void {
       parameters,
 
       async execute(_toolCallId, rawParams) {
-        const envelope = rawParams as AgentResultEnvelope;
+        // Provider adapters such as Anthropic preserve top-level properties
+        // but cannot express the exclusive choice. A thrown tool error is
+        // returned to the model so it can correct and resubmit the envelope.
+        const envelope = resultEnvelope(rawParams);
         const isError = "error" in envelope;
         return {
           content: [

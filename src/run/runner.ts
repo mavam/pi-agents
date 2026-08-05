@@ -18,9 +18,9 @@ import {
   ADHOC_LABEL,
   DEFAULT_BUDGETS,
   type EffectiveBudgets,
-  type OutputMode,
   type Scope,
 } from "../model/ast.js";
+import { resultValueError } from "../model/json-schema.js";
 import { BudgetExceededError } from "./budgets.js";
 import type { AgentCall, AgentRunner } from "./interpreter.js";
 import {
@@ -52,32 +52,20 @@ export interface RunnerOptions {
   onHandle?: (call: AgentCall, handle: SpawnHandle) => (() => void) | undefined;
 }
 
-/**
- * The result contract appended to every delegated agent's system prompt:
- * only the final message survives (see the value contract in the README),
- * so the agent must end with the deliverable itself.
- */
-export function delegationPreamble(output: OutputMode): string {
-  const lines = [
+/** The result contract appended to every delegated agent's system prompt. */
+export function delegationPreamble(): string {
+  return [
     "You run non-interactively as a delegated agent inside a workflow:",
     "this assignment is delegated work, not fresh user intent. Perform the",
     "assignment directly. Do not invoke workflows or delegate it further;",
     "if the assignment asks for delegation, perform the underlying work",
-    "yourself. Nobody can reply to you, and only your final message is",
-    "returned to the caller as your result — everything before it is",
-    "discarded. End your turn with one dedicated message containing the",
-    "complete deliverable itself, not a summary of what you did, a",
-    "reference to earlier messages, or a closing remark.",
-  ];
-  if (output === "json") {
-    lines.push(
-      "",
-      "The caller parses your result as JSON: your final message must be a",
-      "single JSON value with no surrounding prose (a ```json fence is",
-      "acceptable).",
-    );
-  }
-  return lines.join("\n");
+    "yourself. Nobody can reply to you. Assistant messages are progress",
+    "only and are not returned to the caller. Complete the assignment by",
+    "submitting exactly one complete agent result through the provided",
+    "result-submission mechanism as your final action. If the assignment",
+    "cannot be completed, submit an error with a concrete reason instead",
+    "of fabricating a result.",
+  ].join("\n");
 }
 
 export function createAgentRunner(options: RunnerOptions): AgentRunner {
@@ -93,13 +81,14 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       catalogs,
     });
     const { cwd, profile } = resolved;
+    const agentName = profile?.name ?? ADHOC_LABEL;
 
     // Persona (named calls only), then skills, then the result contract every
     // delegated agent gets — ad-hoc ones included.
     const parts: string[] = [];
     if (profile) parts.push(profile.systemPrompt);
     parts.push(renderSkillsPrompt(resolved.skills));
-    parts.push(delegationPreamble(call.output));
+    parts.push(delegationPreamble());
     const systemPrompt = parts.filter(Boolean).join("\n\n");
 
     // pi-agents registers only in the root process (depth 0), so every
@@ -110,15 +99,16 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
     };
 
     const handle = options.engine.spawn({
-      agent: profile?.name ?? ADHOC_LABEL,
+      agent: agentName,
       task: call.task,
       cwd,
       systemPrompt,
       model: resolved.model,
       thinking: resolved.thinking,
       disableSkillDiscovery: resolved.disableSkillDiscovery,
-      // Preserved exactly: `[]` makes the engine emit --no-tools.
+      // Preserved exactly: the engine adds only its mandatory result tool.
       tools: resolved.tools,
+      resultSchema: call.resultSchema,
       env,
     });
     const unregisterHandle = options.onHandle?.(call, handle);
@@ -172,7 +162,16 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       // enforcement relies on the engine streaming activity.
       await progressPump.catch(() => {});
       if (breach) throw breach;
-      return { text: outcome.text, usage: outcome.usage };
+      const validationError = resultValueError(
+        outcome.value,
+        call.resultSchema,
+      );
+      if (validationError) {
+        throw new Error(
+          `Spawn engine for agent ${agentName} returned a result that violates the declared result schema: ${validationError}.`,
+        );
+      }
+      return { value: outcome.value, usage: outcome.usage };
     } catch (error) {
       if (breach && error instanceof SpawnAborted) throw breach;
       throw error;

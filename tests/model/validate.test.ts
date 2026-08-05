@@ -103,14 +103,92 @@ describe("structural validation", () => {
     expectValid(agent("a", "t", { model: "some-model", thinking: "low" }));
   });
 
-  test("agent output and scope are enums", () => {
+  test("removed output field points at json", () => {
     expectIssue(
       agent("a", "t", { output: "yaml" }),
-      "'output' must be one of: text, json",
+      "$.output: 'output' was removed; omit it for string results or replace it with a concrete 'json' schema",
     );
+  });
+
+  test("agent scope is an enum", () => {
     expectIssue(
       agent("a", "t", { scope: "global" }),
       "'scope' must be one of: user, project, both",
+    );
+  });
+
+  test("accepts substantive Draft 7 result schemas", () => {
+    expectValid(
+      agent("a", "t", {
+        json: {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+          additionalProperties: false,
+          description: "Literal {missing} text is not interpolated.",
+        },
+      }),
+    );
+  });
+
+  test("reuses unchanged schema validation but detects later mutations", () => {
+    const schema = { type: "string" };
+    const node = agent("a", "t", { json: schema });
+    expectValid(node);
+    expectValid(node);
+    schema.type = "bogus";
+    expectIssue(node, "$.json: is not a supported JSON Schema Draft 7 schema");
+  });
+
+  test("rejects boolean, empty, and metadata-only result schemas", () => {
+    expectIssue(
+      agent("a", "t", { json: true }),
+      "$.json: must be a JSON Schema object",
+    );
+    expectIssue(
+      agent("a", "t", { json: false }),
+      "$.json: must be a JSON Schema object",
+    );
+    expectIssue(agent("a", "t", { json: {} }), "$.json: must not be empty");
+    expectIssue(
+      agent("a", "t", { json: { description: "anything" } }),
+      "$.json: must contain at least one validation assertion",
+    );
+  });
+
+  test("rejects invalid and non-JSON result schemas", () => {
+    expectIssue(
+      agent("a", "t", { json: { type: "bogus" } }),
+      "$.json: is not a supported JSON Schema Draft 7 schema",
+    );
+    expectIssue(
+      agent("a", "t", { json: { type: "object", default: new Date(0) } }),
+      "$.json: must contain only JSON data",
+    );
+    const cyclic: Record<string, unknown> = { type: "object" };
+    cyclic.properties = cyclic;
+    expectIssue(
+      agent("a", "t", { json: cyclic }),
+      "$.json: must contain only JSON data",
+    );
+  });
+
+  test("reducers validate schemas at the reduce path", () => {
+    expectIssue(
+      {
+        kind: "parallel",
+        branches: { a: agent("a", "t") },
+        reduce: { task: "merge {branches}", json: {} },
+      },
+      "$.reduce.json: must not be empty",
+    );
+    expectIssue(
+      {
+        kind: "parallel",
+        branches: { a: agent("a", "t") },
+        reduce: { task: "merge {branches}", output: "json" },
+      },
+      "$.reduce.output: 'output' was removed",
     );
   });
 
@@ -218,7 +296,12 @@ describe("structural validation", () => {
   });
 
   test("while requires a single-reference on, condition, body, and max", () => {
-    const state = agent("seed", "state", { as: "state", output: "json" });
+    const state = agent("seed", "state", {
+      as: "state",
+      json: {
+        type: ["null", "boolean", "number", "string", "array", "object"],
+      },
+    });
     expectValid(
       seq(state, {
         kind: "while",
@@ -460,7 +543,12 @@ describe("binding scope", () => {
   });
 
   test("while and loop bodies expose distinct iterative roots", () => {
-    const state = agent("seed", "state", { as: "state", output: "json" });
+    const state = agent("seed", "state", {
+      as: "state",
+      json: {
+        type: ["null", "boolean", "number", "string", "array", "object"],
+      },
+    });
     expectValid(
       seq(state, {
         kind: "while",
@@ -492,38 +580,54 @@ describe("binding scope", () => {
 
   test("nested while resolves on in the enclosing frame and shadows its body", () => {
     expectValid(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["outer", true] },
-        max: 2,
-        body: {
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
           kind: "while",
-          on: "{current}",
-          condition: { eq: ["inner", true] },
+          on: "{state}",
+          condition: { eq: ["outer", true] },
           max: 2,
-          body: agent("worker", "inner {iteration}: {current}"),
+          body: {
+            kind: "while",
+            on: "{current}",
+            condition: { eq: ["inner", true] },
+            max: 2,
+            body: agent("worker", "inner {iteration}: {current}"),
+          },
         },
-      }),
+      ),
     );
   });
 
   test("while preserves map roots and shadows an enclosing loop frame", () => {
     expectValid(
-      seq(agent("seed", "list", { as: "list", output: "json" }), {
-        kind: "map",
-        over: "{list}",
-        body: {
-          kind: "while",
-          on: "{item}",
-          condition: { eq: ["continue", true] },
-          max: 2,
-          body: agent(
-            "worker",
-            "item {index}: {item}; iteration {iteration}: {current}",
-          ),
+      seq(
+        agent("seed", "list", {
+          as: "list",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{list}",
+          body: {
+            kind: "while",
+            on: "{item}",
+            condition: { eq: ["continue", true] },
+            max: 2,
+            body: agent(
+              "worker",
+              "item {index}: {item}; iteration {iteration}: {current}",
+            ),
+          },
         },
-      }),
+      ),
     );
     expectValid({
       kind: "loop",

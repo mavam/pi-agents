@@ -4,6 +4,8 @@
  * subprocess.ts; tests inject fakes.
  */
 
+import type { JsonSchema } from "../model/json-schema.js";
+
 export interface SpawnUsage {
   input: number;
   output: number;
@@ -49,8 +51,10 @@ export interface SpawnSpec {
   /** Disable the child Pi process's ambient skill discovery. Instructions
    * already included in `systemPrompt` remain available. */
   disableSkillDiscovery?: boolean;
-  /** Tool allowlist passed as `--tools a,b,c`. */
+  /** Working-tool allowlist; the engine always adds result submission. */
   tools?: string[];
+  /** Optional JSON Schema for the submitted payload. Omit for a string. */
+  resultSchema?: JsonSchema;
   /** Extra environment variables for the child process. */
   env?: Record<string, string>;
 }
@@ -70,7 +74,8 @@ export interface SpawnProgress {
 }
 
 export interface SpawnOutcome {
-  text: string;
+  /** Value accepted through the delegated agent's result-submission tool. */
+  value: unknown;
   exitCode: number;
   usage: SpawnUsage;
   /** Model that actually served the run, when reported. */
@@ -92,6 +97,19 @@ export class SpawnFailure extends Error {
   }
 }
 
+/** Thrown by wait() when the agent explicitly submits an error result. */
+export class AgentErrorResult extends Error {
+  readonly agent: string;
+  readonly reason: string;
+
+  constructor(agent: string, reason: string) {
+    super(reason);
+    this.name = "AgentErrorResult";
+    this.agent = agent;
+    this.reason = reason;
+  }
+}
+
 /** Thrown by wait() when the spawn was aborted via abort(). */
 export class SpawnAborted extends Error {
   constructor(agent: string) {
@@ -103,7 +121,8 @@ export class SpawnAborted extends Error {
 export interface SpawnHandle {
   readonly status: "running" | "completed" | "failed" | "aborted";
   updates: AsyncIterable<SpawnProgress>;
-  /** Resolves with the outcome; rejects with SpawnFailure or SpawnAborted. */
+  /** Resolves with the outcome; rejects with AgentErrorResult, SpawnFailure,
+   * or SpawnAborted. */
   wait(): Promise<SpawnOutcome>;
   /** Queue a steering message; unavailable on engines without live input. */
   steer?(message: string): Promise<void>;

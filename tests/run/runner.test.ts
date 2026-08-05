@@ -14,14 +14,14 @@ import type { AgentCall } from "../../src/run/interpreter.js";
 import { createAgentRunner, delegationPreamble } from "../../src/run/runner.js";
 
 /** Engine fake that records the spec and returns a canned outcome. */
-function captureEngine(specs: SpawnSpec[]): SpawnEngine {
+function captureEngine(specs: SpawnSpec[], value: unknown = "ok"): SpawnEngine {
   return {
     spawn(spec) {
       specs.push(spec);
       return {
         status: "completed",
         updates: (async function* () {})(),
-        wait: async () => ({ text: "ok", exitCode: 0, usage: emptyUsage() }),
+        wait: async () => ({ value, exitCode: 0, usage: emptyUsage() }),
         abort: () => {},
       };
     },
@@ -31,7 +31,6 @@ function captureEngine(specs: SpawnSpec[]): SpawnEngine {
 function call(overrides: Partial<AgentCall> = {}): AgentCall {
   return {
     task: "do the thing",
-    output: "text",
     path: "$",
     instance: "$",
     signal: new AbortController().signal,
@@ -40,23 +39,19 @@ function call(overrides: Partial<AgentCall> = {}): AgentCall {
 }
 
 describe("delegationPreamble", () => {
-  test("states the final-message result contract", () => {
-    const text = delegationPreamble("text");
+  test("states the explicit result-submission contract", () => {
+    const text = delegationPreamble();
     expect(text).toContain("not fresh user intent");
     expect(text).toContain("Do not invoke workflows or delegate it further");
     expect(text).toContain("perform the underlying work");
-    expect(text).toContain("final message");
-    expect(text).toContain("deliverable");
-    expect(text).not.toContain("JSON");
-  });
-
-  test("json mode adds the raw-JSON requirement", () => {
-    const text = delegationPreamble("json");
-    expect(text).toContain("single JSON value");
+    expect(text).toContain("submitting exactly one complete agent result");
+    expect(text).toContain("Assistant messages are progress");
+    expect(text).toContain("submit an error with a concrete reason");
+    expect(text).not.toContain("pi_agents_submit_result");
   });
 });
 
-describe("createAgentRunner system prompt", () => {
+describe("createAgentRunner", () => {
   test("ad-hoc agents get the result contract", async () => {
     const specs: SpawnSpec[] = [];
     const runner = createAgentRunner({
@@ -64,18 +59,80 @@ describe("createAgentRunner system prompt", () => {
       cwd: process.cwd(),
     });
     await runner(call());
-    expect(specs[0]?.systemPrompt).toContain(delegationPreamble("text"));
+    expect(specs[0]?.systemPrompt).toContain(delegationPreamble());
     expect(specs[0]?.disableSkillDiscovery).toBe(false);
+    expect(specs[0]?.resultSchema).toBeUndefined();
   });
 
-  test("json calls get the JSON variant", async () => {
+  test("structured calls forward their result schema", async () => {
     const specs: SpawnSpec[] = [];
+    const resultSchema = {
+      type: "object",
+      properties: { ok: { type: "boolean" } },
+      required: ["ok"],
+      additionalProperties: false,
+    };
     const runner = createAgentRunner({
-      engine: captureEngine(specs),
+      engine: captureEngine(specs, { ok: true }),
       cwd: process.cwd(),
     });
-    await runner(call({ output: "json" }));
-    expect(specs[0]?.systemPrompt).toContain("single JSON value");
+    await runner(call({ resultSchema }));
+    expect(specs[0]?.resultSchema).toBe(resultSchema);
+  });
+
+  test("rejects non-string text outcomes from custom engines", async () => {
+    const runner = createAgentRunner({
+      engine: captureEngine([], { unexpected: true }),
+      cwd: process.cwd(),
+    });
+    await expect(runner(call())).rejects.toThrow(
+      "violates the declared result schema",
+    );
+  });
+
+  test("accepts structured JSON outcomes from custom engines", async () => {
+    const value = { expected: true };
+    const resultSchema = {
+      type: "object",
+      properties: { expected: { type: "boolean" } },
+      required: ["expected"],
+      additionalProperties: false,
+    };
+    const runner = createAgentRunner({
+      engine: captureEngine([], value),
+      cwd: process.cwd(),
+    });
+    await expect(runner(call({ resultSchema }))).resolves.toMatchObject({
+      value,
+    });
+  });
+
+  test("rejects results that violate a concrete schema", async () => {
+    const runner = createAgentRunner({
+      engine: captureEngine([], { expected: "yes" }),
+      cwd: process.cwd(),
+    });
+    await expect(
+      runner(
+        call({
+          resultSchema: {
+            type: "object",
+            properties: { expected: { type: "boolean" } },
+            required: ["expected"],
+          },
+        }),
+      ),
+    ).rejects.toThrow("violates the declared result schema");
+  });
+
+  test("rejects non-JSON values even when the schema would accept objects", async () => {
+    const runner = createAgentRunner({
+      engine: captureEngine([], new Date(0)),
+      cwd: process.cwd(),
+    });
+    await expect(
+      runner(call({ resultSchema: { type: "object" } })),
+    ).rejects.toThrow("non-JSON Date");
   });
 
   test("an anonymous call renders the skills it asked for", async () => {
@@ -101,7 +158,7 @@ describe("createAgentRunner system prompt", () => {
       expect(prompt).toContain("Follow the runner rules.");
       // Order: skills first, result contract last; no profile persona exists.
       expect(prompt.indexOf("runner-skill")).toBeLessThan(
-        prompt.indexOf(delegationPreamble("text")),
+        prompt.indexOf(delegationPreamble()),
       );
       expect(specs[0]?.disableSkillDiscovery).toBe(true);
       expect(specs[0]?.agent).toBe("ad-hoc");
@@ -181,7 +238,7 @@ function streamingEngine(script: SpawnProgress[]): SpawnEngine {
         wait: async () => {
           await released;
           if (aborted) throw new SpawnAborted("w");
-          return { text: "final", exitCode: 0, usage: emptyUsage() };
+          return { value: "final", exitCode: 0, usage: emptyUsage() };
         },
         abort: () => {
           aborted = true;
@@ -261,7 +318,7 @@ describe("createAgentRunner budget watchdog", () => {
               yield progress(1, "one");
             })(),
             wait: async () => ({
-              text: "done",
+              value: "done",
               exitCode: 0,
               usage: emptyUsage(),
             }),
@@ -275,7 +332,7 @@ describe("createAgentRunner budget watchdog", () => {
       budgetLimits: { ...DEFAULT_BUDGETS, maxTurns: 2 },
     });
     await expect(runner(call())).resolves.toEqual({
-      text: "done",
+      value: "done",
       usage: emptyUsage(),
     });
   });
@@ -305,7 +362,7 @@ describe("createAgentRunner breach/settle races", () => {
             yield progress(3, "late partial");
           })(),
           wait: async () => ({
-            text: "done",
+            value: "done",
             exitCode: 0,
             usage: emptyUsage(),
           }),
@@ -337,7 +394,7 @@ describe("createAgentRunner breach/settle races", () => {
         return {
           status: "completed",
           updates: (async function* () {})(),
-          wait: async () => ({ text: "done", exitCode: 0, usage: over }),
+          wait: async () => ({ value: "done", exitCode: 0, usage: over }),
           abort: () => {},
         };
       },
@@ -348,7 +405,7 @@ describe("createAgentRunner breach/settle races", () => {
       budgetLimits: { ...DEFAULT_BUDGETS, maxTurns: 2 },
     });
     await expect(runner(call())).resolves.toEqual({
-      text: "done",
+      value: "done",
       usage: over,
     });
   });

@@ -27,7 +27,7 @@ async function recordedEvents(): Promise<RunEvent[]> {
     flow,
     label: "test run",
     display: "report",
-    runAgent: async (call) => ({ text: `out-${call.task}` }),
+    runAgent: async (call) => ({ value: `out-${call.task}` }),
     emit: (event) => events.push(event),
   });
   return events;

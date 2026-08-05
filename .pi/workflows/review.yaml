@@ -77,7 +77,7 @@ task: |-
   - PRF / 🚀 / performance
   - GRP / 📦 / grouped, only for symptoms with one shared root cause
 
-  Keep the JSON fields plain and machine-readable: severity is P1, P2, or P3;
+  Keep the result fields plain and machine-readable: severity is P1, P2, or P3;
   category is the mapping's text value; and id combines its prefix with a
   sequence number. Emojis appear only in the Markdown report and must always
   be paired with their text label.
@@ -118,29 +118,52 @@ task: |-
   approved and changes_required, and use a non-empty reason for
   cannot_proceed.
 
-  End with exactly one raw JSON object using this contract:
-  {
-    "outcome": "changes_required",
-    "reason": null,
-    "actionable": [
-      {
-        "id": "BUG-1",
-        "severity": "P2",
-        "category": "correctness",
-        "title": "Imperative fix title",
-        "problem": "Concrete description of what is wrong",
-        "fix": "Specific implementation action",
-        "context": "Evidence and reasoning that validate the finding",
-        "locations": ["src/file.ts:10-20"]
-      }
-    ],
-    "report": "Complete Markdown report following the format described earlier"
-  }
-
   Include every P1-P3 finding in actionable and no P4 findings there. Keep
   outcome, reason, and actionable mutually consistent. Put the complete
-  human-readable Markdown review in report despite returning JSON.
+  human-readable Markdown review in report.
+json:
+  type: object
+  required: [outcome, reason, actionable, report]
+  properties:
+    outcome:
+      enum: [approved, changes_required, cannot_proceed]
+    reason:
+      anyOf:
+        - { type: "null" }
+        - { type: string, minLength: 1 }
+    actionable:
+      type: array
+      items:
+        type: object
+        required: [id, severity, category, title, problem, fix, context, locations]
+        properties:
+          id:
+            type: string
+            pattern: '^(BUG|SEC|ARC|TST|UXD|RDY|DOC|PRF|GRP)-[1-9][0-9]*$'
+          severity:
+            enum: [P1, P2, P3]
+          category:
+            enum:
+              - correctness
+              - security
+              - architecture
+              - tests
+              - user_experience
+              - readability
+              - documentation
+              - performance
+              - grouped
+          title: { type: string, minLength: 1 }
+          problem: { type: string, minLength: 1 }
+          fix: { type: string, minLength: 1 }
+          context: { type: string, minLength: 1 }
+          locations:
+            type: array
+            minItems: 1
+            items: { type: string, minLength: 1 }
+        additionalProperties: false
+    report: { type: string, minLength: 1 }
+  additionalProperties: false
 thinking: high
-output: json
 tools: [read, bash]
 skills: []

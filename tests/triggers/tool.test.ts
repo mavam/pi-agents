@@ -93,7 +93,7 @@ function fakeEngine(handler: (spec: SpawnSpec) => string): {
           status: "completed",
           updates: emptyUpdates(),
           wait: async () => ({
-            text: handler(spec),
+            value: handler(spec),
             exitCode: 0,
             usage: emptyUsage(),
           }),
@@ -130,7 +130,7 @@ function steerableEngine(): {
           updates: emptyUpdates(),
           async wait() {
             await completion;
-            return { text: "ok", exitCode: 0, usage: emptyUsage() };
+            return { value: "ok", exitCode: 0, usage: emptyUsage() };
           },
           async steer(message) {
             messages.push(message);
@@ -413,7 +413,7 @@ describe("workflow tool", () => {
       expect(text).toContain('status="completed"');
       expect(text).toContain("did: create a worktree");
       expect(specs[0]?.agent).toBe("ad-hoc");
-      expect(specs[0]?.systemPrompt).toContain("final message"); // result contract only, no persona
+      expect(specs[0]?.systemPrompt).toContain("result-submission mechanism"); // result contract only, no persona
       expect(specs[0]?.tools).toBeUndefined();
     } finally {
       fs.rmSync(emptyDir, { recursive: true, force: true });
@@ -688,7 +688,6 @@ describe("call and result previews", () => {
           investigate: {
             kind: "agent",
             task: "Investigate the rendering lifecycle and flicker source",
-            output: "text",
           },
           reproduce: {
             kind: "sequence",
@@ -696,7 +695,16 @@ describe("call and result previews", () => {
               {
                 kind: "agent",
                 task: "Build a minimal streaming reproduction",
-                output: "json",
+                json: {
+                  type: [
+                    "null",
+                    "boolean",
+                    "number",
+                    "string",
+                    "array",
+                    "object",
+                  ],
+                },
                 as: "case",
               },
               {

@@ -26,7 +26,7 @@ const REVIEW_FLOW = {
 
 async function recordedRun(
   raw: unknown,
-  handler: (agent: string | undefined, task: string) => string,
+  handler: (agent: string | undefined, task: string) => unknown,
   keep: (event: RunEvent) => boolean = () => true,
 ): Promise<RunView> {
   const flow = validateFlow(raw);
@@ -35,7 +35,7 @@ async function recordedRun(
     runId: "w1",
     flow,
     label: "review",
-    runAgent: async (call) => ({ text: handler(call.agent, call.task) }),
+    runAgent: async (call) => ({ value: handler(call.agent, call.task) }),
     emit: (event) => events.push(event),
   });
   const run = rebuildRunState(events.filter(keep)).runs.get("w1");
@@ -103,7 +103,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "scout",
             task: "list",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "files",
           },
           {
@@ -113,7 +115,7 @@ describe("formatRunWidget", () => {
           },
         ],
       },
-      (agent) => (agent === "scout" ? '["a","b","c"]' : "ok"),
+      (agent) => (agent === "scout" ? ["a", "b", "c"] : "ok"),
     );
     const [line] = formatRunWidget(run, run.createdAt + 1000);
     expect(line).toContain("✦⇶");
@@ -130,7 +132,9 @@ describe("formatRunWidget", () => {
           kind: "agent",
           name: "gate",
           task: "inspect",
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
           as: "gate",
         },
         {
@@ -155,14 +159,14 @@ describe("formatRunWidget", () => {
     // Before anything starts, the denominator counts gate + the smallest arm.
     const pending = await recordedRun(
       SWITCH_FLOW,
-      (agent) => (agent === "gate" ? '{"status": "findings"}' : "ok"),
+      (agent) => (agent === "gate" ? { status: "findings" } : "ok"),
       (event) => event.type === "run_created",
     );
     expect(widgetProgress(pending)).toEqual({ done: 0, total: 2 });
     // The larger arm ran: the total grows with the real instances and the
     // finished run still reads 100% (min-arm undercounts, never overcounts).
     const run = await recordedRun(SWITCH_FLOW, (agent) =>
-      agent === "gate" ? '{"status": "findings"}' : "ok",
+      agent === "gate" ? { status: "findings" } : "ok",
     );
     expect(widgetProgress(run)).toEqual({ done: 3, total: 3 });
     const [line] = formatRunWidget(run, run.createdAt);
@@ -179,13 +183,15 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "scout",
             task: "scan",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "scout",
           },
           { kind: "value", value: { seen: "{scout.count}" } },
         ],
       },
-      () => '{"count": 3}',
+      () => ({ count: 3 }),
     );
     expect(widgetProgress(run)).toEqual({ done: 1, total: 1 });
     const [line] = formatRunWidget(run, run.createdAt);
@@ -258,7 +264,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "explorer",
             task: "map",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "map",
           },
           {
@@ -288,7 +296,7 @@ describe("formatRunWidget", () => {
           },
         ],
       },
-      (_agent, task) => (task === "map" ? '{"hotspots":["a","b"]}' : "ok"),
+      (_agent, task) => (task === "map" ? { hotspots: ["a", "b"] } : "ok"),
     );
     const [line] = formatRunWidget(run, run.createdAt);
     // Four top-level steps, not one glyph per structural agent.
@@ -347,7 +355,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "gate",
             task: "inspect",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "gate",
           },
           {
@@ -363,7 +373,7 @@ describe("formatRunWidget", () => {
           },
         ],
       },
-      (agent) => (agent === "gate" ? '{"status": "findings"}' : "ok"),
+      (agent) => (agent === "gate" ? { status: "findings" } : "ok"),
       (event) => {
         if (event.type === "run_completed") return false;
         if (event.type !== "node_completed") return true;
@@ -388,7 +398,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "scout",
             task: "list",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "files",
           },
           {
@@ -400,7 +412,7 @@ describe("formatRunWidget", () => {
       },
       (agent) =>
         agent === "scout"
-          ? JSON.stringify(Array.from({ length: 10 }, (_, i) => `f${i}`))
+          ? Array.from({ length: 10 }, (_, i) => `f${i}`)
           : "ok",
       (event) => {
         if (event.type === "run_completed") return false;
@@ -425,7 +437,9 @@ describe("formatRunWidget", () => {
             kind: "agent",
             name: "scout",
             task: "list",
-            output: "json",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
             as: "files",
           },
           {
@@ -436,7 +450,7 @@ describe("formatRunWidget", () => {
           },
         ],
       },
-      (agent) => (agent === "scout" ? '["a","b"]' : "ok"),
+      (agent) => (agent === "scout" ? ["a", "b"] : "ok"),
       (event) => {
         if (event.type === "run_completed") return false;
         if (event.type !== "node_completed") return true;

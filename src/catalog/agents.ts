@@ -22,7 +22,7 @@ export interface Agent {
   model?: string;
   thinking?: Thinking;
   skills: string[];
-  /** Tool allowlist for the delegated process (passed as `--tools`). */
+  /** Working-tool allowlist for the delegated process. */
   tools?: string[];
   systemPrompt: string;
   source: Source;

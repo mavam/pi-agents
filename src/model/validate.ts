@@ -48,6 +48,7 @@ import {
   type WorkflowRefNode,
 } from "./ast.js";
 import { isSingleReference, templateRefs } from "./interpolate.js";
+import { type JsonSchema, validateJsonSchema } from "./json-schema.js";
 
 export interface ValidationIssue {
   path: string;
@@ -145,6 +146,36 @@ function checkKeys(
         message: `unknown key '${key}' (allowed: ${allowed.join(", ")})`,
       });
     }
+  }
+}
+
+function removedOutputField(
+  obj: Record<string, unknown>,
+  path: string,
+  issues: Issues,
+): void {
+  if (!Object.hasOwn(obj, "output")) return;
+  issues.push({
+    path: `${path}.output`,
+    message:
+      "'output' was removed; omit it for string results or replace it with a concrete 'json' schema",
+  });
+}
+
+function optionalJsonSchema(
+  obj: Record<string, unknown>,
+  path: string,
+  issues: Issues,
+): JsonSchema | undefined {
+  if (obj.json === undefined) return undefined;
+  try {
+    return validateJsonSchema(obj.json);
+  } catch (error) {
+    issues.push({
+      path: `${path}.json`,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
   }
 }
 
@@ -397,22 +428,26 @@ function parseAgent(
 ): AgentNode {
   checkKeys(
     obj,
-    ["kind", "name", "task", "output", ...EXECUTION_OPTION_KEYS, "as", "label"],
+    [
+      "kind",
+      "name",
+      "task",
+      "json",
+      "output",
+      ...EXECUTION_OPTION_KEYS,
+      "as",
+      "label",
+    ],
     path,
     issues,
   );
+  removedOutputField(obj, path, issues);
   return {
     kind: "agent",
     ...parseBase(obj, path, issues),
     name: optionalNonEmptyString(obj, "name", path, issues),
     task: requiredString(obj, "task", path, issues),
-    output: optionalEnum(
-      obj,
-      "output",
-      ["text", "json"] as const,
-      path,
-      issues,
-    ),
+    json: optionalJsonSchema(obj, path, issues),
     ...parseAgentExecutionOptions(obj, path, issues),
   };
 }
@@ -447,20 +482,15 @@ function parseReduce(
   if (!obj) return undefined;
   checkKeys(
     obj,
-    ["agent", "task", "output", ...EXECUTION_OPTION_KEYS],
+    ["agent", "task", "json", "output", ...EXECUTION_OPTION_KEYS],
     path,
     issues,
   );
+  removedOutputField(obj, path, issues);
   return {
     agent: optionalNonEmptyString(obj, "agent", path, issues),
     task: requiredString(obj, "task", path, issues),
-    output: optionalEnum(
-      obj,
-      "output",
-      ["text", "json"] as const,
-      path,
-      issues,
-    ),
+    json: optionalJsonSchema(obj, path, issues),
     ...parseAgentExecutionOptions(obj, path, issues),
   };
 }

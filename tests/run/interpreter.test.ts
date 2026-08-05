@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { emptyUsage } from "../../src/engine/types.js";
+import { AgentErrorResult, emptyUsage } from "../../src/engine/types.js";
 import type { FlowNode, WorkflowLike } from "../../src/model/ast.js";
 import { validateFlow } from "../../src/model/validate.js";
 import { BudgetExceededError } from "../../src/run/budgets.js";
@@ -9,7 +9,6 @@ import {
   type AgentRunner,
   type ExecuteOptions,
   executeFlow,
-  parseJsonOutput,
 } from "../../src/run/interpreter.js";
 
 const agent = (
@@ -24,7 +23,7 @@ const agent = (
 });
 const seq = (...steps: unknown[]) => ({ kind: "sequence", steps });
 
-type Handler = (call: AgentCall) => string | Promise<string>;
+type Handler = (call: AgentCall) => unknown | Promise<unknown>;
 
 function makeRunner(handler: Handler): {
   runner: AgentRunner;
@@ -35,11 +34,11 @@ function makeRunner(handler: Handler): {
     calls,
     runner: async (call) => {
       calls.push(call);
-      const text = await handler(call);
+      const value = await handler(call);
       const usage = emptyUsage();
       usage.turns = 1;
       usage.cost = 0.01;
-      return { text, usage };
+      return { value, usage };
     },
   };
 }
@@ -108,25 +107,32 @@ describe("seq and bindings", () => {
   test("dot paths reach into JSON outputs", async () => {
     const { calls } = await run(
       seq(
-        agent("scout", "list", { as: "scout", output: "json" }),
+        agent("scout", "list", {
+          as: "scout",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
         agent("worker", "fix {scout.files.0}"),
       ),
-      (call) =>
-        call.agent === "scout" ? '{"files": ["a.ts", "b.ts"]}' : "done",
+      (call) => (call.agent === "scout" ? { files: ["a.ts", "b.ts"] } : "done"),
     );
     expect(calls[1]?.task).toBe("fix a.ts");
+    expect(calls[0]?.resultSchema).toMatchObject({ type: expect.anything() });
   });
 
-  test("json output tolerates fences and fails loudly otherwise", async () => {
-    expect(parseJsonOutput('```json\n{"ok": true}\n```')).toEqual({ ok: true });
-    expect(parseJsonOutput("[1, 2]")).toEqual([1, 2]);
-    const { outcome, events } = await run(
-      agent("a", "t", { output: "json" }),
-      () => "not json at all",
+  test("submitted JSON values pass through without text parsing", async () => {
+    const submitted = { ok: true, nested: [1, null, "two"] };
+    const { outcome } = await run(
+      agent("a", "t", {
+        json: {
+          type: ["null", "boolean", "number", "string", "array", "object"],
+        },
+      }),
+      () => submitted,
     );
-    expect(outcome.status).toBe("failed");
-    expect(outcome.error).toContain("expected JSON output");
-    expect(eventTypes(events, "node_failed")).toHaveLength(1);
+    expect(outcome.status).toBe("completed");
+    expect(outcome.value).toBe(submitted);
   });
 });
 
@@ -277,6 +283,45 @@ describe("parallel", () => {
     expect(outcome.value).toEqual({ good: "fine", bad: { error: "boom" } });
   });
 
+  test("collect mode preserves an agent-submitted error reason", async () => {
+    const { outcome, events } = await run(
+      {
+        kind: "parallel",
+        onError: "collect",
+        branches: { good: agent("g", "ok"), bad: agent("b", "blocked") },
+      },
+      (call) => {
+        if (call.agent === "b") {
+          throw new AgentErrorResult("b", "required context is unavailable");
+        }
+        return "fine";
+      },
+    );
+    expect(outcome.value).toEqual({
+      good: "fine",
+      bad: { error: "required context is unavailable" },
+    });
+    expect(
+      events.find(
+        (event) =>
+          event.type === "node_failed" && event.instance === "$.branches.bad",
+      ),
+    ).toMatchObject({ error: "required context is unavailable" });
+  });
+
+  test("an agent-submitted error fails the run with its reason", async () => {
+    const { outcome, events } = await run(agent("a", "blocked"), () => {
+      throw new AgentErrorResult("a", "the target cannot be inspected");
+    });
+    expect(outcome).toMatchObject({
+      status: "failed",
+      error: "the target cannot be inspected",
+    });
+    expect(events.find((event) => event.type === "node_failed")).toMatchObject({
+      error: "the target cannot be inspected",
+    });
+  });
+
   test("collect mode fails when every branch fails", async () => {
     const { outcome } = await run(
       {
@@ -315,13 +360,21 @@ describe("parallel", () => {
 describe("map", () => {
   test("fans out per item, preserving input order", async () => {
     const { outcome, calls } = await run(
-      seq(agent("scout", "list files", { as: "files", output: "json" }), {
-        kind: "map",
-        over: "{files}",
-        body: agent("reviewer", "review {item} at {index}"),
-      }),
+      seq(
+        agent("scout", "list files", {
+          as: "files",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{files}",
+          body: agent("reviewer", "review {item} at {index}"),
+        },
+      ),
       (call) => {
-        if (call.agent === "scout") return '["a.ts", "b.ts", "c.ts"]';
+        if (call.agent === "scout") return ["a.ts", "b.ts", "c.ts"];
         return `reviewed ${call.task.split(" ")[1]}`;
       },
     );
@@ -342,12 +395,20 @@ describe("map", () => {
 
   test("map body instances carry @index suffixes", async () => {
     const { events } = await run(
-      seq(agent("s", "list", { as: "files", output: "json" }), {
-        kind: "map",
-        over: "{files}",
-        body: agent("r", "review {item}"),
-      }),
-      (call) => (call.agent === "s" ? '["x", "y"]' : "ok"),
+      seq(
+        agent("s", "list", {
+          as: "files",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{files}",
+          body: agent("r", "review {item}"),
+        },
+      ),
+      (call) => (call.agent === "s" ? ["x", "y"] : "ok"),
     );
     const instances = eventTypes(events, "node_started").map(
       (e) => (e as { instance: string }).instance,
@@ -358,12 +419,20 @@ describe("map", () => {
 
   test("non-array over fails the node", async () => {
     const { outcome } = await run(
-      seq(agent("s", "list", { as: "files", output: "json" }), {
-        kind: "map",
-        over: "{files}",
-        body: agent("r", "review {item}"),
-      }),
-      (call) => (call.agent === "s" ? '{"not": "array"}' : "ok"),
+      seq(
+        agent("s", "list", {
+          as: "files",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{files}",
+          body: agent("r", "review {item}"),
+        },
+      ),
+      (call) => (call.agent === "s" ? { not: "array" } : "ok"),
     );
     expect(outcome.status).toBe("failed");
     expect(outcome.error).toContain("must resolve to a JSON array, got object");
@@ -371,14 +440,22 @@ describe("map", () => {
 
   test("item failure fails the map and cancels siblings", async () => {
     const { outcome } = await run(
-      seq(agent("s", "list", { as: "files", output: "json" }), {
-        kind: "map",
-        over: "{files}",
-        body: agent("r", "review {item}"),
-        concurrency: 2,
-      }),
+      seq(
+        agent("s", "list", {
+          as: "files",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{files}",
+          body: agent("r", "review {item}"),
+          concurrency: 2,
+        },
+      ),
       (call) => {
-        if (call.agent === "s") return '["a", "b"]';
+        if (call.agent === "s") return ["a", "b"];
         if (call.task === "review a") throw new Error("bad item");
         return hangUntilAbort(call.signal);
       },
@@ -389,14 +466,22 @@ describe("map", () => {
 
   test("reduce sees {items}", async () => {
     const { calls, outcome } = await run(
-      seq(agent("s", "list", { as: "files", output: "json" }), {
-        kind: "map",
-        over: "{files}",
-        body: agent("r", "review {item}"),
-        reduce: { agent: "syn", task: "combine {items}" },
-      }),
+      seq(
+        agent("s", "list", {
+          as: "files",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{files}",
+          body: agent("r", "review {item}"),
+          reduce: { agent: "syn", task: "combine {items}" },
+        },
+      ),
       (call) => {
-        if (call.agent === "s") return '["a"]';
+        if (call.agent === "s") return ["a"];
         if (call.agent === "syn") return "combined";
         return "r-a";
       },
@@ -413,16 +498,16 @@ describe("loop", () => {
       {
         kind: "loop",
         body: agent("worker", "round {iteration}, prior: [{last}]", {
-          output: "json",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
         }),
         max: 5,
         until: { eq: ["done", true] },
       },
       () => {
         round += 1;
-        return round >= 3
-          ? '{"done": true, "round": 3}'
-          : `{"done": false, "round": ${round}}`;
+        return { done: round >= 3, round };
       },
     );
     expect(outcome.status).toBe("completed");
@@ -463,17 +548,29 @@ describe("loop", () => {
 describe("while", () => {
   test("returns the initial value when the condition is false", async () => {
     const { outcome, calls, events } = await run(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["continue", true] },
-        max: 3,
-        body: agent("worker", "use {current}", { output: "json" }),
-      }),
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "while",
+          on: "{state}",
+          condition: { eq: ["continue", true] },
+          max: 3,
+          body: agent("worker", "use {current}", {
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
+          }),
+        },
+      ),
       (call) =>
         call.agent === "seed"
-          ? '{"continue": false, "round": null}'
-          : '{"continue": false, "round": 0}',
+          ? { continue: false, round: null }
+          : { continue: false, round: 0 },
     );
     expect(outcome.value).toEqual({ continue: false, round: null });
     expect(calls.map((call) => call.agent)).toEqual(["seed"]);
@@ -483,19 +580,29 @@ describe("while", () => {
   test("carries body values through {current} until the condition is false", async () => {
     let round = 0;
     const { outcome, calls, events } = await run(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["continue", true] },
-        max: 5,
-        body: agent("worker", "round {iteration}, current: {current}", {
-          output: "json",
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
         }),
-      }),
+        {
+          kind: "while",
+          on: "{state}",
+          condition: { eq: ["continue", true] },
+          max: 5,
+          body: agent("worker", "round {iteration}, current: {current}", {
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
+          }),
+        },
+      ),
       (call) => {
-        if (call.agent === "seed") return '{"continue": true, "round": -1}';
+        if (call.agent === "seed") return { continue: true, round: -1 };
         round += 1;
-        return JSON.stringify({ continue: round < 3, round: round - 1 });
+        return { continue: round < 3, round: round - 1 };
       },
     );
     expect(outcome.value).toEqual({ continue: false, round: 2 });
@@ -512,17 +619,29 @@ describe("while", () => {
 
   test("returns a still-matching value when the effective cap is reached", async () => {
     const { outcome, calls } = await run(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["continue", true] },
-        max: 9,
-        body: agent("worker", "round {iteration}", { output: "json" }),
-      }),
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "while",
+          on: "{state}",
+          condition: { eq: ["continue", true] },
+          max: 9,
+          body: agent("worker", "round {iteration}", {
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
+          }),
+        },
+      ),
       (call) =>
         call.agent === "seed"
-          ? '{"continue": true, "round": -1}'
-          : '{"continue": true, "round": 0}',
+          ? { continue: true, round: -1 }
+          : { continue: true, round: 0 },
       { budgets: { maxIterations: 2 } },
     );
     expect(outcome.value).toEqual({ continue: true, round: 0 });
@@ -531,25 +650,42 @@ describe("while", () => {
 
   test("an inner on resolves outer {current} before its body shadows it", async () => {
     const { outcome, calls } = await run(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["outer", true] },
-        max: 1,
-        body: {
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
           kind: "while",
-          on: "{current}",
-          condition: { eq: ["inner", true] },
+          on: "{state}",
+          condition: { eq: ["outer", true] },
           max: 1,
-          body: agent("worker", "inner {iteration}: {current}", {
-            output: "json",
-          }),
+          body: {
+            kind: "while",
+            on: "{current}",
+            condition: { eq: ["inner", true] },
+            max: 1,
+            body: agent("worker", "inner {iteration}: {current}", {
+              json: {
+                type: [
+                  "null",
+                  "boolean",
+                  "number",
+                  "string",
+                  "array",
+                  "object",
+                ],
+              },
+            }),
+          },
         },
-      }),
+      ),
       (call) =>
         call.agent === "seed"
-          ? '{"outer": true, "inner": true, "label": "outer"}'
-          : '{"outer": false, "inner": false, "label": "inner"}',
+          ? { outer: true, inner: true, label: "outer" }
+          : { outer: false, inner: false, label: "inner" },
     );
     expect(calls[1]?.task).toContain('"label": "outer"');
     expect(calls[1]?.task).toContain("inner 0");
@@ -562,23 +698,40 @@ describe("while", () => {
 
   test("preserves enclosing map item and index roots", async () => {
     const { calls } = await run(
-      seq(agent("seed", "items", { as: "list", output: "json" }), {
-        kind: "map",
-        over: "{list}",
-        body: {
-          kind: "while",
-          on: "{item}",
-          condition: { eq: ["continue", true] },
-          max: 1,
-          body: agent("worker", "item {index}: {item}; current: {current}", {
-            output: "json",
-          }),
+      seq(
+        agent("seed", "items", {
+          as: "list",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "map",
+          over: "{list}",
+          body: {
+            kind: "while",
+            on: "{item}",
+            condition: { eq: ["continue", true] },
+            max: 1,
+            body: agent("worker", "item {index}: {item}; current: {current}", {
+              json: {
+                type: [
+                  "null",
+                  "boolean",
+                  "number",
+                  "string",
+                  "array",
+                  "object",
+                ],
+              },
+            }),
+          },
         },
-      }),
+      ),
       (call) =>
         call.agent === "seed"
-          ? '[{"continue": true, "name": "a"}]'
-          : '{"continue": false}',
+          ? [{ continue: true, name: "a" }]
+          : { continue: false },
     );
     expect(calls[1]?.task).toContain("item 0");
     expect(calls[1]?.task).toContain('"name": "a"');
@@ -587,15 +740,23 @@ describe("while", () => {
   test("cancellation stops a running while body", async () => {
     const controller = new AbortController();
     const { outcome, events } = await run(
-      seq(agent("seed", "state", { as: "state", output: "json" }), {
-        kind: "while",
-        on: "{state}",
-        condition: { eq: ["continue", true] },
-        max: 3,
-        body: agent("worker", "work"),
-      }),
+      seq(
+        agent("seed", "state", {
+          as: "state",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "while",
+          on: "{state}",
+          condition: { eq: ["continue", true] },
+          max: 3,
+          body: agent("worker", "work"),
+        },
+      ),
       (call) => {
-        if (call.agent === "seed") return '{"continue": true}';
+        if (call.agent === "seed") return { continue: true };
         queueMicrotask(() => controller.abort());
         return hangUntilAbort(call.signal);
       },
@@ -794,13 +955,21 @@ describe("switch", () => {
     elseArm: unknown,
     extra: Record<string, unknown> = {},
   ) =>
-    seq(agent("gate", "inspect", { as: "gate", output: "json" }), {
-      kind: "switch",
-      on: "{gate}",
-      cases,
-      else: elseArm,
-      ...extra,
-    });
+    seq(
+      agent("gate", "inspect", {
+        as: "gate",
+        json: {
+          type: ["null", "boolean", "number", "string", "array", "object"],
+        },
+      }),
+      {
+        kind: "switch",
+        on: "{gate}",
+        cases,
+        else: elseArm,
+        ...extra,
+      },
+    );
 
   test("first matching case wins; later truthy cases never run", async () => {
     const { outcome, calls } = await run(
@@ -812,7 +981,7 @@ describe("switch", () => {
         agent("fallback", "c"),
       ),
       (call) =>
-        call.agent === "gate" ? '{"status": "approved"}' : `${call.agent}-ran`,
+        call.agent === "gate" ? { status: "approved" } : `${call.agent}-ran`,
     );
     expect(outcome.status).toBe("completed");
     expect(outcome.value).toBe("first-ran");
@@ -826,7 +995,7 @@ describe("switch", () => {
         agent("fallback", "c"),
       ),
       (call) =>
-        call.agent === "gate" ? '{"status": "rejected"}' : `${call.agent}-ran`,
+        call.agent === "gate" ? { status: "rejected" } : `${call.agent}-ran`,
     );
     expect(outcome.value).toBe("fallback-ran");
     expect(calls.map((call) => call.agent)).toEqual(["gate", "fallback"]);
@@ -835,7 +1004,12 @@ describe("switch", () => {
   test("the switch's value binds via as for later steps", async () => {
     const { calls } = await run(
       seq(
-        agent("gate", "inspect", { as: "gate", output: "json" }),
+        agent("gate", "inspect", {
+          as: "gate",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
         {
           kind: "switch",
           on: "{gate}",
@@ -845,7 +1019,7 @@ describe("switch", () => {
         },
         agent("closer", "wrap up {outcome}"),
       ),
-      (call) => (call.agent === "gate" ? '{"go": 1}' : `${call.agent}-done`),
+      (call) => (call.agent === "gate" ? { go: 1 } : `${call.agent}-done`),
     );
     expect(calls[2]?.task).toBe("wrap up worker-done");
   });
@@ -857,7 +1031,7 @@ describe("switch", () => {
         agent("b", "t"),
         { on: "{gate.decision.state}" },
       ),
-      () => '{"status": "ok"}',
+      () => ({ status: "ok" }),
     );
     expect(outcome.status).toBe("failed");
     expect(outcome.error).toContain(
@@ -900,7 +1074,7 @@ describe("switch", () => {
     const routed = async (when: unknown) => {
       const { calls } = await run(
         gateSwitch([{ when, then: agent("hit", "h") }], agent("miss", "m")),
-        (call) => (call.agent === "gate" ? "{}" : "done"),
+        (call) => (call.agent === "gate" ? {} : "done"),
       );
       return calls[1]?.agent;
     };
@@ -945,7 +1119,7 @@ describe("switch", () => {
         [{ when: { eq: ["status", "approved"] }, then: agent("shipper", "s") }],
         agent("reporter", "r"),
       ),
-      (call) => (call.agent === "gate" ? '{"status": "approved"}' : "shipped"),
+      (call) => (call.agent === "gate" ? { status: "approved" } : "shipped"),
     );
     const started = eventTypes(events, "node_started") as {
       path: string;
@@ -974,7 +1148,7 @@ describe("switch", () => {
         agent("idle", "idle"),
       ),
       (call) => {
-        if (call.agent === "gate") return '{"go": true}';
+        if (call.agent === "gate") return { go: true };
         queueMicrotask(() => controller.abort());
         return hangUntilAbort(call.signal);
       },
@@ -994,7 +1168,7 @@ describe("switch", () => {
         [{ when: { exists: "go" }, then: agent("worker", "work") }],
         agent("idle", "idle"),
       ),
-      (call) => (call.agent === "gate" ? '{"go": 1}' : "ok"),
+      (call) => (call.agent === "gate" ? { go: 1 } : "ok"),
       { budgets: { maxAgents: 2 } },
     );
     expect(outcome.status).toBe("completed");
@@ -1073,16 +1247,24 @@ describe("value", () => {
 
   test("single-reference strings substitute values; mixed strings interpolate", async () => {
     const { outcome } = await run(
-      seq(agent("scout", "scan", { as: "scout", output: "json" }), {
-        kind: "value",
-        value: {
-          files: "{scout.files}",
-          count: "{scout.count}",
-          summary: "found {scout.count} files",
-          nested: [{ first: "{scout.files.0}" }, 42, true],
+      seq(
+        agent("scout", "scan", {
+          as: "scout",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "value",
+          value: {
+            files: "{scout.files}",
+            count: "{scout.count}",
+            summary: "found {scout.count} files",
+            nested: [{ first: "{scout.files.0}" }, 42, true],
+          },
         },
-      }),
-      () => '{"files": ["a.ts", "b.ts"], "count": 2}',
+      ),
+      () => ({ files: ["a.ts", "b.ts"], count: 2 }),
     );
     expect(outcome.value).toEqual({
       files: ["a.ts", "b.ts"],
@@ -1094,11 +1276,19 @@ describe("value", () => {
 
   test("an unresolvable path fails the node", async () => {
     const { outcome } = await run(
-      seq(agent("scout", "scan", { as: "scout", output: "json" }), {
-        kind: "value",
-        value: "{scout.nope}",
-      }),
-      () => "{}",
+      seq(
+        agent("scout", "scan", {
+          as: "scout",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
+        {
+          kind: "value",
+          value: "{scout.nope}",
+        },
+      ),
+      () => ({}),
     );
     expect(outcome.status).toBe("failed");
     expect(outcome.error).toContain("value: path 'nope' not found in {scout}");
@@ -1122,7 +1312,12 @@ describe("value", () => {
   test("a value arm yields an existing binding without an echo agent", async () => {
     const { outcome, calls } = await run(
       seq(
-        agent("review", "review the change", { as: "review", output: "json" }),
+        agent("review", "review the change", {
+          as: "review",
+          json: {
+            type: ["null", "boolean", "number", "string", "array", "object"],
+          },
+        }),
         {
           kind: "switch",
           on: "{review}",
@@ -1134,7 +1329,7 @@ describe("value", () => {
         },
       ),
       (call) =>
-        call.agent === "review" ? '{"pr": false, "outcome": "clean"}' : "gated",
+        call.agent === "review" ? { pr: false, outcome: "clean" } : "gated",
     );
     expect(outcome.value).toEqual({ outcome: "clean", gated: false });
     expect(calls.map((call) => call.agent)).toEqual(["review"]);
@@ -1206,7 +1401,7 @@ describe("run-level execution budgets", () => {
         usage.output = 200;
         call.onProgress?.({ text: "streaming half an answer", usage });
         await hangUntilAbort(call.signal);
-        return { text: "unreachable" };
+        return { value: "unreachable" };
       },
     });
     expect(outcome.status).toBe("failed");
@@ -1284,11 +1479,16 @@ describe("budget cancellation reasons in pools", () => {
       {
         kind: "sequence",
         steps: [
-          agent("s", "list", { as: "targets", output: "json" }),
+          agent("s", "list", {
+            as: "targets",
+            json: {
+              type: ["null", "boolean", "number", "string", "array", "object"],
+            },
+          }),
           { kind: "map", over: "{targets}", body: agent("m", "work {item}") },
         ],
       },
-      (call) => (call.task === "list" ? "[1, 2]" : hangUntilAbort(call.signal)),
+      (call) => (call.task === "list" ? [1, 2] : hangUntilAbort(call.signal)),
       { budgets: { maxDuration: 0.05 } },
     );
     expect(outcome.status).toBe("failed");

@@ -1,3 +1,5 @@
+import type { JsonSchema } from "./json-schema.js";
+
 /**
  * Pure data model for the workflow algebra.
  *
@@ -27,8 +29,6 @@ export function effectiveScope(
   const scope = requested ?? fallback;
   return trusted ? scope : "user";
 }
-
-export type OutputMode = "text" | "json";
 
 /**
  * Extension-owned orchestration tools that delegated agents cannot receive.
@@ -65,7 +65,7 @@ export interface AgentExecutionOptions {
   /** Closed set of skills to inject; replaces ambient/profile skills. `[]`
    * disables skill discovery for the delegated process. */
   skills?: string[];
-  /** Tool allowlist for the delegated process; `[]` means no tools at all. */
+  /** Working-tool allowlist; `[]` leaves only result submission available. */
   tools?: string[];
   /** Working directory override for the delegated process. */
   cwd?: string;
@@ -102,8 +102,8 @@ export interface AgentNode extends BaseNode, AgentExecutionOptions {
   name?: string;
   /** Task prompt; may interpolate `{bindings}`. */
   task: string;
-  /** How to interpret the agent's final output. Default: "text". */
-  output?: OutputMode;
+  /** Optional JSON Schema for a machine-readable result. Omit for text. */
+  json?: JsonSchema;
 }
 
 /** Run steps in order; the sequence's value is the last step's value. */
@@ -124,7 +124,8 @@ export interface Reduce extends AgentExecutionOptions {
   agent?: string;
   /** Task prompt; interpolates `{branches}` (parallel) or `{items}` (map). */
   task: string;
-  output?: OutputMode;
+  /** Optional JSON Schema for a machine-readable result. Omit for text. */
+  json?: JsonSchema;
 }
 
 /**

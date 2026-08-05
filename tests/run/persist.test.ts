@@ -124,7 +124,7 @@ describe("background tool runs", () => {
         status: "running",
         updates: emptyUpdates(),
         wait: async () => ({
-          text: await gate.promise,
+          value: await gate.promise,
           exitCode: 0,
           usage: emptyUsage(),
         }),
@@ -221,7 +221,7 @@ describe("background tool runs", () => {
       spawn: () => ({
         status: "completed",
         updates: emptyUpdates(),
-        wait: async () => ({ text: "ok", exitCode: 0, usage: emptyUsage() }),
+        wait: async () => ({ value: "ok", exitCode: 0, usage: emptyUsage() }),
         abort: () => {},
       }),
     };

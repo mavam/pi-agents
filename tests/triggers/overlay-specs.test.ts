@@ -374,15 +374,46 @@ describe("command registration", () => {
     expect(messages.at(-1)).toContain("## /aaaa1111");
   });
 
-  test("/workflow <run-id> inspects the run, verbs included", async () => {
+  test("/workflow <run-id> separates presented and raw results", async () => {
     const run = await makeRun("aaaa1111-run", { kind: "tool" });
+    run.header.display = "report";
+    run.value = {
+      outcome: "changes_required",
+      report: "# Human-facing report",
+    };
     const { pi, commands, messages } = fakePi();
     registerCommands(pi, fakeDeps([run]).deps);
     const workflow = commands.get("workflow");
+
     await workflow?.handler("aaaa1111", fakeCtx());
     expect(messages.at(-1)).toContain("## Run aaaa1111");
+
     await workflow?.handler("aaaa1111 result", fakeCtx());
-    expect(messages.at(-1)).toContain("— raw result");
+    const result = messages.at(-1) ?? "";
+    expect(result).toContain("— result");
+    expect(result).toContain("# Human-facing report");
+    expect(result).not.toContain('"outcome": "changes_required"');
+    expect(result).toContain("`/workflow aaaa1111 raw`");
+
+    await workflow?.handler("aaaa1111 raw", fakeCtx());
+    const raw = messages.at(-1) ?? "";
+    expect(raw).toContain("— raw");
+    expect(raw).toContain('```json\n{\n  "outcome": "changes_required"');
+
+    const root = [...run.nodes.values()].find((node) => node.kind === "agent");
+    if (!root) throw new Error("missing root agent");
+    root.label = "raw";
+    await workflow?.handler("aaaa1111 result raw", fakeCtx());
+    expect(messages.at(-1)).toContain("— raw (ad-hoc)");
+  });
+
+  test("/workflow <run-id> raw JSON-encodes string values", async () => {
+    const run = await makeRun("bbbb2222-run", { kind: "tool" });
+    const { pi, commands, messages } = fakePi();
+    registerCommands(pi, fakeDeps([run]).deps);
+
+    await commands.get("workflow")?.handler("bbbb2222 raw", fakeCtx());
+    expect(messages.at(-1)).toContain('```json\n"ok"\n```');
   });
 
   test("/workflow rejects run verbs on a workflow name", async () => {

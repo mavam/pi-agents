@@ -346,12 +346,12 @@ describe("formatNodeResultFull", () => {
     expect(text).not.toContain("````\n## Change map");
   });
 
-  test("non-string values remain fenced, pretty-printed JSON", async () => {
+  test("non-string values remain fenced, highlighted JSON", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
     const target = workNodes(run)[0] as NodeView;
     target.value = { findings: [1, 2] };
     const text = formatNodeResultFull(run, target);
-    expect(text).toContain('```\n{\n  "findings": [');
+    expect(text).toContain('```json\n{\n  "findings": [');
     expect(text).toContain("\n}\n```");
   });
 
@@ -454,6 +454,7 @@ describe("completeRunArgs", () => {
     const completions = completeRunArgs("run-1234 ", await runs());
     expect(completions.map((c) => c.label)).toEqual([
       "result",
+      "raw",
       "agents",
       "watch",
       "mermaid",

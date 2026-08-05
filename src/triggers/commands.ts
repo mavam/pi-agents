@@ -68,7 +68,7 @@ export const RESERVED_COMMAND_NAMES = new Set([
 export type CommandDeps = TriggerDeps;
 
 /** Run-inspection verbs accepted by `/workflow <run-id> …`. */
-const RUN_ACTIONS = ["result", "agents", "watch", "mermaid", "stop"];
+const RUN_ACTIONS = ["result", "raw", "agents", "watch", "mermaid", "stop"];
 
 /** Discovery scope for a context: untrusted projects contribute nothing. */
 function scopeFor(ctx: Pick<ExtensionContext, "isProjectTrusted">): Scope {
@@ -210,7 +210,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
 
   pi.registerCommand("workflow", {
     description:
-      "Show a workflow, or inspect a run: /workflow <name>, /workflow <run-id> [result [node]|agents|watch|mermaid|stop]",
+      "Show a workflow, or inspect a run: /workflow <name>, /workflow <run-id> [result [node]|raw|agents|watch|mermaid|stop]",
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.split(/\s+/);
       const { workflows } = discoverWorkflows(process.cwd(), "both");
@@ -235,12 +235,14 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
     },
     handler: async (args, ctx) => {
       const tokens = args.trim().split(/\s+/).filter(Boolean);
-      const action = tokens.find((t) => RUN_ACTIONS.includes(t));
-      const [target, nodeRef] = tokens.filter((t) => !RUN_ACTIONS.includes(t));
+      const [target, actionToken, nodeRef] = tokens;
+      const action = RUN_ACTIONS.includes(actionToken ?? "")
+        ? actionToken
+        : undefined;
       if (!target) {
         sendInfo(
           pi,
-          "Usage: `/workflow <name>` or `/workflow <run-id> [result [node]|agents|watch|mermaid|stop]`",
+          "Usage: `/workflow <name>` or `/workflow <run-id> [result [node]|raw|agents|watch|mermaid|stop]`",
         );
         return;
       }
@@ -313,6 +315,10 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
           return;
         }
         sendInfo(pi, formatRunResultFull(run));
+        return;
+      }
+      if (action === "raw") {
+        sendInfo(pi, formatRunRawResult(run));
         return;
       }
       if (action === "watch") {
@@ -1118,20 +1124,41 @@ function formatWorkflowDetails(wf: WorkflowDef): string {
   return lines.join("\n");
 }
 
-/** The complete run value (bounded only by what persistence retained). */
+/** The complete human-facing run value selected by the workflow's display path. */
 function formatRunResultFull(run: RunView): string {
-  const lines = [`## Run ${shortId(run.header.id)} — raw result`, ""];
+  const lines = [`## Run ${shortId(run.header.id)} — result`, ""];
   if (run.status === "running") {
     lines.push("Still running — no result yet.");
     return lines.join("\n");
   }
   if (run.error) lines.push(`⚠ ${run.error}`, "");
-  const text = valueText(run.value);
+  const display = selectDisplayValue(run.value, run.header.display);
+  const text = valueText(display.value);
   if (text === undefined) {
     lines.push("(no result value)");
     return lines.join("\n");
   }
-  lines.push(renderResultValue(run.value, text));
+  lines.push(renderResultValue(display.value, text));
+  if (display.selected)
+    lines.push("", `Raw data: \`/workflow ${shortId(run.header.id)} raw\``);
+  return lines.join("\n");
+}
+
+/** The complete persisted run value serialized as JSON. */
+function formatRunRawResult(run: RunView): string {
+  const lines = [`## Run ${shortId(run.header.id)} — raw`, ""];
+  if (run.status === "running") {
+    lines.push("Still running — no result yet.");
+    return lines.join("\n");
+  }
+  if (run.error) lines.push(`⚠ ${run.error}`, "");
+  const text =
+    run.value === undefined ? undefined : JSON.stringify(run.value, null, 2);
+  if (text === undefined) {
+    lines.push("(no result value)");
+    return lines.join("\n");
+  }
+  lines.push(fenced(text, "json"));
   return lines.join("\n");
 }
 
@@ -1319,7 +1346,7 @@ export function formatRunDetails(run: RunView, fullValue = false): string {
     }
   }
   if (run.value !== undefined)
-    lines.push("", `Raw data: \`/workflow ${shortId(run.header.id)} result\``);
+    lines.push("", `Raw data: \`/workflow ${shortId(run.header.id)} raw\``);
   return lines.join("\n");
 }
 

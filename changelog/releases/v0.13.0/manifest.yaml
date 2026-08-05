@@ -1,0 +1,9 @@
+created: 2026-08-05
+title: Schema-driven delegated agent results
+intro: "Pi-agents now validates delegated agent results against the flow\u2019s declared\
+  \ schema before accepting them, making machine-readable workflows safer and more\
+  \ predictable. The release also improves workflow result display and copying, slash-command\
+  \ ergonomics, and saved-workflow previews."
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.12.0

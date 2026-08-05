@@ -586,7 +586,9 @@ describe("call and result previews", () => {
       "../../src/triggers/tool.js"
     );
     const tree = resolveSavedFlowTree("greet", projectDir);
-    expect(tree).toBe("✦ echo · greet {params.target}");
+    expect(tree).toBe(
+      ["❖ greet", "└─ ✦ echo · greet {params.target}"].join("\n"),
+    );
     const preview = formatCallPreview(
       { name: "greet", params: { target: "world" } },
       undefined,
@@ -594,8 +596,8 @@ describe("call and result previews", () => {
     );
     expect(preview.split("\n")).toEqual([
       "❖ greet",
-      "   target: world",
-      "✦ echo · greet {params.target}",
+      "│  target: world",
+      "└─ ✦ echo · greet {params.target}",
     ]);
     expect(resolveSavedFlowTree("nonexistent", projectDir)).toBeUndefined();
   });
@@ -612,8 +614,10 @@ describe("call and result previews", () => {
     const { formatCallPreview } = await import("../../src/triggers/tool.js");
     const preview = formatCallPreview({
       flow: { kind: "agent", task: "hello" },
+      label: "Quick check",
     });
-    expect(preview).toBe("✦ ad-hoc · hello");
+    expect(preview).toBe("Quick check\n✦ ad-hoc · hello");
+    expect(preview).not.toContain("└─");
   });
 
   test("streaming previews retain the newest valid tree", async () => {
@@ -797,8 +801,10 @@ describe("call and result previews", () => {
         toolCallId: "same-id",
       }),
     );
-    expect(savedState.savedFlowTree).toBe("✦ echo · greet {params.target}");
-    expect(renderedText(saved)).toContain("✦ echo · greet {params.target}");
+    expect(savedState.savedFlowTree).toBe(
+      ["❖ greet", "└─ ✦ echo · greet {params.target}"].join("\n"),
+    );
+    expect(renderedText(saved)).toContain("└─ ✦ echo · greet {params.target}");
 
     const missingState: WorkflowToolRenderState = {};
     const missingArgs = { name: "missing" };

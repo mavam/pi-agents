@@ -80,18 +80,20 @@ and saved workflows inline like function calls.
 
 The JSON/YAML form is what you author; the icons are how flows are *read*.
 Every surface that shows a flow — the tool call display, `/workflow <name>`,
-`/workflow <run-id>` — renders it as an icon tree. This repository's
-`review-fix` workflow has the following shape (abridged):
+`/workflow <run-id>` — renders it as an icon tree. A named workflow is the
+visual root of its steps; a titleless inline flow remains flat. This
+repository's `review-fix` workflow has the following shape (abridged):
 
 ```
-❖ review → {initial_review}
-⎇ switch {initial_review} → {initial_state}
-↺ while outcome == "changes_required" on {initial_state} ≤3 → {cycle_result}
-├─ ✦ ad-hoc → {implementation}
-├─ ❖ review → {verified_review}
-└─ ⎇ switch {verified_review}
-⎇ switch {cycle_result}
-└─ changes remain → ≔ exhausted
+❖ review-fix
+├─ ❖ review → {initial_review}
+├─ ⎇ switch {initial_review} → {initial_state}
+├─ ↺ while outcome == "changes_required" on {initial_state} ≤3 → {cycle_result}
+│  ├─ ✦ ad-hoc → {implementation}
+│  ├─ ❖ review → {verified_review}
+│  └─ ⎇ switch {verified_review}
+└─ ⎇ switch {cycle_result}
+   └─ changes remain → ≔ exhausted
 ```
 
 Sequences are transparent — their steps appear at the parent level without
@@ -679,18 +681,20 @@ and `(ad-hoc)` (inline and tool-started flows).
 │ ▸ ❖ /triage    user    Triage findings        ◉1 ●1│
 │   ❖ /review   project  Structured code review   ●2│
 ├─ /triage · user · 2 runs ──────────────────────────┤
-│ ✦ scout → {files} · List files to review           │
-│ ⇶ map {files}                                      │
-│ └─ ✦ reviewer · Review {item}                      │
+│ ❖ triage                                           │
+│ ├─ ✦ scout → {files} · List files to review        │
+│ └─ ⇶ map {files}                                   │
+│    └─ ✦ reviewer · Review {item}                   │
 ╰─ ⏎ runs · c compose · r run · n new · esc ─────────╯
                          ⏎
 ╭─ Runs · /triage (1/2) ─────────────────────────────╮
 │ ▸ ◉ 77aa01bc  running    triage (command)   $0.01  │
 │   ● c9e5799a  completed  triage (command)   $0.21  │
 ├─ 77aa01bc · triage · 1m32s · 5 turns ↑33k ↓2k ─────┤
-│  ● scout → {files} · List files to review          │
-│  ⇶ map {files} (×4)                                │
-│     └─ ◉ reviewer · Review {item} [2/4]            │
+│ ● ❖ triage                                         │
+│ ├─ ● ✦ scout → {files} · List files to review      │
+│ └─ ◉ ⇶ map {files} (×4)                            │
+│    └─ ◉ ✦ reviewer · Review {item} [2/4]           │
 ╰─ ⏎ inspect · a agents · c cancel · r rerun · esc ──╯
 ```
 

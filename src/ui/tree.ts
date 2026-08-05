@@ -442,7 +442,23 @@ export function renderFlowTree(
   );
 }
 
-/** Flow tree with kind icons replaced by live status icons. */
+/**
+ * Static tree for a saved workflow definition. The synthetic display-only
+ * workflow node makes the title the visual parent of the definition's flow;
+ * it never enters validation or execution.
+ */
+export function renderWorkflowTree(
+  name: string,
+  flow: FlowNode,
+  color: TreeColorize = plainTree,
+): string {
+  return renderFlowTree({ kind: "workflow", name, body: flow }, color);
+}
+
+/**
+ * Flow tree with kind icons replaced by live status icons. Saved-workflow
+ * runs carry a real workflow root; inline runs intentionally remain flat.
+ */
 export function renderRunTree(
   run: RunView,
   color: TreeColorize = plainTree,

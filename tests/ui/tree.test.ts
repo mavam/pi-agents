@@ -7,7 +7,11 @@ import {
   markRunningRunsStopped,
   rebuildRunState,
 } from "../../src/run/state.js";
-import { renderFlowTree, renderRunTree } from "../../src/ui/tree.js";
+import {
+  renderFlowTree,
+  renderRunTree,
+  renderWorkflowTree,
+} from "../../src/ui/tree.js";
 
 describe("renderFlowTree", () => {
   test("the review par reads as a compact icon tree", () => {
@@ -79,6 +83,34 @@ describe("renderFlowTree", () => {
     expect(tree).toContain("↺ loop ≤3 until done == true");
     expect(tree).toContain("└─ ✦ fixer · Fix {last}");
     expect(tree).not.toContain("≡");
+  });
+
+  test("saved workflow titles contain their transparent sequence steps", () => {
+    const flow = validateFlow({
+      kind: "sequence",
+      steps: [
+        {
+          kind: "agent",
+          name: "scout",
+          task: "List files",
+          output: "json",
+          as: "files",
+        },
+        {
+          kind: "map",
+          over: "{files}",
+          body: { kind: "agent", name: "reviewer", task: "Review {item}" },
+        },
+      ],
+    });
+    expect(renderWorkflowTree("deep-test", flow)).toBe(
+      [
+        "❖ deep-test",
+        "├─ ✦ scout → {files} · List files",
+        "└─ ⇶ map {files}",
+        "   └─ ✦ reviewer · Review {item}",
+      ].join("\n"),
+    );
   });
 
   test("while renders its pre-checked condition and carried value", () => {
@@ -292,6 +324,36 @@ describe("renderRunTree", () => {
     expect(tree).toContain("└─ ● ✦ reviewer · review {item} [3/3]");
     // Status icons join the kind glyphs, so structure stays readable.
     expect(tree).toContain("● ⇶ map {files}");
+  });
+
+  test("saved runs use their real workflow node as the status-bearing root", async () => {
+    const def: WorkflowLike = {
+      name: "saved",
+      params: [],
+      flow: {
+        kind: "sequence",
+        steps: [
+          { kind: "agent", name: "a", task: "one" },
+          { kind: "agent", name: "b", task: "two" },
+        ],
+      },
+    };
+    const flow = validateFlow(
+      { kind: "workflow", name: "saved" },
+      { resolveWorkflow: () => def },
+    );
+    const events: RunEvent[] = [];
+    await executeFlow({
+      runId: "saved-root",
+      flow,
+      runAgent: async () => ({ text: "ok" }),
+      emit: (event) => events.push(event),
+    });
+    const run = rebuildRunState(events).runs.get("saved-root");
+    if (!run) throw new Error("missing run");
+    expect(renderRunTree(run)).toBe(
+      ["● ❖ saved", "├─ ● ✦ a · one", "└─ ● ✦ b · two"].join("\n"),
+    );
   });
 
   test("iteration rows show rounds, effective caps, and zero iterations", async () => {

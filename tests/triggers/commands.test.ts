@@ -23,6 +23,7 @@ import {
   formatNodeResultFull,
   formatRunDetails,
   formatRunNodesList,
+  registerCommands,
   registerWorkflowCommands,
   steeringMarker,
 } from "../../src/triggers/commands.js";
@@ -103,6 +104,7 @@ task: greet {params.target}
       const deps = {
         pi,
         manager: {
+          state: { runs: new Map() },
           start: () => ({ runId: "12345678-full", done }),
           markBackgrounded: () => {},
         },
@@ -124,12 +126,35 @@ task: greet {params.target}
       expect(messages).toHaveLength(1);
       const preview = messages[0]?.content ?? "";
       expect(preview).toContain("❖ greet");
-      expect(preview).toContain("   target: world");
-      expect(preview).toContain("✦ ad-hoc · greet {params.target}");
+      expect(preview).toContain("│  target: world");
+      expect(preview).toContain("└─ ✦ ad-hoc · greet {params.target}");
       expect(preview).toContain(
         "\n\nrunning in background · /workflow 12345678",
       );
       expect(preview).not.toContain("Started run");
+
+      registerCommands(pi, deps);
+      const inspect = commands.get("workflow");
+      if (!inspect) throw new Error("workflow command was not registered");
+      await inspect.handler("greet", ctx);
+      expect(messages).toHaveLength(2);
+      expect(messages[1]?.content).toContain(
+        ["```", "❖ greet", "└─ ✦ ad-hoc · greet {params.target}", "```"].join(
+          "\n",
+        ),
+      );
+
+      const spec = buildWorkflowsSpec(pi, deps, ctx);
+      const item = spec
+        .items()
+        .find(
+          (candidate) =>
+            candidate.kind === "workflow" && candidate.wf.name === "greet",
+        );
+      if (!item) throw new Error("workflow panel item was not discovered");
+      const detail = spec.detail(item, (_color, text) => text);
+      expect(detail).toContain("❖ greet");
+      expect(detail).toContain("└─ ✦ ad-hoc · greet {params.target}");
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }

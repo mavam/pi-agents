@@ -17,13 +17,14 @@ export function createModelRefresher(): (
   return (registry) => {
     if (started) return;
     started = true;
-    try {
-      void registry.refresh().catch(() => {
+    void registry.refresh().then(
+      (result) => {
+        if (result.aborted || result.errors.size > 0) started = false;
+      },
+      () => {
         started = false;
-      });
-    } catch {
-      started = false;
-    }
+      },
+    );
   };
 }
 

@@ -23,15 +23,22 @@ function fakeRegistry(
 }
 
 describe("createModelRefresher", () => {
-  test("retries after failure and stops after success", async () => {
+  test("retries after reported provider errors and stops after success", async () => {
     let calls = 0;
     const refresh = createModelRefresher();
-    const registry = {
+    const registry: Pick<ModelRegistry, "refresh"> = {
       refresh: () => {
         calls += 1;
-        return calls === 1
-          ? Promise.reject(new Error("temporary failure"))
-          : Promise.resolve();
+        return Promise.resolve(
+          calls === 1
+            ? {
+                aborted: false,
+                errors: new Map([
+                  ["test-provider", new Error("temporary failure")],
+                ]),
+              }
+            : { aborted: false, errors: new Map() },
+        );
       },
     };
 
@@ -43,6 +50,24 @@ describe("createModelRefresher", () => {
     refresh(registry);
     expect(calls).toBe(2);
 
+    await Promise.resolve();
+    refresh(registry);
+    expect(calls).toBe(2);
+  });
+
+  test("retries after an unexpected refresh rejection", async () => {
+    let calls = 0;
+    const refresh = createModelRefresher();
+    const registry: Pick<ModelRegistry, "refresh"> = {
+      refresh: () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new Error("temporary failure"))
+          : Promise.resolve({ aborted: false, errors: new Map() });
+      },
+    };
+
+    refresh(registry);
     await Promise.resolve();
     refresh(registry);
     expect(calls).toBe(2);

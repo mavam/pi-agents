@@ -1011,14 +1011,21 @@ describe("overlapping tools and streamed text", () => {
       for await (const update of handle.updates) seen.push(update.text);
     })();
     const proc = procs[0]?.proc as FakeProc;
-    const partial = (text: string) =>
+    proc.emitRecord({
+      type: "message_start",
+      message: { role: "assistant", content: [] },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+    });
+    const partial = (delta: string) =>
       proc.emitRecord({
         type: "message_update",
-        message: { role: "assistant", content: [{ type: "text", text }] },
-        assistantMessageEvent: {},
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
       });
     partial("half an");
-    partial("half an answer"); // within the throttle window: not pushed
+    partial(" answer"); // within the throttle window: not pushed
     proc.emitAssistant("the full answer");
     submitResult(proc, "submitted answer");
     proc.settle();
@@ -1027,6 +1034,107 @@ describe("overlapping tools and streamed text", () => {
     await reader;
     expect(seen.slice(0, 2)).toEqual(["half an", "the full answer"]);
     expect(outcome.value).toBe("submitted answer");
+  });
+
+  test("orders text blocks and trusts text_end content", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+    });
+    const seen: string[] = [];
+    const reader = (async () => {
+      for await (const update of handle.updates) seen.push(update.text);
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({ type: "turn_start" }); // keeps deltas throttled until close
+    proc.emitRecord({
+      type: "message_start",
+      message: { role: "assistant", content: [] },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_start", contentIndex: 2 },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 2,
+        delta: "tail draft",
+      },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "head",
+      },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 2,
+        content: "tail final",
+      },
+    });
+    proc.close(2);
+
+    await expect(handle.wait()).rejects.toThrow(SpawnFailure);
+    await reader;
+    expect(seen.at(-1)).toBe("head\ntail final");
+  });
+
+  test("resets streamed blocks between assistant messages", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+    });
+    const seen: string[] = [];
+    const reader = (async () => {
+      for await (const update of handle.updates) seen.push(update.text);
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({ type: "turn_start" });
+    proc.emitRecord({
+      type: "message_start",
+      message: { role: "assistant", content: [] },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "first partial",
+      },
+    });
+    proc.emitAssistant("first final");
+    proc.emitRecord({
+      type: "message_start",
+      message: { role: "assistant", content: [] },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "second partial",
+      },
+    });
+    proc.close(2);
+
+    await expect(handle.wait()).rejects.toThrow(SpawnFailure);
+    await reader;
+    expect(seen.at(-1)).toBe("second partial");
   });
 
   test("flushes the newest assistant tail when the stream is cut off", async () => {
@@ -1044,14 +1152,17 @@ describe("overlapping tools and streamed text", () => {
     })();
     const proc = procs[0]?.proc as FakeProc;
     proc.emitRecord({ type: "turn_start" }); // starts the throttle window
-    const partial = (text: string) =>
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+    });
+    const partial = (delta: string) =>
       proc.emitRecord({
         type: "message_update",
-        message: { role: "assistant", content: [{ type: "text", text }] },
-        assistantMessageEvent: {},
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
       });
     partial("half an");
-    partial("half an answer"); // throttled, then flushed by close
+    partial(" answer"); // throttled, then flushed by close
     proc.close(2);
 
     await expect(handle.wait()).rejects.toThrow(SpawnFailure);

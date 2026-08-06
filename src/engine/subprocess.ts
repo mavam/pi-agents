@@ -398,6 +398,7 @@ export function createSubprocessSpawnEngine(options?: {
       const activeTools = new Map<string, string>();
       const activityTail = new ActivityTail();
       const toolTailEntries = new Map<string, { key: string; label: string }>();
+      const streamedTextBlocks = new Map<number, string>();
       let activitySequence = 0;
       let currentAssistantEntry: string | undefined;
       let turnsStarted = 0;
@@ -581,21 +582,37 @@ export function createSubprocessSpawnEngine(options?: {
        * Malformed partials are skipped rather than failing the protocol.
        */
       const recordPartialMessage = (record: Record<string, unknown>) => {
-        if (!isRecord(record.message)) return;
-        if (record.message.role !== "assistant") return;
-        const content = record.message.content;
-        if (!Array.isArray(content)) return;
-        const chunks: string[] = [];
-        for (const part of content) {
-          if (
-            isRecord(part) &&
-            part.type === "text" &&
-            typeof part.text === "string"
-          ) {
-            chunks.push(part.text);
-          }
+        const event = record.assistantMessageEvent;
+        if (!isRecord(event)) return;
+        if (
+          !Number.isInteger(event.contentIndex) ||
+          (event.contentIndex as number) < 0
+        ) {
+          return;
         }
-        const text = chunks.join("\n").trim();
+        const contentIndex = event.contentIndex as number;
+        if (event.type === "text_start") {
+          streamedTextBlocks.set(contentIndex, "");
+          return;
+        }
+        if (event.type === "text_delta" && typeof event.delta === "string") {
+          streamedTextBlocks.set(
+            contentIndex,
+            (streamedTextBlocks.get(contentIndex) ?? "") + event.delta,
+          );
+        } else if (
+          event.type === "text_end" &&
+          typeof event.content === "string"
+        ) {
+          streamedTextBlocks.set(contentIndex, event.content);
+        } else {
+          return;
+        }
+        const text = [...streamedTextBlocks.entries()]
+          .sort(([left], [right]) => left - right)
+          .map(([, block]) => block)
+          .join("\n")
+          .trim();
         if (!text) return;
         const startsNewEntry = currentAssistantEntry === undefined;
         if (text === latestText && !startsNewEntry) return;
@@ -633,6 +650,7 @@ export function createSubprocessSpawnEngine(options?: {
             latestText = text;
             updateAssistantTail(text);
           }
+          streamedTextBlocks.clear();
           currentAssistantEntry = undefined;
         }
         pushUpdate();
@@ -706,8 +724,16 @@ export function createSubprocessSpawnEngine(options?: {
           // between assistant messages (a thinking turn can run minutes).
           if (record.type === "turn_start") {
             turnsStarted += 1;
+            streamedTextBlocks.clear();
             currentAssistantEntry = undefined;
             pushUpdate();
+          }
+          if (
+            record.type === "message_start" &&
+            isRecord(record.message) &&
+            record.message.role === "assistant"
+          ) {
+            streamedTextBlocks.clear();
           }
           if (record.type === "message_update") {
             recordPartialMessage(record);

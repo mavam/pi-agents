@@ -18,9 +18,16 @@ export function createModelRefresher(): (
     if (started) return;
     started = true;
     try {
-      void registry.refresh().catch(() => {
-        started = false;
-      });
+      void registry.refresh().then(
+        (result) => {
+          if (result?.aborted || (result?.errors?.size ?? 0) > 0) {
+            started = false;
+          }
+        },
+        () => {
+          started = false;
+        },
+      );
     } catch {
       started = false;
     }

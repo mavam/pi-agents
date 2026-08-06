@@ -1011,14 +1011,21 @@ describe("overlapping tools and streamed text", () => {
       for await (const update of handle.updates) seen.push(update.text);
     })();
     const proc = procs[0]?.proc as FakeProc;
-    const partial = (text: string) =>
+    proc.emitRecord({
+      type: "message_start",
+      message: { role: "assistant", content: [] },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+    });
+    const partial = (delta: string) =>
       proc.emitRecord({
         type: "message_update",
-        message: { role: "assistant", content: [{ type: "text", text }] },
-        assistantMessageEvent: {},
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
       });
     partial("half an");
-    partial("half an answer"); // within the throttle window: not pushed
+    partial(" answer"); // within the throttle window: not pushed
     proc.emitAssistant("the full answer");
     submitResult(proc, "submitted answer");
     proc.settle();
@@ -1044,14 +1051,17 @@ describe("overlapping tools and streamed text", () => {
     })();
     const proc = procs[0]?.proc as FakeProc;
     proc.emitRecord({ type: "turn_start" }); // starts the throttle window
-    const partial = (text: string) =>
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+    });
+    const partial = (delta: string) =>
       proc.emitRecord({
         type: "message_update",
-        message: { role: "assistant", content: [{ type: "text", text }] },
-        assistantMessageEvent: {},
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
       });
     partial("half an");
-    partial("half an answer"); // throttled, then flushed by close
+    partial(" answer"); // throttled, then flushed by close
     proc.close(2);
 
     await expect(handle.wait()).rejects.toThrow(SpawnFailure);

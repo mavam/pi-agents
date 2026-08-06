@@ -584,13 +584,14 @@ export function createSubprocessSpawnEngine(options?: {
       const recordPartialMessage = (record: Record<string, unknown>) => {
         const event = record.assistantMessageEvent;
         if (!isRecord(event)) return;
+        const contentIndex = event.contentIndex;
         if (
-          !Number.isInteger(event.contentIndex) ||
-          (event.contentIndex as number) < 0
+          typeof contentIndex !== "number" ||
+          !Number.isInteger(contentIndex) ||
+          contentIndex < 0
         ) {
           return;
         }
-        const contentIndex = event.contentIndex as number;
         if (event.type === "text_start") {
           streamedTextBlocks.set(contentIndex, "");
           return;

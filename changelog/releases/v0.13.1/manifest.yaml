@@ -1,0 +1,9 @@
+created: 2026-08-06
+title: Pi 0.84 delegated agent compatibility
+intro: >-
+  Pi-agents keeps delegated workflows observable and recoverable with Pi 0.84. Live
+  agent output continues during streaming responses, partial text survives early process
+  exits, and transient model-catalog refresh failures can retry on later events.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.13.0

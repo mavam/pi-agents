@@ -1,0 +1,8 @@
+created: 2026-08-07
+title: Higher default agent turn budget
+intro: >-
+  This release gives long-running review and repair workflows more room to finish
+  by raising the default delegated-agent turn budget from 100 to 250.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.13.1

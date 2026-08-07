@@ -126,7 +126,7 @@ const WorkflowToolParams = Type.Object({
           Type.Integer({
             minimum: 1,
             description:
-              "Maximum assistant turns per agent. Integer >= 1; default 100.",
+              "Maximum assistant turns per agent. Integer >= 1; default 250.",
           }),
         ),
         maxAgentDuration: Type.Optional(

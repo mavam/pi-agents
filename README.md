@@ -601,7 +601,7 @@ Every run enforces limits (tool parameter `budgets`, all optional):
 | `maxParallelism`   | 8       | Simultaneously running agents, global across nested pools.   |
 | `maxIterations`    | 10      | Cap applied to every `loop` and `while`.                     |
 | `maxDepth`         | 5       | Maximum process depth allowed before an agent spawn.         |
-| `maxTurns`         | 100     | Assistant turns a single delegated agent may take.           |
+| `maxTurns`         | 250     | Assistant turns a single delegated agent may take.           |
 | `maxAgentDuration` | —       | Wall-clock seconds a single delegated agent may run.         |
 | `maxDuration`      | —       | Wall-clock seconds the whole run may take.                   |
 | `maxTokens`        | —       | Input+output tokens (cache traffic excluded) a run may use.  |

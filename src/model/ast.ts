@@ -305,7 +305,7 @@ export const DEFAULT_BUDGETS: EffectiveBudgets = {
   maxParallelism: 8,
   maxIterations: 10,
   maxAgents: 50,
-  maxTurns: 100,
+  maxTurns: 250,
 };
 
 export interface WorkflowParamDef {

@@ -1063,7 +1063,7 @@ describe("workflow tool description", () => {
       ["maxDepth", 5],
       ["maxParallelism", 8],
       ["maxIterations", 10],
-      ["maxTurns", 100],
+      ["maxTurns", 250],
     ] as const) {
       expect(budgets[name]).toMatchObject({ type: "integer", minimum: 1 });
       expect(budgets[name]?.description).toContain(`default ${defaultValue}`);

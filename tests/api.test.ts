@@ -84,6 +84,35 @@ describe("public pi-agents client", () => {
     expect((await second).runs[0]?.runId).toBe(requests[1]?.id);
   });
 
+  test("sends a display path with a typed start request", async () => {
+    const bus = new TestBus();
+    let request!: RpcRequest;
+    bus.on(RPC_REQUEST_CHANNEL, (raw) => {
+      request = raw as RpcRequest;
+      bus.emit(`${RPC_REPLY_PREFIX}${request.id}`, {
+        protocol: PROTOCOL_VERSION,
+        id: request.id,
+        success: true,
+        data: { runId: "run-1" },
+      });
+    });
+    const client = createPiAgentsClient(makePi(bus));
+
+    await expect(
+      client.start({
+        flow: { kind: "agent", task: "review" },
+        display: "summary",
+      }),
+    ).resolves.toEqual({ runId: "run-1" });
+    expect(request).toMatchObject({
+      op: "start",
+      params: {
+        flow: { kind: "agent", task: "review" },
+        display: "summary",
+      },
+    });
+  });
+
   test("sends a typed steering request", async () => {
     const bus = new TestBus();
     let request!: RpcRequest;

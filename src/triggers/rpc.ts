@@ -21,7 +21,7 @@ import {
   discoverWorkflows,
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
-import { effectiveScope } from "../model/ast.js";
+import { effectiveScope, normalizeDisplayPath } from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
@@ -180,6 +180,7 @@ export class RpcManager {
       throw new Error("'params' is only valid with a saved workflow");
     }
     const label = optionalString(raw.label, "label");
+    const requestedDisplay = normalizeDisplayPath(raw.display);
     const cwd = resolveCwd(raw.cwd, ctx);
     const trusted = isProjectTrusted(ctx);
     const scope = effectiveScope(undefined, trusted);
@@ -189,7 +190,7 @@ export class RpcManager {
 
     let input: unknown = raw.flow;
     let effectiveLabel = label;
-    let display: string | undefined;
+    let display = requestedDisplay;
     if (workflow !== undefined) {
       const definition = resolveWorkflow(workflow);
       if (!definition) {
@@ -201,7 +202,7 @@ export class RpcManager {
       }
       input = { kind: "workflow", name: definition.name, params: params ?? {} };
       effectiveLabel = effectiveLabel ?? definition.name;
-      display = definition.display;
+      display = requestedDisplay ?? definition.display;
     }
 
     const flow = validateFlow(input, { resolveWorkflow });

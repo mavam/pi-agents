@@ -210,7 +210,11 @@ describe("RpcManager", () => {
       id: "start-saved",
       caller: "test-dashboard",
       op: "start",
-      params: { workflow: "rpc-greet", params: { target: "world" } },
+      params: {
+        workflow: "rpc-greet",
+        params: { target: "world" },
+        display: "summary",
+      },
     });
     expect(reply.success).toBe(true);
     if (!reply.success) return;
@@ -225,6 +229,7 @@ describe("RpcManager", () => {
       caller: "test-dashboard",
     });
     expect(run?.backgrounded).toBe(true);
+    expect(run?.header.display).toBe("summary");
     expect(specs[0]?.task).toBe("hello world");
     expect(eventTypes).toContain("run_created");
     expect(eventTypes).toContain("run_backgrounded");
@@ -353,6 +358,15 @@ describe("RpcManager", () => {
         params: {
           flow: { kind: "agent", task: "hello" },
           workflow: "project-only-rpc",
+        },
+      },
+      {
+        protocol: PROTOCOL_VERSION,
+        id: "bad-display",
+        op: "start",
+        params: {
+          flow: { kind: "agent", task: "hello" },
+          display: "report title",
         },
       },
       {

@@ -349,6 +349,33 @@ a bare agent leaf is a valid flow, so single delegation is just
 `workflow({flow: {kind: "agent", task: "…"}})` (add `name:` only to use a
 saved profile).
 
+When an inline flow returns structured data with a human-readable Markdown
+field, set the call's top-level `display` to that field's dot path:
+
+```json
+{
+  "flow": {
+    "kind": "agent",
+    "task": "Review the current change",
+    "json": {
+      "type": "object",
+      "required": ["outcome", "summary"],
+      "properties": {
+        "outcome": { "enum": ["approved", "changes_required"] },
+        "summary": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "display": "summary"
+}
+```
+
+The completion card, `/workflow <id> result`, and `/workflow <id> copy` use
+the selected string. The calling model, parent workflows, interpolation,
+routing, and `/workflow <id> raw` keep the complete object. A call-level
+`display` also overrides a saved workflow's declared path for that run.
+
 ## 🧮 Node reference
 
 ### `agent`
@@ -676,11 +703,13 @@ because a slash command cannot supply it.
 hex, workflow names are slugs, so the two never collide in practice.
 
 Completion cards render the complete presented result. String results use
-Markdown, structured results use highlighted fenced JSON, and a saved workflow's
-`display` path selects its human-facing Markdown value. `/workflow <id> result`
-uses the same presentation, and `/workflow <id> copy` copies that value without
-the completion card's metadata or controls. If the workflow has no valid
-`display` path, both actions use the complete result instead.
+Markdown, structured results use highlighted fenced JSON, and a run's
+`display` path selects its human-facing Markdown value. Saved workflows can
+declare the path, and inline or saved workflow calls can set or override it.
+`/workflow <id> result` uses the same presentation, and `/workflow <id> copy`
+copies that value without the completion card's metadata or controls. If the
+path is missing or does not resolve to a string, these surfaces warn and fall
+back to the complete result.
 `/workflow <id> raw` always serializes the complete value as highlighted JSON.
 Run and agent
 detail panes also receive complete results, while their terminal viewport
@@ -872,14 +901,19 @@ const agents = createPiAgentsClient(pi, { caller: "my-extension" });
 const off = agents.onRunEvent((event) => {
   if (event.type === "run_completed") console.log(event.status);
 });
-const { runId } = await agents.start({ workflow: "review", params: { target: "src" } });
+const { runId } = await agents.start({
+  workflow: "review",
+  params: { target: "src" },
+  display: "report",
+});
 await agents.stop(runId); // only while the run is live
 off();
 ```
 
 RPC operations are `ping`, `start`, `stop`, `steer`, and `list`. `start`
 accepts exactly one of an inline `flow` or saved `workflow`, optional literal
-workflow parameters and label, and an optional absolute existing `cwd`.
+workflow parameters, label, and `display` path, and an optional absolute
+existing `cwd`. A call-level `display` overrides the saved definition.
 `start` confirms that the run was scheduled; it does not wait for a child agent
 to become steerable. `steer` targets a currently running child and may reject
 while a run is starting, between nodes, or waiting for capacity. It accepts an

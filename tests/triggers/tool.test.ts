@@ -78,7 +78,7 @@ async function* emptyUpdates(): AsyncGenerator<never> {
   // No streamed updates in the fake engine.
 }
 
-function fakeEngine(handler: (spec: SpawnSpec) => string): {
+function fakeEngine(handler: (spec: SpawnSpec) => unknown): {
   engine: SpawnEngine;
   specs: SpawnSpec[];
 } {
@@ -198,6 +198,39 @@ describe("workflow tool", () => {
     expect(specs[0]?.systemPrompt).toContain("Echo the task back.");
   });
 
+  test("stores a display path for an inline structured result", async () => {
+    const { engine } = fakeEngine(() => ({
+      review: { markdown: "# Code Review" },
+      findings: [],
+    }));
+    const deps = makeDeps(engine);
+    const tool = createWorkflowTool(deps);
+    const result = await tool.execute(
+      "t-display",
+      {
+        flow: {
+          kind: "agent",
+          task: "review",
+          json: {
+            type: "object",
+            properties: {
+              review: { type: "object" },
+              findings: { type: "array" },
+            },
+          },
+        },
+        display: " review.markdown ",
+      },
+      undefined,
+      undefined,
+      ctx(),
+    );
+
+    expect(
+      deps.manager.state.runs.get(result.details.runId)?.header.display,
+    ).toBe("review.markdown");
+  });
+
   test("runs a saved workflow by name with params", async () => {
     const { engine } = fakeEngine((spec) => `ran: ${spec.task}`);
     const deps = makeDeps(engine);
@@ -215,6 +248,48 @@ describe("workflow tool", () => {
     expect(
       deps.manager.state.runs.get(result.details.runId)?.header.display,
     ).toBe("report");
+  });
+
+  test("lets a call override a saved workflow's display path", async () => {
+    const { engine } = fakeEngine(() => "ok");
+    const deps = makeDeps(engine);
+    const tool = createWorkflowTool(deps);
+    const result = await tool.execute(
+      "t-display-override",
+      {
+        name: "greet",
+        params: { target: "world" },
+        display: "summary",
+        scope: "project",
+      },
+      undefined,
+      undefined,
+      ctx(),
+    );
+
+    expect(
+      deps.manager.state.runs.get(result.details.runId)?.header.display,
+    ).toBe("summary");
+  });
+
+  test("rejects an invalid display path before starting a run", async () => {
+    const { engine } = fakeEngine(() => "ok");
+    const deps = makeDeps(engine);
+    const tool = createWorkflowTool(deps);
+
+    await expect(
+      tool.execute(
+        "t-invalid-display",
+        {
+          flow: { kind: "agent", task: "review" },
+          display: "review markdown",
+        },
+        undefined,
+        undefined,
+        ctx(),
+      ),
+    ).rejects.toThrow("Invalid 'display'");
+    expect(deps.manager.state.runs.size).toBe(0);
   });
 
   test("passes the agent tools allowlist to the engine", async () => {
@@ -1082,6 +1157,24 @@ describe("workflow tool description", () => {
         exclusiveMinimum: 0,
       });
     }
+  });
+
+  test("the schema explains human-facing display selection", () => {
+    const tool = createWorkflowTool(makeDeps(inertEngine));
+    const schema = tool.parameters as unknown as {
+      properties: { display: { type: string; description?: string } };
+    };
+
+    expect(schema.properties.display).toMatchObject({ type: "string" });
+    expect(schema.properties.display.description).toContain(
+      "Markdown string in the final value",
+    );
+    expect(tool.description).toContain('"display":"path.to.markdown"');
+    expect(
+      tool.promptGuidelines?.some((line) =>
+        line.includes("structured data with a human-readable Markdown field"),
+      ),
+    ).toBe(true);
   });
 
   test("the description covers every node kind and the binding rules", () => {

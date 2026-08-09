@@ -18,7 +18,12 @@ import {
   discoverWorkflows,
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
-import { type Budgets, effectiveScope, type Scope } from "../model/ast.js";
+import {
+  type Budgets,
+  effectiveScope,
+  normalizeDisplayPath,
+  type Scope,
+} from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
 import { truncateModelResult, valueText } from "../model/value.js";
 import type { RunStatus } from "../run/events.js";
@@ -90,6 +95,12 @@ const WorkflowToolParams = Type.Object({
   ),
   label: Type.Optional(
     Type.String({ description: "Short human-readable label for this run." }),
+  ),
+  display: Type.Optional(
+    Type.String({
+      description:
+        "Dot path to a Markdown string in the final value for human-facing rendering. Overrides a saved workflow's display path. The complete value remains available to machine consumers and through /workflow <id> raw.",
+    }),
   ),
   budgets: Type.Optional(
     Type.Object(
@@ -341,7 +352,7 @@ export function createWorkflowTool(
 
 ${USE_GATE}
 
-Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flow" for an inline expression. ${FLOW_REFERENCE}`,
+Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flow" for an inline expression. A top-level "display":"path.to.markdown" selects a string from the final value for human-facing Markdown rendering while preserving the complete value for the calling model, parent workflows, and raw inspection. ${FLOW_REFERENCE}`,
     promptSnippet:
       "workflow: run a workflow of delegated agents — only when the user explicitly asks for a workflow or for delegation, never on your own initiative",
     promptGuidelines: [
@@ -354,6 +365,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
       "Request a skill by name on the node that needs it. An unknown skill fails the run before anything spawns, so do not guess names; take them from <available_skills>.",
       "An unknown model fails the run before anything spawns; take identifiers from <models>.",
       'In flows, thread data explicitly: bind sequence steps with "as" and reference {name}/{previous} in later tasks; declare a concrete "json" schema when downstream steps need structured access.',
+      "When a workflow returns structured data with a human-readable Markdown field, set the workflow call's top-level display to that field's dot path; display changes presentation only and preserves the complete result.",
     ],
     parameters: WorkflowToolParams,
     renderCall(args, theme, context) {
@@ -434,7 +446,8 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
 
       let raw: unknown;
       let label = params.label;
-      let display: string | undefined;
+      const requestedDisplay = normalizeDisplayPath(params.display);
+      let display = requestedDisplay;
       if (params.name !== undefined) {
         const def = resolveWorkflow(params.name);
         if (!def) {
@@ -445,7 +458,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
         }
         raw = { kind: "workflow", name: def.name, params: params.params ?? {} };
         label = label ?? def.name;
-        display = def.display;
+        display = requestedDisplay ?? def.display;
       } else {
         raw = params.flow;
       }

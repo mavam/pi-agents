@@ -5,6 +5,7 @@ import {
   type RunNotificationDetails,
   renderResultValue,
   renderRunNotification,
+  selectDisplayValue,
 } from "../../src/ui/render.js";
 
 beforeAll(() => initTheme(undefined, false));
@@ -84,6 +85,34 @@ describe("structured result rendering", () => {
     expect(renderResultValue({ report: "```markdown" }, json)).toBe(
       `\`\`\`\`json\n${json}\n\`\`\`\``,
     );
+  });
+
+  test("selects a nested Markdown display path", () => {
+    const value = {
+      review: { markdown: "# Code Review" },
+      findings: [{ id: "BUG-1" }],
+    };
+
+    expect(selectDisplayValue(value, "review.markdown")).toEqual({
+      value: "# Code Review",
+      selected: true,
+    });
+  });
+
+  test("explains missing and non-string display fallbacks", () => {
+    const value = { summary: { text: "not directly renderable" } };
+
+    expect(selectDisplayValue(value, "report")).toEqual({
+      value,
+      selected: false,
+      warning: "Display path `report` was not found; showing the raw result.",
+    });
+    expect(selectDisplayValue(value, "summary")).toEqual({
+      value,
+      selected: false,
+      warning:
+        "Display path `summary` resolved to a non-string value; showing the raw result.",
+    });
   });
 });
 

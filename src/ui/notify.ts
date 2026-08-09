@@ -107,6 +107,9 @@ export class NotificationManager {
       const result = valueText(event.value) ?? "";
       const display = selectDisplayValue(event.value, run?.header.display);
       const presented = valueText(display.value) ?? "";
+      const rendered = presented
+        ? renderResultValue(display.value, presented)
+        : "(no output)";
       return {
         kind: "run_final",
         version: 2,
@@ -117,9 +120,9 @@ export class NotificationManager {
         agents: event.agents,
         copyable: Boolean(presented),
         bodyKind: "result",
-        body: presented
-          ? renderResultValue(display.value, presented)
-          : "(no output)",
+        body: display.warning
+          ? `> ⚠ ${display.warning}\n\n${rendered}`
+          : rendered,
         modelBody: result
           ? renderResultValue(
               event.value,

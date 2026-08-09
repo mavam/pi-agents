@@ -277,6 +277,22 @@ describe("NotificationManager", () => {
     expect(sent[0]?.message.content).not.toContain("…");
   });
 
+  test("warns when a display path cannot select Markdown", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    addRun(manager, "run-review", { display: "summary" });
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    notifications.track("run-review", "session.jsonl", false);
+    const value = { summary: { text: "not a string" }, findings: [] };
+    notifications.handleRunEvent(completed("run-review", value));
+
+    expect(sent[0]?.message.details?.body).toContain(
+      "Display path `summary` resolved to a non-string value; showing the raw result.",
+    );
+    expect(sent[0]?.message.details?.body).toContain('```json\n{\n  "summary"');
+    expect(sent[0]?.message.content).toContain(JSON.stringify(value, null, 2));
+  });
+
   test("delivers complete long results before the host controls", () => {
     const { sent, pi, manager, makeCtx } = makeFakes();
     const notifications = new NotificationManager(pi, manager);

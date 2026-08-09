@@ -9,6 +9,11 @@ export interface ModelCatalog {
   }>;
 }
 
+interface ModelRefreshResult {
+  readonly aborted: boolean;
+  readonly errors: { readonly size: number };
+}
+
 /** Start one model refresh, allowing a later event to retry after failure. */
 export function createModelRefresher(): (
   registry: Pick<ModelRegistry, "refresh">,
@@ -17,9 +22,13 @@ export function createModelRefresher(): (
   return (registry) => {
     if (started) return;
     started = true;
-    void registry.refresh().then(
+    const pending = registry.refresh() as Promise<
+      ModelRefreshResult | undefined
+    >;
+    void pending.then(
       (result) => {
-        if (result.aborted || result.errors.size > 0) started = false;
+        if (result && (result.aborted || result.errors.size > 0))
+          started = false;
       },
       () => {
         started = false;

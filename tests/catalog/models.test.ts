@@ -72,6 +72,21 @@ describe("createModelRefresher", () => {
     refresh(registry);
     expect(calls).toBe(2);
   });
+
+  test("accepts refreshes without a result", async () => {
+    let calls = 0;
+    const refresh = createModelRefresher();
+    const registry: Pick<ModelRegistry, "refresh"> = {
+      refresh: async () => {
+        calls += 1;
+      },
+    };
+
+    refresh(registry);
+    await Promise.resolve();
+    refresh(registry);
+    expect(calls).toBe(1);
+  });
 });
 
 describe("buildModelCatalog", () => {

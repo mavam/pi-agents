@@ -171,8 +171,24 @@ function fakeTuiCtx(
 
 const color = plainColorize;
 
+const displayFallbackCases = [
+  {
+    name: "missing path",
+    display: "report",
+    value: { outcome: "changes_required" },
+    warning: "Display path `report` was not found; showing the raw result.",
+  },
+  {
+    name: "non-string path",
+    display: "summary",
+    value: { summary: { text: "not directly renderable" } },
+    warning:
+      "Display path `summary` resolved to a non-string value; showing the raw result.",
+  },
+];
+
 describe("buildWorkflowsSpec", () => {
-  async function fixture() {
+  async function fixture(ctx = fakeCtx()) {
     writeWorkflow("triage", "Triage findings");
     const done = await makeRun("aaaa1111-run", {
       kind: "command",
@@ -185,7 +201,7 @@ describe("buildWorkflowsSpec", () => {
     );
     const adhoc = await makeRun("cccc3333-run", { kind: "tool" });
     const { deps, stops } = fakeDeps([done, live, adhoc]);
-    const spec = buildWorkflowsSpec(fakePi().pi, deps, fakeCtx());
+    const spec = buildWorkflowsSpec(fakePi().pi, deps, ctx);
     return { spec, done, live, adhoc, deps, stops };
   }
 
@@ -280,6 +296,46 @@ describe("buildWorkflowsSpec", () => {
 
     done.value = undefined;
     expect(spec.footerFor?.(doneItem)).not.toContain(" · c ");
+  });
+
+  test("c warns when copying raw display fallbacks", async () => {
+    const copied: string[] = [];
+    const notices: Array<[string, string]> = [];
+    const { spec, done, deps } = await fixture(
+      fakeTuiCtx((message, level) => notices.push([message, level])),
+    );
+    deps.copyText = async (text) => {
+      copied.push(text);
+    };
+    const workflow = spec
+      .items()
+      .find((item) => item.kind === "workflow" && item.wf.name === "triage");
+    if (!workflow) throw new Error("expected workflow row");
+    spec.onAction("enter", workflow);
+    const doneItem = spec
+      .items()
+      .find((item) => item.kind === "run" && item.run === done);
+    if (doneItem?.kind !== "run") throw new Error("expected completed run row");
+
+    for (const fallback of displayFallbackCases) {
+      done.header.display = fallback.display;
+      done.value = fallback.value;
+      copied.length = 0;
+      notices.length = 0;
+
+      spec.onAction("c", doneItem);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(copied, fallback.name).toEqual([
+        JSON.stringify(fallback.value, null, 2),
+      ]);
+      expect(notices, fallback.name).toEqual([
+        [
+          `${fallback.warning} Copied run aaaa1111 result to clipboard.`,
+          "warning",
+        ],
+      ]);
+    }
   });
 
   test("run and agent detail panes receive complete results", async () => {
@@ -511,6 +567,40 @@ describe("command registration", () => {
     expect(notices).toEqual([
       ["Copied run aaaa1111 result to clipboard.", "info"],
     ]);
+  });
+
+  test("/workflow <run-id> copy warns for raw display fallbacks", async () => {
+    const run = await makeRun("aaaa1111-run", { kind: "tool" });
+    const copied: string[] = [];
+    const notices: Array<[string, string]> = [];
+    const { pi, commands } = fakePi();
+    const { deps } = fakeDeps([run]);
+    deps.copyText = async (text) => {
+      copied.push(text);
+    };
+    registerCommands(pi, deps);
+
+    for (const fallback of displayFallbackCases) {
+      run.header.display = fallback.display;
+      run.value = fallback.value;
+      copied.length = 0;
+      notices.length = 0;
+
+      await commands.get("workflow")?.handler(
+        "aaaa1111 copy",
+        fakeTuiCtx((message, level) => notices.push([message, level])),
+      );
+
+      expect(copied, fallback.name).toEqual([
+        JSON.stringify(fallback.value, null, 2),
+      ]);
+      expect(notices, fallback.name).toEqual([
+        [
+          `${fallback.warning} Copied run aaaa1111 result to clipboard.`,
+          "warning",
+        ],
+      ]);
+    }
   });
 
   test("/workflow <run-id> copy waits for a final result", async () => {

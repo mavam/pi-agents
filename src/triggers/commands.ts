@@ -630,9 +630,10 @@ async function copyRunResult(
   }
   try {
     await (deps.copyText ?? copyToClipboard)(text);
+    const copied = `Copied run ${shortId(run.header.id)} result to clipboard.`;
     ctx.ui.notify(
-      `Copied run ${shortId(run.header.id)} result to clipboard.`,
-      "info",
+      display.warning ? `${display.warning} ${copied}` : copied,
+      display.warning ? "warning" : "info",
     );
   } catch (error) {
     ctx.ui.notify(

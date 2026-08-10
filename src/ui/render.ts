@@ -336,18 +336,32 @@ export interface SelectedDisplayValue {
   value: unknown;
   /** Whether the declared path resolved to a string. */
   selected: boolean;
+  /** Why a declared path fell back to the raw value. */
+  warning?: string;
 }
 
-/** Select a saved workflow's declared human-facing Markdown result. */
+/** Select a run's declared human-facing Markdown result. */
 export function selectDisplayValue(
   value: unknown,
   display: string | undefined,
 ): SelectedDisplayValue {
   if (!display) return { value, selected: false };
   const resolved = resolvePath(value, display.split("."));
-  return resolved.found && typeof resolved.value === "string"
-    ? { value: resolved.value, selected: true }
-    : { value, selected: false };
+  if (!resolved.found) {
+    return {
+      value,
+      selected: false,
+      warning: `Display path \`${display}\` was not found; showing the raw result.`,
+    };
+  }
+  if (typeof resolved.value !== "string") {
+    return {
+      value,
+      selected: false,
+      warning: `Display path \`${display}\` resolved to a non-string value; showing the raw result.`,
+    };
+  }
+  return { value: resolved.value, selected: true };
 }
 
 /** Wrap text in a code fence long enough to contain embedded backticks. */

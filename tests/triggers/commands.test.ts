@@ -435,10 +435,33 @@ describe("formatRunDetails", () => {
     run.header.display = "report";
 
     const text = formatRunDetails(run);
+    expect(text).toContain("- display: `report`");
     expect(text).toContain(report);
     expect(text).not.toContain("…");
     expect(text).not.toContain('"outcome": "changes_required"');
     expect(text.indexOf(report)).toBeLessThan(text.indexOf("Raw data:"));
+  });
+
+  test("warns before previewing a raw fallback", async () => {
+    const run = await recordedRun(
+      {
+        kind: "agent",
+        task: "review",
+        json: {
+          type: ["null", "boolean", "number", "string", "array", "object"],
+        },
+      },
+      () => ({ findings: [] }),
+    );
+    run.header.display = "report";
+
+    const text = formatRunDetails(run);
+    expect(text).toContain(
+      "> ⚠ Display path `report` was not found; showing the raw result.",
+    );
+    expect(text.indexOf("> ⚠")).toBeLessThan(
+      text.indexOf("### Result (preview)"),
+    );
   });
 });
 

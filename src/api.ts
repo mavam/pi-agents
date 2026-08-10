@@ -33,6 +33,8 @@ export interface StartRpcParams {
   /** Literal parameters for a saved workflow. */
   params?: Record<string, string>;
   label?: string;
+  /** Dot path to a Markdown string in the final value for human rendering. */
+  display?: string;
   /** Absolute path to an existing working directory. */
   cwd?: string;
 }

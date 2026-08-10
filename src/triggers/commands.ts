@@ -551,6 +551,8 @@ function runDetail(run: RunView, color: Colorize): string[] {
   if (run.error) lines.push(color("error", `✗ ${run.error}`));
   const display = selectDisplayValue(run.value, run.header.display);
   const value = run.status !== "running" ? valueText(display.value) : undefined;
+  if (run.status === "completed" && display.warning)
+    lines.push(color("warning", `⚠ ${display.warning}`));
   if (value) lines.push("", ...value.split("\n"));
   return lines;
 }
@@ -628,9 +630,12 @@ async function copyRunResult(
   }
   try {
     await (deps.copyText ?? copyToClipboard)(text);
+    const copied = `Copied run ${shortId(run.header.id)} result to clipboard.`;
     ctx.ui.notify(
-      `Copied run ${shortId(run.header.id)} result to clipboard.`,
-      "info",
+      display.warning
+        ? `${copied} ${display.warning.replaceAll("`", "'")}`
+        : copied,
+      display.warning ? "warning" : "info",
     );
   } catch (error) {
     ctx.ui.notify(
@@ -1228,6 +1233,8 @@ function formatRunResultFull(run: RunView): string {
   if (run.error) lines.push(`⚠ ${run.error}`, "");
   const display = selectDisplayValue(run.value, run.header.display);
   const text = valueText(display.value);
+  if (run.status === "completed" && display.warning)
+    lines.push(`> ⚠ ${display.warning}`, "");
   if (text === undefined) {
     lines.push("(no result value)");
     return lines.join("\n");
@@ -1412,6 +1419,7 @@ export function formatRunDetails(run: RunView, fullValue = false): string {
     `- source: ${formatRunSource(run.header.source)}${run.header.source.workflow ? ` (${run.header.source.workflow})` : ""}`,
     `- started: ${new Date(run.createdAt).toLocaleString()}`,
   ];
+  if (run.header.display) lines.push(`- display: \`${run.header.display}\``);
   if (run.usage)
     lines.push(
       `- usage: ${formatUsage(run.usage)}${run.agents ? `, ${run.agents} agent(s)` : ""}`,
@@ -1424,6 +1432,8 @@ export function formatRunDetails(run: RunView, fullValue = false): string {
       `Per-agent output: \`/workflow ${shortId(run.header.id)} agents\``,
     );
   const display = selectDisplayValue(run.value, run.header.display);
+  if (run.status === "completed" && display.warning)
+    lines.push("", `> ⚠ ${display.warning}`);
   if (fullValue || display.selected) {
     const text = valueText(display.value);
     if (text)

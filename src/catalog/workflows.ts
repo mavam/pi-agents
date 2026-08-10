@@ -22,7 +22,7 @@ import type {
   WorkflowParamDef,
   WorkflowSource,
 } from "../model/ast.js";
-import { IDENTIFIER_RE } from "../model/ast.js";
+import { IDENTIFIER_RE, normalizeDisplayPath } from "../model/ast.js";
 import {
   FlowValidationError,
   parseFlowNode,
@@ -113,9 +113,6 @@ export const BUNDLED_WORKFLOWS_DIR = fileURLToPath(
 const FLAT_LIST_KEYS = new Set(["skills", "tools"]);
 
 const WORKFLOW_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
-
-/** Dot path into a workflow's final JSON value. */
-const DISPLAY_PATH_RE = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
 
 function toErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -328,11 +325,11 @@ export function parseWorkflowFile(
   if (fm.trigger !== undefined && typeof fm.trigger !== "string") {
     return "Invalid 'trigger' (must be a string)";
   }
-  if (
-    fm.display !== undefined &&
-    (typeof fm.display !== "string" || !DISPLAY_PATH_RE.test(fm.display.trim()))
-  ) {
-    return "Invalid 'display' (must be a non-empty dot path)";
+  let display: string | undefined;
+  try {
+    display = normalizeDisplayPath(fm.display);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
   }
   if (
     fm.on !== undefined &&
@@ -385,7 +382,7 @@ export function parseWorkflowFile(
     name: fm.name.trim(),
     description: fm.description.trim(),
     trigger: typeof fm.trigger === "string" ? fm.trigger.trim() : undefined,
-    display: typeof fm.display === "string" ? fm.display.trim() : undefined,
+    display,
     on,
     debounce: fm.debounce as number | undefined,
     params: allParams,

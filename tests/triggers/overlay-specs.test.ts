@@ -331,7 +331,7 @@ describe("buildWorkflowsSpec", () => {
       ]);
       expect(notices, fallback.name).toEqual([
         [
-          `${fallback.warning} Copied run aaaa1111 result to clipboard.`,
+          `Copied run aaaa1111 result to clipboard. ${fallback.warning.replaceAll("`", "'")}`,
           "warning",
         ],
       ]);
@@ -353,6 +353,15 @@ describe("buildWorkflowsSpec", () => {
     const runResult = `${"r".repeat(700)}run-tail`;
     done.value = runResult;
     expect(spec.detail(runItem, color).join("\n")).toContain(runResult);
+
+    done.header.display = "report";
+    const fallbackDetail = spec.detail(runItem, color).join("\n");
+    const fallbackWarning =
+      "⚠ Display path `report` was not found; showing the raw result.";
+    expect(fallbackDetail).toContain(fallbackWarning);
+    expect(fallbackDetail.indexOf(fallbackWarning)).toBeLessThan(
+      fallbackDetail.indexOf(runResult),
+    );
 
     spec.onAction("a", runItem);
     const nodeItem = spec.items()[0];
@@ -502,6 +511,16 @@ describe("command registration", () => {
     expect(result).not.toContain('"outcome": "changes_required"');
     expect(result).toContain("`/workflow aaaa1111 raw`");
 
+    run.header.display = "summary";
+    await workflow?.handler("aaaa1111 result", fakeCtx());
+    const fallback = messages.at(-1) ?? "";
+    const warning =
+      "> ⚠ Display path `summary` was not found; showing the raw result.";
+    expect(fallback).toContain(warning);
+    expect(fallback.indexOf(warning)).toBeLessThan(
+      fallback.indexOf('"outcome": "changes_required"'),
+    );
+
     await workflow?.handler("aaaa1111 raw", fakeCtx());
     const raw = messages.at(-1) ?? "";
     expect(raw).toContain("— raw");
@@ -596,7 +615,7 @@ describe("command registration", () => {
       ]);
       expect(notices, fallback.name).toEqual([
         [
-          `${fallback.warning} Copied run aaaa1111 result to clipboard.`,
+          `Copied run aaaa1111 result to clipboard. ${fallback.warning.replaceAll("`", "'")}`,
           "warning",
         ],
       ]);

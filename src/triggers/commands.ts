@@ -632,7 +632,9 @@ async function copyRunResult(
     await (deps.copyText ?? copyToClipboard)(text);
     const copied = `Copied run ${shortId(run.header.id)} result to clipboard.`;
     ctx.ui.notify(
-      display.warning ? `${display.warning} ${copied}` : copied,
+      display.warning
+        ? `${copied} ${display.warning.replaceAll("`", "'")}`
+        : copied,
       display.warning ? "warning" : "info",
     );
   } catch (error) {

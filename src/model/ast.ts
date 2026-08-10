@@ -18,7 +18,7 @@ export type WorkflowSource = Source | "bundled";
 export type Scope = Source | "both";
 
 /** Dot path to a human-facing Markdown string in a workflow's final value. */
-export const DISPLAY_PATH_RE = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
+const DISPLAY_PATH_RE = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
 
 /** Validate and normalize optional run-level presentation metadata. */
 export function normalizeDisplayPath(value: unknown): string | undefined {

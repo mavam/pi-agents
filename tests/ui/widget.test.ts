@@ -35,6 +35,7 @@ async function recordedRun(
     runId: "w1",
     flow,
     label: "review",
+    budgets: { maxAgents: 200 },
     runAgent: async (call) => ({ value: handler(call.agent, call.task) }),
     emit: (event) => events.push(event),
   });
@@ -44,14 +45,15 @@ async function recordedRun(
 }
 
 describe("formatRunWidget", () => {
-  test("completed run is one line with 100% and an all-green strip", async () => {
+  test("completed run is one line with its agent count and an all-green strip", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
     const lines = formatRunWidget(run, run.createdAt + 92_000, tagged);
     expect(lines).toHaveLength(1);
     const [line] = lines;
-    // The static ❖ run mark leads; no spinner animates.
-    expect(line).toContain("<muted>❖</> 100%");
-    expect(line).toContain("review");
+    expect(line).toStartWith("<muted>❖</> review");
+    expect(line).toContain("<success>✦</>3/3");
+    expect(line).not.toContain("<muted>❖</> <success>✦</>");
+    expect(line).not.toContain("%");
     expect(line).toContain("1m32s");
     // Two agent branches plus the reducer, all completed.
     expect(line).toContain("<success>✦</><success>✦</><success>⑂</>");
@@ -59,7 +61,7 @@ describe("formatRunWidget", () => {
     expect(line).not.toContain("⟨");
   });
 
-  test("mid-run shows partial percent and a running glyph", async () => {
+  test("mid-run shows completed and total agents with a running glyph", async () => {
     // Drop the reduce completion and everything after: reduce stays running.
     const run = await recordedRun(
       REVIEW_FLOW,
@@ -74,7 +76,7 @@ describe("formatRunWidget", () => {
     expect(total).toBe(3);
     expect(done).toBe(2);
     const [line] = formatRunWidget(run, run.createdAt + 5_000, tagged);
-    expect(line).toContain("67%");
+    expect(line).toContain("<success>✦</>2/3");
     // Finished branches are green; the running reducer is the warning glyph.
     expect(line).toContain("<success>✦</><success>✦</><warning>⑂</>");
   });
@@ -90,8 +92,34 @@ describe("formatRunWidget", () => {
     // Even with no node events, the static skeleton knows 3 agents.
     expect(total).toBe(3);
     const [line] = formatRunWidget(run, run.createdAt, tagged);
-    expect(line).toContain("0%");
+    expect(line).toContain("<success>✦</>0/3");
     expect(line).toContain("<dim>✦</><dim>✦</><dim>⑂</>");
+  });
+
+  test("a single-agent counter keeps pending and running status colors", async () => {
+    const flow = { kind: "agent", name: "reviewer", task: "review" };
+    const pending = await recordedRun(
+      flow,
+      () => "ok",
+      (event) => event.type === "run_created",
+    );
+    const [pendingLine] = formatRunWidget(pending, pending.createdAt, tagged);
+    expect(pendingLine).toContain("<dim>✦</>0/1");
+    expect(pendingLine.match(/<dim>✦<\/>/g)).toHaveLength(1);
+
+    const running = await recordedRun(
+      flow,
+      () => "ok",
+      (event) =>
+        event.type !== "node_completed" && event.type !== "run_completed",
+    );
+    const [runningLine] = formatRunWidget(
+      running,
+      running.createdAt + 8_000,
+      tagged,
+    );
+    expect(runningLine).toContain("<warning>✦</>0/1");
+    expect(runningLine.match(/<warning>✦<\/>/g)).toHaveLength(1);
   });
 
   test("map fan-out aggregates counts into one segment", async () => {
@@ -121,7 +149,7 @@ describe("formatRunWidget", () => {
     expect(line).toContain("✦⇶");
     // 1 scout + 3 map items = 4 agents total.
     expect(widgetProgress(run)).toEqual({ done: 4, total: 4 });
-    expect(line).toContain("100%");
+    expect(line).toContain("✦4/4");
   });
 
   test("switch totals use the smallest arm and self-correct as instances appear", async () => {
@@ -163,14 +191,14 @@ describe("formatRunWidget", () => {
       (event) => event.type === "run_created",
     );
     expect(widgetProgress(pending)).toEqual({ done: 0, total: 2 });
-    // The larger arm ran: the total grows with the real instances and the
-    // finished run still reads 100% (min-arm undercounts, never overcounts).
+    // The larger arm ran: the total grows with the real instances while the
+    // min-arm estimate avoids leaving a finished run with an inflated total.
     const run = await recordedRun(SWITCH_FLOW, (agent) =>
       agent === "gate" ? { status: "findings" } : "ok",
     );
     expect(widgetProgress(run)).toEqual({ done: 3, total: 3 });
     const [line] = formatRunWidget(run, run.createdAt);
-    expect(line).toContain("100%");
+    expect(line).toContain("✦3/3");
     expect(line).toContain("✦⎇");
   });
 
@@ -195,7 +223,7 @@ describe("formatRunWidget", () => {
     );
     expect(widgetProgress(run)).toEqual({ done: 1, total: 1 });
     const [line] = formatRunWidget(run, run.createdAt);
-    expect(line).toContain("100%");
+    expect(line).toContain("✦1/1");
     expect(line).toContain("✦≔");
   });
 
@@ -235,7 +263,7 @@ describe("formatRunWidget", () => {
     expect(line1).toContain("4.5k");
   });
 
-  test("the active agent's output excerpt joins line 1", async () => {
+  test("the active agent's reasoning summary joins line 1", async () => {
     const run = await recordedRun(
       REVIEW_FLOW,
       () => "ok",
@@ -247,12 +275,17 @@ describe("formatRunWidget", () => {
     );
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
-        node.progressText = "Merging findings into one prioritized list\nmore";
+        node.progressSummary = "Merging findings into one prioritized list";
+        node.progressSummaryAt = run.createdAt + 1000;
+        node.progressTool = "bash";
+        node.progressText = "assistant output fallback";
+        node.lastProgressAt = run.createdAt;
       }
     }
     const [line1] = formatRunWidget(run, run.createdAt + 1000);
     expect(line1).toContain("· Merging findings into one prioritized list");
-    expect(line1).not.toContain("more");
+    expect(line1).not.toContain("Using bash");
+    expect(line1).not.toContain("assistant output fallback");
   });
 
   test("deep flows collapse to one glyph per top-level step", async () => {
@@ -495,6 +528,39 @@ describe("formatRunWidget width budgeting", () => {
     return run;
   }
 
+  async function threeDigitRun(): Promise<RunView> {
+    const run = await recordedRun(
+      {
+        kind: "sequence",
+        steps: [
+          {
+            kind: "sequence",
+            steps: Array.from({ length: 50 }, () => ({
+              kind: "agent",
+              name: "ok",
+              task: "work",
+            })),
+          },
+          { kind: "agent", name: "fail", task: "stop" },
+          {
+            kind: "sequence",
+            steps: Array.from({ length: 50 }, () => ({
+              kind: "agent",
+              name: "pending",
+              task: "work",
+            })),
+          },
+        ],
+      },
+      (agent) => {
+        if (agent === "fail") throw new Error("stop");
+        return "ok";
+      },
+    );
+    run.header.label = longLabel;
+    return run;
+  }
+
   test("wide terminals show useful details without the run id", async () => {
     const run = await longLabelRun();
     run.header.id = "6b88f374-599d-4bed-98da-a65de84c20b5";
@@ -552,6 +618,23 @@ describe("formatRunWidget width budgeting", () => {
     expect(minimal).toContain("✦✦⑂");
   });
 
+  test("three-digit counts can shrink the label below its preferred floor", async () => {
+    const run = await threeDigitRun();
+    expect(widgetProgress(run)).toEqual({ done: 50, total: 101 });
+
+    const [line] = formatRunWidget(run, run.createdAt, undefined, 23);
+    expect(visibleWidth(line)).toBeLessThanOrEqual(23);
+    expect(line).toContain("✦50/101");
+    expect(line).toEndWith(" · ≡✗≡");
+
+    // With no room for a label, retain the counter and status strip. If even
+    // those cannot coexist, prefer the status strip over right truncation.
+    expect(formatRunWidget(run, run.createdAt, undefined, 13)[0]).toBe(
+      "✦50/101 · ≡✗≡",
+    );
+    expect(formatRunWidget(run, run.createdAt, undefined, 12)[0]).toBe("≡✗≡");
+  });
+
   test("long labels shrink with an ellipsis but keep a readable floor", async () => {
     const run = await longLabelRun();
     const [line] = formatRunWidget(run, run.createdAt + 92_000, undefined, 50);
@@ -568,11 +651,14 @@ describe("live activity", () => {
     return !event.instance.endsWith(".reduce") && event.instance !== "$";
   };
 
-  test("per-agent tool and turn metrics stay off the summary line", async () => {
+  test("falls back to the active tool without showing turn counts", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
+        node.progressSummary = "Earlier reasoning";
+        node.progressSummaryAt = run.createdAt;
         node.progressTool = "bash";
+        node.progressText = "assistant output";
         node.progressUsage = {
           input: 100,
           output: 50,
@@ -582,24 +668,34 @@ describe("live activity", () => {
           contextTokens: 0,
           turns: 7,
         };
-        node.lastProgressAt = run.createdAt;
+        node.lastProgressAt = run.createdAt + 1;
       }
     }
-    const [line1] = formatRunWidget(run, run.createdAt + 1000);
-    // Neither turns summed across concurrent agents nor one unattributed
-    // agent's current tool mean anything at the run level — and a
-    // variable-width tool name ahead of the strip made the glyphs shift on
-    // every tool switch. Only the token volume aggregates meaningfully.
-    expect(line1).not.toContain("turn");
-    expect(line1).not.toContain("bash");
-    expect(line1).toContain("✦✦⑂");
+    const [line] = formatRunWidget(run, run.createdAt + 1000);
+    expect(line).toContain("· Using bash");
+    expect(line).not.toContain("turn");
+    expect(line).not.toContain("assistant output");
+    expect(line).toContain("✦✦⑂");
   });
 
-  test("a long silence replaces the excerpt with a stall hint", async () => {
+  test("leaves activity blank without a summary or active tool", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
-        node.progressText = "still merging";
+        node.progressText = "assistant output";
+        node.lastProgressAt = run.createdAt;
+      }
+    }
+    const [line] = formatRunWidget(run, run.createdAt + 1000);
+    expect(line).not.toContain("assistant output");
+    expect(line).not.toContain("Using");
+  });
+
+  test("a long silence replaces the excerpt with an activity warning", async () => {
+    const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
+    for (const node of run.nodes.values()) {
+      if (node.status === "running" && node.kind === "reduce") {
+        node.progressSummary = "still merging";
         node.lastProgressAt = run.createdAt;
       }
     }
@@ -609,7 +705,7 @@ describe("live activity", () => {
       run,
       run.createdAt + STALL_AFTER_MS + 121_000,
     );
-    expect(stalled).toContain("no output for");
+    expect(stalled).toContain("no activity for");
     expect(stalled).not.toContain("still merging");
   });
 });
@@ -620,6 +716,7 @@ describe("RunWidget suppression", () => {
     runs.set("a", {
       status: "running",
       header: { id: "a", source: { kind: "command" } },
+      nodes: new Map(),
     } as unknown as RunView);
     const widget = new RunWidget({ state: { runs } } as never);
     const shown: unknown[] = [];
@@ -666,11 +763,116 @@ describe("RunWidget suppression", () => {
 });
 
 describe("RunWidget lifecycle", () => {
+  test("holds every workflow activity while coalescing newer ones", async () => {
+    const run = await recordedRun(
+      REVIEW_FLOW,
+      () => "ok",
+      (event) => {
+        if (event.type === "run_completed") return false;
+        if (event.type !== "node_completed") return true;
+        return !event.instance.endsWith(".reduce") && event.instance !== "$";
+      },
+    );
+    const node = [...run.nodes.values()].find(
+      (candidate) =>
+        candidate.status === "running" && candidate.kind === "reduce",
+    );
+    if (!node) throw new Error("missing running reducer");
+    let now = run.createdAt;
+    node.progressSummary = "First headline";
+    node.progressSummaryAt = now;
+    node.lastProgressAt = now;
+    const widget = new RunWidget(
+      { state: { runs: new Map([[run.header.id, run]]) } } as never,
+      () => now,
+    );
+    const shown: unknown[] = [];
+    const ctx = {
+      mode: "tui",
+      ui: { setWidget: (_key: string, value: unknown) => shown.push(value) },
+    } as never;
+    const renderLast = () => {
+      const factory = shown.at(-1) as (
+        tui: unknown,
+        theme: { fg: (color: string, text: string) => string },
+      ) => { render: (width: number) => string[] };
+      return factory({}, { fg: (_color, text) => text })
+        .render(200)
+        .join("\n");
+    };
+
+    widget.update(ctx);
+    expect(renderLast()).toContain("First headline");
+    now += 100;
+    node.progressSummary = "Skipped headline";
+    node.progressSummaryAt = now;
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("First headline");
+    now += 100;
+    node.progressSummary = "Latest headline";
+    node.progressSummaryAt = now;
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("First headline");
+    now = run.createdAt + 2_999;
+    widget.update();
+    expect(renderLast()).toContain("First headline");
+    now = run.createdAt + 3_000;
+    widget.update();
+    expect(renderLast()).toContain("Latest headline");
+    expect(renderLast()).not.toContain("Skipped headline");
+
+    now += 5_000;
+    node.progressTool = "bash";
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("Using bash");
+
+    now += 100;
+    node.progressTool = undefined;
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("Using bash");
+    now += 100;
+    node.progressTool = "read";
+    node.lastProgressAt = now;
+    widget.update();
+    now += 100;
+    node.progressTool = undefined;
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("Using bash");
+    now = run.createdAt + 10_999;
+    widget.update();
+    expect(renderLast()).toContain("Using bash");
+    now = run.createdAt + 11_000;
+    widget.update();
+    expect(renderLast()).toContain("Using read");
+
+    now += 100;
+    node.progressTool = "bash";
+    node.lastProgressAt = now;
+    widget.update();
+    now += 100;
+    node.progressTool = "read";
+    node.lastProgressAt = now;
+    widget.update();
+    node.progressTool = undefined;
+    now = run.createdAt + 14_000;
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("Using read");
+    expect(renderLast()).not.toContain("Using bash");
+    widget.dispose();
+  });
+
   test("disposal detaches the session context from late updates", () => {
     const runs = new Map<string, RunView>();
     runs.set("a", {
       status: "running",
       header: { id: "a", source: { kind: "command" } },
+      nodes: new Map(),
     } as unknown as RunView);
     const widget = new RunWidget({ state: { runs } } as never);
     const shown: unknown[] = [];

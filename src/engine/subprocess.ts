@@ -42,6 +42,7 @@ export const DEPTH_ENV_VAR = "PI_AGENTS_DEPTH";
 const CONTROL_RESPONSE_TIMEOUT_MS = 30_000;
 const TERMINATE_AFTER_MS = 1_000;
 const FORCE_KILL_AFTER_MS = 5_000;
+const SUMMARY_DEBOUNCE_MS = 250;
 /** Minimum spacing between updates driven by streaming text deltas. */
 export const STREAM_PUSH_INTERVAL_MS = 250;
 /** Live tails are deliberately ephemeral and bounded. Only an accepted agent
@@ -90,7 +91,7 @@ class AsyncQueue<T> implements AsyncIterable<T> {
 
 interface AssistantMessage {
   role: string;
-  content?: Array<{ type?: string; text?: string }>;
+  content?: Array<{ type?: string; text?: string; thinking?: string }>;
   usage?: {
     input?: number;
     output?: number;
@@ -228,6 +229,9 @@ function assistantMessage(value: unknown): AssistantMessage | undefined {
     if (part.text !== undefined && typeof part.text !== "string") {
       throw new Error("Invalid assistant message text from delegated pi");
     }
+    if (part.thinking !== undefined && typeof part.thinking !== "string") {
+      throw new Error("Invalid assistant thinking from delegated pi");
+    }
   }
   const usage = value.message.usage;
   if (usage !== undefined) {
@@ -291,6 +295,43 @@ function messageText(message: AssistantMessage): string {
       chunks.push(part.text);
   }
   return chunks.join("\n").trim();
+}
+
+/** The headline from one provider-supplied thinking block. */
+function reasoningSummaryHeadline(
+  thinking: string,
+  complete: boolean,
+): string | undefined {
+  const lines = thinking.split("\n");
+  if (!complete && !thinking.endsWith("\n")) lines.pop();
+  const completeLines = lines.map((part) => part.trim()).filter(Boolean);
+  const line =
+    completeLines.find((part) =>
+      /^(?:#{1,6}\s+|\*\*.+\*\*$|__.+__$)/.test(part),
+    ) ?? completeLines[0];
+  if (!line) return undefined;
+  return clippedLine(
+    line
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/^[-*]\s+/, "")
+      .replace(/^\*\*(.+)\*\*$/, "$1")
+      .replace(/^__(.+)__$/, "$1"),
+  );
+}
+
+function messageReasoningSummary(
+  message: AssistantMessage,
+): string | undefined {
+  const thinking = (message.content ?? [])
+    .flatMap((part) =>
+      part.type === "thinking" && typeof part.thinking === "string"
+        ? [part.thinking]
+        : [],
+    )
+    .at(-1);
+  return thinking === undefined
+    ? undefined
+    : reasoningSummaryHeadline(thinking, true);
 }
 
 function writeSpawnFiles(
@@ -365,12 +406,14 @@ export function createSubprocessSpawnEngine(options?: {
   /** Test hooks; production uses the conservative defaults above. */
   terminateAfterMs?: number;
   forceKillAfterMs?: number;
+  summaryDebounceMs?: number;
   /** Test hook for loading provider fixtures in delegated processes. */
   extraExtensionPaths?: string[];
 }): SpawnEngine {
   const spawnProcess = options?.spawnProcess ?? spawn;
   const terminateAfterMs = options?.terminateAfterMs ?? TERMINATE_AFTER_MS;
   const forceKillAfterMs = options?.forceKillAfterMs ?? FORCE_KILL_AFTER_MS;
+  const summaryDebounceMs = options?.summaryDebounceMs ?? SUMMARY_DEBOUNCE_MS;
 
   return {
     spawn(spec: SpawnSpec): SpawnHandle {
@@ -399,6 +442,10 @@ export function createSubprocessSpawnEngine(options?: {
       const activityTail = new ActivityTail();
       const toolTailEntries = new Map<string, { key: string; label: string }>();
       const streamedTextBlocks = new Map<number, string>();
+      const streamedThinkingBlocks = new Map<number, string>();
+      let latestSummary: string | undefined;
+      let pendingSummary: string | undefined;
+      let summaryTimer: ReturnType<typeof setTimeout> | undefined;
       let activitySequence = 0;
       let currentAssistantEntry: string | undefined;
       let turnsStarted = 0;
@@ -456,8 +503,11 @@ export function createSubprocessSpawnEngine(options?: {
       const cleanup = () => {
         if (terminateTimer) clearTimeout(terminateTimer);
         if (forceKillTimer) clearTimeout(forceKillTimer);
+        if (summaryTimer) clearTimeout(summaryTimer);
         terminateTimer = undefined;
         forceKillTimer = undefined;
+        summaryTimer = undefined;
+        pendingSummary = undefined;
         for (const pending of pendingCommands.values()) {
           clearTimeout(pending.timer);
         }
@@ -557,14 +607,39 @@ export function createSubprocessSpawnEngine(options?: {
       const pushUpdate = () => {
         lastStreamPushAt = Date.now();
         let currentTool: string | undefined;
-        for (const name of activeTools.values()) currentTool = name;
+        for (const name of activeTools.values()) {
+          if (name !== RESULT_TOOL_NAME) currentTool = name;
+        }
         updates.push({
           text: latestText,
+          summary: latestSummary,
           tail: activityTail.snapshot(),
           usage: { ...usage },
           currentTool,
           turnsStarted,
         });
+      };
+
+      const flushPendingSummary = () => {
+        summaryTimer = undefined;
+        const pending = pendingSummary;
+        pendingSummary = undefined;
+        if (!pending || pending === latestSummary) return;
+        latestSummary = pending;
+        pushUpdate();
+      };
+
+      /** Coalesce streamed fragments before publishing the newest headline. */
+      const queueSummary = (summary: string) => {
+        if (summary === latestSummary || summary === pendingSummary) return;
+        pendingSummary = summary;
+        if (summaryTimer) clearTimeout(summaryTimer);
+        if (summaryDebounceMs <= 0) {
+          flushPendingSummary();
+          return;
+        }
+        summaryTimer = setTimeout(flushPendingSummary, summaryDebounceMs);
+        summaryTimer.unref?.();
       };
 
       const updateAssistantTail = (text: string) => {
@@ -577,9 +652,9 @@ export function createSubprocessSpawnEngine(options?: {
       };
 
       /**
-       * Capture in-flight assistant text (message_update fires per delta) so
-       * a mid-generation cutoff still preserves the newest partial output.
-       * Malformed partials are skipped rather than failing the protocol.
+       * Capture in-flight assistant text and provider-supplied reasoning
+       * summaries. Malformed partials are skipped rather than failing the
+       * protocol.
        */
       const recordPartialMessage = (record: Record<string, unknown>) => {
         const event = record.assistantMessageEvent;
@@ -592,11 +667,31 @@ export function createSubprocessSpawnEngine(options?: {
         ) {
           return;
         }
-        if (event.type === "text_start") {
-          streamedTextBlocks.set(contentIndex, "");
+
+        if (event.type === "thinking_start") {
+          streamedThinkingBlocks.set(contentIndex, "");
           return;
         }
-        if (event.type === "text_delta" && typeof event.delta === "string") {
+        if (
+          event.type === "thinking_delta" &&
+          typeof event.delta === "string"
+        ) {
+          streamedThinkingBlocks.set(
+            contentIndex,
+            (streamedThinkingBlocks.get(contentIndex) ?? "") + event.delta,
+          );
+        } else if (
+          event.type === "thinking_end" &&
+          typeof event.content === "string"
+        ) {
+          streamedThinkingBlocks.set(contentIndex, event.content);
+        } else if (event.type === "text_start") {
+          streamedTextBlocks.set(contentIndex, "");
+          return;
+        } else if (
+          event.type === "text_delta" &&
+          typeof event.delta === "string"
+        ) {
           streamedTextBlocks.set(
             contentIndex,
             (streamedTextBlocks.get(contentIndex) ?? "") + event.delta,
@@ -609,6 +704,25 @@ export function createSubprocessSpawnEngine(options?: {
         } else {
           return;
         }
+
+        if (
+          typeof event.type === "string" &&
+          event.type.startsWith("thinking_")
+        ) {
+          const thinking = [...streamedThinkingBlocks.entries()]
+            .sort(([left], [right]) => left - right)
+            .at(-1)?.[1];
+          const summary =
+            thinking === undefined
+              ? undefined
+              : reasoningSummaryHeadline(
+                  thinking,
+                  event.type === "thinking_end",
+                );
+          if (summary !== undefined) queueSummary(summary);
+          return;
+        }
+
         const text = [...streamedTextBlocks.entries()]
           .sort(([left], [right]) => left - right)
           .map(([, block]) => block)
@@ -651,7 +765,10 @@ export function createSubprocessSpawnEngine(options?: {
             latestText = text;
             updateAssistantTail(text);
           }
+          const summary = messageReasoningSummary(message);
+          if (summary !== undefined) queueSummary(summary);
           streamedTextBlocks.clear();
+          streamedThinkingBlocks.clear();
           currentAssistantEntry = undefined;
         }
         pushUpdate();
@@ -726,6 +843,7 @@ export function createSubprocessSpawnEngine(options?: {
           if (record.type === "turn_start") {
             turnsStarted += 1;
             streamedTextBlocks.clear();
+            streamedThinkingBlocks.clear();
             currentAssistantEntry = undefined;
             pushUpdate();
           }
@@ -735,6 +853,7 @@ export function createSubprocessSpawnEngine(options?: {
             record.message.role === "assistant"
           ) {
             streamedTextBlocks.clear();
+            streamedThinkingBlocks.clear();
           }
           if (record.type === "message_update") {
             recordPartialMessage(record);

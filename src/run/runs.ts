@@ -208,11 +208,16 @@ export class RunManager {
           call.onProgress?.(progress);
           const node = this.state.runs.get(runId)?.nodes.get(call.instance);
           if (node) {
+            const now = Date.now();
             node.progressText = progress.text;
+            if (progress.summary !== node.progressSummary) {
+              node.progressSummary = progress.summary;
+              if (progress.summary !== undefined) node.progressSummaryAt = now;
+            }
             if (progress.tail !== undefined) node.progressTail = progress.tail;
             node.progressUsage = progress.usage;
             node.progressTool = progress.currentTool;
-            node.lastProgressAt = Date.now();
+            node.lastProgressAt = now;
           }
           this.options.onStateChanged?.(runId);
         },

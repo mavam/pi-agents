@@ -209,6 +209,7 @@ export class RunManager {
           const node = this.state.runs.get(runId)?.nodes.get(call.instance);
           if (node) {
             node.progressText = progress.text;
+            node.progressSummary = progress.summary;
             if (progress.tail !== undefined) node.progressTail = progress.tail;
             node.progressUsage = progress.usage;
             node.progressTool = progress.currentTool;

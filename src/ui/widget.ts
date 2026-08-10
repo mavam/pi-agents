@@ -1,11 +1,12 @@
 /**
  * The above-editor widget for live runs: one line per run.
  *
- *   ❖ 67% · review · 1m32s · 15.5k · ✦⑃⟨✦✦⑂⟩⇶↺ · merging…
+ *   ❖ review · ✦2/3 · 1m32s · 15.5k · ✦⑃⟨✦✦⑂⟩⇶↺ · merging…
  *
- * The static ❖ run mark (shared with completion cards and notifications),
- * completion percent (done agents over known agents — the denominator grows
- * as map items are discovered), label, elapsed, live token count
+ * The static ❖ run mark acts as a bullet for each workflow. After the label,
+ * the completed/known agent count uses the same ✦A/T iconography as the
+ * pi-fancy-footer contribution — the denominator grows as map items are
+ * discovered — followed by elapsed time and the live token count
  * (completed usage + streaming usage), the glyph strip, then the latest
  * output excerpt —
  * replaced by a "no output for …" stall hint when agents have been silent.
@@ -334,7 +335,7 @@ export function formatElapsed(ms: number): string {
 export const STALL_AFTER_MS = 60_000;
 
 export interface LiveActivity {
-  /** Latest output line of the most recently started running agent. */
+  /** Latest provider-supplied reasoning summary from a running agent. */
   excerpt?: string;
   /** Most recent progress timestamp across all running agents. */
   lastAt?: number;
@@ -342,7 +343,9 @@ export interface LiveActivity {
 
 export function liveActivity(run: RunView): LiveActivity {
   let lastAt: number | undefined;
-  let bestText: { startedAt: number; text: string } | undefined;
+  let bestSummary:
+    | { seen: number; startedAt: number; text: string }
+    | undefined;
   for (const node of run.nodes.values()) {
     // Only work leaves report progress; structural nodes just wrap them.
     if (node.kind !== "agent" && node.kind !== "reduce") continue;
@@ -350,14 +353,19 @@ export function liveActivity(run: RunView): LiveActivity {
     const seen = node.lastProgressAt ?? node.startedAt;
     if (lastAt === undefined || seen > lastAt) lastAt = seen;
     if (
-      node.progressText &&
-      (!bestText || node.startedAt > bestText.startedAt)
+      node.progressSummary &&
+      (!bestSummary ||
+        seen > bestSummary.seen ||
+        (seen === bestSummary.seen && node.startedAt > bestSummary.startedAt))
     ) {
-      bestText = { startedAt: node.startedAt, text: node.progressText };
+      bestSummary = {
+        seen,
+        startedAt: node.startedAt,
+        text: node.progressSummary,
+      };
     }
   }
-  const line = bestText?.text.split("\n").find((part) => part.trim());
-  return { excerpt: line?.trim(), lastAt };
+  return { excerpt: bestSummary?.text.trim(), lastAt };
 }
 
 /** Labels never shrink below this many columns before meta gives way. */
@@ -377,8 +385,7 @@ export function formatRunWidget(
   width = Number.POSITIVE_INFINITY,
 ): string[] {
   const { done, total } = widgetProgress(run);
-  const ratio = total > 0 ? done / total : 0;
-  const percent = `${Math.round(ratio * 100)}%`;
+  const progress = `${color("success", KIND_GLYPHS.agent)}${done}/${total}`;
   const label = run.header.label ?? run.header.flow.kind;
   const tokens = liveTokens(run);
   const activity = liveActivity(run);
@@ -415,13 +422,22 @@ export function formatRunWidget(
     const inner = segment.children.map(renderSegment).join("");
     return `${own}${color("dim", "⟨")}${inner}${color("dim", "⟩")}`;
   };
-  const strip = segments.map(renderSegment).join("");
+  const redundantSingleAgent =
+    segments.length === 1 &&
+    segments[0]?.glyph === KIND_GLYPHS.agent &&
+    segments[0].children === undefined &&
+    segments[0].status !== "failed";
+  const strip = redundantSingleAgent
+    ? ""
+    : segments.map(renderSegment).join("");
 
   // Budget everything left of the strip so the strip always fits. Widths
   // are measured on colored strings — visibleWidth is ANSI-aware.
   const sepWidth = 3; // " · "
   const fixedWidth =
-    visibleWidth(`❖ ${percent}`) + sepWidth * 2 + visibleWidth(strip);
+    visibleWidth(`❖ ${progress}`) +
+    sepWidth * (strip ? 2 : 1) +
+    visibleWidth(strip);
   const metaWidth = (parts: string[]): number =>
     parts.reduce((sum, part) => sum + visibleWidth(part) + sepWidth, 0);
   const labelFloor = Math.min(visibleWidth(label), MIN_LABEL_WIDTH);
@@ -448,7 +464,7 @@ export function formatRunWidget(
   // The strip precedes the excerpt: that tail has unbounded width, and
   // truncation must never push the liveness glyphs off screen.
   return [
-    `${color("muted", "❖")} ${percent}${dot}${shownLabel}${meta ? `${dot}${meta}` : ""}${dot}${strip}${tail ? `${dot}${tail}` : ""}`,
+    `${color("muted", "❖")} ${shownLabel}${dot}${progress}${meta ? `${dot}${meta}` : ""}${strip ? `${dot}${strip}` : ""}${tail ? `${dot}${tail}` : ""}`,
   ];
 }
 

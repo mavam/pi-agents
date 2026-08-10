@@ -90,7 +90,7 @@ class AsyncQueue<T> implements AsyncIterable<T> {
 
 interface AssistantMessage {
   role: string;
-  content?: Array<{ type?: string; text?: string }>;
+  content?: Array<{ type?: string; text?: string; thinking?: string }>;
   usage?: {
     input?: number;
     output?: number;
@@ -228,6 +228,9 @@ function assistantMessage(value: unknown): AssistantMessage | undefined {
     if (part.text !== undefined && typeof part.text !== "string") {
       throw new Error("Invalid assistant message text from delegated pi");
     }
+    if (part.thinking !== undefined && typeof part.thinking !== "string") {
+      throw new Error("Invalid assistant thinking from delegated pi");
+    }
   }
   const usage = value.message.usage;
   if (usage !== undefined) {
@@ -291,6 +294,38 @@ function messageText(message: AssistantMessage): string {
       chunks.push(part.text);
   }
   return chunks.join("\n").trim();
+}
+
+/** The newest one-line headline from Pi's provider-supplied thinking blocks. */
+function reasoningSummaryHeadline(thinking: string): string | undefined {
+  const line = thinking
+    .split("\n")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .at(-1);
+  if (!line) return undefined;
+  return clippedLine(
+    line
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/^[-*]\s+/, "")
+      .replace(/^\*\*/, "")
+      .replace(/\*\*$/, "")
+      .replace(/^__/, "")
+      .replace(/__$/, ""),
+  );
+}
+
+function messageReasoningSummary(
+  message: AssistantMessage,
+): string | undefined {
+  const thinking = (message.content ?? [])
+    .flatMap((part) =>
+      part.type === "thinking" && typeof part.thinking === "string"
+        ? [part.thinking]
+        : [],
+    )
+    .join("\n");
+  return reasoningSummaryHeadline(thinking);
 }
 
 function writeSpawnFiles(
@@ -399,6 +434,8 @@ export function createSubprocessSpawnEngine(options?: {
       const activityTail = new ActivityTail();
       const toolTailEntries = new Map<string, { key: string; label: string }>();
       const streamedTextBlocks = new Map<number, string>();
+      const streamedThinkingBlocks = new Map<number, string>();
+      let latestSummary: string | undefined;
       let activitySequence = 0;
       let currentAssistantEntry: string | undefined;
       let turnsStarted = 0;
@@ -560,6 +597,7 @@ export function createSubprocessSpawnEngine(options?: {
         for (const name of activeTools.values()) currentTool = name;
         updates.push({
           text: latestText,
+          summary: latestSummary,
           tail: activityTail.snapshot(),
           usage: { ...usage },
           currentTool,
@@ -577,9 +615,9 @@ export function createSubprocessSpawnEngine(options?: {
       };
 
       /**
-       * Capture in-flight assistant text (message_update fires per delta) so
-       * a mid-generation cutoff still preserves the newest partial output.
-       * Malformed partials are skipped rather than failing the protocol.
+       * Capture in-flight assistant text and provider-supplied reasoning
+       * summaries. Malformed partials are skipped rather than failing the
+       * protocol.
        */
       const recordPartialMessage = (record: Record<string, unknown>) => {
         const event = record.assistantMessageEvent;
@@ -592,11 +630,31 @@ export function createSubprocessSpawnEngine(options?: {
         ) {
           return;
         }
-        if (event.type === "text_start") {
-          streamedTextBlocks.set(contentIndex, "");
+
+        if (event.type === "thinking_start") {
+          streamedThinkingBlocks.set(contentIndex, "");
           return;
         }
-        if (event.type === "text_delta" && typeof event.delta === "string") {
+        if (
+          event.type === "thinking_delta" &&
+          typeof event.delta === "string"
+        ) {
+          streamedThinkingBlocks.set(
+            contentIndex,
+            (streamedThinkingBlocks.get(contentIndex) ?? "") + event.delta,
+          );
+        } else if (
+          event.type === "thinking_end" &&
+          typeof event.content === "string"
+        ) {
+          streamedThinkingBlocks.set(contentIndex, event.content);
+        } else if (event.type === "text_start") {
+          streamedTextBlocks.set(contentIndex, "");
+          return;
+        } else if (
+          event.type === "text_delta" &&
+          typeof event.delta === "string"
+        ) {
           streamedTextBlocks.set(
             contentIndex,
             (streamedTextBlocks.get(contentIndex) ?? "") + event.delta,
@@ -609,6 +667,29 @@ export function createSubprocessSpawnEngine(options?: {
         } else {
           return;
         }
+
+        if (
+          typeof event.type === "string" &&
+          event.type.startsWith("thinking_")
+        ) {
+          const thinking = [...streamedThinkingBlocks.entries()]
+            .sort(([left], [right]) => left - right)
+            .map(([, block]) => block)
+            .join("\n");
+          const summary = reasoningSummaryHeadline(thinking);
+          const changed = summary !== undefined && summary !== latestSummary;
+          if (changed) latestSummary = summary;
+          if (
+            summary !== undefined &&
+            (event.type === "thinking_end" ||
+              (changed &&
+                Date.now() - lastStreamPushAt >= STREAM_PUSH_INTERVAL_MS))
+          ) {
+            pushUpdate();
+          }
+          return;
+        }
+
         const text = [...streamedTextBlocks.entries()]
           .sort(([left], [right]) => left - right)
           .map(([, block]) => block)
@@ -651,7 +732,9 @@ export function createSubprocessSpawnEngine(options?: {
             latestText = text;
             updateAssistantTail(text);
           }
+          latestSummary = messageReasoningSummary(message) ?? latestSummary;
           streamedTextBlocks.clear();
+          streamedThinkingBlocks.clear();
           currentAssistantEntry = undefined;
         }
         pushUpdate();
@@ -726,6 +809,8 @@ export function createSubprocessSpawnEngine(options?: {
           if (record.type === "turn_start") {
             turnsStarted += 1;
             streamedTextBlocks.clear();
+            streamedThinkingBlocks.clear();
+            latestSummary = undefined;
             currentAssistantEntry = undefined;
             pushUpdate();
           }
@@ -735,6 +820,8 @@ export function createSubprocessSpawnEngine(options?: {
             record.message.role === "assistant"
           ) {
             streamedTextBlocks.clear();
+            streamedThinkingBlocks.clear();
+            latestSummary = undefined;
           }
           if (record.type === "message_update") {
             recordPartialMessage(record);

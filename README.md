@@ -277,7 +277,7 @@ Workflows fire from four surfaces:
    these in parallel" — or for a saved workflow you asked for by name or by
    its `trigger` situation. Merely saying *workflow* is not a request, and
    neither is a task that looks big or parallelizable. In interactive
-   sessions runs go to the background: the widget shows progress and the
+   sessions runs go to the background: the widget shows live status, and the
    result arrives as a notification.
 2. **You.** Every saved workflow registers a slash command. For a workflow
    named `triage`, `/triage src/core with spaces` runs it directly, passing the
@@ -795,7 +795,8 @@ course, and keep watching. In the agents panel, `⏎` posts the full agent
 details and `n` starts
 a new definition.
 
-The live summary widget can be toggled wholesale with `/workflows widget`.
+The live summary widget shows each workflow's status and latest reasoning
+summary at a glance. It can be toggled wholesale with `/workflows widget`.
 There is no default keybinding for it; bind one via pi's keybindings if you
 want one-keystroke access. While the workflows panel is open the summary hides
 itself — the panel sits directly below it and reports the same run state — and

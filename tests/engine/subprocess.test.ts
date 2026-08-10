@@ -951,6 +951,49 @@ describe("turn and tool activity", () => {
   });
 });
 
+describe("reasoning summaries", () => {
+  test("streams Pi thinking events as the newest summary headline", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const seen: string[] = [];
+    const reader = (async () => {
+      for await (const update of handle.updates) {
+        if (update.summary) seen.push(update.summary);
+      }
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({ type: "turn_start" });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        contentIndex: 0,
+        delta: "**Refining README widget description**\n\n",
+      },
+    });
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "thinking_end",
+        contentIndex: 0,
+        content:
+          "**Refining README widget description**\n\n**Simplifying live summary widget text**",
+      },
+    });
+    proc.emitAssistant("done");
+    submitResult(proc, "result");
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    await reader;
+    expect(seen).toContain("Simplifying live summary widget text");
+  });
+});
+
 describe("overlapping tools and streamed text", () => {
   test("concurrent tool executions correlate by toolCallId", async () => {
     const { engine, procs } = makeEngine();

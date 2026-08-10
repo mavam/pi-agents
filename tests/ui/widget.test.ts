@@ -44,14 +44,15 @@ async function recordedRun(
 }
 
 describe("formatRunWidget", () => {
-  test("completed run is one line with 100% and an all-green strip", async () => {
+  test("completed run is one line with its agent count and an all-green strip", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
     const lines = formatRunWidget(run, run.createdAt + 92_000, tagged);
     expect(lines).toHaveLength(1);
     const [line] = lines;
-    // The static ❖ run mark leads; no spinner animates.
-    expect(line).toContain("<muted>❖</> 100%");
-    expect(line).toContain("review");
+    expect(line).toStartWith("<muted>❖</> review");
+    expect(line).toContain("<success>✦</>3/3");
+    expect(line).not.toContain("<muted>❖</> <success>✦</>");
+    expect(line).not.toContain("%");
     expect(line).toContain("1m32s");
     // Two agent branches plus the reducer, all completed.
     expect(line).toContain("<success>✦</><success>✦</><success>⑂</>");
@@ -59,7 +60,7 @@ describe("formatRunWidget", () => {
     expect(line).not.toContain("⟨");
   });
 
-  test("mid-run shows partial percent and a running glyph", async () => {
+  test("mid-run shows completed and total agents with a running glyph", async () => {
     // Drop the reduce completion and everything after: reduce stays running.
     const run = await recordedRun(
       REVIEW_FLOW,
@@ -74,7 +75,7 @@ describe("formatRunWidget", () => {
     expect(total).toBe(3);
     expect(done).toBe(2);
     const [line] = formatRunWidget(run, run.createdAt + 5_000, tagged);
-    expect(line).toContain("67%");
+    expect(line).toContain("<success>✦</>2/3");
     // Finished branches are green; the running reducer is the warning glyph.
     expect(line).toContain("<success>✦</><success>✦</><warning>⑂</>");
   });
@@ -90,8 +91,19 @@ describe("formatRunWidget", () => {
     // Even with no node events, the static skeleton knows 3 agents.
     expect(total).toBe(3);
     const [line] = formatRunWidget(run, run.createdAt, tagged);
-    expect(line).toContain("0%");
+    expect(line).toContain("<success>✦</>0/3");
     expect(line).toContain("<dim>✦</><dim>✦</><dim>⑂</>");
+  });
+
+  test("a single-agent run omits the redundant trailing agent glyph", async () => {
+    const run = await recordedRun(
+      { kind: "agent", name: "reviewer", task: "review" },
+      () => "ok",
+      (event) =>
+        event.type !== "node_completed" && event.type !== "run_completed",
+    );
+    const [line] = formatRunWidget(run, run.createdAt + 8_000);
+    expect(line).toBe("❖ review · ✦0/1 · 0m08s");
   });
 
   test("map fan-out aggregates counts into one segment", async () => {
@@ -121,7 +133,7 @@ describe("formatRunWidget", () => {
     expect(line).toContain("✦⇶");
     // 1 scout + 3 map items = 4 agents total.
     expect(widgetProgress(run)).toEqual({ done: 4, total: 4 });
-    expect(line).toContain("100%");
+    expect(line).toContain("✦4/4");
   });
 
   test("switch totals use the smallest arm and self-correct as instances appear", async () => {
@@ -163,14 +175,14 @@ describe("formatRunWidget", () => {
       (event) => event.type === "run_created",
     );
     expect(widgetProgress(pending)).toEqual({ done: 0, total: 2 });
-    // The larger arm ran: the total grows with the real instances and the
-    // finished run still reads 100% (min-arm undercounts, never overcounts).
+    // The larger arm ran: the total grows with the real instances while the
+    // min-arm estimate avoids leaving a finished run with an inflated total.
     const run = await recordedRun(SWITCH_FLOW, (agent) =>
       agent === "gate" ? { status: "findings" } : "ok",
     );
     expect(widgetProgress(run)).toEqual({ done: 3, total: 3 });
     const [line] = formatRunWidget(run, run.createdAt);
-    expect(line).toContain("100%");
+    expect(line).toContain("✦3/3");
     expect(line).toContain("✦⎇");
   });
 
@@ -195,7 +207,7 @@ describe("formatRunWidget", () => {
     );
     expect(widgetProgress(run)).toEqual({ done: 1, total: 1 });
     const [line] = formatRunWidget(run, run.createdAt);
-    expect(line).toContain("100%");
+    expect(line).toContain("✦1/1");
     expect(line).toContain("✦≔");
   });
 
@@ -235,7 +247,7 @@ describe("formatRunWidget", () => {
     expect(line1).toContain("4.5k");
   });
 
-  test("the active agent's output excerpt joins line 1", async () => {
+  test("the active agent's reasoning summary joins line 1", async () => {
     const run = await recordedRun(
       REVIEW_FLOW,
       () => "ok",
@@ -247,12 +259,13 @@ describe("formatRunWidget", () => {
     );
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
-        node.progressText = "Merging findings into one prioritized list\nmore";
+        node.progressSummary = "Merging findings into one prioritized list";
+        node.progressText = "assistant output fallback";
       }
     }
     const [line1] = formatRunWidget(run, run.createdAt + 1000);
     expect(line1).toContain("· Merging findings into one prioritized list");
-    expect(line1).not.toContain("more");
+    expect(line1).not.toContain("assistant output fallback");
   });
 
   test("deep flows collapse to one glyph per top-level step", async () => {
@@ -595,11 +608,23 @@ describe("live activity", () => {
     expect(line1).toContain("✦✦⑂");
   });
 
+  test("does not substitute assistant output for a missing summary", async () => {
+    const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
+    for (const node of run.nodes.values()) {
+      if (node.status === "running" && node.kind === "reduce") {
+        node.progressText = "assistant output";
+        node.lastProgressAt = run.createdAt;
+      }
+    }
+    const [line] = formatRunWidget(run, run.createdAt + 1000);
+    expect(line).not.toContain("assistant output");
+  });
+
   test("a long silence replaces the excerpt with a stall hint", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
-        node.progressText = "still merging";
+        node.progressSummary = "still merging";
         node.lastProgressAt = run.createdAt;
       }
     }

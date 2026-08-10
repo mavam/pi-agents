@@ -4,6 +4,8 @@ type: change
 authors:
   - mavam
   - codex
+prs:
+  - 54
 created: 2026-08-10T06:29:55.446054Z
 ---
 

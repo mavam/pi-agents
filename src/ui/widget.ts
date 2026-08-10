@@ -1,11 +1,11 @@
 /**
  * The above-editor widget for live runs: one line per run.
  *
- *   ❖ 67% · review · c9e5799 · 1m32s · 15.5k · ✦⑃⟨✦✦⑂⟩⇶↺ · merging…
+ *   ❖ 67% · review · 1m32s · 15.5k · ✦⑃⟨✦✦⑂⟩⇶↺ · merging…
  *
  * The static ❖ run mark (shared with completion cards and notifications),
  * completion percent (done agents over known agents — the denominator grows
- * as map items are discovered), label, dim id, elapsed, live token count
+ * as map items are discovered), label, elapsed, live token count
  * (completed usage + streaming usage), the glyph strip, then the latest
  * output excerpt —
  * replaced by a "no output for …" stall hint when agents have been silent.
@@ -34,7 +34,7 @@ import {
 } from "../model/ast.js";
 import type { RunManager } from "../run/runs.js";
 import { type RunView, workNodes } from "../run/state.js";
-import { formatTokens, shortId } from "./render.js";
+import { formatTokens } from "./render.js";
 import { STATUS_STYLES } from "./status.js";
 import { aggregateStatuses, KIND_ICONS, type PathStatus } from "./tree.js";
 
@@ -366,8 +366,8 @@ const MIN_LABEL_WIDTH = 8;
 /**
  * The one widget line for one run. Pure — testable with plainColorize.
  * Width-aware: on narrow terminals meta parts are dropped by usefulness
- * (id first — /workflows has it — then tokens, then elapsed) and the label
- * shrinks toward a floor, so the glyph strip always survives. The excerpt
+ * (tokens, then elapsed) and the label shrinks toward a floor, so the glyph
+ * strip always survives. The excerpt
  * tail is unbounded and absorbs the final right-truncation at render time.
  */
 export function formatRunWidget(
@@ -383,11 +383,10 @@ export function formatRunWidget(
   const tokens = liveTokens(run);
   const activity = liveActivity(run);
   const dot = color("dim", " · ");
-  const idPart = shortId(run.header.id);
   const elapsed = formatElapsed(now - run.createdAt);
   const tokensPart = tokens > 0 ? formatTokens(tokens) : undefined;
   // In drop priority: the last entry goes first when space runs out.
-  const metaParts = [elapsed, tokensPart, idPart].filter(
+  const metaParts = [elapsed, tokensPart].filter(
     (part): part is string => part !== undefined,
   );
   // A long silence is more informative than a stale excerpt: surface it.
@@ -426,12 +425,7 @@ export function formatRunWidget(
   const metaWidth = (parts: string[]): number =>
     parts.reduce((sum, part) => sum + visibleWidth(part) + sepWidth, 0);
   const labelFloor = Math.min(visibleWidth(label), MIN_LABEL_WIDTH);
-  let kept = [...metaParts];
-  // The id is near-useless inline (/workflows lists it): it drops as soon
-  // as the full label no longer fits alongside the meta.
-  if (width - fixedWidth - metaWidth(kept) < visibleWidth(label)) {
-    kept = kept.filter((part) => part !== idPart);
-  }
+  const kept = [...metaParts];
   // Tokens, then elapsed, give way only when the label would sink below
   // its readable floor.
   while (kept.length > 0 && width - fixedWidth - metaWidth(kept) < labelFloor) {
@@ -445,8 +439,8 @@ export function formatRunWidget(
     visibleWidth(label) > labelBudget
       ? truncateToWidth(label, labelBudget, "…")
       : label;
-  // Restore display order (id · elapsed · tokens) for whatever survived.
-  const meta = [idPart, elapsed, tokensPart]
+  // Restore display order (elapsed · tokens) for whatever survived.
+  const meta = [elapsed, tokensPart]
     .filter((part): part is string => part !== undefined && kept.includes(part))
     .map((part) => color("dim", part))
     .join(dot);

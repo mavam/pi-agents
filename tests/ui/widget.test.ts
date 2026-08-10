@@ -495,11 +495,12 @@ describe("formatRunWidget width budgeting", () => {
     return run;
   }
 
-  test("wide terminals show everything untruncated", async () => {
+  test("wide terminals show useful details without the run id", async () => {
     const run = await longLabelRun();
+    run.header.id = "6b88f374-599d-4bed-98da-a65de84c20b5";
     const [line] = formatRunWidget(run, run.createdAt + 92_000, undefined, 200);
     expect(line).toContain(longLabel);
-    expect(line).toContain("w1"); // id
+    expect(line).not.toContain("6b88f374");
     expect(line).toContain("1m32s");
     expect(line).toContain("✦✦⑂");
   });
@@ -518,7 +519,7 @@ describe("formatRunWidget width budgeting", () => {
     }
   });
 
-  test("meta drops by usefulness: id first, then tokens, then elapsed", async () => {
+  test("meta drops by usefulness: tokens, then elapsed", async () => {
     const run = await longLabelRun();
     for (const node of run.nodes.values()) {
       if (node.kind === "agent" || node.kind === "reduce") {
@@ -535,9 +536,8 @@ describe("formatRunWidget width budgeting", () => {
     }
     const at = (width: number) =>
       formatRunWidget(run, run.createdAt + 92_000, undefined, width)[0];
-    // Roomy enough for elapsed and tokens, not for the id.
+    // Roomy enough for elapsed and tokens.
     const mid = at(50);
-    expect(mid).not.toContain("w1");
     expect(mid).toContain("4.5k");
     expect(mid).toContain("1m32s");
     // Tighter: tokens go next, elapsed is kept longest.

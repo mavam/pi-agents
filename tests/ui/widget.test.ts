@@ -35,6 +35,7 @@ async function recordedRun(
     runId: "w1",
     flow,
     label: "review",
+    budgets: { maxAgents: 200 },
     runAgent: async (call) => ({ value: handler(call.agent, call.task) }),
     emit: (event) => events.push(event),
   });
@@ -95,15 +96,30 @@ describe("formatRunWidget", () => {
     expect(line).toContain("<dim>✦</><dim>✦</><dim>⑂</>");
   });
 
-  test("a single-agent run omits the redundant trailing agent glyph", async () => {
-    const run = await recordedRun(
-      { kind: "agent", name: "reviewer", task: "review" },
+  test("a single-agent counter keeps pending and running status colors", async () => {
+    const flow = { kind: "agent", name: "reviewer", task: "review" };
+    const pending = await recordedRun(
+      flow,
+      () => "ok",
+      (event) => event.type === "run_created",
+    );
+    const [pendingLine] = formatRunWidget(pending, pending.createdAt, tagged);
+    expect(pendingLine).toContain("<dim>✦</>0/1");
+    expect(pendingLine.match(/<dim>✦<\/>/g)).toHaveLength(1);
+
+    const running = await recordedRun(
+      flow,
       () => "ok",
       (event) =>
         event.type !== "node_completed" && event.type !== "run_completed",
     );
-    const [line] = formatRunWidget(run, run.createdAt + 8_000);
-    expect(line).toBe("❖ review · ✦0/1 · 0m08s");
+    const [runningLine] = formatRunWidget(
+      running,
+      running.createdAt + 8_000,
+      tagged,
+    );
+    expect(runningLine).toContain("<warning>✦</>0/1");
+    expect(runningLine.match(/<warning>✦<\/>/g)).toHaveLength(1);
   });
 
   test("map fan-out aggregates counts into one segment", async () => {
@@ -508,6 +524,39 @@ describe("formatRunWidget width budgeting", () => {
     return run;
   }
 
+  async function threeDigitRun(): Promise<RunView> {
+    const run = await recordedRun(
+      {
+        kind: "sequence",
+        steps: [
+          {
+            kind: "sequence",
+            steps: Array.from({ length: 50 }, () => ({
+              kind: "agent",
+              name: "ok",
+              task: "work",
+            })),
+          },
+          { kind: "agent", name: "fail", task: "stop" },
+          {
+            kind: "sequence",
+            steps: Array.from({ length: 50 }, () => ({
+              kind: "agent",
+              name: "pending",
+              task: "work",
+            })),
+          },
+        ],
+      },
+      (agent) => {
+        if (agent === "fail") throw new Error("stop");
+        return "ok";
+      },
+    );
+    run.header.label = longLabel;
+    return run;
+  }
+
   test("wide terminals show useful details without the run id", async () => {
     const run = await longLabelRun();
     run.header.id = "6b88f374-599d-4bed-98da-a65de84c20b5";
@@ -563,6 +612,23 @@ describe("formatRunWidget width budgeting", () => {
     // truncateToWidth may emit a style reset before the ellipsis.
     expect(minimal.replaceAll("\u001b[0m", "")).toContain("a-very-…");
     expect(minimal).toContain("✦✦⑂");
+  });
+
+  test("three-digit counts can shrink the label below its preferred floor", async () => {
+    const run = await threeDigitRun();
+    expect(widgetProgress(run)).toEqual({ done: 50, total: 101 });
+
+    const [line] = formatRunWidget(run, run.createdAt, undefined, 23);
+    expect(visibleWidth(line)).toBeLessThanOrEqual(23);
+    expect(line).toContain("✦50/101");
+    expect(line).toEndWith(" · ≡✗≡");
+
+    // With no room for a label, retain the counter and status strip. If even
+    // those cannot coexist, prefer the status strip over right truncation.
+    expect(formatRunWidget(run, run.createdAt, undefined, 13)[0]).toBe(
+      "✦50/101 · ≡✗≡",
+    );
+    expect(formatRunWidget(run, run.createdAt, undefined, 12)[0]).toBe("≡✗≡");
   });
 
   test("long labels shrink with an ellipsis but keep a readable floor", async () => {

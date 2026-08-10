@@ -385,7 +385,6 @@ export function formatRunWidget(
   width = Number.POSITIVE_INFINITY,
 ): string[] {
   const { done, total } = widgetProgress(run);
-  const progress = `${color("success", KIND_GLYPHS.agent)}${done}/${total}`;
   const label = run.header.label ?? run.header.flow.kind;
   const tokens = liveTokens(run);
   const activity = liveActivity(run);
@@ -430,6 +429,12 @@ export function formatRunWidget(
   const strip = redundantSingleAgent
     ? ""
     : segments.map(renderSegment).join("");
+  // When the strip is redundant, its status color moves to the counter icon
+  // so a bare pending/running agent still communicates liveness.
+  const progressColor = redundantSingleAgent
+    ? STATUS_STYLES[segments[0]?.status ?? "pending"].color
+    : "success";
+  const progress = `${color(progressColor, KIND_GLYPHS.agent)}${done}/${total}`;
 
   // Budget everything left of the strip so the strip always fits. Widths
   // are measured on colored strings — visibleWidth is ANSI-aware.
@@ -447,10 +452,16 @@ export function formatRunWidget(
   while (kept.length > 0 && width - fixedWidth - metaWidth(kept) < labelFloor) {
     kept.pop();
   }
-  const labelBudget = Math.max(
-    labelFloor,
-    width - fixedWidth - metaWidth(kept),
-  );
+  const labelBudget = width - fixedWidth - metaWidth(kept);
+  if (labelBudget < 1) {
+    // At truly impossible widths, omit the run mark and label before giving
+    // up either the counter or status strip. If both still cannot fit, the
+    // status strip is the most useful final fallback.
+    const compact = `${progress}${strip ? `${dot}${strip}` : ""}`;
+    if (visibleWidth(compact) <= width) return [compact];
+    const statusOnly = strip || progress;
+    return [width > 0 ? truncateToWidth(statusOnly, width, "…") : ""];
+  }
   const shownLabel =
     visibleWidth(label) > labelBudget
       ? truncateToWidth(label, labelBudget, "…")

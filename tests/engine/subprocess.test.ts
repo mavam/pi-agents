@@ -924,6 +924,9 @@ describe("turn and tool activity", () => {
       { turnsStarted: 1, currentTool: undefined },
       { turnsStarted: 1, currentTool: undefined },
     ]);
+    expect(
+      seen.some(({ currentTool }) => currentTool === RESULT_TOOL_NAME),
+    ).toBe(false);
   });
 
   test("completed turns back up turnsStarted for older engines", async () => {

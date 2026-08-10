@@ -8,8 +8,8 @@
  * pi-fancy-footer contribution — the denominator grows as map items are
  * discovered — followed by elapsed time and the live token count
  * (completed usage + streaming usage), the glyph strip, then the latest
- * output excerpt —
- * replaced by a "no output for …" stall hint when agents have been silent.
+ * reasoning summary or active tool name. A "no activity for …" stall hint
+ * replaces stale activity when agents have been silent.
  * The strip shows one kind glyph per top-level unit (✦ marks an agent),
  * colored by status; failed units render ✗ so failures survive without
  * color. Running composites expand their children in ⟨…⟩ — recursively, so
@@ -335,37 +335,51 @@ export function formatElapsed(ms: number): string {
 export const STALL_AFTER_MS = 60_000;
 
 export interface LiveActivity {
-  /** Latest provider-supplied reasoning summary from a running agent. */
+  /** Latest reasoning summary, or an active tool when no summary exists. */
   excerpt?: string;
   /** Most recent progress timestamp across all running agents. */
   lastAt?: number;
 }
 
+type ActivityCandidate = { seen: number; startedAt: number; text: string };
+
+function newerActivity(
+  candidate: ActivityCandidate,
+  current: ActivityCandidate | undefined,
+): boolean {
+  return (
+    !current ||
+    candidate.seen > current.seen ||
+    (candidate.seen === current.seen && candidate.startedAt > current.startedAt)
+  );
+}
+
 export function liveActivity(run: RunView): LiveActivity {
   let lastAt: number | undefined;
-  let bestSummary:
-    | { seen: number; startedAt: number; text: string }
-    | undefined;
+  let bestSummary: ActivityCandidate | undefined;
+  let bestTool: ActivityCandidate | undefined;
   for (const node of run.nodes.values()) {
     // Only work leaves report progress; structural nodes just wrap them.
     if (node.kind !== "agent" && node.kind !== "reduce") continue;
     if (node.status !== "running") continue;
     const seen = node.lastProgressAt ?? node.startedAt;
     if (lastAt === undefined || seen > lastAt) lastAt = seen;
-    if (
-      node.progressSummary &&
-      (!bestSummary ||
-        seen > bestSummary.seen ||
-        (seen === bestSummary.seen && node.startedAt > bestSummary.startedAt))
-    ) {
-      bestSummary = {
-        seen,
-        startedAt: node.startedAt,
-        text: node.progressSummary,
-      };
+    const summary = node.progressSummary?.replaceAll(/\s+/g, " ").trim();
+    if (summary) {
+      const candidate = { seen, startedAt: node.startedAt, text: summary };
+      if (newerActivity(candidate, bestSummary)) bestSummary = candidate;
+    }
+    const tool = node.progressTool?.replaceAll(/\s+/g, " ").trim();
+    if (tool) {
+      const candidate = { seen, startedAt: node.startedAt, text: tool };
+      if (newerActivity(candidate, bestTool)) bestTool = candidate;
     }
   }
-  return { excerpt: bestSummary?.text.trim(), lastAt };
+  return {
+    excerpt:
+      bestSummary?.text ?? (bestTool ? `Using ${bestTool.text}` : undefined),
+    lastAt,
+  };
 }
 
 /** Labels never shrink below this many columns before meta gives way. */
@@ -395,12 +409,12 @@ export function formatRunWidget(
   const metaParts = [elapsed, tokensPart].filter(
     (part): part is string => part !== undefined,
   );
-  // A long silence is more informative than a stale excerpt: surface it.
+  // A long silence is more informative than stale activity: surface it.
   const stalledFor =
     activity.lastAt !== undefined ? now - activity.lastAt : undefined;
   const tail =
     stalledFor !== undefined && stalledFor > STALL_AFTER_MS
-      ? color("warning", `no output for ${formatElapsed(stalledFor)}`)
+      ? color("warning", `no activity for ${formatElapsed(stalledFor)}`)
       : activity.excerpt
         ? color("dim", activity.excerpt)
         : undefined;

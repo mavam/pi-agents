@@ -594,7 +594,9 @@ export function createSubprocessSpawnEngine(options?: {
       const pushUpdate = () => {
         lastStreamPushAt = Date.now();
         let currentTool: string | undefined;
-        for (const name of activeTools.values()) currentTool = name;
+        for (const name of activeTools.values()) {
+          if (name !== RESULT_TOOL_NAME) currentTool = name;
+        }
         updates.push({
           text: latestText,
           summary: latestSummary,

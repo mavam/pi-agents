@@ -796,7 +796,8 @@ details and `n` starts
 a new definition.
 
 The live summary widget shows each workflow's status and latest reasoning
-summary at a glance. It can be toggled wholesale with `/workflows widget`.
+summary at a glance, falling back to the active tool name when no summary is
+available. It can be toggled wholesale with `/workflows widget`.
 There is no default keybinding for it; bind one via pi's keybindings if you
 want one-keystroke access. While the workflows panel is open the summary hides
 itself — the panel sits directly below it and reports the same run state — and

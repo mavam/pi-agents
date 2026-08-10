@@ -276,11 +276,13 @@ describe("formatRunWidget", () => {
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
         node.progressSummary = "Merging findings into one prioritized list";
+        node.progressTool = "bash";
         node.progressText = "assistant output fallback";
       }
     }
     const [line1] = formatRunWidget(run, run.createdAt + 1000);
     expect(line1).toContain("· Merging findings into one prioritized list");
+    expect(line1).not.toContain("Using bash");
     expect(line1).not.toContain("assistant output fallback");
   });
 
@@ -647,11 +649,12 @@ describe("live activity", () => {
     return !event.instance.endsWith(".reduce") && event.instance !== "$";
   };
 
-  test("per-agent tool and turn metrics stay off the summary line", async () => {
+  test("falls back to the active tool without showing turn counts", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
         node.progressTool = "bash";
+        node.progressText = "assistant output";
         node.progressUsage = {
           input: 100,
           output: 50,
@@ -664,17 +667,14 @@ describe("live activity", () => {
         node.lastProgressAt = run.createdAt;
       }
     }
-    const [line1] = formatRunWidget(run, run.createdAt + 1000);
-    // Neither turns summed across concurrent agents nor one unattributed
-    // agent's current tool mean anything at the run level — and a
-    // variable-width tool name ahead of the strip made the glyphs shift on
-    // every tool switch. Only the token volume aggregates meaningfully.
-    expect(line1).not.toContain("turn");
-    expect(line1).not.toContain("bash");
-    expect(line1).toContain("✦✦⑂");
+    const [line] = formatRunWidget(run, run.createdAt + 1000);
+    expect(line).toContain("· Using bash");
+    expect(line).not.toContain("turn");
+    expect(line).not.toContain("assistant output");
+    expect(line).toContain("✦✦⑂");
   });
 
-  test("does not substitute assistant output for a missing summary", async () => {
+  test("leaves activity blank without a summary or active tool", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
@@ -684,9 +684,10 @@ describe("live activity", () => {
     }
     const [line] = formatRunWidget(run, run.createdAt + 1000);
     expect(line).not.toContain("assistant output");
+    expect(line).not.toContain("Using");
   });
 
-  test("a long silence replaces the excerpt with a stall hint", async () => {
+  test("a long silence replaces the excerpt with an activity warning", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
@@ -700,7 +701,7 @@ describe("live activity", () => {
       run,
       run.createdAt + STALL_AFTER_MS + 121_000,
     );
-    expect(stalled).toContain("no output for");
+    expect(stalled).toContain("no activity for");
     expect(stalled).not.toContain("still merging");
   });
 });

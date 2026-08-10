@@ -1,0 +1,10 @@
+created: 2026-08-10
+title: Inline workflow result presentation
+intro: >-
+  Inline workflow calls can now present a selected Markdown field from structured
+  results while preserving the full machine-readable object for models, parent workflows,
+  and raw access. This makes workflow output easier to read without sacrificing structured
+  data.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.13.2

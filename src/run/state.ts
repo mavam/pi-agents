@@ -39,6 +39,8 @@ export interface NodeView {
   progressText?: string;
   /** Latest provider-supplied reasoning summary headline. In-memory only. */
   progressSummary?: string;
+  /** When the live reasoning summary last changed. In-memory only. */
+  progressSummaryAt?: number;
   /** Bounded chronological assistant/tool activity. In-memory only; never
    * persisted, so delegated agents still have a single durable artifact. */
   progressTail?: string;

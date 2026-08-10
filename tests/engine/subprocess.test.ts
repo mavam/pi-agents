@@ -140,7 +140,11 @@ class FakeProc extends EventEmitter {
 
 function makeEngine(
   failCommand?: string,
-  timings?: { terminateAfterMs: number; forceKillAfterMs: number },
+  timings?: {
+    terminateAfterMs?: number;
+    forceKillAfterMs?: number;
+    summaryDebounceMs?: number;
+  },
   procOptions?: FakeProcOptions,
 ) {
   const procs: Array<{
@@ -956,7 +960,9 @@ describe("turn and tool activity", () => {
 
 describe("reasoning summaries", () => {
   test("streams Pi thinking events as the newest summary headline", async () => {
-    const { engine, procs } = makeEngine();
+    const { engine, procs } = makeEngine(undefined, {
+      summaryDebounceMs: 1,
+    });
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
     const seen: string[] = [];
     const reader = (async () => {
@@ -987,13 +993,116 @@ describe("reasoning summaries", () => {
           "**Refining README widget description**\n\n**Simplifying live summary widget text**",
       },
     });
+    await new Promise((resolve) => setTimeout(resolve, 5));
     proc.emitAssistant("done");
     submitResult(proc, "result");
     proc.settle();
     proc.close(0);
     await handle.wait();
     await reader;
-    expect(seen).toContain("Simplifying live summary widget text");
+    expect(seen).toContain("Refining README widget description");
+    expect(seen).not.toContain("Simplifying live summary widget text");
+  });
+
+  test("ignores partial lines and keeps a thinking block's headline", async () => {
+    const { engine, procs } = makeEngine(undefined, {
+      summaryDebounceMs: 1,
+    });
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const seen: string[] = [];
+    const reader = (async () => {
+      for await (const update of handle.updates) {
+        if (update.summary && update.summary !== seen.at(-1)) {
+          seen.push(update.summary);
+        }
+      }
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+    });
+    const delta = (value: string) =>
+      proc.emitRecord({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "thinking_delta",
+          contentIndex: 0,
+          delta: value,
+        },
+      });
+
+    delta("**Deciding on");
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    delta(" the widget fix**");
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    expect(seen).toEqual([]);
+    delta("\n\nI ne");
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    expect(seen).toEqual(["Deciding on the widget fix"]);
+    delta("ed to check src/ui/widget.ts");
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    expect(seen).toEqual(["Deciding on the widget fix"]);
+    proc.emitRecord({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "thinking_end",
+        contentIndex: 0,
+        content:
+          "**Deciding on the widget fix**\n\nI need to check src/ui/widget.ts",
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    expect(seen).toEqual(["Deciding on the widget fix"]);
+
+    proc.emitAssistant("done");
+    submitResult(proc, "result");
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    await reader;
+  });
+
+  test("debounces rapid headlines and keeps the last one across turns", async () => {
+    const { engine, procs } = makeEngine(undefined, {
+      summaryDebounceMs: 5,
+    });
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const seen: string[] = [];
+    let previous: string | undefined;
+    const reader = (async () => {
+      for await (const update of handle.updates) {
+        if (update.summary && update.summary !== previous) {
+          previous = update.summary;
+          seen.push(update.summary);
+        }
+      }
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    const emitSummary = (summary: string) =>
+      proc.emitRecord({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "thinking_end",
+          contentIndex: 0,
+          content: `**${summary}**`,
+        },
+      });
+
+    emitSummary("First headline");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    proc.emitRecord({ type: "turn_start" });
+    emitSummary("Skipped headline");
+    emitSummary("Latest headline");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(seen).toEqual(["First headline", "Latest headline"]);
+
+    proc.emitAssistant("done");
+    submitResult(proc, "result");
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    await reader;
   });
 });
 

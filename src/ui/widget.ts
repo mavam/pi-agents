@@ -42,8 +42,9 @@ import { aggregateStatuses, KIND_ICONS, type PathStatus } from "./tree.js";
 const WIDGET_KEY = "pi-agents:runs";
 const MAX_RUNS = 4;
 // The glyph strip carries liveness through color, so no spinner animates;
-// the tick only refreshes elapsed time and stall hints at their granularity.
+// the tick refreshes elapsed time, stall hints, and held reasoning summaries.
 const TICK_MS = 1000;
+const SUMMARY_MIN_DISPLAY_MS = 3000;
 
 type SegmentStatus =
   | "pending"
@@ -335,13 +336,22 @@ export function formatElapsed(ms: number): string {
 export const STALL_AFTER_MS = 60_000;
 
 export interface LiveActivity {
-  /** Latest reasoning summary, or an active tool when no summary exists. */
+  /** Latest reasoning summary or active tool. */
   excerpt?: string;
+  /** The signal used for the excerpt. */
+  source?: "summary" | "tool";
+  /** When that signal was observed. */
+  at?: number;
   /** Most recent progress timestamp across all running agents. */
   lastAt?: number;
 }
 
-type ActivityCandidate = { seen: number; startedAt: number; text: string };
+type ActivityCandidate = {
+  seen: number;
+  startedAt: number;
+  text: string;
+  source: "summary" | "tool";
+};
 
 function newerActivity(
   candidate: ActivityCandidate,
@@ -356,8 +366,7 @@ function newerActivity(
 
 export function liveActivity(run: RunView): LiveActivity {
   let lastAt: number | undefined;
-  let bestSummary: ActivityCandidate | undefined;
-  let bestTool: ActivityCandidate | undefined;
+  let best: ActivityCandidate | undefined;
   for (const node of run.nodes.values()) {
     // Only work leaves report progress; structural nodes just wrap them.
     if (node.kind !== "agent" && node.kind !== "reduce") continue;
@@ -366,20 +375,28 @@ export function liveActivity(run: RunView): LiveActivity {
     if (lastAt === undefined || seen > lastAt) lastAt = seen;
     const summary = node.progressSummary?.replaceAll(/\s+/g, " ").trim();
     if (summary) {
-      const candidate = { seen, startedAt: node.startedAt, text: summary };
-      if (newerActivity(candidate, bestSummary)) bestSummary = candidate;
+      const candidate: ActivityCandidate = {
+        seen: node.progressSummaryAt ?? seen,
+        startedAt: node.startedAt,
+        text: summary,
+        source: "summary",
+      };
+      if (newerActivity(candidate, best)) best = candidate;
     }
     const tool = node.progressTool?.replaceAll(/\s+/g, " ").trim();
     if (tool) {
-      const candidate = { seen, startedAt: node.startedAt, text: tool };
-      if (newerActivity(candidate, bestTool)) bestTool = candidate;
+      const candidate: ActivityCandidate = {
+        seen,
+        startedAt: node.startedAt,
+        text: `Using ${tool}`,
+        source: "tool",
+      };
+      if (newerActivity(candidate, best)) best = candidate;
     }
   }
-  return {
-    excerpt:
-      bestSummary?.text ?? (bestTool ? `Using ${bestTool.text}` : undefined),
-    lastAt,
-  };
+  return best
+    ? { excerpt: best.text, source: best.source, at: best.seen, lastAt }
+    : { lastAt };
 }
 
 /** Labels never shrink below this many columns before meta gives way. */
@@ -397,11 +414,11 @@ export function formatRunWidget(
   now: number,
   color: Colorize = plainColorize,
   width = Number.POSITIVE_INFINITY,
+  activity = liveActivity(run),
 ): string[] {
   const { done, total } = widgetProgress(run);
   const label = run.header.label ?? run.header.flow.kind;
   const tokens = liveTokens(run);
-  const activity = liveActivity(run);
   const dot = color("dim", " · ");
   const elapsed = formatElapsed(now - run.createdAt);
   const tokensPart = tokens > 0 ? formatTokens(tokens) : undefined;
@@ -505,6 +522,7 @@ export function visibleWidgetRuns(
 
 export class RunWidget {
   private readonly manager: RunManager;
+  private readonly now: () => number;
   private lastContext: ExtensionContext | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private disposed = false;
@@ -513,9 +531,14 @@ export class RunWidget {
   private enabled = true;
   /** True while the workflows panel owns the composer slot. */
   private suppressed = false;
+  private readonly heldActivity = new Map<
+    string,
+    { activity: LiveActivity; shownAt: number; pending?: LiveActivity }
+  >();
 
-  constructor(manager: RunManager) {
+  constructor(manager: RunManager, now: () => number = Date.now) {
     this.manager = manager;
+    this.now = now;
   }
 
   update(ctx?: ExtensionContext): void {
@@ -566,22 +589,72 @@ export class RunWidget {
     return visibleWidgetRuns(this.manager.state.runs.values(), this.hidden);
   }
 
+  private activityFor(run: RunView, now: number): LiveActivity {
+    const candidate = liveActivity(run);
+    const held = this.heldActivity.get(run.header.id);
+    if (!held) {
+      if (candidate.excerpt) {
+        this.heldActivity.set(run.header.id, {
+          activity: candidate,
+          shownAt: now,
+        });
+      }
+      return candidate;
+    }
+    if (candidate.excerpt !== undefined) {
+      const candidateAt = candidate.at ?? 0;
+      const same =
+        held.activity.excerpt === candidate.excerpt &&
+        held.activity.source === candidate.source;
+      if (same) {
+        if (held.pending && candidateAt >= (held.pending.at ?? 0)) {
+          held.pending = undefined;
+        }
+        if (candidateAt >= (held.activity.at ?? 0)) held.activity = candidate;
+      } else {
+        const newestAt = held.pending?.at ?? held.activity.at ?? 0;
+        if (candidateAt >= newestAt) held.pending = candidate;
+      }
+    }
+    if (held.pending && now - held.shownAt >= SUMMARY_MIN_DISPLAY_MS) {
+      held.activity = held.pending;
+      held.pending = undefined;
+      held.shownAt = now;
+    }
+    return { ...held.activity, lastAt: candidate.lastAt };
+  }
+
   private render(context: ExtensionContext): void {
     if (this.disposed) return;
     const running = this.enabled && !this.suppressed ? this.running() : [];
     if (running.length === 0) {
       this.stopTicking();
+      this.heldActivity.clear();
       context.ui.setWidget(WIDGET_KEY, undefined);
       return;
     }
     this.startTicking();
-    const now = Date.now();
+    const now = this.now();
+    const visible = running.slice(0, MAX_RUNS);
+    const visibleIds = new Set(visible.map((run) => run.header.id));
+    for (const runId of this.heldActivity.keys()) {
+      if (!visibleIds.has(runId)) this.heldActivity.delete(runId);
+    }
+    const activities = new Map(
+      visible.map((run) => [run.header.id, this.activityFor(run, now)]),
+    );
     context.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
       const color: Colorize = (name, text) => theme.fg(name, text);
       return new WidthAwareLines((width) => {
-        const lines = running
-          .slice(0, MAX_RUNS)
-          .flatMap((run) => formatRunWidget(run, now, color, width));
+        const lines = visible.flatMap((run) =>
+          formatRunWidget(
+            run,
+            now,
+            color,
+            width,
+            activities.get(run.header.id),
+          ),
+        );
         if (running.length > MAX_RUNS) {
           lines.push(
             color(
@@ -615,6 +688,7 @@ export class RunWidget {
   dispose(): void {
     this.disposed = true;
     this.lastContext = undefined;
+    this.heldActivity.clear();
     this.stopTicking();
   }
 }

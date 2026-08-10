@@ -42,6 +42,7 @@ export const DEPTH_ENV_VAR = "PI_AGENTS_DEPTH";
 const CONTROL_RESPONSE_TIMEOUT_MS = 30_000;
 const TERMINATE_AFTER_MS = 1_000;
 const FORCE_KILL_AFTER_MS = 5_000;
+const SUMMARY_DEBOUNCE_MS = 250;
 /** Minimum spacing between updates driven by streaming text deltas. */
 export const STREAM_PUSH_INTERVAL_MS = 250;
 /** Live tails are deliberately ephemeral and bounded. Only an accepted agent
@@ -296,22 +297,25 @@ function messageText(message: AssistantMessage): string {
   return chunks.join("\n").trim();
 }
 
-/** The newest one-line headline from Pi's provider-supplied thinking blocks. */
-function reasoningSummaryHeadline(thinking: string): string | undefined {
-  const line = thinking
-    .split("\n")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .at(-1);
+/** The headline from one provider-supplied thinking block. */
+function reasoningSummaryHeadline(
+  thinking: string,
+  complete: boolean,
+): string | undefined {
+  const lines = thinking.split("\n");
+  if (!complete && !thinking.endsWith("\n")) lines.pop();
+  const completeLines = lines.map((part) => part.trim()).filter(Boolean);
+  const line =
+    completeLines.find((part) =>
+      /^(?:#{1,6}\s+|\*\*.+\*\*$|__.+__$)/.test(part),
+    ) ?? completeLines[0];
   if (!line) return undefined;
   return clippedLine(
     line
       .replace(/^#{1,6}\s+/, "")
       .replace(/^[-*]\s+/, "")
-      .replace(/^\*\*/, "")
-      .replace(/\*\*$/, "")
-      .replace(/^__/, "")
-      .replace(/__$/, ""),
+      .replace(/^\*\*(.+)\*\*$/, "$1")
+      .replace(/^__(.+)__$/, "$1"),
   );
 }
 
@@ -324,8 +328,10 @@ function messageReasoningSummary(
         ? [part.thinking]
         : [],
     )
-    .join("\n");
-  return reasoningSummaryHeadline(thinking);
+    .at(-1);
+  return thinking === undefined
+    ? undefined
+    : reasoningSummaryHeadline(thinking, true);
 }
 
 function writeSpawnFiles(
@@ -400,12 +406,14 @@ export function createSubprocessSpawnEngine(options?: {
   /** Test hooks; production uses the conservative defaults above. */
   terminateAfterMs?: number;
   forceKillAfterMs?: number;
+  summaryDebounceMs?: number;
   /** Test hook for loading provider fixtures in delegated processes. */
   extraExtensionPaths?: string[];
 }): SpawnEngine {
   const spawnProcess = options?.spawnProcess ?? spawn;
   const terminateAfterMs = options?.terminateAfterMs ?? TERMINATE_AFTER_MS;
   const forceKillAfterMs = options?.forceKillAfterMs ?? FORCE_KILL_AFTER_MS;
+  const summaryDebounceMs = options?.summaryDebounceMs ?? SUMMARY_DEBOUNCE_MS;
 
   return {
     spawn(spec: SpawnSpec): SpawnHandle {
@@ -436,6 +444,8 @@ export function createSubprocessSpawnEngine(options?: {
       const streamedTextBlocks = new Map<number, string>();
       const streamedThinkingBlocks = new Map<number, string>();
       let latestSummary: string | undefined;
+      let pendingSummary: string | undefined;
+      let summaryTimer: ReturnType<typeof setTimeout> | undefined;
       let activitySequence = 0;
       let currentAssistantEntry: string | undefined;
       let turnsStarted = 0;
@@ -493,8 +503,11 @@ export function createSubprocessSpawnEngine(options?: {
       const cleanup = () => {
         if (terminateTimer) clearTimeout(terminateTimer);
         if (forceKillTimer) clearTimeout(forceKillTimer);
+        if (summaryTimer) clearTimeout(summaryTimer);
         terminateTimer = undefined;
         forceKillTimer = undefined;
+        summaryTimer = undefined;
+        pendingSummary = undefined;
         for (const pending of pendingCommands.values()) {
           clearTimeout(pending.timer);
         }
@@ -607,6 +620,28 @@ export function createSubprocessSpawnEngine(options?: {
         });
       };
 
+      const flushPendingSummary = () => {
+        summaryTimer = undefined;
+        const pending = pendingSummary;
+        pendingSummary = undefined;
+        if (!pending || pending === latestSummary) return;
+        latestSummary = pending;
+        pushUpdate();
+      };
+
+      /** Coalesce streamed fragments before publishing the newest headline. */
+      const queueSummary = (summary: string) => {
+        if (summary === latestSummary || summary === pendingSummary) return;
+        pendingSummary = summary;
+        if (summaryTimer) clearTimeout(summaryTimer);
+        if (summaryDebounceMs <= 0) {
+          flushPendingSummary();
+          return;
+        }
+        summaryTimer = setTimeout(flushPendingSummary, summaryDebounceMs);
+        summaryTimer.unref?.();
+      };
+
       const updateAssistantTail = (text: string) => {
         if (!text) return;
         currentAssistantEntry ??= `assistant:${++activitySequence}`;
@@ -676,19 +711,15 @@ export function createSubprocessSpawnEngine(options?: {
         ) {
           const thinking = [...streamedThinkingBlocks.entries()]
             .sort(([left], [right]) => left - right)
-            .map(([, block]) => block)
-            .join("\n");
-          const summary = reasoningSummaryHeadline(thinking);
-          const changed = summary !== undefined && summary !== latestSummary;
-          if (changed) latestSummary = summary;
-          if (
-            summary !== undefined &&
-            (event.type === "thinking_end" ||
-              (changed &&
-                Date.now() - lastStreamPushAt >= STREAM_PUSH_INTERVAL_MS))
-          ) {
-            pushUpdate();
-          }
+            .at(-1)?.[1];
+          const summary =
+            thinking === undefined
+              ? undefined
+              : reasoningSummaryHeadline(
+                  thinking,
+                  event.type === "thinking_end",
+                );
+          if (summary !== undefined) queueSummary(summary);
           return;
         }
 
@@ -734,7 +765,8 @@ export function createSubprocessSpawnEngine(options?: {
             latestText = text;
             updateAssistantTail(text);
           }
-          latestSummary = messageReasoningSummary(message) ?? latestSummary;
+          const summary = messageReasoningSummary(message);
+          if (summary !== undefined) queueSummary(summary);
           streamedTextBlocks.clear();
           streamedThinkingBlocks.clear();
           currentAssistantEntry = undefined;
@@ -812,7 +844,6 @@ export function createSubprocessSpawnEngine(options?: {
             turnsStarted += 1;
             streamedTextBlocks.clear();
             streamedThinkingBlocks.clear();
-            latestSummary = undefined;
             currentAssistantEntry = undefined;
             pushUpdate();
           }
@@ -823,7 +854,6 @@ export function createSubprocessSpawnEngine(options?: {
           ) {
             streamedTextBlocks.clear();
             streamedThinkingBlocks.clear();
-            latestSummary = undefined;
           }
           if (record.type === "message_update") {
             recordPartialMessage(record);

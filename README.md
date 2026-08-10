@@ -795,9 +795,11 @@ course, and keep watching. In the agents panel, `⏎` posts the full agent
 details and `n` starts
 a new definition.
 
-The live summary widget shows each workflow's status and latest reasoning
-summary at a glance, falling back to the active tool name when no summary is
-available. It can be toggled wholesale with `/workflows widget`.
+The live summary widget shows each workflow's status and latest activity at a
+glance, using provider reasoning summaries and active tool names. It keeps
+every activity label visible for at least three seconds
+and then retains it until a newer one arrives, coalescing rapid updates. The
+widget can be toggled wholesale with `/workflows widget`.
 There is no default keybinding for it; bind one via pi's keybindings if you
 want one-keystroke access. While the workflows panel is open the summary hides
 itself — the panel sits directly below it and reports the same run state — and

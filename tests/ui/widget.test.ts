@@ -276,8 +276,10 @@ describe("formatRunWidget", () => {
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
         node.progressSummary = "Merging findings into one prioritized list";
+        node.progressSummaryAt = run.createdAt + 1000;
         node.progressTool = "bash";
         node.progressText = "assistant output fallback";
+        node.lastProgressAt = run.createdAt;
       }
     }
     const [line1] = formatRunWidget(run, run.createdAt + 1000);
@@ -653,6 +655,8 @@ describe("live activity", () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok", runningReduce);
     for (const node of run.nodes.values()) {
       if (node.status === "running" && node.kind === "reduce") {
+        node.progressSummary = "Earlier reasoning";
+        node.progressSummaryAt = run.createdAt;
         node.progressTool = "bash";
         node.progressText = "assistant output";
         node.progressUsage = {
@@ -664,7 +668,7 @@ describe("live activity", () => {
           contextTokens: 0,
           turns: 7,
         };
-        node.lastProgressAt = run.createdAt;
+        node.lastProgressAt = run.createdAt + 1;
       }
     }
     const [line] = formatRunWidget(run, run.createdAt + 1000);
@@ -712,6 +716,7 @@ describe("RunWidget suppression", () => {
     runs.set("a", {
       status: "running",
       header: { id: "a", source: { kind: "command" } },
+      nodes: new Map(),
     } as unknown as RunView);
     const widget = new RunWidget({ state: { runs } } as never);
     const shown: unknown[] = [];
@@ -758,11 +763,116 @@ describe("RunWidget suppression", () => {
 });
 
 describe("RunWidget lifecycle", () => {
+  test("holds every workflow activity while coalescing newer ones", async () => {
+    const run = await recordedRun(
+      REVIEW_FLOW,
+      () => "ok",
+      (event) => {
+        if (event.type === "run_completed") return false;
+        if (event.type !== "node_completed") return true;
+        return !event.instance.endsWith(".reduce") && event.instance !== "$";
+      },
+    );
+    const node = [...run.nodes.values()].find(
+      (candidate) =>
+        candidate.status === "running" && candidate.kind === "reduce",
+    );
+    if (!node) throw new Error("missing running reducer");
+    let now = run.createdAt;
+    node.progressSummary = "First headline";
+    node.progressSummaryAt = now;
+    node.lastProgressAt = now;
+    const widget = new RunWidget(
+      { state: { runs: new Map([[run.header.id, run]]) } } as never,
+      () => now,
+    );
+    const shown: unknown[] = [];
+    const ctx = {
+      mode: "tui",
+      ui: { setWidget: (_key: string, value: unknown) => shown.push(value) },
+    } as never;
+    const renderLast = () => {
+      const factory = shown.at(-1) as (
+        tui: unknown,
+        theme: { fg: (color: string, text: string) => string },
+      ) => { render: (width: number) => string[] };
+      return factory({}, { fg: (_color, text) => text })
+        .render(200)
+        .join("\n");
+    };
+
+    widget.update(ctx);
+    expect(renderLast()).toContain("First headline");
+    now += 100;
+    node.progressSummary = "Skipped headline";
+    node.progressSummaryAt = now;
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("First headline");
+    now += 100;
+    node.progressSummary = "Latest headline";
+    node.progressSummaryAt = now;
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("First headline");
+    now = run.createdAt + 2_999;
+    widget.update();
+    expect(renderLast()).toContain("First headline");
+    now = run.createdAt + 3_000;
+    widget.update();
+    expect(renderLast()).toContain("Latest headline");
+    expect(renderLast()).not.toContain("Skipped headline");
+
+    now += 5_000;
+    node.progressTool = "bash";
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("Using bash");
+
+    now += 100;
+    node.progressTool = undefined;
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("Using bash");
+    now += 100;
+    node.progressTool = "read";
+    node.lastProgressAt = now;
+    widget.update();
+    now += 100;
+    node.progressTool = undefined;
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("Using bash");
+    now = run.createdAt + 10_999;
+    widget.update();
+    expect(renderLast()).toContain("Using bash");
+    now = run.createdAt + 11_000;
+    widget.update();
+    expect(renderLast()).toContain("Using read");
+
+    now += 100;
+    node.progressTool = "bash";
+    node.lastProgressAt = now;
+    widget.update();
+    now += 100;
+    node.progressTool = "read";
+    node.lastProgressAt = now;
+    widget.update();
+    node.progressTool = undefined;
+    now = run.createdAt + 14_000;
+    node.lastProgressAt = now;
+    widget.update();
+    expect(renderLast()).toContain("Using read");
+    expect(renderLast()).not.toContain("Using bash");
+    widget.dispose();
+  });
+
   test("disposal detaches the session context from late updates", () => {
     const runs = new Map<string, RunView>();
     runs.set("a", {
       status: "running",
       header: { id: "a", source: { kind: "command" } },
+      nodes: new Map(),
     } as unknown as RunView);
     const widget = new RunWidget({ state: { runs } } as never);
     const shown: unknown[] = [];

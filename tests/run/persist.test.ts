@@ -17,7 +17,7 @@ import {
 } from "../../src/run/persist.js";
 import { RunManager } from "../../src/run/runs.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
-import { createWorkflowTool } from "../../src/triggers/tool.js";
+import { createWorkflowCreateTool as createWorkflowTool } from "../../src/triggers/tool.js";
 import { NotificationManager } from "../../src/ui/notify.js";
 import { RunWidget } from "../../src/ui/widget.js";
 

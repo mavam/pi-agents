@@ -18,7 +18,7 @@ export type WorkflowSource = Source | "bundled";
 export type Scope = Source | "both";
 
 /** Dot path to a human-facing Markdown string in a workflow's final value. */
-const DISPLAY_PATH_RE = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
+const DISPLAY_PATH_RE = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
 
 /** Validate and normalize optional run-level presentation metadata. */
 export function normalizeDisplayPath(value: unknown): string | undefined {
@@ -46,7 +46,14 @@ export function effectiveScope(
  * Extension-owned orchestration tools that delegated agents cannot receive.
  * Saved workflow composition belongs to the originating interpreter instead.
  */
-export const DELEGATED_AGENT_FORBIDDEN_TOOLS = ["workflow", "steer"] as const;
+export const DELEGATED_AGENT_FORBIDDEN_TOOLS = [
+  "workflow_create",
+  "workflow_list",
+  "workflow_inspect",
+  "workflow_result",
+  "workflow_steer",
+  "workflow_stop",
+] as const;
 
 /**
  * Thinking levels, in ascending order. Lives here (not in the catalog) so

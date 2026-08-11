@@ -964,8 +964,8 @@ describe("execution options", () => {
 
   test("agent nodes cannot request orchestration tools", () => {
     expectIssue(
-      { kind: "agent", task: "t", tools: ["read", "workflow"] },
-      "delegated agents cannot use orchestration tools (workflow)",
+      { kind: "agent", task: "t", tools: ["read", "workflow_create"] },
+      "delegated agents cannot use orchestration tools (workflow_create)",
     );
   });
 
@@ -974,9 +974,9 @@ describe("execution options", () => {
       {
         kind: "parallel",
         branches: { a: { kind: "value", value: "a" } },
-        reduce: { task: "merge {branches}", tools: ["steer"] },
+        reduce: { task: "merge {branches}", tools: ["workflow_stop"] },
       },
-      "delegated agents cannot use orchestration tools (steer)",
+      "delegated agents cannot use orchestration tools (workflow_stop)",
     );
   });
 

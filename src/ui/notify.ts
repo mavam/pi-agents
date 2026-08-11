@@ -15,7 +15,6 @@ import { getSessionFile, isIdle } from "../run/persist.js";
 import type { RunManager } from "../run/runs.js";
 import {
   formatAgentCount,
-  formatRunNotificationControls,
   formatUsage,
   NOTIFICATION_TYPE,
   type RunNotificationDetails,
@@ -128,7 +127,7 @@ export class NotificationManager {
               event.value,
               truncateModelResult(
                 result,
-                `/workflow ${shortId(event.runId)} raw`,
+                `workflow_result({run:"${shortId(event.runId)}",view:"raw"})`,
               ),
             )
           : undefined,
@@ -221,10 +220,7 @@ export class NotificationManager {
     }
     lines.push(
       "",
-      formatRunNotificationControls(
-        notification.runId,
-        notification.copyable === true,
-      ),
+      `Query this run later with workflow_inspect({run:"${id}"}) or workflow_result({run:"${id}"}).`,
     );
     return lines.join("\n");
   }

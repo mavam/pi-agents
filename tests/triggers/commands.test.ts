@@ -571,8 +571,8 @@ describe("workflows panel actions", () => {
     expect(spec.onAction("c", item)).toBeUndefined();
     expect(spec.onAction("r", item)).toBeUndefined();
     expect(notices).toEqual([
-      "/deep-test requires additional named parameters: right. Use the workflow tool or RPC to supply them.",
-      "/deep-test requires additional named parameters: right. Use the workflow tool or RPC to supply them.",
+      "/deep-test requires additional named parameters: right. Use workflow_create or RPC to supply them.",
+      "/deep-test requires additional named parameters: right. Use workflow_create or RPC to supply them.",
     ]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(editorText).toEqual([]);

@@ -178,14 +178,13 @@ describe("NotificationManager", () => {
     expect(sent[0]?.message.content).toContain("agent exploded");
     expect(
       sent[0]?.message.content.indexOf("agent exploded") ?? Number.NaN,
-    ).toBeLessThan(
-      sent[0]?.message.content.indexOf("`/workflow run-fail`") ?? -1,
-    );
+    ).toBeLessThan(sent[0]?.message.content.indexOf("workflow_inspect") ?? -1);
     expect(sent[0]?.message.content).not.toContain("```\nagent exploded");
     expect(sent[0]?.message.details?.bodyKind).toBe("error");
     expect(sent[0]?.message.details?.copyable).toBe(false);
-    expect(sent[0]?.message.content).toContain("[result|raw|agents]");
-    expect(sent[0]?.message.content).not.toContain("[copy|");
+    expect(sent[0]?.message.content).toContain(
+      'workflow_result({run:"run-fail"})',
+    );
     expect(sent[1]?.message.content.split("\n")[0]).toBe(
       "❖ `run-stop` · ⊘ stopped",
     );
@@ -193,8 +192,9 @@ describe("NotificationManager", () => {
     expect(sent[1]?.message.details?.bodyKind).toBe("none");
     expect(sent[1]?.message.details?.body).toBeUndefined();
     expect(sent[1]?.message.details?.copyable).toBe(false);
-    expect(sent[1]?.message.content).toContain("[result|raw|agents]");
-    expect(sent[1]?.message.content).not.toContain("[copy|");
+    expect(sent[1]?.message.content).toContain(
+      'workflow_inspect({run:"run-stop"})',
+    );
   });
 
   test("omits copy from completed notifications without output", () => {
@@ -213,8 +213,7 @@ describe("NotificationManager", () => {
       expect(message.details?.status).toBe("completed");
       expect(message.details?.body).toBe("(no output)");
       expect(message.details?.copyable).toBe(false);
-      expect(message.content).toContain("[result|raw|agents]");
-      expect(message.content).not.toContain("[copy|");
+      expect(message.content).toContain("workflow_result");
     }
   });
 
@@ -227,11 +226,11 @@ describe("NotificationManager", () => {
     notifications.handleRunEvent(completed("run-1", markdown));
     const content = sent[0]?.message.content ?? "";
     expect(content.indexOf(markdown)).toBeLessThan(
-      content.indexOf("`/workflow run-1`"),
+      content.indexOf("workflow_inspect"),
     );
     expect(content).not.toContain(`\`\`\`\n${markdown}`);
     expect(sent[0]?.message.details?.copyable).toBe(true);
-    expect(content).toContain("[copy|result|raw|agents]");
+    expect(content).toContain('workflow_result({run:"run-1"})');
   });
 
   test("keeps complete long structured results as highlighted JSON", () => {
@@ -250,7 +249,7 @@ describe("NotificationManager", () => {
     const fenced = `\`\`\`json\n${json}\n\`\`\``;
     expect(sent[0]?.message.details?.body).toBe(fenced);
     expect(content.indexOf(fenced)).toBeLessThan(
-      content.indexOf("`/workflow run-1`"),
+      content.indexOf("workflow_inspect"),
     );
   });
 
@@ -304,7 +303,7 @@ describe("NotificationManager", () => {
     const resultStart = content.indexOf("```ts");
     expect(content.indexOf("Continue your task")).toBeLessThan(resultStart);
     expect(content).toContain("complete-tail");
-    expect(resultStart).toBeLessThan(content.indexOf("`/workflow run-1`"));
+    expect(resultStart).toBeLessThan(content.indexOf("workflow_inspect"));
     expect(sent[0]?.message.details?.body).toBe(markdown);
   });
 

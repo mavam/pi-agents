@@ -28,8 +28,15 @@ import {
 } from "./triggers/commands.js";
 import { HookManager } from "./triggers/hooks.js";
 import { RpcManager } from "./triggers/rpc.js";
+import {
+  createWorkflowInspectTool,
+  createWorkflowListTool,
+  createWorkflowResultTool,
+  createWorkflowSteerTool,
+  createWorkflowStopTool,
+} from "./triggers/run-tools.js";
 import type { TriggerDeps } from "./triggers/start.js";
-import { createSteerTool, createWorkflowTool } from "./triggers/tool.js";
+import { createWorkflowCreateTool } from "./triggers/tool.js";
 import { FancyFooterRunReporter } from "./ui/footer.js";
 import { NotificationManager } from "./ui/notify.js";
 import {
@@ -79,8 +86,12 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
   const refreshModels = createModelRefresher();
 
   registerRenderers(pi);
-  pi.registerTool(createWorkflowTool(deps));
-  pi.registerTool(createSteerTool(deps));
+  pi.registerTool(createWorkflowCreateTool(deps));
+  pi.registerTool(createWorkflowListTool(deps));
+  pi.registerTool(createWorkflowInspectTool(deps));
+  pi.registerTool(createWorkflowResultTool(deps));
+  pi.registerTool(createWorkflowSteerTool(deps));
+  pi.registerTool(createWorkflowStopTool(deps));
   registerCommands(pi, deps);
 
   const hooks = new HookManager(pi, deps);

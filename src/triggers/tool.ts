@@ -1,5 +1,5 @@
 /**
- * The single model-facing `workflow` tool: runs either a saved workflow by
+ * The model-facing `workflow_create` tool: starts either a saved workflow by
  * name (+ params) or an inline flow expression. A bare agent leaf is a valid
  * flow, so single delegation needs no separate tool.
  *
@@ -29,7 +29,6 @@ import { truncateModelResult, valueText } from "../model/value.js";
 import type { RunStatus } from "../run/events.js";
 import type { RunOutcome } from "../run/interpreter.js";
 import { isProjectTrusted } from "../run/persist.js";
-import { MAX_STEERING_MESSAGE_CHARS } from "../run/runs.js";
 import {
   formatUsage,
   formatWorkflowCallPreview,
@@ -56,7 +55,7 @@ const USE_GATE = `USE ONLY ON EXPLICIT REQUEST — this tool is opt-in, and it o
 
 Mentioning "workflow" or "flow" is not a request; neither is asking about a saved workflow, reading one, editing one, or discussing this algebra — in a conversation about workflows those words appear constantly. Nothing else is a trigger either: not a large multi-step task, a long list of independent items, a multi-file refactor, a review, an audit, a research question, or a task you judge parallelizable. Do that work yourself. If a workflow seems better but was not requested, do the work directly and say so in one sentence — do not call the tool to make the offer concrete.
 
-For a run that already exists, never call this tool: steer a live agent with \`steer\`, and point the user at /workflow <run-id> to inspect or stop one.`;
+For a run that already exists, never call this tool: use workflow_list, workflow_inspect, workflow_result, workflow_steer, or workflow_stop.`;
 
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
 - {"kind":"agent","task":"...","name":"...","json":{"type":"object","properties":{...},"required":[...],"additionalProperties":false},"model":"provider/id from <models> (bare id resolves to the earliest listed provider)","thinking":"...","skills":["..."],"tools":["..."],"cwd":"...","scope":"user"|"project"|"both"} — one delegated agent (leaf; a bare agent node is a valid flow). Omit "name" for an anonymous ad-hoc agent; set it only to use a profile from <agents>. Omit "json" for a string result; include a substantive JSON Schema Draft 7 object for a machine-readable result. Every execution option works with or without "name". "skills" is a closed selection: omit it on an anonymous call to retain ambient discovery, name exactly the skills to inject, or use [] to disable discovery. A named call inherits its profile's closed skill list unless the node replaces it. "tools" is a tool allowlist ([] means no tools) and likewise replaces a named profile's list.
@@ -76,7 +75,7 @@ Data flows ONLY through explicit references: "as":"x" names a step's value; late
 export const FLOW_PARAM_DESCRIPTION =
   'Inline flow expression to run (instead of "name"). Node grammar: see the tool description.';
 
-const WorkflowToolParams = Type.Object({
+const WorkflowCreateParams = Type.Object({
   name: Type.Optional(
     Type.String({
       description:
@@ -99,7 +98,7 @@ const WorkflowToolParams = Type.Object({
   display: Type.Optional(
     Type.String({
       description:
-        "Dot path to a Markdown string in the final value for human-facing rendering. Overrides a saved workflow's display path. The complete value remains available to machine consumers and through /workflow <id> raw.",
+        "Dot path to a Markdown string in the final value for human-facing rendering. Numeric segments index arrays. Overrides a saved workflow's display path. The complete value remains available to machine consumers and workflow_result with view raw.",
     }),
   ),
   budgets: Type.Optional(
@@ -187,104 +186,18 @@ const WorkflowToolParams = Type.Object({
   ),
 });
 
-export type WorkflowToolParamsType = Static<typeof WorkflowToolParams>;
+export type WorkflowCreateParamsType = Static<typeof WorkflowCreateParams>;
 
-export interface WorkflowToolDetails {
+export interface WorkflowCreateDetails {
   runId: string;
   status: RunStatus;
   label?: string;
   error?: string;
 }
 
-const SteerToolParams = Type.Object({
-  run: Type.String({
-    description: "Full workflow run id or unique id prefix.",
-  }),
-  instance: Type.Optional(
-    Type.String({
-      description:
-        "Exact live node instance. Omit only when the run has one steerable agent.",
-    }),
-  ),
-  message: Type.String({
-    description: `Course correction to queue for the delegated agent (maximum ${MAX_STEERING_MESSAGE_CHARS} characters).`,
-  }),
-});
-
-interface SteerToolDetails {
-  runId: string;
-  instance: string;
-}
-
-/** Model-facing control for a live background agent. */
-export function createSteerTool(
-  deps: TriggerDeps,
-): ToolDefinition<typeof SteerToolParams, SteerToolDetails> {
-  return {
-    name: "steer",
-    label: "Steer",
-    description:
-      "Queue a course correction for one agent in a live background workflow run. The message is delivered after the agent's current assistant turn finishes its tool calls. If several agents are running, pass an exact instance returned by the error message or /workflow <run-id> inspection.",
-    promptSnippet:
-      "steer: correct the course of one agent in a live background workflow run",
-    promptGuidelines: [
-      "Use steer only for a run that is already live; it never starts, restarts, or resumes an agent.",
-      "Omit instance only when exactly one agent in the run is currently steerable.",
-    ],
-    parameters: SteerToolParams,
-    async execute(_toolCallId, params) {
-      const lookup = deps.manager.find(params.run);
-      if (lookup.kind === "missing") {
-        throw new Error(`No run matching '${params.run}'.`);
-      }
-      if (lookup.kind === "ambiguous") {
-        throw new Error(
-          `Ambiguous run id '${params.run}': ${lookup.matches.map((run) => shortId(run.header.id)).join(", ")}`,
-        );
-      }
-      const runId = lookup.run.header.id;
-      const available = deps.manager.steerableInstances(runId);
-      const instance =
-        params.instance ?? (available.length === 1 ? available[0] : undefined);
-      if (!instance || !available.includes(instance)) {
-        const choices = available.length > 0 ? available.join(", ") : "none";
-        throw new Error(
-          params.instance
-            ? `Instance '${params.instance}' is not steerable. Available: ${choices}`
-            : `Run ${shortId(runId)} has ${available.length} steerable instances. Specify one of: ${choices}`,
-        );
-      }
-      const result = await deps.manager.steer(
-        runId,
-        instance,
-        params.message,
-        "tool",
-      );
-      if (result.status !== "queued") {
-        throw new Error(
-          result.status === "rejected"
-            ? result.error
-            : result.reason === "run_not_live"
-              ? `Run ${shortId(runId)} is not live.`
-              : `Instance '${instance}' is no longer steerable.`,
-        );
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Steering queued for ${instance} in run ${shortId(runId)}. It will be delivered after the current assistant turn finishes its tool calls.`,
-          },
-        ],
-        details: { runId, instance },
-      };
-    },
-  };
-}
-
-/** Backwards-compatible names for the workflow tool's shared UI formatters. */
+/** Shared UI formatters for the workflow creation tool. */
 export type ToolColorize = WorkflowPreviewColorize;
-export type WorkflowToolRenderState = WorkflowPreviewState;
+export type WorkflowCreateRenderState = WorkflowPreviewState;
 export const formatCallPreview = formatWorkflowCallPreview;
 export const formatResultPreview = formatWorkflowResultPreview;
 
@@ -328,7 +241,7 @@ export function formatRunResult(
   if (outcome.status === "completed") {
     const value = truncateModelResult(
       valueText(outcome.value) ?? "",
-      `/workflow ${shortId(runId)} raw`,
+      `workflow_result({run:"${shortId(runId)}",view:"raw"})`,
     );
     lines.push("<value>", value, "</value>");
   } else {
@@ -338,36 +251,36 @@ export function formatRunResult(
   return lines.join("\n");
 }
 
-export function createWorkflowTool(
+export function createWorkflowCreateTool(
   deps: TriggerDeps,
 ): ToolDefinition<
-  typeof WorkflowToolParams,
-  WorkflowToolDetails,
-  WorkflowToolRenderState
+  typeof WorkflowCreateParams,
+  WorkflowCreateDetails,
+  WorkflowCreateRenderState
 > {
   return {
-    name: "workflow",
-    label: "Workflow",
-    description: `Run a multi-agent workflow of delegated pi agents.
+    name: "workflow_create",
+    label: "Workflow Create",
+    description: `Create a run of a multi-agent workflow of delegated pi agents.
 
 ${USE_GATE}
 
 Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flow" for an inline expression. A top-level "display":"path.to.markdown" selects a string from the final value for human-facing Markdown rendering while preserving the complete value for the calling model, parent workflows, and raw inspection. ${FLOW_REFERENCE}`,
     promptSnippet:
-      "workflow: run a workflow of delegated agents — only when the user explicitly asks for a workflow or for delegation, never on your own initiative",
+      "Create a workflow run of delegated agents — only when the user explicitly asks for delegation",
     promptGuidelines: [
-      'Do not call `workflow` unless the user affirmatively asked to run one — "run the X workflow", "delegate this", "spawn agents", "do these in parallel", or a saved workflow they asked for by name or by its <trigger> situation. Merely mentioning "workflow"/"flow", or asking about a saved workflow, is not a request. Otherwise do the task yourself.',
+      'Do not call workflow_create unless the user affirmatively asked to run one — "run the X workflow", "delegate this", "spawn agents", "do these in parallel", or a saved workflow they asked for by name or by its <trigger> situation. Merely mentioning "workflow"/"flow", or asking about a saved workflow, is not a request. Otherwise do the task yourself.',
       "Size, step count, parallelizability, and review/refactor/audit/research shape are not triggers. When a workflow looks like a good fit but was not requested, do the work directly and offer it in one sentence instead of calling the tool.",
-      "`workflow` only starts new runs. For a run that already exists, use `steer` for a live agent, or point the user at /workflow <run-id> to inspect or stop it.",
-      "Once a workflow is requested: prefer a saved workflow via workflow({name, params}) when one in <workflows> matches; otherwise compose an inline flow — a bare agent leaf for one isolated task, or sequence/parallel/map/loop/while for multi-agent work.",
+      "workflow_create only starts new runs. For an existing run, use workflow_list, workflow_inspect, workflow_result, workflow_steer, or workflow_stop.",
+      "Once a workflow is requested: prefer a saved workflow via workflow_create({name, params}) when one in <workflows> matches; otherwise compose an inline flow — a bare agent leaf for one isolated task, or sequence/parallel/map/loop/while for multi-agent work.",
       "Route deterministically with `switch` instead of asking an agent to decide: predicates over a JSON binding pick exactly one arm; use a `value` arm to yield data without spawning an agent.",
       "Omit the agent name for one-off delegation; it is only needed to select a reusable profile from <agents>. Never invent agent names or create agent-definition files merely to execute an ad-hoc flow — an anonymous node can select skills, tools, model, and thinking directly.",
       "Request a skill by name on the node that needs it. An unknown skill fails the run before anything spawns, so do not guess names; take them from <available_skills>.",
       "An unknown model fails the run before anything spawns; take identifiers from <models>.",
       'In flows, thread data explicitly: bind sequence steps with "as" and reference {name}/{previous} in later tasks; declare a concrete "json" schema when downstream steps need structured access.',
-      "When a workflow returns structured data with a human-readable Markdown field, set the workflow call's top-level display to that field's dot path; display changes presentation only and preserves the complete result.",
+      "When workflow_create returns structured data with a human-readable Markdown field, set its top-level display to that field's dot path; display changes presentation only and preserves the complete result.",
     ],
-    parameters: WorkflowToolParams,
+    parameters: WorkflowCreateParams,
     renderCall(args, theme, context) {
       const color: ToolColorize = (name, text) => theme.fg(name, text);
       // Resolving a saved workflow's tree hits the filesystem; memoize per
@@ -384,7 +297,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
       const streamingState = context.argsComplete ? undefined : context.state;
       const callText =
         formatCallPreview(args, color, savedFlowTree, streamingState) ||
-        "workflow";
+        "workflow_create";
       if (context.lastComponent instanceof Text) {
         if (context.state.callText !== callText) {
           context.lastComponent.setText(callText);
@@ -402,7 +315,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
       // The stored tool result freezes at "running" for backgrounded runs;
       // consult the live run state so scrollback shows the actual outcome.
       const live = deps.manager.state.runs.get(result.details.runId);
-      const details: WorkflowToolDetails =
+      const details: WorkflowCreateDetails =
         live && live.status !== "running"
           ? {
               ...result.details,
@@ -489,7 +402,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
           content: [
             {
               type: "text",
-              text: `Started workflow run ${id}${label ? ` (${label})` : ""} in the background. End your turn now — do not wait for it. When the run finishes you will be re-invoked with its result to continue; the user can inspect it with /workflow ${id}.`,
+              text: `Started workflow run ${id}${label ? ` (${label})` : ""} in the background. End your turn now — do not wait for it. When the run finishes you will be re-invoked with its result to continue. Use workflow_inspect or workflow_result with run ${id} if you need to query it later.`,
             },
           ],
           details: { runId, status: "running", label },

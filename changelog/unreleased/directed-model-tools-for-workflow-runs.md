@@ -17,11 +17,4 @@ The model can now manage workflow runs without asking you to relay `/workflow` c
 - `workflow_steer`: Queue a course correction for a live node.
 - `workflow_stop`: Stop a live run after you explicitly request cancellation.
 
-These tools replace the model-facing `workflow` and `steer` tools. Integrations that select pi-agents tools by name must migrate:
-
-```text
-workflow → workflow_create
-steer    → workflow_steer
-```
-
 Large persisted results remain recoverable through repeated `workflow_result` calls with `nextCursor`.

@@ -47,9 +47,6 @@ export function effectiveScope(
  * Saved workflow composition belongs to the originating interpreter instead.
  */
 export const DELEGATED_AGENT_FORBIDDEN_TOOLS = [
-  // Retain removed names so stale profiles fail with migration guidance.
-  "workflow",
-  "steer",
   "workflow_create",
   "workflow_list",
   "workflow_inspect",

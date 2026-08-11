@@ -16,6 +16,7 @@ import type {
 import { emptyUsage } from "../../src/engine/types.js";
 import { validateFlow } from "../../src/model/validate.js";
 import { MAX_MODEL_RESULT_CHARS } from "../../src/model/value.js";
+import type { RunEvent } from "../../src/run/events.js";
 import { RunManager } from "../../src/run/runs.js";
 import {
   createWorkflowSteerTool as createSteerTool,
@@ -181,7 +182,11 @@ afterEach(() => {
   fs.rmSync(projectDir, { recursive: true, force: true });
 });
 
-const ctx = () => ({ cwd: projectDir }) as unknown as ExtensionContext;
+const ctx = (sessionFile?: string) =>
+  ({
+    cwd: projectDir,
+    sessionManager: { getSessionFile: () => sessionFile },
+  }) as unknown as ExtensionContext;
 
 describe("workflow_create tool", () => {
   test("runs an inline bare agent leaf", async () => {
@@ -235,6 +240,26 @@ describe("workflow_create tool", () => {
     expect(
       deps.manager.state.runs.get(result.details.runId)?.header.display,
     ).toBe("review.markdown");
+
+    const arrayResult = await tool.execute(
+      "t-display-array",
+      {
+        flow: {
+          kind: "value",
+          value: [{ markdown: "# Array review" }],
+        },
+        display: "0.markdown",
+      },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(
+      deps.manager.state.runs.get(arrayResult.details.runId)?.header.display,
+    ).toBe("0.markdown");
+    expect((arrayResult.content[0] as { text: string }).text).toContain(
+      "# Array review",
+    );
   });
 
   test("runs a saved workflow by name with params", async () => {
@@ -646,6 +671,77 @@ describe("workflow_steer tool", () => {
 });
 
 describe("directed workflow run tools", () => {
+  test("scopes listing and lookup to the current session", async () => {
+    const { engine } = fakeEngine(() => "unused");
+    const deps = makeDeps(engine);
+    const current = deps.manager.start({
+      flow: validateFlow({ kind: "value", value: "current" }),
+      cwd: projectDir,
+      source: { kind: "tool" },
+      originSessionFile: "current.jsonl",
+    });
+    const foreign = deps.manager.start({
+      flow: validateFlow({ kind: "value", value: "foreign" }),
+      cwd: projectDir,
+      source: { kind: "tool" },
+      originSessionFile: "foreign.jsonl",
+    });
+    await Promise.all([current.done, foreign.done]);
+    const collidingForeignId = `${current.runId.slice(0, 8)}-foreign`;
+    deps.manager.absorbHistory([
+      {
+        type: "run_created",
+        at: Date.now(),
+        run: {
+          id: collidingForeignId,
+          source: { kind: "tool" },
+          flow: { kind: "value", value: "foreign prefix" },
+          originSessionFile: "foreign.jsonl",
+          depth: 0,
+        },
+      },
+      {
+        type: "run_completed",
+        at: Date.now() + 1,
+        runId: collidingForeignId,
+        status: "completed",
+        value: "foreign prefix",
+        usage: emptyUsage(),
+        agents: 0,
+      },
+    ] satisfies RunEvent[]);
+
+    const listed = await createWorkflowListTool(deps).execute(
+      "list-session",
+      {},
+      undefined,
+      undefined,
+      ctx("current.jsonl"),
+    );
+    expect(listed.details.runs.map((run) => run.runId)).toEqual([
+      current.runId,
+    ]);
+    const currentResult = await createWorkflowResultTool(deps).execute(
+      "result-current-prefix",
+      { run: current.runId.slice(0, 8) },
+      undefined,
+      undefined,
+      ctx("current.jsonl"),
+    );
+    expect((currentResult.content[0] as { text: string }).text).toContain(
+      "current",
+    );
+    await expect(
+      createWorkflowResultTool(deps).execute(
+        "result-foreign",
+        { run: foreign.runId },
+        undefined,
+        undefined,
+        ctx("current.jsonl"),
+      ),
+    ).rejects.toThrow(`No run matching '${foreign.runId}'`);
+  });
+
   test("lists recent runs and filters by status", async () => {
     const { engine } = fakeEngine(() => "done");
     const deps = makeDeps(engine);
@@ -698,6 +794,15 @@ describe("directed workflow run tools", () => {
       ctx(),
     );
     expect(running.details).toEqual({ total: 0, cursor: 0, runs: [] });
+    await expect(
+      listTool.execute(
+        "list-beyond",
+        { cursor: 3 },
+        undefined,
+        undefined,
+        ctx(),
+      ),
+    ).rejects.toThrow("Cursor 3 exceeds the 2 matching runs");
   });
 
   test("inspects a live run and returns exact steerable instances", async () => {
@@ -734,9 +839,70 @@ describe("directed workflow run tools", () => {
     expect((inspected.content[0] as { text: string }).text).not.toContain(
       '"value"',
     );
+    await expect(
+      createWorkflowResultTool(deps).execute(
+        "result-running",
+        { run: started.runId },
+        undefined,
+        undefined,
+        ctx(),
+      ),
+    ).rejects.toThrow("is still running");
 
     controlled.finish();
     await started.done;
+  });
+
+  test("paginates multi-node inspection", async () => {
+    const { engine } = fakeEngine((spec) => spec.task);
+    const deps = makeDeps(engine);
+    const started = deps.manager.start({
+      flow: validateFlow({
+        kind: "sequence",
+        steps: [
+          { kind: "agent", task: "one" },
+          { kind: "agent", task: "two" },
+          { kind: "agent", task: "three" },
+        ],
+      }),
+      cwd: projectDir,
+      source: { kind: "tool" },
+    });
+    await started.done;
+    const tool = createWorkflowInspectTool(deps);
+
+    const first = await tool.execute(
+      "inspect-page-1",
+      { run: started.runId, limit: 1 },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(first.details.totalNodes).toBe(3);
+    expect(first.details.nodes).toHaveLength(1);
+    expect(first.details.nextCursor).toBe(1);
+
+    const second = await tool.execute(
+      "inspect-page-2",
+      { run: started.runId, cursor: 1, limit: 1 },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(second.details.cursor).toBe(1);
+    expect(second.details.nodes).toHaveLength(1);
+    expect(second.details.nodes[0]?.instance).not.toBe(
+      first.details.nodes[0]?.instance,
+    );
+    await expect(
+      tool.execute(
+        "inspect-beyond",
+        { run: started.runId, cursor: 4 },
+        undefined,
+        undefined,
+        ctx(),
+      ),
+    ).rejects.toThrow("Cursor 4 exceeds the run's 3 nodes");
   });
 
   test("retrieves presented, selected, raw, paginated, and node results", async () => {
@@ -795,8 +961,17 @@ describe("directed workflow run tools", () => {
     expect(raw.details.truncated).toBe(true);
     expect(raw.details.nextCursor).toBe(10);
     expect((raw.content[0] as { text: string }).text).toContain(
-      'workflow_result({"run":',
+      `workflow_result({"run":"${started.runId}"`,
     );
+    await expect(
+      tool.execute(
+        "result-beyond",
+        { run: started.runId, view: "raw", cursor: raw.details.totalChars + 1 },
+        undefined,
+        undefined,
+        ctx(),
+      ),
+    ).rejects.toThrow("exceeds the result length");
 
     const nodeResult = await tool.execute(
       "result-4",
@@ -808,6 +983,121 @@ describe("directed workflow run tools", () => {
     expect(nodeResult.details.instance).toBe("$");
     expect((nodeResult.content[0] as { text: string }).text).toContain(
       "Approved.",
+    );
+
+    const arrayStarted = deps.manager.start({
+      flow: validateFlow({
+        kind: "value",
+        value: [{ report: "array-root result" }],
+      }),
+      cwd: projectDir,
+      source: { kind: "tool" },
+    });
+    await arrayStarted.done;
+    const arrayRoot = await tool.execute(
+      "result-array-root",
+      { run: arrayStarted.runId, path: "0.report" },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect((arrayRoot.content[0] as { text: string }).text).toContain(
+      "array-root result",
+    );
+
+    const fallbackStarted = deps.manager.start({
+      flow: validateFlow({ kind: "value", value: { report: "fallback" } }),
+      cwd: projectDir,
+      display: "missing",
+      source: { kind: "tool" },
+    });
+    await fallbackStarted.done;
+    const fallback = await tool.execute(
+      "result-display-fallback",
+      { run: fallbackStarted.runId },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(fallback.details.warning).toContain(
+      "Display path `missing` was not found",
+    );
+
+    await expect(
+      tool.execute(
+        "result-invalid-path",
+        { run: started.runId, path: "findings..0" },
+        undefined,
+        undefined,
+        ctx(),
+      ),
+    ).rejects.toThrow("Invalid 'path'");
+    await expect(
+      tool.execute(
+        "result-missing-path",
+        { run: started.runId, path: "missing" },
+        undefined,
+        undefined,
+        ctx(),
+      ),
+    ).rejects.toThrow("Result path 'missing' was not found");
+  });
+
+  test("recovers a failed node's partial result", async () => {
+    const { engine } = fakeEngine(() => "unused");
+    const deps = makeDeps(engine);
+    const runId = "partial-result-run";
+    const now = Date.now();
+    const events: RunEvent[] = [
+      {
+        type: "run_created",
+        at: now,
+        run: {
+          id: runId,
+          source: { kind: "tool" },
+          flow: { kind: "agent", task: "fail after progress" },
+          depth: 0,
+        },
+      },
+      {
+        type: "node_started",
+        at: now + 1,
+        runId,
+        path: "$",
+        instance: "$",
+        kind: "agent",
+      },
+      {
+        type: "node_failed",
+        at: now + 2,
+        runId,
+        path: "$",
+        instance: "$",
+        error: "budget exceeded",
+        partialText: "preserved partial answer",
+      },
+      {
+        type: "run_completed",
+        at: now + 3,
+        runId,
+        status: "failed",
+        error: "budget exceeded",
+        usage: emptyUsage(),
+        agents: 1,
+      },
+    ];
+    deps.manager.absorbHistory(events);
+
+    const result = await createWorkflowResultTool(deps).execute(
+      "result-partial",
+      { run: runId, instance: "$" },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(result.details.partial).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain(
+      "preserved partial answer",
     );
   });
 
@@ -871,9 +1161,10 @@ describe("directed workflow run tools", () => {
     expect(
       JSON.stringify(createWorkflowStopTool(deps).parameters),
     ).not.toContain("message");
-    expect(JSON.stringify(createSteerTool(deps).parameters)).toContain(
-      "message",
-    );
+    const steerSchema = JSON.stringify(createSteerTool(deps).parameters);
+    expect(steerSchema).toContain("message");
+    expect(steerSchema).toContain('"minLength":1');
+    expect(steerSchema).toContain('"maxLength":2000');
   });
 });
 

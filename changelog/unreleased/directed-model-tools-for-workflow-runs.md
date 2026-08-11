@@ -8,7 +8,7 @@ prs:
 created: 2026-08-11T11:33:07.614056Z
 ---
 
-The model can now inspect and control persisted workflow runs without asking you to relay `/workflow` command output. It can list recent runs, inspect a live run tree, retrieve paginated run or node results, steer an agent, and stop a run when you explicitly request cancellation.
+The model can now inspect and control the current session's persisted workflow runs without asking you to relay `/workflow` command output. It can list recent runs, inspect a live run tree, retrieve paginated run or node results, steer an agent, and stop a run when you explicitly request cancellation.
 
 The model-facing `workflow` and `steer` tools have been replaced by directed tools. Integrations that select pi-agents tools by name must migrate:
 

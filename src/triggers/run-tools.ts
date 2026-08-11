@@ -1,8 +1,12 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { resolvePath } from "../model/interpolate.js";
 import type { RunStatus } from "../run/events.js";
+import { getSessionFile } from "../run/persist.js";
 import type { RunManager } from "../run/runs.js";
 import { MAX_STEERING_MESSAGE_CHARS } from "../run/runs.js";
 import { type RunView, workNodes } from "../run/state.js";
@@ -22,21 +26,38 @@ const DEFAULT_INSPECT_LIMIT = 20;
 const MAX_INSPECT_LIMIT = 25;
 const DEFAULT_RESULT_LIMIT = 16_000;
 const MAX_RESULT_LIMIT = 50_000;
-const RESULT_PATH_RE = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
+const RESULT_PATH_RE = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
 
-function resolveRun(manager: RunManager, ref: string): RunView {
-  const lookup = manager.find(ref);
-  if (lookup.kind === "missing") {
+function isRunInSession(
+  run: RunView,
+  sessionFile: string | undefined,
+): boolean {
+  const origin = run.header.originSessionFile;
+  return origin === undefined || origin === sessionFile;
+}
+
+function resolveRun(
+  manager: RunManager,
+  ref: string,
+  ctx: ExtensionContext,
+): RunView {
+  const sessionFile = getSessionFile(ctx);
+  const exact = manager.state.runs.get(ref);
+  if (exact && isRunInSession(exact, sessionFile)) return exact;
+  const matches = [...manager.state.runs.values()].filter(
+    (run) => isRunInSession(run, sessionFile) && run.header.id.startsWith(ref),
+  );
+  if (matches.length === 0) {
     throw new Error(`No run matching '${ref}'.`);
   }
-  if (lookup.kind === "ambiguous") {
+  if (matches.length > 1) {
     throw new Error(
-      `Ambiguous run id '${ref}': ${lookup.matches
+      `Ambiguous run id '${ref}': ${matches
         .map((run) => shortId(run.header.id))
         .join(", ")}`,
     );
   }
-  return lookup.run;
+  return matches[0] as RunView;
 }
 
 function compactText(
@@ -102,12 +123,21 @@ export function createWorkflowListTool(
       "List recent workflow runs persisted in the current session. Optionally filter by status. Results are paginated and nextCursor indicates another page. Use workflow_inspect with a returned run ID for its tree and live state.",
     promptSnippet: "List recent workflow runs from the current session",
     parameters: WorkflowListParams,
-    async execute(_toolCallId, params) {
+    async execute(
+      _toolCallId,
+      params,
+      _signal,
+      _onUpdate,
+      ctx: ExtensionContext,
+    ) {
+      const sessionFile = getSessionFile(ctx);
       const matching = [...deps.manager.state.order]
         .reverse()
         .flatMap((runId) => {
           const run = deps.manager.state.runs.get(runId);
-          return run && (!params.status || run.status === params.status)
+          return run &&
+            isRunInSession(run, sessionFile) &&
+            (!params.status || run.status === params.status)
             ? [run]
             : [];
         });
@@ -214,8 +244,14 @@ export function createWorkflowInspectTool(
     promptSnippet:
       "Inspect the status and node tree of an existing workflow run",
     parameters: WorkflowInspectParams,
-    async execute(_toolCallId, params) {
-      const run = resolveRun(deps.manager, params.run);
+    async execute(
+      _toolCallId,
+      params,
+      _signal,
+      _onUpdate,
+      ctx: ExtensionContext,
+    ) {
+      const run = resolveRun(deps.manager, params.run, ctx);
       const steerable = new Set(deps.manager.steerableInstances(run.header.id));
       const nodes = workNodes(run);
       const cursor = params.cursor ?? 0;
@@ -297,7 +333,7 @@ const WorkflowResultParams = Type.Object({
   path: Type.Optional(
     Type.String({
       description:
-        "Dot path to select within the underlying structured value before rendering.",
+        "Dot path to select within the underlying structured value before rendering. Numeric segments index arrays.",
     }),
   ),
   cursor: Type.Optional(
@@ -337,15 +373,21 @@ export function createWorkflowResultTool(
   return {
     name: "workflow_result",
     label: "Workflow Result",
-    description: `Retrieve a persisted workflow run result or one node result. Results are paginated by character offset; each call returns at most ${MAX_RESULT_LIMIT} characters and reports nextCursor when more remain. Use path to select part of a structured value and view raw to preserve its JSON representation.`,
+    description: `Retrieve a persisted workflow run result or one node result. Results are paginated by character offset; calls default to ${DEFAULT_RESULT_LIMIT} characters, accept up to ${MAX_RESULT_LIMIT}, and report nextCursor when more remain. Use path to select part of a structured value and view raw to preserve its JSON representation.`,
     promptSnippet:
       "Retrieve a workflow run or node result, with path selection and pagination",
     promptGuidelines: [
       "When workflow_result reports nextCursor, call workflow_result again with that cursor only when the omitted content is needed for the task.",
     ],
     parameters: WorkflowResultParams,
-    async execute(_toolCallId, params) {
-      const run = resolveRun(deps.manager, params.run);
+    async execute(
+      _toolCallId,
+      params,
+      _signal,
+      _onUpdate,
+      ctx: ExtensionContext,
+    ) {
+      const run = resolveRun(deps.manager, params.run, ctx);
       const node = params.instance ? run.nodes.get(params.instance) : undefined;
       if (params.instance && !node) {
         throw new Error(
@@ -439,7 +481,7 @@ export function createWorkflowResultTool(
       lines.push("<value>", text.slice(cursor, end), "</value>");
       if (nextCursor !== undefined) {
         const continuation = {
-          run: shortId(run.header.id),
+          run: run.header.id,
           instance: node?.instance,
           view,
           path,
@@ -468,6 +510,8 @@ const WorkflowSteerParams = Type.Object({
     }),
   ),
   message: Type.String({
+    minLength: 1,
+    maxLength: MAX_STEERING_MESSAGE_CHARS,
     description: `Course correction to queue (maximum ${MAX_STEERING_MESSAGE_CHARS} characters).`,
   }),
 });
@@ -492,8 +536,14 @@ export function createWorkflowSteerTool(
       "Omit workflow_steer's instance only when exactly one agent in the run is currently steerable.",
     ],
     parameters: WorkflowSteerParams,
-    async execute(_toolCallId, params) {
-      const run = resolveRun(deps.manager, params.run);
+    async execute(
+      _toolCallId,
+      params,
+      _signal,
+      _onUpdate,
+      ctx: ExtensionContext,
+    ) {
+      const run = resolveRun(deps.manager, params.run, ctx);
       const runId = run.header.id;
       const available = deps.manager.steerableInstances(runId);
       const instance =
@@ -559,8 +609,14 @@ export function createWorkflowStopTool(
       "Call workflow_stop only when the user explicitly asks to stop or cancel the run; never terminate a run merely because it appears slow, unnecessary, or likely to fail.",
     ],
     parameters: WorkflowStopParams,
-    async execute(_toolCallId, params) {
-      const run = resolveRun(deps.manager, params.run);
+    async execute(
+      _toolCallId,
+      params,
+      _signal,
+      _onUpdate,
+      ctx: ExtensionContext,
+    ) {
+      const run = resolveRun(deps.manager, params.run, ctx);
       if (!deps.manager.isLive(run.header.id)) {
         const details: WorkflowStopDetails = {
           runId: run.header.id,

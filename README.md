@@ -856,11 +856,13 @@ The model uses one directed tool for each run operation:
 | `workflow_steer` | Queue a course correction for a live node. |
 | `workflow_stop` | Stop a live run after you explicitly request cancellation. |
 
-`workflow_list` and `workflow_inspect` report a `nextCursor` when another page
-of runs or nodes remains. `workflow_result` returns at most 50,000 characters
-per call and reports the same field when more content remains. Pass that cursor
-to the next call, or
-use `path` to select a smaller value before retrieval. The `presented` view
+These tools only expose runs belonging to the current session. `workflow_list`
+and `workflow_inspect` report a `nextCursor` when another page
+of runs or nodes remains. `workflow_result` returns 16,000 characters by
+default, accepts a limit of up to 50,000, and reports the same field when more
+content remains. Pass that cursor to the next call, or use `path` to select a
+smaller value before retrieval; numeric path segments index arrays. The
+`presented` view
 uses the run's display selection, while `raw` preserves the underlying JSON
 representation.
 

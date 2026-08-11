@@ -171,6 +171,14 @@ describe("skills and tools precedence", () => {
     expect(resolution.problems.join("\n")).toContain(
       "compose the work in the parent flow",
     );
+
+    writeAgent(projectDir, "legacy-reviewer", { tools: "[steer]" });
+    const legacy = resolve({ agent: "legacy-reviewer" });
+    expect(legacy.ok).toBe(false);
+    if (legacy.ok) throw new Error("expected legacy resolution failure");
+    expect(legacy.problems.join("\n")).toContain(
+      "delegated agents cannot use orchestration tools (steer)",
+    );
   });
 
   test("a call-site tool list replaces a forbidden profile list", () => {

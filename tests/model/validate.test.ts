@@ -967,6 +967,10 @@ describe("execution options", () => {
       { kind: "agent", task: "t", tools: ["read", "workflow_create"] },
       "delegated agents cannot use orchestration tools (workflow_create)",
     );
+    expectIssue(
+      { kind: "agent", task: "t", tools: ["workflow"] },
+      "delegated agents cannot use orchestration tools (workflow)",
+    );
   });
 
   test("reducers cannot request orchestration tools", () => {

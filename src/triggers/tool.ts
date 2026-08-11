@@ -98,7 +98,7 @@ const WorkflowCreateParams = Type.Object({
   display: Type.Optional(
     Type.String({
       description:
-        "Dot path to a Markdown string in the final value for human-facing rendering. Overrides a saved workflow's display path. The complete value remains available to machine consumers and workflow_result with view raw.",
+        "Dot path to a Markdown string in the final value for human-facing rendering. Numeric segments index arrays. Overrides a saved workflow's display path. The complete value remains available to machine consumers and workflow_result with view raw.",
     }),
   ),
   budgets: Type.Optional(

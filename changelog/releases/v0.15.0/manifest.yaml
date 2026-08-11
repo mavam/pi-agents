@@ -1,0 +1,9 @@
+created: 2026-08-11
+title: Directed workflow run tools
+intro: >-
+  Pi Agents gives the model dedicated tools to create, list, inspect, retrieve, steer,
+  and stop workflow runs. Live summaries now stay compact while surfacing agent progress
+  and recent activity.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.14.0

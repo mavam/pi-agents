@@ -46,6 +46,13 @@ describe("extension process boundary", () => {
     ) as ExtensionAPI;
 
     registerAgentExtension(pi, 0);
-    expect(registered).toEqual(["workflow", "steer"]);
+    expect(registered).toEqual([
+      "workflow_create",
+      "workflow_list",
+      "workflow_inspect",
+      "workflow_result",
+      "workflow_steer",
+      "workflow_stop",
+    ]);
   });
 });

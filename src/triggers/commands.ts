@@ -95,7 +95,7 @@ function directCommandBlocker(
     .slice(1)
     .filter((param) => param.required && param.default === undefined);
   if (required.length === 0) return undefined;
-  return `/${wf.name} requires additional named parameters: ${required.map((param) => param.name).join(", ")}. Use the workflow tool or RPC to supply them.`;
+  return `/${wf.name} requires additional named parameters: ${required.map((param) => param.name).join(", ")}. Use workflow_create or RPC to supply them.`;
 }
 
 // ---------------------------------------------------------------------------

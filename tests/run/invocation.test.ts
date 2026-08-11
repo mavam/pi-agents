@@ -160,13 +160,13 @@ describe("skills and tools precedence", () => {
 
   test("rejects orchestration tools inherited from a named profile", () => {
     writeAgent(projectDir, "reviewer", {
-      tools: "[read, workflow]",
+      tools: "[read, workflow_create]",
     });
     const resolution = resolve({ agent: "reviewer" });
     expect(resolution.ok).toBe(false);
     if (resolution.ok) throw new Error("expected resolution failure");
     expect(resolution.problems.join("\n")).toContain(
-      "delegated agents cannot use orchestration tools (workflow)",
+      "delegated agents cannot use orchestration tools (workflow_create)",
     );
     expect(resolution.problems.join("\n")).toContain(
       "compose the work in the parent flow",
@@ -175,7 +175,7 @@ describe("skills and tools precedence", () => {
 
   test("a call-site tool list replaces a forbidden profile list", () => {
     writeAgent(projectDir, "reviewer", {
-      tools: "[workflow]",
+      tools: "[workflow_create]",
     });
     expect(resolveOk({ agent: "reviewer", tools: ["read"] }).tools).toEqual([
       "read",

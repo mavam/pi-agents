@@ -17,14 +17,20 @@ import { emptyUsage } from "../../src/engine/types.js";
 import { validateFlow } from "../../src/model/validate.js";
 import { MAX_MODEL_RESULT_CHARS } from "../../src/model/value.js";
 import { RunManager } from "../../src/run/runs.js";
+import {
+  createWorkflowSteerTool as createSteerTool,
+  createWorkflowInspectTool,
+  createWorkflowListTool,
+  createWorkflowResultTool,
+  createWorkflowStopTool,
+} from "../../src/triggers/run-tools.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
 import {
-  createSteerTool,
-  createWorkflowTool,
+  createWorkflowCreateTool as createWorkflowTool,
   FLOW_PARAM_DESCRIPTION,
   formatRunResult,
-  type WorkflowToolParamsType,
-  type WorkflowToolRenderState,
+  type WorkflowCreateParamsType as WorkflowToolParamsType,
+  type WorkflowCreateRenderState as WorkflowToolRenderState,
 } from "../../src/triggers/tool.js";
 import { NotificationManager } from "../../src/ui/notify.js";
 import { RunWidget } from "../../src/ui/widget.js";
@@ -177,7 +183,7 @@ afterEach(() => {
 
 const ctx = () => ({ cwd: projectDir }) as unknown as ExtensionContext;
 
-describe("workflow tool", () => {
+describe("workflow_create tool", () => {
   test("runs an inline bare agent leaf", async () => {
     const { engine, specs } = fakeEngine((spec) => `echo: ${spec.task}`);
     const tool = createWorkflowTool(makeDeps(engine));
@@ -566,7 +572,9 @@ describe("workflow tool", () => {
       agents: 2,
     });
     expect(text).toContain("[truncated");
-    expect(text).toContain("full result: /workflow run-stru raw");
+    expect(text).toContain(
+      'full result: workflow_result({run:"run-stru",view:"raw"})',
+    );
     expect(text).not.toContain("complete-tail");
   });
 
@@ -592,7 +600,7 @@ describe("workflow tool", () => {
   });
 });
 
-describe("steer tool", () => {
+describe("workflow_steer tool", () => {
   test("resolves a run prefix, infers its sole instance, and queues once", async () => {
     const controlled = steerableEngine();
     const deps = makeDeps(controlled.engine);
@@ -634,6 +642,238 @@ describe("steer tool", () => {
 
     controlled.finish();
     await started.done;
+  });
+});
+
+describe("directed workflow run tools", () => {
+  test("lists recent runs and filters by status", async () => {
+    const { engine } = fakeEngine(() => "done");
+    const deps = makeDeps(engine);
+    const started = deps.manager.start({
+      flow: validateFlow({ kind: "agent", task: "complete" }),
+      cwd: projectDir,
+      source: { kind: "tool" },
+      label: "completed run",
+    });
+    await started.done;
+    const newest = deps.manager.start({
+      flow: validateFlow({ kind: "value", value: "newest" }),
+      cwd: projectDir,
+      source: { kind: "tool" },
+      label: "newest run",
+    });
+    await newest.done;
+
+    const listTool = createWorkflowListTool(deps);
+    const listed = await listTool.execute(
+      "list-1",
+      { limit: 1 },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(listed.details.total).toBe(2);
+    expect(listed.details.nextCursor).toBe(1);
+    expect(listed.details.runs[0]).toMatchObject({
+      runId: newest.runId,
+      status: "completed",
+      live: false,
+      label: "newest run",
+    });
+    const next = await listTool.execute(
+      "list-next",
+      { cursor: 1, limit: 1 },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(next.details.runs[0]?.runId).toBe(started.runId);
+    expect(next.details.nextCursor).toBeUndefined();
+
+    const running = await listTool.execute(
+      "list-2",
+      { status: "running" },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(running.details).toEqual({ total: 0, cursor: 0, runs: [] });
+  });
+
+  test("inspects a live run and returns exact steerable instances", async () => {
+    const controlled = steerableEngine();
+    const deps = makeDeps(controlled.engine);
+    const started = deps.manager.start({
+      flow: validateFlow({ kind: "agent", name: "echo", task: "wait" }),
+      cwd: projectDir,
+      scope: "project",
+      source: { kind: "tool" },
+    });
+    await waitFor(
+      () => deps.manager.steerableInstances(started.runId).length === 1,
+    );
+
+    const inspected = await createWorkflowInspectTool(deps).execute(
+      "inspect-1",
+      { run: started.runId.slice(0, 8) },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(inspected.details).toMatchObject({
+      runId: started.runId,
+      status: "running",
+      live: true,
+    });
+    expect(inspected.details.tree).toContain("echo");
+    expect(inspected.details.nodes[0]).toMatchObject({
+      instance: "$",
+      status: "running",
+      steerable: true,
+    });
+    expect((inspected.content[0] as { text: string }).text).not.toContain(
+      '"value"',
+    );
+
+    controlled.finish();
+    await started.done;
+  });
+
+  test("retrieves presented, selected, raw, paginated, and node results", async () => {
+    const { engine } = fakeEngine(() => ({
+      report: "# Review\n\nApproved.",
+      findings: ["first", "second"],
+    }));
+    const deps = makeDeps(engine);
+    const started = deps.manager.start({
+      flow: validateFlow({
+        kind: "agent",
+        task: "review",
+        json: {
+          type: "object",
+          properties: {
+            report: { type: "string" },
+            findings: { type: "array" },
+          },
+        },
+      }),
+      cwd: projectDir,
+      display: "report",
+      source: { kind: "tool" },
+    });
+    await started.done;
+    const tool = createWorkflowResultTool(deps);
+
+    const presented = await tool.execute(
+      "result-1",
+      { run: started.runId },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect((presented.content[0] as { text: string }).text).toContain(
+      "# Review\n\nApproved.",
+    );
+    expect(presented.details.truncated).toBe(false);
+
+    const selected = await tool.execute(
+      "result-2",
+      { run: started.runId, path: "findings.1" },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect((selected.content[0] as { text: string }).text).toContain("second");
+
+    const raw = await tool.execute(
+      "result-3",
+      { run: started.runId, view: "raw", limit: 10 },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(raw.details.truncated).toBe(true);
+    expect(raw.details.nextCursor).toBe(10);
+    expect((raw.content[0] as { text: string }).text).toContain(
+      'workflow_result({"run":',
+    );
+
+    const nodeResult = await tool.execute(
+      "result-4",
+      { run: started.runId, instance: "$", path: "report" },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(nodeResult.details.instance).toBe("$");
+    expect((nodeResult.content[0] as { text: string }).text).toContain(
+      "Approved.",
+    );
+  });
+
+  test("stops live runs and treats completion races as settled", async () => {
+    const controlled = steerableEngine();
+    const deps = makeDeps(controlled.engine);
+    const started = deps.manager.start({
+      flow: validateFlow({ kind: "agent", task: "wait" }),
+      cwd: projectDir,
+      source: { kind: "tool" },
+    });
+    await waitFor(() => deps.manager.isLive(started.runId));
+    const tool = createWorkflowStopTool(deps);
+
+    const stopping = await tool.execute(
+      "stop-1",
+      { run: started.runId.slice(0, 8) },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(stopping.details.outcome).toBe("stopping");
+
+    controlled.finish();
+    await started.done;
+    const settled = await tool.execute(
+      "stop-2",
+      { run: started.runId },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(settled.details.outcome).toBe("already_settled");
+    expect(settled.details.status).toBe("stopped");
+  });
+
+  test("gives each operation a directed schema and safety guidance", () => {
+    const inertEngine = {
+      spawn: () => {
+        throw new Error("not used");
+      },
+    } as unknown as SpawnEngine;
+    const deps = makeDeps(inertEngine);
+    const tools = [
+      createWorkflowListTool(deps),
+      createWorkflowInspectTool(deps),
+      createWorkflowResultTool(deps),
+      createSteerTool(deps),
+      createWorkflowStopTool(deps),
+    ];
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "workflow_list",
+      "workflow_inspect",
+      "workflow_result",
+      "workflow_steer",
+      "workflow_stop",
+    ]);
+    expect(createWorkflowStopTool(deps).promptGuidelines?.join(" ")).toContain(
+      "explicitly asks",
+    );
+    expect(
+      JSON.stringify(createWorkflowStopTool(deps).parameters),
+    ).not.toContain("message");
+    expect(JSON.stringify(createSteerTool(deps).parameters)).toContain(
+      "message",
+    );
   });
 });
 
@@ -1083,7 +1323,7 @@ describe("project trust", () => {
   });
 });
 
-describe("workflow tool description", () => {
+describe("workflow_create tool description", () => {
   const inertEngine = {
     spawn: () => {
       throw new Error("not used");
@@ -1220,7 +1460,7 @@ describe("workflow tool description", () => {
     expect(tool.description).toContain("never call this tool");
     expect(tool.promptSnippet).toContain("explicitly");
     const guidelines = tool.promptGuidelines ?? [];
-    expect(guidelines[0]).toContain("Do not call `workflow` unless");
+    expect(guidelines[0]).toContain("Do not call workflow_create unless");
     expect(guidelines.some((line) => line.includes("are not triggers"))).toBe(
       true,
     );

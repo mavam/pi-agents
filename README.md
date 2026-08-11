@@ -202,8 +202,9 @@ options on the relevant agent node when `flow:` is present.
 
 When a workflow returns structured data with a human-readable Markdown field,
 set `display` to its dot path. A top-level run renders that string in completion
-cards and run details while preserving the complete structured value for the
-calling model, `/workflow <id> raw`, and parent workflows. A nested workflow
+cards and run details while preserving the complete structured value for
+`workflow_result` with `view: "raw"`, `/workflow <id> raw`, and parent
+workflows. A nested workflow
 always passes its complete value to its caller. If the path is missing or does
 not resolve to a string, rendering falls back to the raw value.
 
@@ -271,7 +272,7 @@ Workflows fire from four surfaces:
 
 1. **The root model.** Saved workflows (name, description, `trigger`, params)
    are advertised in the system prompt; the model runs them — or composes
-   ad-hoc flows — through the single `workflow` tool. The tool is
+   ad-hoc flows — through `workflow_create`. The tool is
    **opt-in**: the model may only reach for it when you affirmatively ask
    for something to run — "run the review workflow", "delegate this", "do
    these in parallel" — or for a saved workflow you asked for by name or by
@@ -282,8 +283,8 @@ Workflows fire from four surfaces:
 2. **You.** Every saved workflow registers a slash command. For a workflow
    named `triage`, `/triage src/core with spaces` runs it directly, passing the
    complete text after the command to its first parameter with no model
-   round-trip. Remaining parameters use their defaults. Use the `workflow`
-   tool or RPC when you need to supply multiple named parameters.
+   round-trip. Remaining parameters use their defaults. Use `workflow_create`
+   or RPC when you need to supply multiple named parameters.
 3. **Events.** Add `on: [turn_end]` (plus optional `debounce:` milliseconds)
    and the workflow fires on those pi events, always in the background,
    with the event payload bound as `{params.event}`. Hooks run only in the
@@ -292,10 +293,10 @@ Workflows fire from four surfaces:
    stop, and inspect runs over the in-process event bus. See
    [Event bus and RPC](#-event-bus-and-rpc).
 
-## 🛠️ The `workflow` tool: ad-hoc flows from the model
+## 🛠️ The `workflow_create` tool: ad-hoc flows from the model
 
-The root model is a first-class workflow author, not just an invoker. The single
-`workflow` tool takes either a saved workflow by name or a **complete inline
+The root model is a first-class workflow author, not just an invoker.
+`workflow_create` takes either a saved workflow by name or a **complete inline
 flow expression**, and its tool description embeds the full algebra — node
 kinds, value semantics, binding rules, predicates — so the model can
 translate a request like *"review these three modules in parallel, then fix
@@ -312,8 +313,8 @@ audit, a research question, anything the model privately judges
 parallelizable — it does itself, mentioning at most in one sentence that a
 workflow could take it. That is what makes the example above run: *"review
 these three modules in parallel"* is your request, not the model's inference.
-The tool also only ever starts runs: a live agent is corrected with `steer`,
-and an existing run is inspected or stopped with `/workflow <run-id>`.
+The tool only starts runs. Directed tools list, inspect, retrieve, steer, and
+stop existing runs without requiring you to relay `/workflow` command output.
 
 ```json
 {
@@ -346,8 +347,8 @@ catalog (names, `trigger` guidance, params). Inline flows go through exactly
 the same validation as saved ones — unknown agents, bad references, and
 scope violations come back as node-path errors the model can correct — and
 a bare agent leaf is a valid flow, so single delegation is just
-`workflow({flow: {kind: "agent", task: "…"}})` (add `name:` only to use a
-saved profile).
+`workflow_create({flow: {kind: "agent", task: "…"}})` (add `name:` only to
+use a saved profile).
 
 When an inline flow returns structured data with a human-readable Markdown
 field, set the call's top-level `display` to that field's dot path:
@@ -410,8 +411,9 @@ omit `skills` to retain the child Pi process's normal ambient skill discovery.
 Any explicit list is closed: a non-empty list injects exactly those skills,
 and `skills: []` disables skill discovery. `tools` follows the same replacement
 precedence, and `tools: []` leaves the agent with no working tools. Pi-agents
-still supplies its mandatory result-submission tool. `workflow` and `steer` are
-orchestration tools owned by the parent process, so agent and reducer
+still supplies its mandatory result-submission tool. The `workflow_create`,
+`workflow_list`, `workflow_inspect`, `workflow_result`, `workflow_steer`, and
+`workflow_stop` tools are owned by the parent process, so agent and reducer
 allowlists cannot name them. Express that work with `workflow`, `parallel`,
 `map`, `loop`, or `while` nodes in the parent flow.
 
@@ -715,10 +717,10 @@ Run and agent
 detail panes also receive complete results, while their terminal viewport
 controls how much is visible at once.
 
-The payload sent to the calling model remains subject to a 200,000-character
-safety ceiling. Larger values include a truncation notice and remain available
-in full through `/workflow <id> raw`. Step-to-step interpolation uses the same
-200,000-character ceiling.
+The initial payload sent to the calling model remains subject to a
+200,000-character safety ceiling. Larger values include a truncation notice and
+remain available through paginated `workflow_result` calls with `view: "raw"`.
+Step-to-step interpolation uses the same 200,000-character ceiling.
 
 ### Interactive browsing
 
@@ -779,7 +781,7 @@ one tier. Workflow tier: `⏎` drills into the selected workflow's runs, `c`
 puts `/<name> ` into the composer, and `r` runs it immediately while the panel
 stays open. If the first parameter requires input, `r` falls back to the
 composer. If a later parameter is required, both actions keep the panel open
-and direct you to the `workflow` tool or an RPC invocation. The `n` key starts
+and direct you to `workflow_create` or an RPC invocation. The `n` key starts
 a new workflow or agent: you name it and describe the intent, and the model
 drafts the definition file. Run tier: `⏎` posts the run details with the full
 presented result to the chat, and `a` drills into the run's agents. The `c` key
@@ -828,7 +830,7 @@ project, project-local agents and workflows (`.pi/agents`, `.pi/workflows`)
 are invisible everywhere: they are not injected into the system prompt, not
 registered as commands, never fired by event hooks, and per-node
 `scope: project` overrides inside flows clamp to user scope. Passing
-`scope: "project"` to the workflow tool in an untrusted project is an error.
+`scope: "project"` to `workflow_create` in an untrusted project is an error.
 Trust the project (pi's own prompt) and everything appears.
 
 ## 🗂️ Runs, background, and history
@@ -841,6 +843,27 @@ sidecar; results are delivered as notifications when that session is idle.
 After a pi restart, in-flight runs are marked stopped — they cannot resume —
 but their history remains inspectable.
 
+### Model-facing run tools
+
+The model uses one directed tool for each run operation:
+
+| Tool | Purpose |
+|---|---|
+| `workflow_create` | Start a saved workflow or inline flow. |
+| `workflow_list` | List recent persisted runs, optionally filtered by status. |
+| `workflow_inspect` | Read one run's live tree, progress, usage, errors, and exact node instances. |
+| `workflow_result` | Retrieve a run or node result with dot-path selection and pagination. |
+| `workflow_steer` | Queue a course correction for a live node. |
+| `workflow_stop` | Stop a live run after you explicitly request cancellation. |
+
+`workflow_list` and `workflow_inspect` report a `nextCursor` when another page
+of runs or nodes remains. `workflow_result` returns at most 50,000 characters
+per call and reports the same field when more content remains. Pass that cursor
+to the next call, or
+use `path` to select a smaller value before retrieval. The `presented` view
+uses the run's display selection, while `raw` preserves the underlying JSON
+representation.
+
 ### Steering live agents
 
 Steering queues a course correction for an already-running delegated agent;
@@ -852,10 +875,10 @@ the agent detail view and are persisted with their source (`user`, `tool`, or
 `rpc`). Steering-triggered assistant turns count toward the run's normal usage
 and turn totals.
 
-Besides the `/workflows` panel, the model can call the separate `steer` tool with
-a run ID (full or unique prefix), an optional exact node instance, and the
-message. The instance may be omitted only while exactly one agent in that run
-is steerable.
+The model calls `workflow_steer` with a run ID (full or unique prefix), an
+optional exact node instance, and the message. The instance may be omitted only
+while exactly one agent in that run is steerable. `workflow_inspect` reports the
+exact instances and whether each one is currently steerable.
 
 ## 🔌 Event bus and RPC
 

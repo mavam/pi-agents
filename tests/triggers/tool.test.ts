@@ -209,6 +209,38 @@ describe("workflow_create tool", () => {
     expect(specs[0]?.systemPrompt).toContain("Echo the task back.");
   });
 
+  test("accepts an inline flow serialized as a JSON string", async () => {
+    const { engine } = fakeEngine((spec) => `echo: ${spec.task}`);
+    const tool = createWorkflowTool(makeDeps(engine));
+    const result = await tool.execute(
+      "t1s",
+      {
+        flow: JSON.stringify({ kind: "agent", name: "echo", task: "hello" }),
+        scope: "project",
+      },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('status="completed"');
+    expect(text).toContain("echo: hello");
+  });
+
+  test("rejects an inline flow string that is not valid JSON", async () => {
+    const { engine } = fakeEngine(() => "unused");
+    const tool = createWorkflowTool(makeDeps(engine));
+    await expect(
+      tool.execute(
+        "t1b",
+        { flow: '{"kind": "agent",', scope: "project" },
+        undefined,
+        undefined,
+        ctx(),
+      ),
+    ).rejects.toThrow(/not valid JSON/);
+  });
+
   test("stores a display path for an inline structured result", async () => {
     const { engine } = fakeEngine(() => ({
       review: { markdown: "# Code Review" },

@@ -75,6 +75,24 @@ Data flows ONLY through explicit references: "as":"x" names a step's value; late
 export const FLOW_PARAM_DESCRIPTION =
   'Inline flow expression to run (instead of "name"). Node grammar: see the tool description.';
 
+/**
+ * Some tool-calling harnesses serialize loosely-typed parameters as JSON
+ * text instead of structured objects. Accept a stringified flow by parsing
+ * it back into a value before validation.
+ */
+export function coerceInlineFlow(flow: unknown): unknown {
+  if (typeof flow !== "string") return flow;
+  const trimmed = flow.trim();
+  if (!trimmed.startsWith("{")) return flow;
+  try {
+    return JSON.parse(trimmed);
+  } catch (err) {
+    throw new Error(
+      `invalid flow: "flow" arrived as a string that is not valid JSON (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+}
+
 const WorkflowCreateParams = Type.Object({
   name: Type.Optional(
     Type.String({
@@ -373,7 +391,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
         label = label ?? def.name;
         display = requestedDisplay ?? def.display;
       } else {
-        raw = params.flow;
+        raw = coerceInlineFlow(params.flow);
       }
 
       const flow = validateFlow(raw, { resolveWorkflow });

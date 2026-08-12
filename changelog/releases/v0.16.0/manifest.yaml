@@ -1,0 +1,9 @@
+created: 2026-08-12
+title: Compact TUI views for workflow tools
+intro: >-
+  The workflow management tools now render compact, themed TUI views instead of raw
+  JSON, making run status, live trees, paginated results, and confirmations easier
+  to scan. The model-facing payloads remain unchanged.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.15.0

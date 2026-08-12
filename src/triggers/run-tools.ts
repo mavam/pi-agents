@@ -1,8 +1,11 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import type {
-  ExtensionContext,
-  ToolDefinition,
+import {
+  type ExtensionContext,
+  getMarkdownTheme,
+  type Theme,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { resolvePath } from "../model/interpolate.js";
 import type { RunStatus } from "../run/events.js";
@@ -11,11 +14,15 @@ import type { RunManager } from "../run/runs.js";
 import { MAX_STEERING_MESSAGE_CHARS } from "../run/runs.js";
 import { type RunView, workNodes } from "../run/state.js";
 import {
+  fenced,
+  formatAgentCount,
   formatRunSource,
+  formatUsage,
   nodeDisplayName,
   selectDisplayValue,
   shortId,
 } from "../ui/render.js";
+import { STATUS_STYLES } from "../ui/status.js";
 import { renderRunTree } from "../ui/tree.js";
 import type { TriggerDeps } from "./start.js";
 
@@ -74,6 +81,45 @@ function serialized(value: unknown, raw: boolean): string | undefined {
   return JSON.stringify(value, null, 2) ?? String(value);
 }
 
+const WORKFLOW_GLYPH = "❖";
+const COLLAPSED_BODY_LINES = 12;
+
+/** Compact one-line call header shared by the workflow_* query tools. */
+function toolCallText(theme: Theme, title: string, detail?: string): string {
+  const head = `${theme.fg("muted", WORKFLOW_GLYPH)} ${title}`;
+  return detail ? `${head} ${theme.fg("dim", detail)}` : head;
+}
+
+function statusBadge(status: string, theme: Theme): string {
+  const style = STATUS_STYLES[status as keyof typeof STATUS_STYLES] ?? {
+    icon: "•",
+    color: "dim" as const,
+  };
+  return theme.fg(style.color, `${style.icon} ${status}`);
+}
+
+function firstText(result: {
+  content: Array<{ type: string; text?: string }>;
+}): string {
+  const first = result.content[0];
+  return first?.type === "text" ? (first.text ?? "") : "";
+}
+
+function oneLine(value: string, max: number): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
+}
+
+/** Clip multi-line bodies in collapsed tool results. */
+function clipLines(text: string, max: number, theme: Theme): string {
+  const lines = text.split("\n");
+  if (lines.length <= max) return text;
+  return [
+    ...lines.slice(0, max),
+    theme.fg("dim", `… (+${lines.length - max} more lines)`),
+  ].join("\n");
+}
+
 const WorkflowListParams = Type.Object({
   status: Type.Optional(
     StringEnum(["running", "completed", "failed", "stopped"] as const, {
@@ -123,6 +169,51 @@ export function createWorkflowListTool(
       "List recent workflow runs persisted in the current session. Optionally filter by status. Results are paginated and nextCursor indicates another page. Use workflow_inspect with a returned run ID for its tree and live state.",
     promptSnippet: "List recent workflow runs from the current session",
     parameters: WorkflowListParams,
+    renderCall(args, theme) {
+      const detail = [
+        args.status !== undefined && `status=${args.status}`,
+        args.cursor !== undefined && `cursor=${args.cursor}`,
+        args.limit !== undefined && `limit=${args.limit}`,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return new Text(
+        toolCallText(theme, "workflow list", detail || undefined),
+        1,
+        0,
+      );
+    },
+    renderResult(result, _options, theme) {
+      const details = result.details;
+      if (!details?.runs) return new Text(firstText(result), 1, 0);
+      const lines = details.runs.map((run) => {
+        const style = STATUS_STYLES[run.status];
+        return [
+          `${theme.fg(style.color, style.icon)} ${run.id}`,
+          ` ${run.status.padEnd(9)}`,
+          run.label ? ` ${run.label}` : "",
+          ` ${theme.fg("dim", `(${run.source})`)}`,
+          run.agents === undefined
+            ? ""
+            : theme.fg("dim", ` · ${formatAgentCount(run.agents)}`),
+          run.live ? ` ${theme.fg("warning", "live")}` : "",
+        ].join("");
+      });
+      if (lines.length === 0) {
+        lines.push(theme.fg("dim", "no matching runs"));
+      } else if (details.cursor > 0 || details.nextCursor !== undefined) {
+        const first = details.cursor + 1;
+        const last = details.cursor + details.runs.length;
+        const more =
+          details.nextCursor === undefined
+            ? ""
+            : ` · next cursor ${details.nextCursor}`;
+        lines.push(
+          theme.fg("dim", `runs ${first}–${last} of ${details.total}${more}`),
+        );
+      }
+      return new Text(lines.join("\n"), 1, 0);
+    },
     async execute(
       _toolCallId,
       params,
@@ -244,6 +335,64 @@ export function createWorkflowInspectTool(
     promptSnippet:
       "Inspect the status and node tree of an existing workflow run",
     parameters: WorkflowInspectParams,
+    renderCall(args, theme) {
+      const detail = [
+        args.cursor !== undefined && `cursor=${args.cursor}`,
+        args.limit !== undefined && `limit=${args.limit}`,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return new Text(
+        toolCallText(
+          theme,
+          `workflow inspect ${args.run ?? ""}`.trimEnd(),
+          detail || undefined,
+        ),
+        1,
+        0,
+      );
+    },
+    renderResult(result, options, theme) {
+      const details = result.details;
+      if (!details?.tree) return new Text(firstText(result), 1, 0);
+      const identity = details.label
+        ? `${theme.bold(details.label)}${theme.fg("dim", ` · ${details.id}`)}`
+        : details.id;
+      const usage = formatUsage(details.usage);
+      const meta = [
+        details.source,
+        usage || undefined,
+        details.agents === undefined
+          ? undefined
+          : formatAgentCount(details.agents),
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const lines = [
+        [
+          `${statusBadge(details.status, theme)} ${identity}`,
+          meta ? theme.fg("dim", ` · ${meta}`) : "",
+          details.live ? ` ${theme.fg("warning", "live")}` : "",
+        ].join(""),
+      ];
+      if (details.error) {
+        lines.push(theme.fg("error", oneLine(details.error, 200)));
+      }
+      lines.push(
+        options.expanded
+          ? details.tree
+          : clipLines(details.tree, COLLAPSED_BODY_LINES, theme),
+      );
+      if (details.nextCursor !== undefined) {
+        lines.push(
+          theme.fg(
+            "dim",
+            `nodes ${details.cursor + 1}–${details.cursor + details.nodes.length} of ${details.totalNodes} · next cursor ${details.nextCursor}`,
+          ),
+        );
+      }
+      return new Text(lines.join("\n"), 1, 0);
+    },
     async execute(
       _toolCallId,
       params,
@@ -380,6 +529,68 @@ export function createWorkflowResultTool(
       "When workflow_result reports nextCursor, call workflow_result again with that cursor only when the omitted content is needed for the task.",
     ],
     parameters: WorkflowResultParams,
+    renderCall(args, theme) {
+      const detail = [
+        args.instance !== undefined && `instance=${args.instance}`,
+        args.path !== undefined && `path=${args.path}`,
+        args.view === "raw" && "view=raw",
+        args.cursor !== undefined && `cursor=${args.cursor}`,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return new Text(
+        toolCallText(
+          theme,
+          `workflow result ${args.run ?? ""}`.trimEnd(),
+          detail || undefined,
+        ),
+        1,
+        0,
+      );
+    },
+    renderResult(result, options, theme) {
+      const details = result.details;
+      const raw = firstText(result);
+      if (!details) return new Text(raw, 1, 0);
+      const open = raw.indexOf("<value>\n");
+      const close = raw.lastIndexOf("\n</value>");
+      const body =
+        open >= 0 && close > open
+          ? raw.slice(open + "<value>\n".length, close)
+          : raw;
+      const meta = [
+        details.path && `path ${details.path}`,
+        details.view === "raw" && "raw",
+        details.truncated &&
+          `chars ${details.cursor + 1}–${Math.min(details.totalChars, details.cursor + body.length)} of ${details.totalChars}`,
+        details.partial && "partial",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const header = [
+        `${statusBadge(details.status, theme)} ${details.id}`,
+        details.instance ? theme.fg("dim", ` · ${details.instance}`) : "",
+        meta ? theme.fg("dim", ` · ${meta}`) : "",
+      ].join("");
+      const card = new Container();
+      card.addChild(new Text(header, 1, 0));
+      if (details.warning) {
+        card.addChild(new Text(theme.fg("warning", details.warning), 1, 0));
+      }
+      if (options.expanded) {
+        const markdown = details.view === "raw" ? fenced(body, "json") : body;
+        card.addChild(new Markdown(markdown, 1, 0, getMarkdownTheme()));
+      } else {
+        card.addChild(
+          new Text(
+            theme.fg("dim", clipLines(body, COLLAPSED_BODY_LINES, theme)),
+            1,
+            0,
+          ),
+        );
+      }
+      return card;
+    },
     async execute(
       _toolCallId,
       params,
@@ -536,6 +747,32 @@ export function createWorkflowSteerTool(
       "Omit workflow_steer's instance only when exactly one agent in the run is currently steerable.",
     ],
     parameters: WorkflowSteerParams,
+    renderCall(args, theme) {
+      const target = [args.run, args.instance && `→ ${args.instance}`]
+        .filter(Boolean)
+        .join(" ");
+      return new Text(
+        toolCallText(
+          theme,
+          `workflow steer ${target}`.trimEnd(),
+          args.message ? oneLine(args.message, 80) : undefined,
+        ),
+        1,
+        0,
+      );
+    },
+    renderResult(result, _options, theme) {
+      const details = result.details;
+      if (!details) return new Text(firstText(result), 1, 0);
+      return new Text(
+        `${theme.fg("success", "↪")} steering queued for ${details.instance} ${theme.fg(
+          "dim",
+          `· run ${shortId(details.runId)} · delivered after the current turn`,
+        )}`,
+        1,
+        0,
+      );
+    },
     async execute(
       _toolCallId,
       params,
@@ -609,6 +846,28 @@ export function createWorkflowStopTool(
       "Call workflow_stop only when the user explicitly asks to stop or cancel the run; never terminate a run merely because it appears slow, unnecessary, or likely to fail.",
     ],
     parameters: WorkflowStopParams,
+    renderCall(args, theme) {
+      return new Text(
+        toolCallText(theme, `workflow stop ${args.run ?? ""}`.trimEnd()),
+        1,
+        0,
+      );
+    },
+    renderResult(result, _options, theme) {
+      const details = result.details;
+      if (!details) return new Text(firstText(result), 1, 0);
+      const id = shortId(details.runId);
+      return new Text(
+        details.outcome === "already_settled"
+          ? `${statusBadge(details.status, theme)} ${id} ${theme.fg(
+              "dim",
+              "already settled · nothing stopped",
+            )}`
+          : `${theme.fg("warning", "⊘")} stopping ${id}`,
+        1,
+        0,
+      );
+    },
     async execute(
       _toolCallId,
       params,

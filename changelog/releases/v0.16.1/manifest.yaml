@@ -1,0 +1,9 @@
+created: 2026-08-12
+title: JSON-string workflow flows
+intro: >-
+  Pi Agents now accepts inline workflow flows delivered as JSON strings, improving
+  compatibility with tool-calling harnesses that serialize loosely typed parameters.
+  Invalid strings produce clear errors instead of opaque validation failures.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.16.0

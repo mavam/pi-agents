@@ -51,7 +51,7 @@ function fakeEngine(
   };
 }
 
-function steerableEngine(): {
+function promptableEngine(sessionFile?: string): {
   engine: SpawnEngine;
   messages: string[];
   finish: () => void;
@@ -75,11 +75,12 @@ function steerableEngine(): {
             return status;
           },
           updates: emptyUpdates(),
+          nativeSession: Promise.resolve(sessionFile),
           async wait() {
             await completion;
             return { value: "ok", exitCode: 0, usage: emptyUsage() };
           },
-          async steer(message) {
+          async prompt(message) {
             messages.push(message);
           },
           abort() {},
@@ -629,76 +630,30 @@ describe("empty tools allowlist", () => {
   });
 });
 
-describe("live steering", () => {
-  test("routes a validated message and records it only after acceptance", async () => {
-    const controlled = steerableEngine();
-    const manager = new RunManager({ engine: controlled.engine });
-    const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
-    const started = manager.start({
-      flow,
-      cwd: projectDir,
-      scope: "project",
-      source: { kind: "tool" },
-    });
-
-    await waitFor(() => manager.steerableInstances(started.runId).length === 1);
-    expect(manager.steerableInstances(started.runId)).toEqual(["$"]);
-    await expect(
-      manager.steer(
-        started.runId,
-        "$",
-        "  revise the conclusion  ",
-        "tool",
-        "parent-agent",
-      ),
-    ).resolves.toEqual({
-      status: "queued",
-      runId: started.runId,
-      instance: "$",
-    });
-    expect(controlled.messages).toEqual(["revise the conclusion"]);
-    expect(
-      manager.state.runs.get(started.runId)?.nodes.get("$")?.steering,
-    ).toEqual([
-      expect.objectContaining({
-        message: "revise the conclusion",
-        source: "tool",
-        caller: "parent-agent",
-      }),
-    ]);
-
-    controlled.finish();
-    await started.done;
-    expect(manager.steerableInstances(started.runId)).toEqual([]);
-    await expect(
-      manager.steer(started.runId, "$", "too late", "user"),
-    ).resolves.toEqual({ status: "unavailable", reason: "run_not_live" });
-  });
-
-  test("rejects empty and oversized messages before delivery", async () => {
-    const controlled = steerableEngine();
+describe("live handles and agent sessions", () => {
+  test("exposes the live handle and records the node session file", async () => {
+    const controlled = promptableEngine("/tmp/child-session.jsonl");
     const manager = new RunManager({ engine: controlled.engine });
     const started = manager.start({
-      flow: validateFlow({ kind: "agent", name: "echo", task: "t" }),
+      flow: { kind: "agent", task: "wait" },
       cwd: projectDir,
-      scope: "project",
       source: { kind: "tool" },
     });
-    await waitFor(() => manager.steerableInstances(started.runId).length === 1);
-
-    expect(await manager.steer(started.runId, "$", "   ", "user")).toEqual({
-      status: "rejected",
-      error: "steering message must not be empty",
-    });
+    await waitFor(() => manager.liveHandle(started.runId, "$") !== undefined);
+    const handle = manager.liveHandle(started.runId, "$");
+    expect(handle).toBeDefined();
+    await handle?.prompt?.("focus on failures");
+    expect(controlled.messages).toEqual(["focus on failures"]);
+    await waitFor(
+      () =>
+        manager.state.runs.get(started.runId)?.nodes.get("$")?.sessionFile !==
+        undefined,
+    );
     expect(
-      await manager.steer(started.runId, "$", "x".repeat(2_001), "user"),
-    ).toEqual({
-      status: "rejected",
-      error: "steering message must be at most 2000 characters",
-    });
-    expect(controlled.messages).toEqual([]);
-
+      manager.state.runs.get(started.runId)?.nodes.get("$")?.sessionFile,
+    ).toBe("/tmp/child-session.jsonl");
     controlled.finish();
     await started.done;
+    expect(manager.liveHandle(started.runId, "$")).toBeUndefined();
   });
 });

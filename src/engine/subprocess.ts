@@ -1,11 +1,14 @@
 /**
  * Subprocess spawn engine: each spawn runs a fresh `pi` process in RPC mode,
- * sends one initial prompt, and keeps stdin open for steering and aborts.
+ * sends one initial prompt, and keeps stdin open for injected prompts and
+ * aborts.
  *
- *   pi --mode rpc --no-session --extension <result-tool>
+ *   pi --mode rpc [--session-dir <dir>] --extension <result-tool>
  *      [--model M] [--thinking T] [--tools a,b]
  *      [--append-system-prompt <tmpfile>]
  *
+ * The child writes a real pi session (attachable after the agent settles);
+ * its path is discovered via `get_state` and exposed as `nativeSession`.
  * The result payload schema travels through a private per-spawn file named by
  * PI_AGENTS_RESULT_SCHEMA_FILE.
  */
@@ -32,6 +35,7 @@ import {
   type SpawnProgress,
   type SpawnSpec,
   type SpawnUsage,
+  type TranscriptItem,
 } from "./types.js";
 
 export type SpawnProcess = typeof spawn;
@@ -45,9 +49,10 @@ const FORCE_KILL_AFTER_MS = 5_000;
 const SUMMARY_DEBOUNCE_MS = 250;
 /** Minimum spacing between updates driven by streaming text deltas. */
 export const STREAM_PUSH_INTERVAL_MS = 250;
-/** Live tails are deliberately ephemeral and bounded. Only an accepted agent
- * result submission becomes a durable workflow value. */
-export const MAX_ACTIVITY_TAIL_CHARS = 64_000;
+/** Live transcripts are ephemeral and bounded. Only an accepted agent result
+ * submission becomes a durable workflow value; the child's own session file
+ * carries the full durable history. */
+export const MAX_TRANSCRIPT_CHARS = 512_000;
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 const MAX_TOOL_LABEL_CHARS = 240;
 const RESULT_TOOL_EXTENSION_PATH = fileURLToPath(
@@ -125,58 +130,50 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-interface ActivityTailEntry {
-  key: string;
-  text: string;
+function itemChars(item: TranscriptItem): number {
+  switch (item.kind) {
+    case "user":
+      return item.text.length;
+    case "assistant":
+      return item.text.length + (item.summary?.length ?? 0);
+    case "tool":
+      return item.label.length + (item.output?.length ?? 0);
+  }
 }
 
-/** Mutable entries let streaming assistant messages and tool output update in
- * place while completed entries stay in chronological order. */
-class ActivityTail {
-  private readonly entries: ActivityTailEntry[] = [];
-  private readonly entriesByKey = new Map<string, ActivityTailEntry>();
-  /** Length of snapshot(), including the blank lines between entries. */
-  private snapshotLength = 0;
+/** Chronological, bounded live transcript. Mutable entries let streaming
+ * assistant messages and tool output update in place while completed entries
+ * stay in order. The oldest entries fall off past MAX_TRANSCRIPT_CHARS. */
+class TranscriptStore {
+  private readonly items: TranscriptItem[] = [];
+  private readonly byKey = new Map<string, TranscriptItem>();
+  private chars = 0;
 
-  upsert(key: string, text: string): void {
-    const existing = this.entriesByKey.get(key);
+  upsert(item: TranscriptItem): void {
+    const existing = this.byKey.get(item.key);
     if (existing) {
-      this.snapshotLength += text.length - existing.text.length;
-      existing.text = text;
+      this.chars -= itemChars(existing);
+      Object.assign(existing, item);
+      this.chars += itemChars(existing);
     } else {
-      const entry = { key, text };
-      if (this.entries.length > 0) this.snapshotLength += 2;
-      this.entries.push(entry);
-      this.entriesByKey.set(key, entry);
-      this.snapshotLength += text.length;
+      this.items.push(item);
+      this.byKey.set(item.key, item);
+      this.chars += itemChars(item);
     }
-    this.trim();
-  }
-
-  snapshot(): string | undefined {
-    const text = this.entries.map((entry) => entry.text).join("\n\n");
-    return text || undefined;
-  }
-
-  private trim(): void {
-    while (
-      this.entries.length > 1 &&
-      this.snapshotLength > MAX_ACTIVITY_TAIL_CHARS
-    ) {
-      const removed = this.entries.shift();
+    while (this.items.length > 1 && this.chars > MAX_TRANSCRIPT_CHARS) {
+      const removed = this.items.shift();
       if (!removed) break;
-      this.entriesByKey.delete(removed.key);
-      this.snapshotLength -= removed.text.length + 2;
+      this.byKey.delete(removed.key);
+      this.chars -= itemChars(removed);
     }
-    const only = this.entries[0];
-    if (only && only.text.length > MAX_ACTIVITY_TAIL_CHARS) {
-      const marker = "… earlier activity omitted …\n";
-      const truncated = `${marker}${only.text.slice(
-        -(MAX_ACTIVITY_TAIL_CHARS - marker.length),
-      )}`;
-      this.snapshotLength += truncated.length - only.text.length;
-      only.text = truncated;
-    }
+  }
+
+  get(key: string): TranscriptItem | undefined {
+    return this.byKey.get(key);
+  }
+
+  snapshot(): readonly TranscriptItem[] {
+    return this.items;
   }
 }
 
@@ -439,8 +436,8 @@ export function createSubprocessSpawnEngine(options?: {
       let latestText = "";
       /** Tools currently executing, in start order (they can overlap). */
       const activeTools = new Map<string, string>();
-      const activityTail = new ActivityTail();
-      const toolTailEntries = new Map<string, { key: string; label: string }>();
+      const transcriptStore = new TranscriptStore();
+      const toolTranscriptKeys = new Map<string, string>();
       const streamedTextBlocks = new Map<number, string>();
       const streamedThinkingBlocks = new Map<number, string>();
       let latestSummary: string | undefined;
@@ -462,10 +459,18 @@ export function createSubprocessSpawnEngine(options?: {
       const args: string[] = [
         "--mode",
         "rpc",
-        "--no-session",
         "--extension",
         RESULT_TOOL_EXTENSION_PATH,
       ];
+      // Delegated agents write real pi sessions into a pi-agents-owned
+      // directory (never the project's default store, which would flood the
+      // session picker). Finished agents stay attachable via that file.
+      if (spec.sessionDir) {
+        fs.mkdirSync(spec.sessionDir, { recursive: true });
+        args.push("--session-dir", spec.sessionDir);
+      } else {
+        args.push("--no-session");
+      }
       for (const extensionPath of options?.extraExtensionPaths ?? []) {
         args.push("--extension", extensionPath);
       }
@@ -613,7 +618,6 @@ export function createSubprocessSpawnEngine(options?: {
         updates.push({
           text: latestText,
           summary: latestSummary,
-          tail: activityTail.snapshot(),
           usage: { ...usage },
           currentTool,
           turnsStarted,
@@ -626,6 +630,12 @@ export function createSubprocessSpawnEngine(options?: {
         pendingSummary = undefined;
         if (!pending || pending === latestSummary) return;
         latestSummary = pending;
+        if (currentAssistantEntry) {
+          const item = transcriptStore.get(currentAssistantEntry);
+          if (item?.kind === "assistant") {
+            transcriptStore.upsert({ ...item, summary: pending });
+          }
+        }
         pushUpdate();
       };
 
@@ -642,13 +652,19 @@ export function createSubprocessSpawnEngine(options?: {
         summaryTimer.unref?.();
       };
 
-      const updateAssistantTail = (text: string) => {
+      const updateAssistantItem = (text: string) => {
         if (!text) return;
         currentAssistantEntry ??= `assistant:${++activitySequence}`;
-        activityTail.upsert(
-          currentAssistantEntry,
-          `assistant · turn ${Math.max(1, turnsStarted)}\n${text}`,
-        );
+        const existing = transcriptStore.get(currentAssistantEntry);
+        transcriptStore.upsert({
+          key: currentAssistantEntry,
+          kind: "assistant",
+          text,
+          summary:
+            existing?.kind === "assistant" ? existing.summary : undefined,
+          turn: Math.max(1, turnsStarted),
+          at: existing?.at ?? Date.now(),
+        });
       };
 
       /**
@@ -732,7 +748,7 @@ export function createSubprocessSpawnEngine(options?: {
         const startsNewEntry = currentAssistantEntry === undefined;
         if (text === latestText && !startsNewEntry) return;
         latestText = text;
-        updateAssistantTail(text);
+        updateAssistantItem(text);
         // Deltas arrive far faster than anyone can read; cap intermediate
         // tail snapshots and update fan-out. The close path flushes the last
         // delta when no message_end arrives.
@@ -763,7 +779,7 @@ export function createSubprocessSpawnEngine(options?: {
           const text = messageText(message);
           if (text) {
             latestText = text;
-            updateAssistantTail(text);
+            updateAssistantItem(text);
           }
           const summary = messageReasoningSummary(message);
           if (summary !== undefined) queueSummary(summary);
@@ -864,26 +880,34 @@ export function createSubprocessSpawnEngine(options?: {
             typeof record.toolName === "string"
           ) {
             activeTools.set(record.toolCallId, record.toolName);
-            const entry = {
-              key: `tool:${++activitySequence}`,
-              label: toolLabel(record.toolName, record.args),
-            };
-            toolTailEntries.set(record.toolCallId, entry);
-            activityTail.upsert(entry.key, `› ${entry.label}`);
+            // The mandatory result-submission tool is engine plumbing, not
+            // agent activity; keep it out of the transcript.
+            if (record.toolName !== RESULT_TOOL_NAME) {
+              const key = `tool:${++activitySequence}`;
+              toolTranscriptKeys.set(record.toolCallId, key);
+              transcriptStore.upsert({
+                key,
+                kind: "tool",
+                label: toolLabel(record.toolName, record.args),
+                status: "running",
+                at: Date.now(),
+              });
+            }
             pushUpdate();
           }
           if (
             record.type === "tool_execution_update" &&
             typeof record.toolCallId === "string"
           ) {
-            const entry = toolTailEntries.get(record.toolCallId);
+            const key = toolTranscriptKeys.get(record.toolCallId);
+            const item = key ? transcriptStore.get(key) : undefined;
             const output = toolOutput(record.partialResult);
             if (
-              entry &&
+              item?.kind === "tool" &&
               output &&
               Date.now() - lastStreamPushAt >= STREAM_PUSH_INTERVAL_MS
             ) {
-              activityTail.upsert(entry.key, `› ${entry.label}\n${output}`);
+              transcriptStore.upsert({ ...item, output });
               pushUpdate();
             }
           }
@@ -926,14 +950,15 @@ export function createSubprocessSpawnEngine(options?: {
               submissionAccepted = true;
             }
             activeTools.delete(record.toolCallId);
-            const entry = toolTailEntries.get(record.toolCallId);
-            if (entry) {
-              const output = toolOutput(record.result);
-              activityTail.upsert(
-                entry.key,
-                `${record.isError === true ? "✗" : "✓"} ${entry.label}${output ? `\n${output}` : ""}`,
-              );
-              toolTailEntries.delete(record.toolCallId);
+            const key = toolTranscriptKeys.get(record.toolCallId);
+            const item = key ? transcriptStore.get(key) : undefined;
+            if (item?.kind === "tool") {
+              transcriptStore.upsert({
+                ...item,
+                output: toolOutput(record.result),
+                status: record.isError === true ? "error" : "ok",
+              });
+              toolTranscriptKeys.delete(record.toolCallId);
             }
             pushUpdate();
           }
@@ -1007,7 +1032,7 @@ export function createSubprocessSpawnEngine(options?: {
             parseLine(finalLine);
           }
           if (currentAssistantEntry !== undefined) {
-            updateAssistantTail(latestText);
+            updateAssistantItem(latestText);
             pushUpdate();
           }
           settled = true;
@@ -1101,6 +1126,18 @@ export function createSubprocessSpawnEngine(options?: {
         });
       }
 
+      transcriptStore.upsert({
+        key: "user:task",
+        kind: "user",
+        text: spec.task,
+        at: Date.now(),
+      });
+
+      let resolveNativeSession!: (file: string | undefined) => void;
+      const nativeSession = new Promise<string | undefined>((resolve) => {
+        resolveNativeSession = resolve;
+      });
+
       const startupPromise = proc
         ? (async () => {
             try {
@@ -1118,9 +1155,18 @@ export function createSubprocessSpawnEngine(options?: {
             if (wasAborted) throw new SpawnAborted(spec.agent);
             await sendCommand({ type: "prompt", message: spec.task });
             promptAccepted = true;
-            if (agentStarted || agentSettled) return;
             const state = await sendCommand({ type: "get_state" });
-            if (!agentStarted && !agentSettled && idleRpcState(state.data)) {
+            const data = state.data;
+            if (
+              spec.sessionDir &&
+              isRecord(data) &&
+              typeof data.sessionFile === "string"
+            ) {
+              resolveNativeSession(data.sessionFile);
+            } else {
+              resolveNativeSession(undefined);
+            }
+            if (!agentStarted && !agentSettled && idleRpcState(data)) {
               throw new Error(
                 "Delegated pi accepted the prompt without starting an agent run",
               );
@@ -1129,30 +1175,45 @@ export function createSubprocessSpawnEngine(options?: {
         : Promise.reject(new Error("Delegated pi RPC process did not start"));
 
       startupPromise.catch((error) => {
+        resolveNativeSession(undefined);
         if (wasAborted || settled) return;
         failProtocol(
           `Failed to initialize delegated pi RPC process: ${error instanceof Error ? error.message : String(error)}`,
         );
       });
 
+      let injectedPrompts = 0;
       return {
         get status() {
           return status;
         },
         updates,
         wait: () => waitPromise,
-        steer: async (message: string) => {
+        nativeSession,
+        transcript: () => transcriptStore.snapshot(),
+        prompt: async (message: string) => {
           await startupPromise;
           if (wasAborted || agentSettled || settled || status !== "running") {
             throw new Error(`Agent ${spec.agent} is no longer running`);
           }
           await Promise.race([
-            sendCommand({ type: "steer", message }),
+            sendCommand({
+              type: "prompt",
+              message,
+              streamingBehavior: "steer",
+            }),
             waitPromise.then(
               () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
               () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
             ),
           ]);
+          transcriptStore.upsert({
+            key: `user:${++injectedPrompts}`,
+            kind: "user",
+            text: message,
+            at: Date.now(),
+          });
+          pushUpdate();
         },
         abort: () => {
           if (wasAborted || settled) return;

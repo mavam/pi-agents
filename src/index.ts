@@ -32,19 +32,19 @@ import {
   createWorkflowInspectTool,
   createWorkflowListTool,
   createWorkflowResultTool,
-  createWorkflowSteerTool,
   createWorkflowStopTool,
 } from "./triggers/run-tools.js";
 import type { TriggerDeps } from "./triggers/start.js";
 import { createWorkflowCreateTool } from "./triggers/tool.js";
+import { FocusController } from "./ui/focus.js";
 import { FancyFooterRunReporter } from "./ui/footer.js";
 import { NotificationManager } from "./ui/notify.js";
+import { RunPanel } from "./ui/panel.js";
 import {
   MESSAGE_TYPE,
   NOTIFICATION_TYPE,
   registerRenderers,
 } from "./ui/render.js";
-import { RunWidget } from "./ui/widget.js";
 
 const PACKAGE_VERSION = (
   createRequire(import.meta.url)("../package.json") as { version: string }
@@ -66,7 +66,7 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
 
   // Assigned right below; the manager's callbacks fire only once runs exist.
   let notifications: NotificationManager;
-  let widget: RunWidget;
+  let widget: RunPanel;
   let footerReporter: FancyFooterRunReporter;
 
   const manager = new RunManager({
@@ -79,8 +79,9 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
     publish: createRunEventPublisher(pi),
   });
   notifications = new NotificationManager(pi, manager);
-  widget = new RunWidget(manager);
+  widget = new RunPanel(manager);
   footerReporter = new FancyFooterRunReporter(pi, manager);
+  const focus = new FocusController(manager, widget);
 
   const deps: TriggerDeps = { pi, manager, notifications, widget };
   const refreshModels = createModelRefresher();
@@ -90,9 +91,12 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
   pi.registerTool(createWorkflowListTool(deps));
   pi.registerTool(createWorkflowInspectTool(deps));
   pi.registerTool(createWorkflowResultTool(deps));
-  pi.registerTool(createWorkflowSteerTool(deps));
   pi.registerTool(createWorkflowStopTool(deps));
   registerCommands(pi, deps);
+  pi.registerShortcut("ctrl+q", {
+    description: "Focus the pi-agents run panel",
+    handler: (ctx) => focus.focusPanel(ctx),
+  });
 
   const hooks = new HookManager(pi, deps);
   const rpc = new RpcManager(pi, deps, PACKAGE_VERSION);
@@ -124,6 +128,7 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
   pi.on("session_start", (_event, ctx) => {
     refreshModels(ctx.modelRegistry);
     rpc.setContext(ctx);
+    focus.install(ctx);
     reloadRunState(ctx);
     const trusted = isProjectTrusted(ctx);
     registerWorkflowCommands(pi, ctx.cwd, deps, trusted);
@@ -159,6 +164,7 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
   pi.on("session_shutdown", () => {
     rpc.dispose();
     hooks.dispose();
+    focus.dispose();
     widget.dispose();
     footerReporter.dispose();
     manager.stopAll();

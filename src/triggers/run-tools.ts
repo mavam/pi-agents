@@ -11,7 +11,6 @@ import { resolvePath } from "../model/interpolate.js";
 import type { RunStatus } from "../run/events.js";
 import { getSessionFile } from "../run/persist.js";
 import type { RunManager } from "../run/runs.js";
-import { MAX_STEERING_MESSAGE_CHARS } from "../run/runs.js";
 import { type RunView, workNodes } from "../run/state.js";
 import {
   fenced,
@@ -309,7 +308,6 @@ interface WorkflowInspectDetails {
     agent?: string;
     kind: string;
     status: string;
-    steerable: boolean;
     startedAt: string;
     endedAt?: string;
     error?: string;
@@ -319,7 +317,8 @@ interface WorkflowInspectDetails {
     progressText?: string;
     hasResult: boolean;
     hasPartialResult: boolean;
-    steeringCount: number;
+    /** The agent's own pi session file, when it wrote one. */
+    sessionFile?: string;
   }>;
 }
 
@@ -331,7 +330,7 @@ export function createWorkflowInspectTool(
     name: "workflow_inspect",
     label: "Workflow Inspect",
     description:
-      "Inspect one existing workflow run: status, live tree, usage, errors, node instances, progress, and steering availability. Nodes are paginated and nextCursor indicates another page. This does not return completed result values; use workflow_result for those.",
+      "Inspect one existing workflow run: status, live tree, usage, errors, node instances, and progress. Nodes are paginated and nextCursor indicates another page. This does not return completed result values; use workflow_result for those.",
     promptSnippet:
       "Inspect the status and node tree of an existing workflow run",
     parameters: WorkflowInspectParams,
@@ -401,7 +400,6 @@ export function createWorkflowInspectTool(
       ctx: ExtensionContext,
     ) {
       const run = resolveRun(deps.manager, params.run, ctx);
-      const steerable = new Set(deps.manager.steerableInstances(run.header.id));
       const nodes = workNodes(run);
       const cursor = params.cursor ?? 0;
       if (cursor > nodes.length) {
@@ -438,7 +436,6 @@ export function createWorkflowInspectTool(
           agent: node.agent,
           kind: node.kind,
           status: node.status,
-          steerable: steerable.has(node.instance),
           startedAt: new Date(node.startedAt).toISOString(),
           endedAt:
             node.endedAt === undefined
@@ -453,7 +450,7 @@ export function createWorkflowInspectTool(
           hasPartialResult:
             node.partialText !== undefined ||
             (node.status === "failed" && node.progressText !== undefined),
-          steeringCount: node.steering.length,
+          sessionFile: node.sessionFile,
         })),
       };
       return {
@@ -707,115 +704,6 @@ export function createWorkflowResultTool(
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         details,
-      };
-    },
-  };
-}
-
-const WorkflowSteerParams = Type.Object({
-  run: Type.String({ description: RUN_ID_DESCRIPTION }),
-  instance: Type.Optional(
-    Type.String({
-      description:
-        "Exact live node instance returned by workflow_inspect. Omit only when one agent is steerable.",
-    }),
-  ),
-  message: Type.String({
-    minLength: 1,
-    maxLength: MAX_STEERING_MESSAGE_CHARS,
-    description: `Course correction to queue (maximum ${MAX_STEERING_MESSAGE_CHARS} characters).`,
-  }),
-});
-
-interface WorkflowSteerDetails {
-  runId: string;
-  instance: string;
-}
-
-/** Model-facing control for a live background agent. */
-export function createWorkflowSteerTool(
-  deps: TriggerDeps,
-): ToolDefinition<typeof WorkflowSteerParams, WorkflowSteerDetails> {
-  return {
-    name: "workflow_steer",
-    label: "Workflow Steer",
-    description:
-      "Queue a course correction for one agent in a live workflow run. The message is delivered after the agent's current assistant turn finishes its tool calls. Use workflow_inspect to discover exact steerable instances.",
-    promptSnippet: "Steer one agent in a live workflow run",
-    promptGuidelines: [
-      "Use workflow_steer only for an existing live run; it never starts, restarts, or resumes an agent.",
-      "Omit workflow_steer's instance only when exactly one agent in the run is currently steerable.",
-    ],
-    parameters: WorkflowSteerParams,
-    renderCall(args, theme) {
-      const target = [args.run, args.instance && `→ ${args.instance}`]
-        .filter(Boolean)
-        .join(" ");
-      return new Text(
-        toolCallText(
-          theme,
-          `workflow steer ${target}`.trimEnd(),
-          args.message ? oneLine(args.message, 80) : undefined,
-        ),
-        1,
-        0,
-      );
-    },
-    renderResult(result, _options, theme) {
-      const details = result.details;
-      if (!details) return new Text(firstText(result), 1, 0);
-      return new Text(
-        `${theme.fg("success", "↪")} steering queued for ${details.instance} ${theme.fg(
-          "dim",
-          `· run ${shortId(details.runId)} · delivered after the current turn`,
-        )}`,
-        1,
-        0,
-      );
-    },
-    async execute(
-      _toolCallId,
-      params,
-      _signal,
-      _onUpdate,
-      ctx: ExtensionContext,
-    ) {
-      const run = resolveRun(deps.manager, params.run, ctx);
-      const runId = run.header.id;
-      const available = deps.manager.steerableInstances(runId);
-      const instance =
-        params.instance ?? (available.length === 1 ? available[0] : undefined);
-      if (!instance || !available.includes(instance)) {
-        const choices = available.length > 0 ? available.join(", ") : "none";
-        throw new Error(
-          params.instance
-            ? `Instance '${params.instance}' is not steerable. Available: ${choices}`
-            : `Run ${shortId(runId)} has ${available.length} steerable instances. Specify one of: ${choices}`,
-        );
-      }
-      const result = await deps.manager.steer(
-        runId,
-        instance,
-        params.message,
-        "tool",
-      );
-      if (result.status !== "queued") {
-        throw new Error(
-          result.status === "rejected"
-            ? result.error
-            : result.reason === "run_not_live"
-              ? `Run ${shortId(runId)} is not live.`
-              : `Instance '${instance}' is no longer steerable.`,
-        );
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Steering queued for ${instance} in run ${shortId(runId)}. It will be delivered after the current assistant turn finishes its tool calls.`,
-          },
-        ],
-        details: { runId, instance },
       };
     },
   };

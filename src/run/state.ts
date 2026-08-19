@@ -12,15 +12,7 @@ import type {
   RunEvent,
   RunHeader,
   RunStatus,
-  SteeringSource,
 } from "./events.js";
-
-export interface SteeringEntry {
-  at: number;
-  message: string;
-  source: SteeringSource;
-  caller?: string;
-}
 
 export interface NodeView {
   path: string;
@@ -35,23 +27,21 @@ export interface NodeView {
   usage?: SpawnUsage;
   /** Preserved partial output of a budget-cut agent (persisted via events). */
   partialText?: string;
+  /** The delegated agent's own pi session file (persisted via events); set
+   * for engines with native sessions, enabling first-class attach. */
+  sessionFile?: string;
   /** Latest streamed output preview. In-memory only; never persisted. */
   progressText?: string;
   /** Latest provider-supplied reasoning summary headline. In-memory only. */
   progressSummary?: string;
   /** When the live reasoning summary last changed. In-memory only. */
   progressSummaryAt?: number;
-  /** Bounded chronological assistant/tool activity. In-memory only; never
-   * persisted, so delegated agents still have a single durable artifact. */
-  progressTail?: string;
   /** Latest streamed usage of a running agent. In-memory only. */
   progressUsage?: SpawnUsage;
   /** Tool the running agent is currently executing. In-memory only. */
   progressTool?: string;
   /** When the running agent last reported any activity. In-memory only. */
   lastProgressAt?: number;
-  /** Accepted steering messages in delivery order. */
-  steering: SteeringEntry[];
   startedAt: number;
   endedAt?: number;
 }
@@ -109,7 +99,6 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
         agent: event.agent,
         label: event.label,
         status: "running",
-        steering: [],
         startedAt: event.at,
       });
       run.order.push(event.instance);
@@ -142,7 +131,6 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
           instance: event.instance,
           kind: "agent",
           status: "cancelled",
-          steering: [],
           startedAt: event.at,
         };
         run.nodes.set(event.instance, node);
@@ -153,15 +141,10 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
       node.endedAt = event.at;
       return;
     }
-    case "node_steered": {
+    case "node_session": {
       const node = run.nodes.get(event.instance);
       if (!node) return;
-      node.steering.push({
-        at: event.at,
-        message: event.message,
-        source: event.source,
-        caller: event.caller,
-      });
+      node.sessionFile = event.sessionFile;
       return;
     }
     case "loop_iteration": {

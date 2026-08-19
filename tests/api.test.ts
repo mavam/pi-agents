@@ -113,40 +113,6 @@ describe("public pi-agents client", () => {
     });
   });
 
-  test("sends a typed steering request", async () => {
-    const bus = new TestBus();
-    let request!: RpcRequest;
-    bus.on(RPC_REQUEST_CHANNEL, (raw) => {
-      request = raw as RpcRequest;
-      bus.emit(`${RPC_REPLY_PREFIX}${request.id}`, {
-        protocol: PROTOCOL_VERSION,
-        id: request.id,
-        success: true,
-        data: { runId: "run-1", instance: "$.branches.reviewer" },
-      });
-    });
-    const client = createPiAgentsClient(makePi(bus), { caller: "dashboard" });
-    await expect(
-      client.steer({
-        runId: "run-1",
-        instance: "$.branches.reviewer",
-        message: "check the failure path",
-      }),
-    ).resolves.toEqual({
-      runId: "run-1",
-      instance: "$.branches.reviewer",
-    });
-    expect(request).toMatchObject({
-      op: "steer",
-      caller: "dashboard",
-      params: {
-        runId: "run-1",
-        instance: "$.branches.reviewer",
-        message: "check the failure path",
-      },
-    });
-  });
-
   test("times out and removes its reply listener", async () => {
     const bus = new TestBus();
     let request!: RpcRequest;

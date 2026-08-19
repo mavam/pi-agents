@@ -1,5 +1,5 @@
 /**
- * Run-event schema v3. Runs are event-sourced: everything the UI and history
+ * Run-event schema v4. Runs are event-sourced: everything the UI and history
  * need is reconstructable by replaying these events. Nodes are addressed by
  * static `path` (position in the flow tree) plus dynamic `instance` (the path
  * with `@item` / `#iteration` suffixes interleaved for dynamic multiplicity).
@@ -8,7 +8,7 @@
 import type { SpawnUsage } from "../engine/types.js";
 import type { Budgets, FlowNode, NodeKind, Scope } from "../model/ast.js";
 
-export const RUN_EVENT_TYPE = "pi-agents:run-event:v3";
+export const RUN_EVENT_TYPE = "pi-agents:run-event:v4";
 
 export type RunStatus = "running" | "completed" | "failed" | "stopped";
 
@@ -20,8 +20,6 @@ export type CancelReason =
   | "sibling_failed"
   | "stopped"
   | "budget";
-
-export type SteeringSource = "user" | "tool" | "rpc";
 
 export interface RunSource {
   kind: "tool" | "command" | "hook" | "rpc";
@@ -91,15 +89,14 @@ export type RunEvent =
       reason: CancelReason;
     }
   | {
-      type: "node_steered";
+      /** The delegated agent's own pi session file became known. Persisted,
+       * so finished agents remain attachable across restarts. */
+      type: "node_session";
       at: number;
       runId: string;
       path: string;
       instance: string;
-      message: string;
-      source: SteeringSource;
-      /** Self-declared extension name for cross-extension RPC steering. */
-      caller?: string;
+      sessionFile: string;
     }
   | {
       /** Emitted before a loop or while body iteration starts. */

@@ -48,6 +48,8 @@ export interface RunnerOptions {
   budgetLimits?: EffectiveBudgets;
   /** Discovery caches shared with preflight, so resolution happens once. */
   catalogs?: CatalogCache;
+  /** Directory for delegated agents' own session files (one per run). */
+  sessionDir?: string;
   /** Observe a live handle; return a disposer that unregisters it. */
   onHandle?: (call: AgentCall, handle: SpawnHandle) => (() => void) | undefined;
 }
@@ -109,6 +111,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       // Preserved exactly: the engine adds only its mandatory result tool.
       tools: resolved.tools,
       resultSchema: call.resultSchema,
+      sessionDir: options.sessionDir,
       env,
     });
     const unregisterHandle = options.onHandle?.(call, handle);

@@ -313,7 +313,7 @@ audit, a research question, anything the model privately judges
 parallelizable — it does itself, mentioning at most in one sentence that a
 workflow could take it. That is what makes the example above run: *"review
 these three modules in parallel"* is your request, not the model's inference.
-The tool only starts runs. Directed tools list, inspect, retrieve, steer, and
+The tool only starts runs. Directed tools list, inspect, retrieve, and
 stop existing runs without requiring you to relay `/workflow` command output.
 
 ```json
@@ -412,7 +412,7 @@ Any explicit list is closed: a non-empty list injects exactly those skills,
 and `skills: []` disables skill discovery. `tools` follows the same replacement
 precedence, and `tools: []` leaves the agent with no working tools. Pi-agents
 still supplies its mandatory result-submission tool. The `workflow_create`,
-`workflow_list`, `workflow_inspect`, `workflow_result`, `workflow_steer`, and
+`workflow_list`, `workflow_inspect`, `workflow_result`, and
 `workflow_stop` tools are owned by the parent process, so agent and reducer
 allowlists cannot name them. Express that work with `workflow`, `parallel`,
 `map`, `loop`, or `while` nodes in the parent flow.
@@ -788,26 +788,44 @@ presented result to the chat, and `a` drills into the run's agents. The `c` key
 cancels a running run or copies a settled run's presented result; settled runs
 without a result omit it. The `r` key starts the same flow again, and `h`
 shows/hides that run in the live summary above the composer (useful for
-long-running flows). Agent tier: `⏎` posts the agent's full output, while `t`
-opens a live, auto-following tail of its assistant output and tool activity.
-The tail is a bounded in-memory peek and is not persisted as another agent
-artifact. On a running agent, `s` opens an inline composer for a steering
-message from either the agent list or its tail, so you can observe, correct
-course, and keep watching. In the agents panel, `⏎` posts the full agent
-details and `n` starts
-a new definition.
+long-running flows). Agent tier: `⏎` attaches to the agent — a running
+agent opens the interactive agent console (its live transcript with an input
+line), and a settled agent opens its own pi session. `o` posts the agent's
+full output to the chat instead. In the agents panel, `⏎` posts the full
+agent details and `n` starts a new definition.
 
-The live summary widget shows each workflow's status and latest activity at a
-glance, using provider reasoning summaries and active tool names. It keeps
-every activity label visible for at least three seconds
-and then retains it until a newer one arrives, coalescing rapid updates. The
-widget can be toggled wholesale with `/workflows widget`.
-There is no default keybinding for it; bind one via pi's keybindings if you
-want one-keystroke access. While the workflows panel is open the summary hides
-itself — the panel sits directly below it and reports the same run state — and
-returns when you close the panel, leaving the toggle and any per-run `h`
-choices untouched. It remains visible in the agents panel, which doesn't show
-run state.
+### The run panel
+
+The run panel above the editor shows each workflow's status and latest
+activity at a glance, using provider reasoning summaries and active tool
+names. It keeps every activity label visible for at least three seconds and
+then retains it until a newer one arrives, coalescing rapid updates. The panel
+can be toggled wholesale with `/workflows widget`.
+
+The panel is interactive: press **←** from an empty editor (or `ctrl+q` any
+time) to move focus into it. Inside, `↑`/`↓` move the selection, **space**
+expands or collapses a run into its agent list (the panel grows upward, so
+the editor never shifts), `⏎` attaches to the selected agent, `c` cancels the
+selected run, and `esc`/`→` (or just typing) returns focus to the editor.
+Because agent rows are color-coded by status, the running agents are visible
+at a glance.
+
+Attaching to a **running** agent opens the agent console in the editor slot:
+the agent's transcript — task, assistant turns, tool activity — following live
+output, with an input line at the bottom. `⏎` sends a message into the agent
+(delivered as steering while it is mid-turn), `shift+↑`/`shift+↓` scroll,
+`ctrl+x` aborts the agent, and `esc` detaches while the agent keeps running.
+While a console is open, the run panel collapses to a one-line status for that
+agent and its place in the workflow. Attaching to a **settled** agent opens
+the agent's own pi session as the active session — full editor, history, and
+tree navigation — since every delegated agent writes a real session file into
+a pi-agents-owned directory (`~/.pi/agent/sessions/pi-agents/<run-id>/`).
+Switching sessions tears down all running workflows, so pi-agents asks for
+confirmation when any run is still live.
+
+While the workflows overlay is open the run panel hides itself — the overlay
+sits directly below it and reports the same run state — and returns when you
+close the overlay, leaving the toggle and any per-run `h` choices untouched.
 
 When
 [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) is installed,
@@ -853,7 +871,6 @@ The model uses one directed tool for each run operation:
 | `workflow_list` | List recent persisted runs, optionally filtered by status. |
 | `workflow_inspect` | Read one run's live tree, progress, usage, errors, and exact node instances. |
 | `workflow_result` | Retrieve a run or node result with dot-path selection and pagination. |
-| `workflow_steer` | Queue a course correction for a live node. |
 | `workflow_stop` | Stop a live run after you explicitly request cancellation. |
 
 These tools only expose runs belonging to the current session. `workflow_list`
@@ -866,21 +883,15 @@ smaller value before retrieval; numeric path segments index arrays. The
 uses the run's display selection, while `raw` preserves the underlying JSON
 representation.
 
-### Steering live agents
+### Talking to live agents
 
-Steering queues a course correction for an already-running delegated agent;
-it does not start, resume, or restart one. Messages use Pi's deterministic
-`one-at-a-time` steering mode, so delivery follows the current assistant
-turn's tool-call batch. A message is limited to 2,000 characters and is added
-to run history only after the child accepts it. Accepted messages appear in
-the agent detail view and are persisted with their source (`user`, `tool`, or
-`rpc`). Steering-triggered assistant turns count toward the run's normal usage
-and turn totals.
-
-The model calls `workflow_steer` with a run ID (full or unique prefix), an
-optional exact node instance, and the message. The instance may be omitted only
-while exactly one agent in that run is steerable. `workflow_inspect` reports the
-exact instances and whether each one is currently steerable.
+Intervening in a running agent is interactive: attach to it from the run
+panel or the `/workflows` overlay and type. Messages are injected through
+Pi's deterministic `one-at-a-time` steering mode, so delivery follows the
+current assistant turn's tool-call batch, and the resulting assistant turns
+count toward the run's normal usage and turn totals. There is no programmatic
+steering surface: models and RPC callers observe runs (`workflow_inspect`)
+and stop them, but course corrections belong to the human at the console.
 
 ## 🔌 Event bus and RPC
 
@@ -896,8 +907,8 @@ this package; an optional typed client is exported from `pi-agents/api`.
 | `pi-agents:rpc:reply:<id>` | Correlated success or error reply |
 
 The run channel carries `run_created`, node lifecycle (including
-`node_steered` after queue acceptance), loop/while iteration, `run_backgrounded`,
-and `run_completed` events. These are detached, deeply frozen snapshots:
+`node_session` once a delegated agent's own session file is known), loop/while
+iteration, `run_backgrounded`, and `run_completed` events. These are detached, deeply frozen snapshots:
 subscribers cannot mutate pi-agents' internal run state or the event seen by
 later subscribers. Only new live events are published; use RPC `list` for the
 current session's known run summaries.
@@ -939,16 +950,12 @@ await agents.stop(runId); // only while the run is live
 off();
 ```
 
-RPC operations are `ping`, `start`, `stop`, `steer`, and `list`. `start`
+RPC operations are `ping`, `start`, `stop`, and `list`. `start`
 accepts exactly one of an inline `flow` or saved `workflow`, optional literal
 workflow parameters, label, and `display` path, and an optional absolute
 existing `cwd`. A call-level `display` overrides the saved definition.
-`start` confirms that the run was scheduled; it does not wait for a child agent
-to become steerable. `steer` targets a currently running child and may reject
-while a run is starting, between nodes, or waiting for capacity. It accepts an
-exact `runId`, optional exact live node `instance`, and a message; omission of
-`instance` is valid only when one agent is steerable at the time of the request.
-RPC runs always run in the background, use the normal inherited/default
+`start` confirms that the run was scheduled; it does not wait for a child
+agent to start. RPC runs always run in the background, use the normal inherited/default
 budgets, and obey the active session's project-trust decision. In untrusted
 projects only user agents and workflows resolve. A `start` request made outside
 an active session returns an error.

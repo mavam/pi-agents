@@ -43,13 +43,6 @@ export interface StopRpcParams {
   runId: string;
 }
 
-export interface SteerRpcParams {
-  runId: string;
-  /** Exact live node instance; optional when only one instance is steerable. */
-  instance?: string;
-  message: string;
-}
-
 interface RpcRequestBase {
   protocol: typeof PROTOCOL_VERSION;
   id: string;
@@ -61,7 +54,6 @@ export type RpcRequest =
   | (RpcRequestBase & { op: "ping"; params?: never })
   | (RpcRequestBase & { op: "start"; params: StartRpcParams })
   | (RpcRequestBase & { op: "stop"; params: StopRpcParams })
-  | (RpcRequestBase & { op: "steer"; params: SteerRpcParams })
   | (RpcRequestBase & { op: "list"; params?: never });
 
 export type RpcReply<T = unknown> =
@@ -91,11 +83,6 @@ export interface StopRpcData {
   runId: string;
 }
 
-export interface SteerRpcData {
-  runId: string;
-  instance: string;
-}
-
 export interface RunSummary {
   runId: string;
   label?: string;
@@ -117,7 +104,6 @@ export interface PiAgentsClient {
   ping(): Promise<PingRpcData>;
   start(params: StartRpcParams): Promise<StartRpcData>;
   stop(runId: string): Promise<StopRpcData>;
-  steer(params: SteerRpcParams): Promise<SteerRpcData>;
   list(): Promise<ListRpcData>;
   onRunEvent(handler: (event: RunEvent) => void): () => void;
   onReady(handler: (ready: ReadyEnvelope) => void): () => void;
@@ -211,7 +197,6 @@ export function createPiAgentsClient(
     ping: () => rpcRequest(pi, "ping", undefined, options),
     start: (params) => rpcRequest(pi, "start", params, options),
     stop: (runId) => rpcRequest(pi, "stop", { runId }, options),
-    steer: (params) => rpcRequest(pi, "steer", params, options),
     list: () => rpcRequest(pi, "list", undefined, options),
     onRunEvent: (handler) =>
       pi.events.on(RUN_EVENT_CHANNEL, (raw) => {

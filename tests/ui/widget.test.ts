@@ -4,10 +4,10 @@ import { validateFlow } from "../../src/model/validate.js";
 import type { RunEvent } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
 import { type RunView, rebuildRunState } from "../../src/run/state.js";
+import { RunPanel } from "../../src/ui/panel.js";
 import {
   type Colorize,
   formatRunWidget,
-  RunWidget,
   STALL_AFTER_MS,
   widgetProgress,
 } from "../../src/ui/widget.js";
@@ -710,7 +710,7 @@ describe("live activity", () => {
   });
 });
 
-describe("RunWidget suppression", () => {
+describe("RunPanel suppression", () => {
   function harness() {
     const runs = new Map<string, RunView>();
     runs.set("a", {
@@ -718,7 +718,7 @@ describe("RunWidget suppression", () => {
       header: { id: "a", source: { kind: "command" } },
       nodes: new Map(),
     } as unknown as RunView);
-    const widget = new RunWidget({ state: { runs } } as never);
+    const widget = new RunPanel({ state: { runs } } as never);
     const shown: unknown[] = [];
     const ctx = {
       mode: "tui",
@@ -762,7 +762,7 @@ describe("RunWidget suppression", () => {
   });
 });
 
-describe("RunWidget lifecycle", () => {
+describe("RunPanel lifecycle", () => {
   test("holds every workflow activity while coalescing newer ones", async () => {
     const run = await recordedRun(
       REVIEW_FLOW,
@@ -782,7 +782,7 @@ describe("RunWidget lifecycle", () => {
     node.progressSummary = "First headline";
     node.progressSummaryAt = now;
     node.lastProgressAt = now;
-    const widget = new RunWidget(
+    const widget = new RunPanel(
       { state: { runs: new Map([[run.header.id, run]]) } } as never,
       () => now,
     );
@@ -874,7 +874,7 @@ describe("RunWidget lifecycle", () => {
       header: { id: "a", source: { kind: "command" } },
       nodes: new Map(),
     } as unknown as RunView);
-    const widget = new RunWidget({ state: { runs } } as never);
+    const widget = new RunPanel({ state: { runs } } as never);
     const shown: unknown[] = [];
     let contextActive = true;
     const ctx = {

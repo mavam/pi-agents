@@ -51,7 +51,6 @@ export const DELEGATED_AGENT_FORBIDDEN_TOOLS = [
   "workflow_list",
   "workflow_inspect",
   "workflow_result",
-  "workflow_steer",
   "workflow_stop",
 ] as const;
 

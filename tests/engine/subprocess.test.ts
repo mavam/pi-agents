@@ -9,7 +9,7 @@ import {
   createSubprocessSpawnEngine,
   formatFailureReason,
   isChildProcessRunning,
-  MAX_ACTIVITY_TAIL_CHARS,
+  MAX_TRANSCRIPT_CHARS,
   type SpawnProcess,
 } from "../../src/engine/subprocess.js";
 import {
@@ -240,7 +240,8 @@ describe("subprocess spawn engine", () => {
     });
     const spawned = procs[0] as (typeof procs)[number];
     expect(spawned.command).toBe("pi");
-    expect(spawned.args.slice(0, 3)).toEqual(["--mode", "rpc", "--no-session"]);
+    expect(spawned.args.slice(0, 2)).toEqual(["--mode", "rpc"]);
+    expect(spawned.args).toContain("--no-session");
     expect(spawned.args).not.toContain("-p");
     expect(spawned.args).toContain("some-model");
     expect(spawned.args).toContain("--thinking");
@@ -658,7 +659,7 @@ describe("subprocess spawn engine", () => {
     expect(handle.status).toBe("aborted");
   });
 
-  test("steer waits for readiness and receives correlated acknowledgement", async () => {
+  test("prompt waits for readiness and injects a steering-delivered message", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
       agent: "w",
@@ -666,13 +667,20 @@ describe("subprocess spawn engine", () => {
       cwd: "/tmp",
     });
     const proc = procs[0]?.proc as FakeProc;
-    await handle.steer?.("change course");
+    await handle.prompt?.("change course");
+    const injected = proc.stdin.records.filter(
+      (record) => record.type === "prompt",
+    );
+    expect(injected.at(-1)?.message).toBe("change course");
+    expect(injected.at(-1)?.streamingBehavior).toBe("steer");
     expect(
-      proc.stdin.records.find((record) => record.type === "steer")?.message,
-    ).toBe("change course");
+      handle
+        .transcript?.()
+        .some((item) => item.kind === "user" && item.text === "change course"),
+    ).toBe(true);
     finish(proc);
     await handle.wait();
-    await expect(handle.steer?.("too late")).rejects.toThrow(
+    await expect(handle.prompt?.("too late")).rejects.toThrow(
       "no longer running",
     );
   });
@@ -699,17 +707,16 @@ describe("subprocess spawn engine", () => {
     expect(seen.slice(0, 2)).toEqual(["first", "second"]);
   });
 
-  test("keeps a bounded chronological tail of assistant and tool activity", async () => {
+  test("keeps a bounded chronological transcript of assistant and tool activity", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
       agent: "w",
       task: "t",
       cwd: "/tmp",
     });
-    const tails: string[] = [];
     const reader = (async () => {
-      for await (const update of handle.updates) {
-        if (update.tail) tails.push(update.tail);
+      for await (const _update of handle.updates) {
+        // Drain so the engine never blocks on a slow consumer.
       }
     })();
     const proc = procs[0]?.proc as FakeProc;
@@ -744,38 +751,51 @@ describe("subprocess spawn engine", () => {
     await handle.wait();
     await reader;
 
-    const tail = tails.at(-1) ?? "";
-    expect(tail).toContain("assistant · turn 1\nI will inspect the tests.");
-    expect(tail).toContain("✓ bash: bun test\n455 pass");
-    expect(tail).toContain("assistant · turn 2\nEverything passes.");
-    expect(tail.length).toBeLessThanOrEqual(MAX_ACTIVITY_TAIL_CHARS);
+    const items = handle.transcript?.() ?? [];
+    expect(items[0]).toMatchObject({ kind: "user", text: "t" });
+    expect(items[1]).toMatchObject({
+      kind: "assistant",
+      turn: 1,
+      text: "I will inspect the tests.",
+    });
+    expect(items[2]).toMatchObject({
+      kind: "tool",
+      label: "bash: bun test",
+      status: "ok",
+      output: "455 pass",
+    });
+    expect(items[3]).toMatchObject({
+      kind: "assistant",
+      turn: 2,
+      text: "Everything passes.",
+    });
   });
 
-  test("bounds a single oversized activity entry", async () => {
+  test("drops the oldest transcript entries past the character bound", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
       agent: "w",
       task: "t",
       cwd: "/tmp",
     });
-    let longestTail = "";
     const reader = (async () => {
-      for await (const update of handle.updates) {
-        if ((update.tail?.length ?? 0) > longestTail.length) {
-          longestTail = update.tail ?? longestTail;
-        }
+      for await (const _update of handle.updates) {
+        // Drain so the engine never blocks on a slow consumer.
       }
     })();
     const proc = procs[0]?.proc as FakeProc;
     proc.emitRecord({ type: "turn_start" });
-    proc.emitAssistant("x".repeat(MAX_ACTIVITY_TAIL_CHARS + 1_000));
+    proc.emitAssistant("early answer");
+    proc.emitRecord({ type: "turn_start" });
+    proc.emitAssistant("x".repeat(MAX_TRANSCRIPT_CHARS + 1_000));
     submitResult(proc, "result");
     proc.settle();
     proc.close(0);
     await handle.wait();
     await reader;
-    expect(longestTail.length).toBe(MAX_ACTIVITY_TAIL_CHARS);
-    expect(longestTail).toStartWith("… earlier activity omitted …\n");
+    const items = handle.transcript?.() ?? [];
+    expect(items).toHaveLength(1);
+    expect(items[0]?.kind).toBe("assistant");
   });
 
   test("strict JSONL preserves chunking, CRLF, and Unicode separators", async () => {
@@ -1292,36 +1312,36 @@ describe("overlapping tools and streamed text", () => {
     expect(seen.at(-1)).toBe("second partial");
   });
 
-  test("flushes the newest assistant tail when the stream is cut off", async () => {
+  test("keeps the newest streamed assistant text when the stream is cut off", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
       agent: "w",
       task: "t",
       cwd: "/tmp",
     });
-    const tails: string[] = [];
     const reader = (async () => {
-      for await (const update of handle.updates) {
-        if (update.tail) tails.push(update.tail);
+      for await (const _update of handle.updates) {
+        // Drain so the engine never blocks on a slow consumer.
       }
     })();
     const proc = procs[0]?.proc as FakeProc;
-    proc.emitRecord({ type: "turn_start" }); // starts the throttle window
+    proc.emitRecord({ type: "turn_start" });
     proc.emitRecord({
       type: "message_update",
-      assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "half an answer",
+      },
     });
-    const partial = (delta: string) =>
-      proc.emitRecord({
-        type: "message_update",
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
-      });
-    partial("half an");
-    partial(" answer"); // throttled, then flushed by close
-    proc.close(2);
-
+    proc.close(1);
     await expect(handle.wait()).rejects.toThrow(SpawnFailure);
     await reader;
-    expect(tails.at(-1)).toContain("assistant · turn 1\nhalf an answer");
+    const items = handle.transcript?.() ?? [];
+    expect(items.at(-1)).toMatchObject({
+      kind: "assistant",
+      turn: 1,
+      text: "half an answer",
+    });
   });
 });

@@ -55,6 +55,9 @@ export interface SpawnSpec {
   tools?: string[];
   /** Optional JSON Schema for the submitted payload. Omit for a string. */
   resultSchema?: JsonSchema;
+  /** Directory for the delegated agent's own session file. Engines with
+   * native sessions write a real, later-attachable session there. */
+  sessionDir?: string;
   /** Extra environment variables for the child process. */
   env?: Record<string, string>;
 }
@@ -64,9 +67,6 @@ export interface SpawnProgress {
   text: string;
   /** Latest provider-supplied reasoning summary headline, when Pi exposes one. */
   summary?: string;
-  /** Bounded, chronological activity tail for live observation. Engines may
-   * omit this when they only support latest-text progress. */
-  tail?: string;
   usage: SpawnUsage;
   /** Tool currently executing, when the engine reports tool activity. */
   currentTool?: string;
@@ -120,14 +120,46 @@ export class SpawnAborted extends Error {
   }
 }
 
+/**
+ * One entry in a delegated agent's live transcript. Engine-neutral: the
+ * subprocess engine builds these from pi RPC records; other engines may map
+ * their own event streams. Entries are mutable in place (streaming text and
+ * tool output update the same item), identified by `key`.
+ */
+export type TranscriptItem =
+  | { key: string; kind: "user"; text: string; at: number }
+  | {
+      key: string;
+      kind: "assistant";
+      text: string;
+      /** Latest reasoning summary headline for this turn, when available. */
+      summary?: string;
+      turn: number;
+      at: number;
+    }
+  | {
+      key: string;
+      kind: "tool";
+      label: string;
+      output?: string;
+      status: "running" | "ok" | "error";
+      at: number;
+    };
+
 export interface SpawnHandle {
   readonly status: "running" | "completed" | "failed" | "aborted";
   updates: AsyncIterable<SpawnProgress>;
   /** Resolves with the outcome; rejects with AgentErrorResult, SpawnFailure,
    * or SpawnAborted. */
   wait(): Promise<SpawnOutcome>;
-  /** Queue a steering message; unavailable on engines without live input. */
-  steer?(message: string): Promise<void>;
+  /** Inject a user message into the running agent (delivered as steering when
+   * the agent is mid-turn); unavailable on engines without live input. */
+  prompt?(message: string): Promise<void>;
+  /** Snapshot of the live transcript; unavailable on engines without one. */
+  transcript?(): readonly TranscriptItem[];
+  /** Path of the engine-native pi session file, once known. Engines without
+   * native sessions leave this undefined. */
+  nativeSession?: Promise<string | undefined>;
   abort(): void;
 }
 

@@ -111,7 +111,7 @@ function fakeDeps(runs: RunView[]): FakeDeps {
   const deps = {
     manager: {
       state,
-      steerableInstances: () => [] as string[],
+      liveHandle: () => undefined,
       stop: (runId: string) => {
         stops.push(runId);
         return true;
@@ -390,51 +390,6 @@ describe("buildWorkflowsSpec", () => {
     expect(spec.onCancel?.()).toEqual({ selectKey: "wf:project:triage" });
     expect(spec.items()[0]?.kind).toBe("all");
     expect(spec.onCancel?.()).toBe("close");
-  });
-
-  test("t opens an auto-following agent tail and esc returns to agents", async () => {
-    const { spec, live } = await fixture();
-    const node = live.nodes.get("$");
-    if (!node) throw new Error("expected live node");
-    node.progressTail = [
-      "assistant · turn 1",
-      "✓ reported by the test runner",
-      "",
-      "✓ read: src/index.ts",
-      "assistant · literal tool output",
-    ].join("\n");
-
-    const wf = spec.items().find((item) => item.kind === "workflow");
-    if (!wf) throw new Error("expected workflow row");
-    spec.onAction("enter", wf);
-    const runItem = spec.items()[0];
-    if (runItem?.kind !== "run") throw new Error("expected run row");
-    spec.onAction("a", runItem);
-    const nodeItem = spec.items()[0];
-    if (nodeItem?.kind !== "node") throw new Error("expected node row");
-
-    expect(spec.onAction("t", nodeItem)).toEqual({
-      selectKey: `node:${live.header.id}:$`,
-    });
-    expect(spec.items()).toHaveLength(1);
-    expect((spec.title as () => string)()).toContain("Live tail");
-    expect(spec.detail(nodeItem, color).join("\n")).toContain(
-      "✓ reported by the test runner",
-    );
-    const colored = spec.detail(nodeItem, (tone, text) => `<${tone}>${text}`);
-    expect(colored).toContain("<muted>assistant · turn 1");
-    expect(colored).toContain("<success>✓ read: src/index.ts");
-    expect(colored).toContain("✓ reported by the test runner");
-    expect(colored).toContain("assistant · literal tool output");
-    expect(colored).not.toContain("<success>✓ reported by the test runner");
-    expect(colored).not.toContain("<muted>assistant · literal tool output");
-    expect(spec.detailWindow?.(nodeItem)).toBe("tail");
-    expect(spec.footerFor?.(nodeItem)).toContain("t agents");
-
-    expect(spec.onCancel?.()).toEqual({
-      selectKey: `node:${live.header.id}:$`,
-    });
-    expect((spec.title as () => string)()).toContain("agents");
   });
 
   test("keyOf namespaces are distinct per tier", async () => {

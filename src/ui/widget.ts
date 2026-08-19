@@ -1,5 +1,5 @@
 /**
- * The above-editor widget for live runs: one line per run.
+ * Pure formatting helpers for the above-editor run panel: one line per run.
  *
  *   ❖ review · ✦2/3 · 1m32s · 15.5k · ✦⑃⟨✦✦⑂⟩⇶↺ · merging…
  *
@@ -17,12 +17,7 @@
  * iterations always collapse to one glyph each, capped with an ellipsis.
  */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-  type Component,
-  truncateToWidth,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
 import {
   bodyPath,
@@ -33,18 +28,10 @@ import {
   reducePath,
   stepPath,
 } from "../model/ast.js";
-import type { RunManager } from "../run/runs.js";
 import { type RunView, workNodes } from "../run/state.js";
 import { formatTokens } from "./render.js";
 import { STATUS_STYLES } from "./status.js";
 import { aggregateStatuses, KIND_ICONS, type PathStatus } from "./tree.js";
-
-const WIDGET_KEY = "pi-agents:runs";
-const MAX_RUNS = 4;
-// The glyph strip carries liveness through color, so no spinner animates;
-// the tick refreshes elapsed time, stall hints, and held reasoning summaries.
-const TICK_MS = 1000;
-const SUMMARY_MIN_DISPLAY_MS = 3000;
 
 type SegmentStatus =
   | "pending"
@@ -83,32 +70,6 @@ export type Colorize = (
 ) => string;
 
 export const plainColorize: Colorize = (_color, text) => text;
-
-/**
- * Width-aware widget lines: content is (re)built per render with the actual
- * terminal width, so each run line can budget its label and meta parts to
- * keep the glyph strip visible. Lines are still truncated (ANSI-aware) as a
- * last resort, never wrapped.
- */
-class WidthAwareLines implements Component {
-  private readonly build: (width: number) => string[];
-
-  constructor(build: (width: number) => string[]) {
-    this.build = build;
-  }
-
-  invalidate(): void {
-    // Content is a pure function of run state; the widget is replaced
-    // wholesale on updates.
-  }
-
-  render(width: number): string[] {
-    const usable = Math.max(4, width - 1);
-    return this.build(usable).map(
-      (line) => ` ${truncateToWidth(line, usable, "…")}`,
-    );
-  }
-}
 
 /**
  * Status for one depth-1 unit: liveness from the unit's own node (when it
@@ -518,177 +479,4 @@ export function visibleWidgetRuns(
   return [...runs].filter(
     (run) => run.status === "running" && !hiddenRunIds.has(run.header.id),
   );
-}
-
-export class RunWidget {
-  private readonly manager: RunManager;
-  private readonly now: () => number;
-  private lastContext: ExtensionContext | undefined;
-  private timer: ReturnType<typeof setInterval> | undefined;
-  private disposed = false;
-  /** Run ids muted from the summary (session-scoped, via the /workflows overlay `h`). */
-  private readonly hidden = new Set<string>();
-  private enabled = true;
-  /** True while the workflows panel owns the composer slot. */
-  private suppressed = false;
-  private readonly heldActivity = new Map<
-    string,
-    { activity: LiveActivity; shownAt: number; pending?: LiveActivity }
-  >();
-
-  constructor(manager: RunManager, now: () => number = Date.now) {
-    this.manager = manager;
-    this.now = now;
-  }
-
-  update(ctx?: ExtensionContext): void {
-    if (this.disposed) return;
-    const context = ctx ?? this.lastContext;
-    // RPC exposes a UI bridge, but delegated/headless sessions must not start
-    // widget timers or emit display requests. The widget belongs to the TUI.
-    if (context?.mode !== "tui") return;
-    this.lastContext = context;
-    this.render(context);
-  }
-
-  isHidden(runId: string): boolean {
-    return this.hidden.has(runId);
-  }
-
-  /** Show/hide one run in the summary. Returns true when now hidden. */
-  toggleHidden(runId: string): boolean {
-    if (!this.hidden.delete(runId)) this.hidden.add(runId);
-    this.update();
-    return this.hidden.has(runId);
-  }
-
-  isEnabled(): boolean {
-    return this.enabled;
-  }
-
-  /**
-   * Hide the summary while the workflows panel is open: the panel sits in the
-   * composer slot right below it and reports the same run state, so the widget
-   * is pure duplication there. Orthogonal to the `enabled` preference and the
-   * per-run `hidden` set — both survive being suppressed.
-   */
-  setSuppressed(value: boolean): void {
-    if (this.suppressed === value) return;
-    this.suppressed = value;
-    this.update();
-  }
-
-  /** Turn the whole live summary on/off. Returns the new state. */
-  toggleEnabled(): boolean {
-    this.enabled = !this.enabled;
-    this.update();
-    return this.enabled;
-  }
-
-  private running(): RunView[] {
-    return visibleWidgetRuns(this.manager.state.runs.values(), this.hidden);
-  }
-
-  private activityFor(run: RunView, now: number): LiveActivity {
-    const candidate = liveActivity(run);
-    const held = this.heldActivity.get(run.header.id);
-    if (!held) {
-      if (candidate.excerpt) {
-        this.heldActivity.set(run.header.id, {
-          activity: candidate,
-          shownAt: now,
-        });
-      }
-      return candidate;
-    }
-    if (candidate.excerpt !== undefined) {
-      const candidateAt = candidate.at ?? 0;
-      const same =
-        held.activity.excerpt === candidate.excerpt &&
-        held.activity.source === candidate.source;
-      if (same) {
-        if (held.pending && candidateAt >= (held.pending.at ?? 0)) {
-          held.pending = undefined;
-        }
-        if (candidateAt >= (held.activity.at ?? 0)) held.activity = candidate;
-      } else {
-        const newestAt = held.pending?.at ?? held.activity.at ?? 0;
-        if (candidateAt >= newestAt) held.pending = candidate;
-      }
-    }
-    if (held.pending && now - held.shownAt >= SUMMARY_MIN_DISPLAY_MS) {
-      held.activity = held.pending;
-      held.pending = undefined;
-      held.shownAt = now;
-    }
-    return { ...held.activity, lastAt: candidate.lastAt };
-  }
-
-  private render(context: ExtensionContext): void {
-    if (this.disposed) return;
-    const running = this.enabled && !this.suppressed ? this.running() : [];
-    if (running.length === 0) {
-      this.stopTicking();
-      this.heldActivity.clear();
-      context.ui.setWidget(WIDGET_KEY, undefined);
-      return;
-    }
-    this.startTicking();
-    const now = this.now();
-    const visible = running.slice(0, MAX_RUNS);
-    const visibleIds = new Set(visible.map((run) => run.header.id));
-    for (const runId of this.heldActivity.keys()) {
-      if (!visibleIds.has(runId)) this.heldActivity.delete(runId);
-    }
-    const activities = new Map(
-      visible.map((run) => [run.header.id, this.activityFor(run, now)]),
-    );
-    context.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
-      const color: Colorize = (name, text) => theme.fg(name, text);
-      return new WidthAwareLines((width) => {
-        const lines = visible.flatMap((run) =>
-          formatRunWidget(
-            run,
-            now,
-            color,
-            width,
-            activities.get(run.header.id),
-          ),
-        );
-        if (running.length > MAX_RUNS) {
-          lines.push(
-            color(
-              "dim",
-              `…+${running.length - MAX_RUNS} more (see /workflows)`,
-            ),
-          );
-        }
-        return lines;
-      });
-    });
-  }
-
-  private startTicking(): void {
-    if (this.timer || this.disposed) return;
-    this.timer = setInterval(() => {
-      if (this.disposed) return;
-      const context = this.lastContext;
-      if (context) this.render(context);
-    }, TICK_MS);
-    this.timer.unref?.();
-  }
-
-  private stopTicking(): void {
-    if (!this.timer) return;
-    clearInterval(this.timer);
-    this.timer = undefined;
-  }
-
-  /** Detach session-bound state and stop animation (session shutdown). */
-  dispose(): void {
-    this.disposed = true;
-    this.lastContext = undefined;
-    this.heldActivity.clear();
-    this.stopTicking();
-  }
 }

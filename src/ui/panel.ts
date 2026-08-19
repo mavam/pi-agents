@@ -109,6 +109,30 @@ export function formatAttachedLine(
   return parts.join(dot);
 }
 
+/** Reverse-video wrap, so the label reads as a badge in any theme. */
+function inverted(text: string): string {
+  return `\u001b[7m${text}\u001b[27m`;
+}
+
+/**
+ * The rule directly above the editor while attached, carrying a right-aligned
+ * inverted badge that names the agent the editor now feeds:
+ *
+ *   ──────────────────────────────── scout · dummy-sleep60-1 ──
+ */
+export function attachedRule(
+  run: RunView,
+  node: NodeView,
+  width: number,
+  color: Colorize = (_c, t) => t,
+): string {
+  const label = ` ${nodeDisplayName(node)}${node.agent ? ` (${node.agent})` : ""} · ${run.header.label ?? run.header.flow.kind} `;
+  const badge = inverted(label);
+  const tail = 2;
+  const lead = Math.max(1, width - label.length - tail);
+  return `${color("dim", "─".repeat(lead))}${badge}${color("dim", "─".repeat(tail))}`;
+}
+
 class PanelLines implements Component {
   private readonly build: (width: number) => string[];
 
@@ -365,18 +389,19 @@ export class RunPanel {
     const transcript = this.attachedView.render(
       this.attachedItems ?? [],
       width,
-      Math.max(3, rowsBudget - 2),
+      Math.max(3, rowsBudget - 3),
     );
     const hints =
       node.status === "running"
-        ? "type to talk to this agent · shift+↑↓ scroll · esc detach"
+        ? "type to talk to this agent · esc interrupt · ← back · shift+↑↓ scroll"
         : node.sessionFile
-          ? "agent settled — /workflows opens its session · esc detach"
-          : "agent settled · esc detach";
+          ? "agent settled — /workflows opens its session · ← back"
+          : "agent settled · ← back";
     return [
       ...transcript,
       "",
       `${formatAttachedLine(run, node, now, color)}${color("dim", " · ")}${color("dim", hints)}`,
+      attachedRule(run, node, width, color),
     ];
   }
 

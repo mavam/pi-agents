@@ -6,11 +6,15 @@
  *   editor ── left (empty editor) / ctrl+q ──▶ panel
  *   panel  ── esc / → / typing ──▶ editor
  *   panel  ── ⏎ on a running agent ──▶ attached
+ *   attached ── left (empty editor) ──▶ editor
  *
  * Attached mode keeps pi's editor in place as the agent's composer: the
  * panel shows the agent's transcript with pi's native message renderers, and
  * everything submitted from the editor is routed into the agent through the
- * `input` event (handleUserInput below). Esc detaches; shift+↑↓ scroll.
+ * `input` event (handleUserInput below). Esc interrupts the agent's current
+ * turn — exactly like Esc in a normal pi session — left-arrow detaches, and
+ * shift+↑↓ scroll. While attached, the spawn is held: an idle settle without
+ * a result keeps the child promptable instead of ending the node.
  */
 
 import type {
@@ -36,6 +40,13 @@ export class FocusController {
   private readonly panel: RunPanel;
   private ctx: ExtensionContext | undefined;
   private unsubscribe: (() => void) | undefined;
+  /** Releases the attached spawn's settle-hold; set for the attachment. */
+  private releaseHold: (() => void) | undefined;
+  /** Duplicate-delivery guard: some terminal stacks hand the same chunk to
+   * input listeners twice in immediate succession. */
+  private lastData = "";
+  private lastDataAt = 0;
+  private lastResult: { consume?: boolean } | undefined;
 
   constructor(manager: RunManager, panel: RunPanel) {
     this.manager = manager;
@@ -51,6 +62,8 @@ export class FocusController {
   }
 
   dispose(): void {
+    this.releaseHold?.();
+    this.releaseHold = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.ctx = undefined;
@@ -77,15 +90,20 @@ export class FocusController {
       });
       return;
     }
-    if (!this.manager.liveHandle(runId, instance)) {
+    const handle = this.manager.liveHandle(runId, instance);
+    if (!handle) {
       ctx.ui.notify("Agent is no longer attachable.", "warning");
       return;
     }
+    this.releaseHold?.();
+    this.releaseHold = handle.hold?.();
     this.panel.setFocused(false);
     this.panel.setAttached({ runId, instance });
   }
 
   detach(): void {
+    this.releaseHold?.();
+    this.releaseHold = undefined;
     this.panel.setAttached(undefined);
   }
 
@@ -123,11 +141,51 @@ export class FocusController {
     // parseKey maps both to the same key name. Acting on releases would
     // double every navigation step; pi's own components ignore them too.
     if (isKeyRelease(data)) return undefined;
+    // Belt and braces against double-stepped navigation: if the identical
+    // chunk arrives again within a few milliseconds, repeat the previous
+    // decision without acting again. Real key repeats are far slower.
+    const now = Date.now();
+    if (data === this.lastData && now - this.lastDataAt < 10) {
+      this.lastDataAt = now;
+      return this.lastResult;
+    }
+    const result = this.decide(ctx, data);
+    this.lastData = data;
+    this.lastDataAt = now;
+    this.lastResult = result;
+    return result;
+  }
+
+  private decide(
+    ctx: ExtensionContext,
+    data: string,
+  ): { consume?: boolean } | undefined {
     const keybindings = getKeybindings();
     const key = parseKey(data) ?? data;
 
-    if (this.panel.attachedTarget()) {
+    const attached = this.panel.attachedTarget();
+    if (attached) {
+      // Esc means the same thing as in a normal pi session: interrupt the
+      // agent's current turn. The held spawn stays alive and promptable.
       if (keybindings.matches(data, "tui.select.cancel")) {
+        const handle = this.manager.liveHandle(
+          attached.runId,
+          attached.instance,
+        );
+        if (handle?.interrupt) {
+          void handle.interrupt().catch((error) => {
+            ctx.ui.notify(
+              error instanceof Error ? error.message : String(error),
+              "warning",
+            );
+          });
+          return { consume: true };
+        }
+        return undefined;
+      }
+      // Left from an empty editor goes back to the parent context, mirroring
+      // how the panel is entered.
+      if (key === "left" && ctx.ui.getEditorText() === "") {
         this.detach();
         return { consume: true };
       }

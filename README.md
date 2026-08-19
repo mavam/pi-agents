@@ -815,9 +815,16 @@ transcript, rendered with pi's own message components — assistant turns,
 thinking, and tool executions look exactly like the main conversation. The
 editor stays in place and becomes the agent's composer: everything you submit
 goes to the agent (delivered as steering while it is mid-turn), while slash
-commands keep their normal meaning. `shift+↑`/`shift+↓` scroll the
-transcript, and `esc` detaches while the agent keeps running. A one-line
-status under the transcript shows the agent's place in the workflow.
+commands keep their normal meaning. `esc` interrupts the agent's current turn
+— exactly like `esc` in a normal pi session — after which the agent idles,
+still attached and promptable, until you give it a new instruction or leave.
+`←` from an empty editor goes back to the parent context (mirroring how the
+panel is entered), and `shift+↑`/`shift+↓` scroll the transcript. A one-line
+status sits under the transcript, and the rule directly above the editor
+carries an inverted badge naming the agent the editor currently feeds. While
+attached, the spawn is held: an idle settle without a result keeps the child
+alive for follow-up prompts; leaving an idle, resultless agent lets it settle
+normally.
 Attaching to a **settled** agent opens
 the agent's own pi session as the active session — full editor, history, and
 tree navigation — since every delegated agent writes a real session file into

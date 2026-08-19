@@ -429,6 +429,7 @@ export function createSubprocessSpawnEngine(options?: {
       let wasAborted = false;
       let terminalFailure: Error | undefined;
       let submissionAccepted = false;
+      let settleHolds = 0;
       let resultValue: unknown;
       let agentErrorReason: string | undefined;
 
@@ -981,10 +982,19 @@ export function createSubprocessSpawnEngine(options?: {
             }
             pushUpdate();
           }
-          if (record.type === "agent_start") agentStarted = true;
+          if (record.type === "agent_start") {
+            agentStarted = true;
+            // A held spawn can be re-prompted after an idle settle; a new
+            // agent run un-settles it.
+            agentSettled = false;
+          }
           if (record.type === "agent_settled" && !agentSettled) {
             agentSettled = true;
-            endStdin();
+            // While held by an attached user, an idle settle without a
+            // result keeps the child alive for follow-up prompts. A settle
+            // after result submission always ends the spawn: the node's work
+            // is done and the workflow must not wait on the attachment.
+            if (settleHolds === 0 || submissionAccepted) endStdin();
           }
         } catch (error) {
           failProtocol(
@@ -1212,7 +1222,12 @@ export function createSubprocessSpawnEngine(options?: {
         transcript: () => transcriptStore.snapshot(),
         prompt: async (message: string) => {
           await startupPromise;
-          if (wasAborted || agentSettled || settled || status !== "running") {
+          if (
+            wasAborted ||
+            settled ||
+            status !== "running" ||
+            (agentSettled && settleHolds === 0)
+          ) {
             throw new Error(`Agent ${spec.agent} is no longer running`);
           }
           await Promise.race([
@@ -1233,6 +1248,21 @@ export function createSubprocessSpawnEngine(options?: {
             at: Date.now(),
           });
           pushUpdate();
+        },
+        interrupt: async () => {
+          await startupPromise;
+          if (wasAborted || settled || status !== "running") return;
+          await sendCommand({ type: "abort" });
+        },
+        hold: () => {
+          settleHolds += 1;
+          let released = false;
+          return () => {
+            if (released) return;
+            released = true;
+            settleHolds -= 1;
+            if (settleHolds === 0 && agentSettled && !stdinEnded) endStdin();
+          };
         },
         abort: () => {
           if (wasAborted || settled) return;

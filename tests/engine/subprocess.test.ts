@@ -685,6 +685,57 @@ describe("subprocess spawn engine", () => {
     );
   });
 
+  test("interrupt aborts the current turn without ending the spawn", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await handle.interrupt?.();
+    expect(
+      proc.stdin.records.some((record) => record.type === "abort"),
+    ).toBe(true);
+    expect(handle.status).toBe("running");
+    finish(proc);
+    await handle.wait();
+  });
+
+  test("hold keeps an idle settle promptable until released", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    const release = handle.hold?.();
+    // Idle settle without a result: held spawns stay alive and promptable.
+    proc.emitRecord({ type: "agent_settled" });
+    await Bun.sleep(0);
+    expect(proc.stdin.ended).toBe(false);
+    proc.emitRecord({ type: "agent_start" });
+    await handle.prompt?.("continue with the fix");
+    // A settle after result submission always ends the spawn.
+    submitResult(proc, "result");
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    release?.();
+    expect(handle.status).toBe("completed");
+  });
+
+  test("releasing the hold settles an idle, resultless spawn", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    const release = handle.hold?.();
+    // Let startup (steering mode, task prompt, get_state) finish first.
+    await handle.prompt?.("are you there");
+    proc.emitRecord({ type: "agent_settled" });
+    await Bun.sleep(0);
+    expect(proc.stdin.ended).toBe(false);
+    release?.();
+    expect(proc.stdin.ended).toBe(true);
+    proc.close(0);
+    await expect(handle.wait()).rejects.toThrow(
+      "finished without submitting a result",
+    );
+  });
+
   test("streams progress updates", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({

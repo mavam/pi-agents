@@ -18,7 +18,7 @@ import type {
   InputEvent,
   InputEventResult,
 } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, parseKey } from "@earendil-works/pi-tui";
+import { getKeybindings, isKeyRelease, parseKey } from "@earendil-works/pi-tui";
 import type { RunManager } from "../run/runs.js";
 import { openAgentSession } from "./console.js";
 import type { RunPanel } from "./panel.js";
@@ -119,6 +119,10 @@ export class FocusController {
   private handle(data: string): { consume?: boolean } | undefined {
     const ctx = this.ctx;
     if (!ctx) return undefined;
+    // Kitty keyboard protocol reports presses and releases separately, and
+    // parseKey maps both to the same key name. Acting on releases would
+    // double every navigation step; pi's own components ignore them too.
+    if (isKeyRelease(data)) return undefined;
     const keybindings = getKeybindings();
     const key = parseKey(data) ?? data;
 

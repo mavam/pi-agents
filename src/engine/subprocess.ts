@@ -652,16 +652,27 @@ export function createSubprocessSpawnEngine(options?: {
         summaryTimer.unref?.();
       };
 
-      const updateAssistantItem = (text: string) => {
+      const updateAssistantItem = (
+        text: string,
+        raw?: { message?: unknown; streaming?: boolean },
+      ) => {
         if (!text) return;
         currentAssistantEntry ??= `assistant:${++activitySequence}`;
         const existing = transcriptStore.get(currentAssistantEntry);
+        const prior = existing?.kind === "assistant" ? existing : undefined;
+        const thinking = [...streamedThinkingBlocks.entries()]
+          .sort(([left], [right]) => left - right)
+          .map(([, block]) => block)
+          .join("\n")
+          .trim();
         transcriptStore.upsert({
           key: currentAssistantEntry,
           kind: "assistant",
           text,
-          summary:
-            existing?.kind === "assistant" ? existing.summary : undefined,
+          summary: prior?.summary,
+          message: raw?.message ?? prior?.message,
+          thinking: thinking || prior?.thinking,
+          streaming: raw?.streaming ?? true,
           turn: Math.max(1, turnsStarted),
           at: existing?.at ?? Date.now(),
         });
@@ -779,7 +790,7 @@ export function createSubprocessSpawnEngine(options?: {
           const text = messageText(message);
           if (text) {
             latestText = text;
-            updateAssistantItem(text);
+            updateAssistantItem(text, { message, streaming: false });
           }
           const summary = messageReasoningSummary(message);
           if (summary !== undefined) queueSummary(summary);
@@ -890,6 +901,9 @@ export function createSubprocessSpawnEngine(options?: {
                 kind: "tool",
                 label: toolLabel(record.toolName, record.args),
                 status: "running",
+                toolName: record.toolName,
+                toolCallId: record.toolCallId,
+                args: record.args,
                 at: Date.now(),
               });
             }
@@ -907,7 +921,11 @@ export function createSubprocessSpawnEngine(options?: {
               output &&
               Date.now() - lastStreamPushAt >= STREAM_PUSH_INTERVAL_MS
             ) {
-              transcriptStore.upsert({ ...item, output });
+              transcriptStore.upsert({
+                ...item,
+                output,
+                result: record.partialResult,
+              });
               pushUpdate();
             }
           }
@@ -957,6 +975,7 @@ export function createSubprocessSpawnEngine(options?: {
                 ...item,
                 output: toolOutput(record.result),
                 status: record.isError === true ? "error" : "ok",
+                result: record.result,
               });
               toolTranscriptKeys.delete(record.toolCallId);
             }

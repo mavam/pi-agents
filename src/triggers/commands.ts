@@ -22,7 +22,7 @@ import { validateFlow } from "../model/validate.js";
 import { valueText } from "../model/value.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { type NodeView, type RunView, workNodes } from "../run/state.js";
-import { canAttachNode, openAgentConsoleOrSession } from "../ui/console.js";
+import { canAttachNode, openAgentSession } from "../ui/console.js";
 import { toMermaid } from "../ui/mermaid.js";
 import {
   type OverlayAction,
@@ -486,19 +486,18 @@ function nodeAction(
 ): OverlayAction {
   if (key === "enter") {
     if (canAttachNode(deps.manager, run.header.id, node)) {
-      // Defer past the overlay teardown so the console gets focus.
+      // Defer past the overlay teardown so the editor regains focus first.
       setTimeout(() => {
-        void openAgentConsoleOrSession(
-          ctx,
-          deps.manager,
-          run.header.id,
-          node.instance,
-        ).catch((error) => {
-          ctx.ui.notify(
-            error instanceof Error ? error.message : String(error),
-            "error",
-          );
-        });
+        if (node.status === "running" && deps.attach) {
+          deps.attach(ctx, run.header.id, node.instance);
+        } else {
+          void openAgentSession(ctx, deps.manager, node).catch((error) => {
+            ctx.ui.notify(
+              error instanceof Error ? error.message : String(error),
+              "error",
+            );
+          });
+        }
       }, 0);
       return "close";
     }

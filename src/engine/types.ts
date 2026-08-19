@@ -134,6 +134,13 @@ export type TranscriptItem =
       text: string;
       /** Latest reasoning summary headline for this turn, when available. */
       summary?: string;
+      /** The engine's complete raw assistant message once the turn ends
+       * (pi's AgentMessage shape), for native transcript rendering. */
+      message?: unknown;
+      /** Streamed thinking text accumulated before the turn ends. */
+      thinking?: string;
+      /** True while this turn is still streaming. */
+      streaming?: boolean;
       turn: number;
       at: number;
     }
@@ -143,6 +150,12 @@ export type TranscriptItem =
       label: string;
       output?: string;
       status: "running" | "ok" | "error";
+      /** Raw tool identity and payloads for native transcript rendering. */
+      toolName: string;
+      toolCallId: string;
+      args?: unknown;
+      /** Raw (partial or final) tool result in pi's result shape. */
+      result?: unknown;
       at: number;
     };
 

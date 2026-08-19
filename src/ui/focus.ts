@@ -5,14 +5,22 @@
  *
  *   editor ── left (empty editor) / ctrl+q ──▶ panel
  *   panel  ── esc / → / typing ──▶ editor
- *   panel  ── ⏎ on an agent ──▶ console (ctx.ui.custom owns focus; the
- *                                handler goes dormant until it closes)
+ *   panel  ── ⏎ on a running agent ──▶ attached
+ *
+ * Attached mode keeps pi's editor in place as the agent's composer: the
+ * panel shows the agent's transcript with pi's native message renderers, and
+ * everything submitted from the editor is routed into the agent through the
+ * `input` event (handleUserInput below). Esc detaches; shift+↑↓ scroll.
  */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  InputEvent,
+  InputEventResult,
+} from "@earendil-works/pi-coding-agent";
 import { getKeybindings, parseKey } from "@earendil-works/pi-tui";
 import type { RunManager } from "../run/runs.js";
-import { openAgentConsoleOrSession } from "./console.js";
+import { openAgentSession } from "./console.js";
 import type { RunPanel } from "./panel.js";
 
 /** True for input a user typed as text: no escape introducer, no control
@@ -28,7 +36,6 @@ export class FocusController {
   private readonly panel: RunPanel;
   private ctx: ExtensionContext | undefined;
   private unsubscribe: (() => void) | undefined;
-  private consoleOpen = false;
 
   constructor(manager: RunManager, panel: RunPanel) {
     this.manager = manager;
@@ -52,8 +59,57 @@ export class FocusController {
   /** Explicit entry point (ctrl+q shortcut) that works mid-composition. */
   focusPanel(ctx?: ExtensionContext): void {
     if (ctx) this.ctx = ctx;
-    if (this.consoleOpen || !this.panel.hasRows()) return;
+    if (this.panel.attachedTarget() || !this.panel.hasRows()) return;
     this.panel.setFocused(true);
+  }
+
+  /** Attach the editor and panel to one agent (also used by /workflows). */
+  attach(ctx: ExtensionContext, runId: string, instance: string): void {
+    this.ctx = ctx;
+    const node = this.manager.state.runs.get(runId)?.nodes.get(instance);
+    if (!node) return;
+    if (node.status !== "running") {
+      void openAgentSession(ctx, this.manager, node).catch((error) => {
+        ctx.ui.notify(
+          error instanceof Error ? error.message : String(error),
+          "error",
+        );
+      });
+      return;
+    }
+    if (!this.manager.liveHandle(runId, instance)) {
+      ctx.ui.notify("Agent is no longer attachable.", "warning");
+      return;
+    }
+    this.panel.setFocused(false);
+    this.panel.setAttached({ runId, instance });
+  }
+
+  detach(): void {
+    this.panel.setAttached(undefined);
+  }
+
+  /**
+   * Route editor submissions while attached: everything the user types goes
+   * to the attached agent (delivered as steering mid-turn). Slash commands
+   * keep their normal meaning, so /workflows and friends stay reachable.
+   * Wired into `pi.on("input", …)` by the extension entry point.
+   */
+  handleUserInput(event: InputEvent): InputEventResult | undefined {
+    const attached = this.panel.attachedTarget();
+    if (!attached || event.source !== "interactive") return undefined;
+    const text = event.text.trim();
+    if (!text || text.startsWith("/")) return undefined;
+    const handle = this.manager.liveHandle(attached.runId, attached.instance);
+    if (!handle?.prompt) return undefined;
+    const ctx = this.ctx;
+    void handle.prompt(event.text).catch((error) => {
+      ctx?.ui.notify(
+        error instanceof Error ? error.message : String(error),
+        "warning",
+      );
+    });
+    return { action: "handled" };
   }
 
   private releaseToEditor(): void {
@@ -62,12 +118,38 @@ export class FocusController {
 
   private handle(data: string): { consume?: boolean } | undefined {
     const ctx = this.ctx;
-    if (!ctx || this.consoleOpen) return undefined;
+    if (!ctx) return undefined;
+    const keybindings = getKeybindings();
+    const key = parseKey(data) ?? data;
+
+    if (this.panel.attachedTarget()) {
+      if (keybindings.matches(data, "tui.select.cancel")) {
+        this.detach();
+        return { consume: true };
+      }
+      if (key === "shift+up" || key === "ctrl+y") {
+        this.panel.scrollAttached(-1);
+        return { consume: true };
+      }
+      if (key === "shift+down") {
+        this.panel.scrollAttached(1);
+        return { consume: true };
+      }
+      if (key === "shift+pageUp") {
+        this.panel.scrollAttached(-10);
+        return { consume: true };
+      }
+      if (key === "shift+pageDown") {
+        this.panel.scrollAttached(10);
+        return { consume: true };
+      }
+      // Everything else belongs to the editor, which now feeds this agent.
+      return undefined;
+    }
 
     if (!this.panel.isFocused()) {
       // Enter the panel only from an empty editor, so left-arrow keeps its
       // cursor-movement meaning while composing a message.
-      const key = parseKey(data) ?? data;
       if (
         key === "left" &&
         ctx.ui.getEditorText() === "" &&
@@ -79,8 +161,6 @@ export class FocusController {
       return undefined;
     }
 
-    const keybindings = getKeybindings();
-    const key = parseKey(data) ?? data;
     if (keybindings.matches(data, "tui.select.cancel") || key === "right") {
       this.releaseToEditor();
       return { consume: true };
@@ -127,25 +207,6 @@ export class FocusController {
       this.panel.move(1);
       return;
     }
-    const { run, node } = row;
-    this.releaseToEditor();
-    this.consoleOpen = true;
-    this.panel.setAttached({ runId: run.header.id, instance: node.instance });
-    void openAgentConsoleOrSession(
-      ctx,
-      this.manager,
-      run.header.id,
-      node.instance,
-    )
-      .catch((error) => {
-        ctx.ui.notify(
-          error instanceof Error ? error.message : String(error),
-          "error",
-        );
-      })
-      .finally(() => {
-        this.consoleOpen = false;
-        this.panel.setAttached(undefined);
-      });
+    this.attach(ctx, row.run.header.id, row.node.instance);
   }
 }

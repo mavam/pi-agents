@@ -789,9 +789,9 @@ cancels a running run or copies a settled run's presented result; settled runs
 without a result omit it. The `r` key starts the same flow again, and `h`
 shows/hides that run in the live summary above the composer (useful for
 long-running flows). Agent tier: `⏎` attaches to the agent — a running
-agent opens the interactive agent console (its live transcript with an input
-line), and a settled agent opens its own pi session. `o` posts the agent's
-full output to the chat instead. In the agents panel, `⏎` posts the full
+agent shows its live transcript above the editor with the editor as its
+composer, and a settled agent opens its own pi session. `o` posts the
+agent's full output to the chat instead. In the agents panel, `⏎` posts the full
 agent details and `n` starts a new definition.
 
 ### The run panel
@@ -810,13 +810,15 @@ selected run, and `esc`/`→` (or just typing) returns focus to the editor.
 Because agent rows are color-coded by status, the running agents are visible
 at a glance.
 
-Attaching to a **running** agent opens the agent console in the editor slot:
-the agent's transcript — task, assistant turns, tool activity — following live
-output, with an input line at the bottom. `⏎` sends a message into the agent
-(delivered as steering while it is mid-turn), `shift+↑`/`shift+↓` scroll,
-`ctrl+x` aborts the agent, and `esc` detaches while the agent keeps running.
-While a console is open, the run panel collapses to a one-line status for that
-agent and its place in the workflow. Attaching to a **settled** agent opens
+Attaching to a **running** agent turns the panel into that agent's live
+transcript, rendered with pi's own message components — assistant turns,
+thinking, and tool executions look exactly like the main conversation. The
+editor stays in place and becomes the agent's composer: everything you submit
+goes to the agent (delivered as steering while it is mid-turn), while slash
+commands keep their normal meaning. `shift+↑`/`shift+↓` scroll the
+transcript, and `esc` detaches while the agent keeps running. A one-line
+status under the transcript shows the agent's place in the workflow.
+Attaching to a **settled** agent opens
 the agent's own pi session as the active session — full editor, history, and
 tree navigation — since every delegated agent writes a real session file into
 a pi-agents-owned directory (`~/.pi/agent/sessions/pi-agents/<run-id>/`).

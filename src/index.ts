@@ -83,8 +83,18 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
   footerReporter = new FancyFooterRunReporter(pi, manager);
   const focus = new FocusController(manager, widget);
 
-  const deps: TriggerDeps = { pi, manager, notifications, widget };
+  const deps: TriggerDeps = {
+    pi,
+    manager,
+    notifications,
+    widget,
+    attach: (ctx, runId, instance) => focus.attach(ctx, runId, instance),
+  };
   const refreshModels = createModelRefresher();
+
+  // While an agent is attached, editor submissions go to that agent instead
+  // of the main session; slash commands keep their normal meaning.
+  pi.on("input", (event) => focus.handleUserInput(event));
 
   registerRenderers(pi);
   pi.registerTool(createWorkflowCreateTool(deps));

@@ -4,23 +4,26 @@
  * Unfocused, it renders like the old passive widget: one line per running
  * run. Left-arrow from an empty editor (or ctrl+q) moves focus in; the panel
  * then shows a selection marker and navigates with ↑↓, expands a run into
- * its agent list with space, attaches to an agent with ⏎ (live console for a
- * running agent, real session for a settled one), and cancels with c.
- * Because the panel sits above the editor, expanding grows upward without
- * moving the editor or footer.
+ * its agent list with space, attaches to an agent with ⏎ (live transcript
+ * for a running agent, its own pi session for a settled one), and cancels
+ * with c. Because the panel sits above the editor, expanding grows upward
+ * without moving the editor or footer.
  *
- * While an AgentConsole is attached, the panel collapses to a single status
- * line for that agent and its place in the workflow.
+ * While an agent is attached, the panel shows that agent's transcript with
+ * pi's native message renderers plus one status line; the pi editor stays in
+ * place as the agent's composer (input routed via the `input` event).
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  type TUI,
   truncateToWidth,
-  visibleWidth,
 } from "@earendil-works/pi-tui";
+import type { TranscriptItem } from "../engine/types.js";
 import type { RunManager } from "../run/runs.js";
 import { type NodeView, type RunView, workNodes } from "../run/state.js";
+import { AgentTranscriptView } from "./console.js";
 import { formatUsage, nodeDisplayName } from "./render.js";
 import { STATUS_STYLES } from "./status.js";
 import {
@@ -84,7 +87,7 @@ export function formatNodeLine(
   return parts.join(dot);
 }
 
-/** The one-line status shown while an AgentConsole is attached. Pure. */
+/** The one-line status shown under an attached agent transcript. Pure. */
 export function formatAttachedLine(
   run: RunView,
   node: NodeView,
@@ -146,6 +149,10 @@ export class RunPanel {
   private selectedKey: string | undefined;
   private readonly expanded = new Set<string>();
   private attached: { runId: string; instance: string } | undefined;
+  /** Native transcript renderer for the attached agent; per attachment. */
+  private attachedView: AgentTranscriptView | undefined;
+  /** Last transcript snapshot, kept so a settled agent stays visible. */
+  private attachedItems: readonly TranscriptItem[] | undefined;
 
   constructor(manager: RunManager, now: () => number = Date.now) {
     this.manager = manager;
@@ -217,6 +224,23 @@ export class RunPanel {
 
   setAttached(value: { runId: string; instance: string } | undefined): void {
     this.attached = value;
+    this.attachedView = undefined;
+    this.attachedItems = undefined;
+    this.update();
+  }
+
+  attachedTarget(): { runId: string; instance: string } | undefined {
+    return this.attached;
+  }
+
+  /** Scroll the attached transcript; positive delta moves toward newer. */
+  scrollAttached(delta: number): void {
+    const view = this.attachedView;
+    if (!view) return;
+    view.scrollBack = Math.max(
+      0,
+      Math.min(view.scrollBack - delta, view.maxScroll()),
+    );
     this.update();
   }
 
@@ -318,12 +342,42 @@ export class RunPanel {
     return { ...held.activity, lastAt: candidate.lastAt };
   }
 
-  private attachedLine(now: number, color: Colorize): string[] | undefined {
+  /** The attached agent's transcript (pi-native rendering) plus one status
+   * line at the bottom, next to the editor that now feeds this agent. */
+  private attachedLines(
+    tui: TUI,
+    width: number,
+    rowsBudget: number,
+    now: number,
+    color: Colorize,
+  ): string[] | undefined {
     if (!this.attached) return undefined;
-    const run = this.manager.state.runs.get(this.attached.runId);
-    const node = run?.nodes.get(this.attached.instance);
+    const { runId, instance } = this.attached;
+    const run = this.manager.state.runs.get(runId);
+    const node = run?.nodes.get(instance);
     if (!run || !node) return undefined;
-    return [formatAttachedLine(run, node, now, color)];
+    const handle = this.manager.liveHandle(runId, instance);
+    if (handle?.transcript) this.attachedItems = handle.transcript();
+    this.attachedView ??= new AgentTranscriptView(
+      tui,
+      run.header.cwd ?? process.cwd(),
+    );
+    const transcript = this.attachedView.render(
+      this.attachedItems ?? [],
+      width,
+      Math.max(3, rowsBudget - 2),
+    );
+    const hints =
+      node.status === "running"
+        ? "type to talk to this agent · shift+↑↓ scroll · esc detach"
+        : node.sessionFile
+          ? "agent settled — /workflows opens its session · esc detach"
+          : "agent settled · esc detach";
+    return [
+      ...transcript,
+      "",
+      `${formatAttachedLine(run, node, now, color)}${color("dim", " · ")}${color("dim", hints)}`,
+    ];
   }
 
   private buildLines(
@@ -411,7 +465,7 @@ export class RunPanel {
         Math.floor(terminalRows * MAX_HEIGHT_RATIO),
       );
       return new PanelLines((width) => {
-        const attached = this.attachedLine(now, color);
+        const attached = this.attachedLines(tui, width, rowsBudget, now, color);
         if (attached) return attached;
         return this.buildLines(width, rowsBudget, now, color, activities);
       });

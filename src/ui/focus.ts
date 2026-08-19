@@ -15,6 +15,14 @@ import type { RunManager } from "../run/runs.js";
 import { openAgentConsoleOrSession } from "./console.js";
 import type { RunPanel } from "./panel.js";
 
+/** True for input a user typed as text: no escape introducer, no control
+ * bytes. Terminal replies always start with ESC (0x1b) or contain C0 bytes. */
+export function isPrintable(data: string): boolean {
+  if (data.length === 0) return false;
+  const code = data.codePointAt(0) ?? 0;
+  return code >= 0x20 && code !== 0x7f;
+}
+
 export class FocusController {
   private readonly manager: RunManager;
   private readonly panel: RunPanel;
@@ -101,9 +109,13 @@ export class FocusController {
       );
       return { consume: true };
     }
-    // Anything else returns focus to the editor and is delivered there, so
-    // starting to type never gets swallowed by the panel.
-    this.releaseToEditor();
+    // Printable typing returns focus to the editor and is delivered there,
+    // so starting to compose never gets swallowed by the panel. Everything
+    // else — escape sequences and control bytes, including the unsolicited
+    // terminal replies (cursor-position reports, focus and paste-mode
+    // events) that arrive on every redraw — passes through without touching
+    // focus, since none of it is the user leaving the panel.
+    if (isPrintable(data)) this.releaseToEditor();
     return undefined;
   }
 

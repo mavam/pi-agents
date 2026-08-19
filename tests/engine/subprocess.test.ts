@@ -690,9 +690,9 @@ describe("subprocess spawn engine", () => {
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
     const proc = procs[0]?.proc as FakeProc;
     await handle.interrupt?.();
-    expect(
-      proc.stdin.records.some((record) => record.type === "abort"),
-    ).toBe(true);
+    expect(proc.stdin.records.some((record) => record.type === "abort")).toBe(
+      true,
+    );
     expect(handle.status).toBe("running");
     finish(proc);
     await handle.wait();

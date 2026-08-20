@@ -112,6 +112,20 @@ export function formatAttachedLine(
   return parts.join(dot);
 }
 
+/**
+ * Neutralize characters that desynchronize the differential renderer's width
+ * accounting: tabs expand at the terminal's discretion and carriage returns
+ * rewind the cursor, so one raw tool-output line can wrap and orphan the
+ * whole frame (duplicated panels, vanished editor). ESC is kept for SGR
+ * colors; every other C0 control byte is dropped.
+ */
+export function sanitizeLine(line: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional
+  return line
+    .replaceAll("\t", "  ")
+    .replace(/[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/g, "");
+}
+
 class PanelLines implements Component {
   private readonly build: (width: number) => string[];
 
@@ -126,7 +140,7 @@ class PanelLines implements Component {
   render(width: number): string[] {
     const usable = Math.max(4, width - 1);
     return this.build(usable).map(
-      (line) => ` ${truncateToWidth(line, usable, "…")}`,
+      (line) => ` ${truncateToWidth(sanitizeLine(line), usable, "…")}`,
     );
   }
 }

@@ -927,6 +927,11 @@ export function createSubprocessSpawnEngine(options?: {
             streamedTextBlocks.clear();
             streamedThinkingBlocks.clear();
             currentAssistantEntry = undefined;
+            // The previous turn's outcome (e.g. a user interrupt's "aborted")
+            // must not describe this turn: a later process exit would blame
+            // a stale reason otherwise.
+            stopReason = undefined;
+            errorMessage = undefined;
             pushUpdate();
           }
           if (

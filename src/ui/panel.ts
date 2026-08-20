@@ -168,6 +168,8 @@ export class RunPanel {
   private attached: { runId: string; instance: string } | undefined;
   /** Native transcript renderer for the attached agent; per attachment. */
   private attachedView: AgentTranscriptView | undefined;
+  /** The TUI from the last widget mount, for forced repaints. */
+  private lastTui: TUI | undefined;
   /** Last transcript snapshot, kept so a settled agent stays visible. */
   private attachedItems: readonly TranscriptItem[] | undefined;
 
@@ -245,6 +247,16 @@ export class RunPanel {
     this.attachedView = undefined;
     this.attachedItems = undefined;
     this.update();
+    // Attach/detach swaps the widget's entire content and height and the
+    // editor's border in one frame; the differential renderer can leave one
+    // stale row behind and then believe the screen matches. Force a full
+    // repaint on the next tick.
+    setTimeout(() => {
+      const tui = this.lastTui;
+      if (!tui || this.disposed) return;
+      tui.invalidate();
+      tui.requestRender(true);
+    }, 0);
   }
 
   attachedTarget(): { runId: string; instance: string } | undefined {
@@ -499,6 +511,7 @@ export class RunPanel {
       running.map((run) => [run.header.id, this.activityFor(run, now)]),
     );
     context.ui.setWidget(WIDGET_KEY, (tui, theme) => {
+      this.lastTui = tui;
       const color: Colorize = (name, text) => theme.fg(name, text);
       const terminalRows = tui?.terminal?.rows ?? 24;
       const rowsBudget = Math.max(

@@ -130,14 +130,60 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function jsonChars(value: unknown): number {
+  if (value === undefined) return 0;
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Full retained size of one item, raw payloads included. */
 function itemChars(item: TranscriptItem): number {
   switch (item.kind) {
     case "user":
       return item.text.length;
     case "assistant":
-      return item.text.length + (item.summary?.length ?? 0);
+      return (
+        item.text.length +
+        (item.summary?.length ?? 0) +
+        (item.thinking?.length ?? 0) +
+        jsonChars(item.message)
+      );
     case "tool":
-      return item.label.length + (item.output?.length ?? 0);
+      return (
+        item.label.length +
+        (item.output?.length ?? 0) +
+        jsonChars(item.args) +
+        jsonChars(item.result)
+      );
+  }
+}
+
+const CLIP_MARKER = "… earlier output omitted …\n";
+
+/** Clip one pathologically large item in place, dropping its raw payloads. */
+function clipItem(item: TranscriptItem): void {
+  const keep = Math.max(1_000, MAX_TRANSCRIPT_CHARS - CLIP_MARKER.length);
+  if (item.kind === "assistant") {
+    item.message = undefined;
+    item.thinking = undefined;
+    if (item.text.length > keep) {
+      item.text = `${CLIP_MARKER}${item.text.slice(-keep)}`;
+    }
+    return;
+  }
+  if (item.kind === "tool") {
+    item.result = undefined;
+    item.args = undefined;
+    if (item.output !== undefined && item.output.length > keep) {
+      item.output = `${CLIP_MARKER}${item.output.slice(-keep)}`;
+    }
+    return;
+  }
+  if (item.text.length > keep) {
+    item.text = `${CLIP_MARKER}${item.text.slice(-keep)}`;
   }
 }
 
@@ -148,8 +194,10 @@ class TranscriptStore {
   private readonly items: TranscriptItem[] = [];
   private readonly byKey = new Map<string, TranscriptItem>();
   private chars = 0;
+  private revision = 0;
 
   upsert(item: TranscriptItem): void {
+    item.rev = ++this.revision;
     const existing = this.byKey.get(item.key);
     if (existing) {
       this.chars -= itemChars(existing);
@@ -165,6 +213,11 @@ class TranscriptStore {
       if (!removed) break;
       this.byKey.delete(removed.key);
       this.chars -= itemChars(removed);
+    }
+    const only = this.items[0];
+    if (this.items.length === 1 && only && this.chars > MAX_TRANSCRIPT_CHARS) {
+      clipItem(only);
+      this.chars = itemChars(only);
     }
   }
 

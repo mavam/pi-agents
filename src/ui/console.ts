@@ -65,22 +65,20 @@ function partialAssistantMessage(
   return { role: "assistant", content } as unknown as AssistantMessage;
 }
 
-/** Cheap change signature, so unchanged items skip component updates. */
-function itemSignature(item: TranscriptItem): string {
-  switch (item.kind) {
-    case "user":
-      return `u:${item.text.length}`;
-    case "assistant":
-      return `a:${item.text.length}:${item.thinking?.length ?? 0}:${item.streaming ? 1 : 0}:${item.message ? 1 : 0}`;
-    case "tool":
-      return `t:${item.status}:${item.output?.length ?? 0}:${item.result ? 1 : 0}`;
-  }
+/** Change signature: the engine bumps `rev` on every content change, so
+ * same-length updates (e.g. rolling tool-output windows) are still caught. */
+export function itemSignature(item: TranscriptItem): string {
+  return `${item.kind}:${item.rev ?? 0}`;
 }
 
 interface Slot {
   component: Component;
   signature: string;
   kind: TranscriptItem["kind"];
+}
+
+function disposeComponent(component: Component): void {
+  (component as { dispose?: () => void }).dispose?.();
 }
 
 /**
@@ -115,6 +113,7 @@ export class AgentTranscriptView {
       }
       return existing;
     }
+    if (existing) disposeComponent(existing.component);
     const slot: Slot = {
       component: this.createComponent(item),
       signature,
@@ -177,7 +176,14 @@ export class AgentTranscriptView {
       return;
     }
     // User messages are immutable once sent; recreate on the odd change.
+    disposeComponent(slot.component);
     slot.component = this.createComponent(item);
+  }
+
+  /** Finalize every native component (tool renderers may hold timers). */
+  dispose(): void {
+    for (const slot of this.slots.values()) disposeComponent(slot.component);
+    this.slots.clear();
   }
 
   /** Render the transcript into at most `maxRows` lines of `width` columns. */
@@ -186,10 +192,12 @@ export class AgentTranscriptView {
     width: number,
     maxRows: number,
   ): string[] {
-    // Drop slots for items that fell off the bounded transcript.
+    // Drop (and finalize) slots for items that fell off the transcript.
     const alive = new Set(items.map((item) => item.key));
-    for (const key of this.slots.keys()) {
-      if (!alive.has(key)) this.slots.delete(key);
+    for (const [key, slot] of this.slots) {
+      if (alive.has(key)) continue;
+      disposeComponent(slot.component);
+      this.slots.delete(key);
     }
 
     const lines: string[] = [];
@@ -232,21 +240,28 @@ export function canAttachNode(
   return node.sessionFile !== undefined;
 }
 
-/** Open a settled agent's own session as the active pi session. */
+/** Open a settled agent's own session as the active pi session.
+ *
+ * Session replacement is a command-context capability: pi exposes
+ * switchSession only to command handlers. Callers holding a plain event
+ * context (the run panel's focus controller) fall back to prefilling the
+ * /agent-session command, whose handler carries the right context. */
 export async function openAgentSession(
   ctx: ExtensionContext,
   manager: RunManager,
+  runId: string,
   node: NodeView,
 ): Promise<void> {
   if (!node.sessionFile) {
     ctx.ui.notify("This agent has no session file to open.", "warning");
     return;
   }
-  // switchSession lives on the command context; interactive pi hands the
-  // same context object to event handlers, so probe for it at runtime.
   const command = ctx as Partial<ExtensionCommandContext> & ExtensionContext;
   if (typeof command.switchSession !== "function") {
-    ctx.ui.notify(`Open it manually: pi --session ${node.sessionFile}`, "info");
+    ctx.ui.setEditorText(
+      `/agent-session ${runId.slice(0, 8)} ${node.instance}`,
+    );
+    ctx.ui.notify("Press ⏎ to open the agent's session.", "info");
     return;
   }
   if (manager.liveRunIds().length > 0) {

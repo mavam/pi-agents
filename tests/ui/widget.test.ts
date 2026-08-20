@@ -901,3 +901,52 @@ describe("RunPanel lifecycle", () => {
     expect(shown.length).toBe(count);
   });
 });
+
+describe("RunPanel selection reconciliation", () => {
+  function fakeRun(id: string) {
+    return {
+      header: { id, label: id, flow: { kind: "agent", task: "t" } },
+      status: "running",
+      nodes: new Map([
+        [
+          "$",
+          {
+            path: "$",
+            instance: "$",
+            kind: "agent",
+            status: "running",
+            startedAt: 0,
+          },
+        ],
+      ]),
+      order: ["$"],
+      loopIterations: new Map(),
+      backgrounded: false,
+      createdAt: 0,
+    };
+  }
+
+  test("stale selections normalize to the first remaining row", () => {
+    const runs = new Map([
+      ["r1", fakeRun("r1")],
+      ["r2", fakeRun("r2")],
+    ]);
+    const manager = {
+      state: { runs, order: ["r1", "r2"] },
+      liveHandle: () => undefined,
+    } as never;
+    const panel = new RunPanel(manager);
+    panel.setFocused(true);
+    expect(panel.selectedRow()).toMatchObject({ kind: "run" });
+    // The selected run settles and leaves the visible set.
+    (runs.get("r1") as { status: string }).status = "completed";
+    const reconciled = panel.selectedRow();
+    expect(reconciled).toMatchObject({ kind: "run" });
+    expect(
+      reconciled?.kind === "run" ? reconciled.run.header.id : undefined,
+    ).toBe("r2");
+    // Movement acts on the reconciled selection, not the stale key.
+    expect(panel.move(1)).toBe(true);
+    expect(panel.selectedRow()).toMatchObject({ kind: "run" });
+  });
+});

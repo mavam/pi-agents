@@ -56,6 +56,7 @@ import { startTriggeredRun, type TriggerDeps } from "./start.js";
 export const RESERVED_COMMAND_NAMES = new Set([
   "agents",
   "agent",
+  "agent-session",
   "workflows",
   "workflow",
   "runs",
@@ -213,6 +214,86 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         lines.push(`- ⚠ ${diagnostic.filePath}: ${diagnostic.message}`);
       }
       sendInfo(pi, lines.join("\n"));
+    },
+  });
+
+  pi.registerCommand("agent-session", {
+    description:
+      "Open a settled delegated agent's own session: /agent-session <run-id> [node]",
+    getArgumentCompletions: (prefix) => {
+      const tokens = prefix.split(/\s+/);
+      const partial = tokens.at(-1) ?? "";
+      const done = tokens.slice(0, -1);
+      if (done.length === 0) {
+        return [...deps.manager.state.runs.values()]
+          .filter((run) =>
+            workNodes(run).some((node) => node.sessionFile !== undefined),
+          )
+          .map((run) => ({
+            value: shortId(run.header.id),
+            label: shortId(run.header.id),
+            description: run.header.label ?? run.header.flow.kind,
+          }))
+          .filter((completion) => completion.value.startsWith(partial));
+      }
+      const lookup = deps.manager.find(done[0] ?? "");
+      if (lookup.kind !== "found") return [];
+      return workNodes(lookup.run)
+        .filter((node) => node.sessionFile !== undefined)
+        .map((node) => ({
+          value: [done[0], node.instance].join(" "),
+          label: nodeDisplayName(node),
+          description: node.agent ?? "ad-hoc",
+        }))
+        .filter((completion) => completion.label.startsWith(partial));
+    },
+    handler: async (args, ctx) => {
+      const [runRef, nodeRef] = args.trim().split(/\s+/).filter(Boolean);
+      if (!runRef) {
+        sendInfo(pi, "Usage: `/agent-session <run-id> [node]`");
+        return;
+      }
+      const lookup = deps.manager.find(runRef);
+      if (lookup.kind === "missing") {
+        sendInfo(pi, `No run matching \`${runRef}\`. Try \`/workflows\`.`);
+        return;
+      }
+      if (lookup.kind === "ambiguous") {
+        sendInfo(
+          pi,
+          `Ambiguous run id \`${runRef}\`: ${lookup.matches.map((run) => shortId(run.header.id)).join(", ")}`,
+        );
+        return;
+      }
+      const run = lookup.run;
+      let node: NodeView | undefined;
+      if (nodeRef) {
+        const found = findNodeInRun(run, nodeRef);
+        if (found.kind !== "found") {
+          sendInfo(pi, `No unique agent matching \`${nodeRef}\` in this run.`);
+          return;
+        }
+        node = found.node;
+      } else {
+        const candidates = workNodes(run).filter(
+          (candidate) => candidate.sessionFile !== undefined,
+        );
+        if (candidates.length !== 1) {
+          sendInfo(
+            pi,
+            candidates.length === 0
+              ? "This run has no agent sessions to open."
+              : `Multiple agent sessions; specify one of: ${candidates.map((candidate) => `\`${nodeDisplayName(candidate)}\``).join(", ")}.`,
+          );
+          return;
+        }
+        node = candidates[0];
+      }
+      if (!node) return;
+      // Command handlers carry the command context, so switchSession is
+      // available here — this is the sanctioned session-switch path that the
+      // run panel prefills when it lacks one.
+      await openAgentSession(ctx, deps.manager, run.header.id, node);
     },
   });
 
@@ -491,12 +572,14 @@ function nodeAction(
         if (node.status === "running" && deps.attach) {
           deps.attach(ctx, run.header.id, node.instance);
         } else {
-          void openAgentSession(ctx, deps.manager, node).catch((error) => {
-            ctx.ui.notify(
-              error instanceof Error ? error.message : String(error),
-              "error",
-            );
-          });
+          void openAgentSession(ctx, deps.manager, run.header.id, node).catch(
+            (error) => {
+              ctx.ui.notify(
+                error instanceof Error ? error.message : String(error),
+                "error",
+              );
+            },
+          );
         }
       }, 0);
       return "close";

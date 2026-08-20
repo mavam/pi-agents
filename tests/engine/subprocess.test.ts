@@ -822,6 +822,43 @@ describe("subprocess spawn engine", () => {
     });
   });
 
+  test("same-length transcript updates carry fresh revisions", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const reader = (async () => {
+      for await (const _update of handle.updates) {
+        // Drain so the engine never blocks on a slow consumer.
+      }
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "1",
+      toolName: "bash",
+      args: { command: "tail -f log" },
+    });
+    const before = handle
+      .transcript?.()
+      .find((item) => item.kind === "tool")?.rev;
+    proc.emitRecord({
+      type: "tool_execution_end",
+      toolCallId: "1",
+      toolName: "bash",
+      // Identical length to a plausible prior window; only content differs.
+      result: { content: [{ type: "text", text: "line B" }] },
+      isError: false,
+    });
+    const item = handle.transcript?.().find((entry) => entry.kind === "tool");
+    expect(item?.kind).toBe("tool");
+    if (item?.kind === "tool") expect(item.output).toBe("line B");
+    expect(item?.rev).toBeGreaterThan(before ?? 0);
+    submitResult(proc, "result");
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    await reader;
+  });
+
   test("drops the oldest transcript entries past the character bound", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({

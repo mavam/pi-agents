@@ -685,6 +685,7 @@ usage only in their final outcome cannot be cut off mid-run.
 | `/agents`             | Browse discovered agents interactively (`list` for plain text). |
 | `/agent <name>`       | Show one agent in full.                              |
 | `/workflows`          | Browse workflows, their runs, and each run's agents interactively (`list`/`runs` for plain text, `widget` to toggle the live summary). |
+| `/agent-session`      | Open a settled delegated agent's own pi session: `/agent-session <run-id> [node]`. |
 | `/workflow <name>`    | Show one workflow: params, triggers, docs, flow.     |
 | `/<name> [argument]`  | Run a saved workflow with one text argument.          |
 | `/workflow <id>`      | Inspect a run (unique id prefixes work).             |
@@ -829,6 +830,9 @@ Attaching to a **settled** agent opens
 the agent's own pi session as the active session — full editor, history, and
 tree navigation — since every delegated agent writes a real session file into
 a pi-agents-owned directory (`~/.pi/agent/sessions/pi-agents/<run-id>/`).
+Session replacement is a command-context capability in pi, so the run panel
+routes it through the `/agent-session` command (prefilling it when needed);
+the `/workflows` overlay switches directly.
 Switching sessions tears down all running workflows, so pi-agents asks for
 confirmation when any run is still live.
 

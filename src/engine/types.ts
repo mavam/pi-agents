@@ -126,7 +126,7 @@ export class SpawnAborted extends Error {
  * their own event streams. Entries are mutable in place (streaming text and
  * tool output update the same item), identified by `key`.
  */
-export type TranscriptItem =
+export type TranscriptItem = (
   | { key: string; kind: "user"; text: string; at: number }
   | {
       key: string;
@@ -157,7 +157,12 @@ export type TranscriptItem =
       /** Raw (partial or final) tool result in pi's result shape. */
       result?: unknown;
       at: number;
-    };
+    }
+) & {
+  /** Monotonically increasing per-transcript revision, bumped on every
+   * content change. Lets renderers detect same-length updates cheaply. */
+  rev?: number;
+};
 
 export interface SpawnHandle {
   readonly status: "running" | "completed" | "failed" | "aborted";

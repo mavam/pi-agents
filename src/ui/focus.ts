@@ -82,7 +82,7 @@ export class FocusController {
     const node = this.manager.state.runs.get(runId)?.nodes.get(instance);
     if (!node) return;
     if (node.status !== "running") {
-      void openAgentSession(ctx, this.manager, node).catch((error) => {
+      void openAgentSession(ctx, this.manager, runId, node).catch((error) => {
         ctx.ui.notify(
           error instanceof Error ? error.message : String(error),
           "error",
@@ -118,9 +118,17 @@ export class FocusController {
     if (!attached || event.source !== "interactive") return undefined;
     const text = event.text.trim();
     if (!text || text.startsWith("/")) return undefined;
-    const handle = this.manager.liveHandle(attached.runId, attached.instance);
-    if (!handle?.prompt) return undefined;
     const ctx = this.ctx;
+    const handle = this.manager.liveHandle(attached.runId, attached.instance);
+    if (!handle?.prompt) {
+      // The agent settled while the badge is still up. Never leak the text
+      // into the parent session; tell the user how to move on instead.
+      ctx?.ui.notify(
+        "Agent settled — ← goes back; /agent-session opens its session.",
+        "warning",
+      );
+      return { action: "handled" };
+    }
     void handle.prompt(event.text).catch((error) => {
       ctx?.ui.notify(
         error instanceof Error ? error.message : String(error),

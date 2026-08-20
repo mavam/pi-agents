@@ -430,6 +430,7 @@ describe("command registration", () => {
     registerCommands(pi, fakeDeps([]).deps);
     expect([...commands.keys()].sort()).toEqual([
       "agent",
+      "agent-session",
       "agents",
       "workflow",
       "workflows",

@@ -248,6 +248,7 @@ export class RunPanel {
 
   setAttached(value: { runId: string; instance: string } | undefined): void {
     this.attached = value;
+    this.attachedView?.dispose();
     this.attachedView = undefined;
     this.attachedItems = undefined;
     this.update();
@@ -283,15 +284,28 @@ export class RunPanel {
   }
 
   selectedRow(): PanelRow | undefined {
-    if (this.selectedKey === undefined) return undefined;
-    return this.rows().find((row) => rowKey(row) === this.selectedKey);
+    return this.reconcile(this.rows());
+  }
+
+  /** Normalize a stale selection (its run settled or collapsed away) to the
+   * first remaining row, so rendering, movement, and activation agree. */
+  private reconcile(rows: PanelRow[]): PanelRow | undefined {
+    if (rows.length === 0) {
+      this.selectedKey = undefined;
+      return undefined;
+    }
+    const current = rows.find((row) => rowKey(row) === this.selectedKey);
+    if (current) return current;
+    const first = rows[0] as PanelRow;
+    this.selectedKey = rowKey(first);
+    return first;
   }
 
   /** Move the selection by delta rows. Returns false when moving above the
    * first row (the focus controller hands focus back to the editor). */
   move(delta: number): boolean {
     const rows = this.rows();
-    if (rows.length === 0) return false;
+    if (this.reconcile(rows) === undefined) return false;
     const index = rows.findIndex((row) => rowKey(row) === this.selectedKey);
     const next = (index >= 0 ? index : 0) + delta;
     if (next >= rows.length) return true;
@@ -395,7 +409,7 @@ export class RunPanel {
       node.status === "running"
         ? "type to talk to this agent · esc interrupt · ← back · shift+↑↓ scroll"
         : node.sessionFile
-          ? "agent settled — /workflows opens its session · ← back"
+          ? "agent settled — /agent-session opens it · ← back"
           : "agent settled · ← back";
     return [
       ...transcript,
@@ -425,6 +439,7 @@ export class RunPanel {
       return lines;
     }
     // Focused: every row gets a marker column; window around the selection.
+    this.reconcile(rows);
     const index = Math.max(
       0,
       rows.findIndex((row) => rowKey(row) === this.selectedKey),
@@ -518,6 +533,8 @@ export class RunPanel {
     this.disposed = true;
     this.lastContext = undefined;
     this.heldActivity.clear();
+    this.attachedView?.dispose();
+    this.attachedView = undefined;
     this.stopTicking();
   }
 }

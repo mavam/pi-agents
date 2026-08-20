@@ -150,7 +150,8 @@ export class RunPanel {
   /** Interactive state, driven by the focus controller. */
   private focused = false;
   private selectedKey: string | undefined;
-  private readonly expanded = new Set<string>();
+  /** Runs the user explicitly collapsed; everything else shows its agents. */
+  private readonly collapsed = new Set<string>();
   private attached: { runId: string; instance: string } | undefined;
   /** Native transcript renderer for the attached agent; per attachment. */
   private attachedView: AgentTranscriptView | undefined;
@@ -248,12 +249,13 @@ export class RunPanel {
     this.update();
   }
 
-  /** The flat, navigable row list: runs, with agents under expanded runs. */
+  /** The flat, navigable row list: runs auto-expand into their agents so
+   * navigation never needs an extra unpack keystroke; space collapses. */
   rows(): PanelRow[] {
     const rows: PanelRow[] = [];
     for (const run of this.running()) {
       rows.push({ kind: "run", run });
-      if (this.expanded.has(run.header.id)) {
+      if (!this.collapsed.has(run.header.id)) {
         for (const node of workNodes(run)) {
           rows.push({ kind: "node", run, node });
         }
@@ -294,22 +296,22 @@ export class RunPanel {
     return true;
   }
 
-  /** Space: expand/collapse the selected run (or the selected node's run). */
+  /** Space: collapse/re-expand the selected run (or the node's run). */
   toggleExpand(): void {
     const row = this.selectedRow();
     if (!row) return;
     const runId = row.run.header.id;
-    if (this.expanded.has(runId)) {
-      this.expanded.delete(runId);
-      this.selectedKey = `run:${runId}`;
+    if (this.collapsed.has(runId)) {
+      this.collapsed.delete(runId);
     } else {
-      this.expanded.add(runId);
+      this.collapsed.add(runId);
+      this.selectedKey = `run:${runId}`;
     }
     this.update();
   }
 
   expandRun(runId: string): void {
-    this.expanded.add(runId);
+    this.collapsed.delete(runId);
     this.update();
   }
 
@@ -458,7 +460,7 @@ export class RunPanel {
     lines.push(
       color(
         "dim",
-        "  ↑↓ move · space expand · ⏎ attach · c cancel · esc editor",
+        "  ↑↓ move · ⏎ attach · space collapse · c cancel · esc editor",
       ),
     );
     return lines;

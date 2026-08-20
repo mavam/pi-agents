@@ -804,10 +804,11 @@ then retains it until a newer one arrives, coalescing rapid updates. The panel
 can be toggled wholesale with `/workflows widget`.
 
 The panel is interactive: press **←** from an empty editor (or `ctrl+q` any
-time) to move focus into it. Inside, `↑`/`↓` move the selection, **space**
-expands or collapses a run into its agent list (the panel grows upward, so
-the editor never shifts), `⏎` attaches to the selected agent, `c` cancels the
-selected run, and `esc`/`→` (or just typing) returns focus to the editor.
+time) to move focus into it. Runs auto-expand into their agent lists (the
+panel grows upward, so the editor never shifts). Inside, `↑`/`↓` move the
+selection, `⏎` attaches to the selected agent, **space** collapses or
+re-expands a run, `c` cancels the selected run, and `esc`/`→` (or just
+typing) returns focus to the editor.
 Because agent rows are color-coded by status, the running agents are visible
 at a glance.
 

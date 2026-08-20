@@ -945,8 +945,9 @@ describe("RunPanel selection reconciliation", () => {
     expect(
       reconciled?.kind === "run" ? reconciled.run.header.id : undefined,
     ).toBe("r2");
-    // Movement acts on the reconciled selection, not the stale key.
+    // Movement acts on the reconciled selection, not the stale key. Runs
+    // auto-expand, so one step down lands on r2's agent row.
     expect(panel.move(1)).toBe(true);
-    expect(panel.selectedRow()).toMatchObject({ kind: "run" });
+    expect(panel.selectedRow()).toMatchObject({ kind: "node" });
   });
 });

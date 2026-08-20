@@ -43,6 +43,9 @@ const TICK_MS = 1000;
 const SUMMARY_MIN_DISPLAY_MS = 3000;
 /** Focused-panel height cap, as a fraction of the terminal. */
 const MAX_HEIGHT_RATIO = 0.6;
+/** Rows reserved for the editor's borders, footer, status, and margin when
+ * budgeting the attached transcript (on top of the editor's 30% growth). */
+const EDITOR_RESERVE_ROWS = 8;
 
 export type PanelRow =
   | { kind: "run"; run: RunView }
@@ -487,8 +490,27 @@ export class RunPanel {
         4,
         Math.floor(terminalRows * MAX_HEIGHT_RATIO),
       );
+      // The widget shares the persistent bottom region with the editor
+      // (which grows to 30% of the terminal while composing), the footer,
+      // and status rows. If their sum ever exceeds the screen, every redraw
+      // scrolls and orphans the previous frame in the scrollback — so the
+      // attached transcript reserves the editor's worst case explicitly
+      // instead of taking a flat share.
+      const attachedBudget = Math.max(
+        6,
+        Math.min(
+          Math.floor(terminalRows * 0.5),
+          terminalRows - Math.floor(terminalRows * 0.3) - EDITOR_RESERVE_ROWS,
+        ),
+      );
       return new PanelLines((width) => {
-        const attached = this.attachedLines(tui, width, rowsBudget, now, color);
+        const attached = this.attachedLines(
+          tui,
+          width,
+          attachedBudget,
+          now,
+          color,
+        );
         if (attached) return attached;
         return this.buildLines(width, rowsBudget, now, color, activities);
       });

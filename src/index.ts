@@ -36,6 +36,7 @@ import {
 } from "./triggers/run-tools.js";
 import type { TriggerDeps } from "./triggers/start.js";
 import { createWorkflowCreateTool } from "./triggers/tool.js";
+import { installBadgeEditor } from "./ui/editor.js";
 import { FocusController } from "./ui/focus.js";
 import { FancyFooterRunReporter } from "./ui/footer.js";
 import { NotificationManager } from "./ui/notify.js";
@@ -139,6 +140,7 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
     refreshModels(ctx.modelRegistry);
     rpc.setContext(ctx);
     focus.install(ctx);
+    installBadgeEditor(pi, ctx, widget);
     reloadRunState(ctx);
     const trusted = isProjectTrusted(ctx);
     registerWorkflowCommands(pi, ctx.cwd, deps, trusted);

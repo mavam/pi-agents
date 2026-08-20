@@ -212,20 +212,19 @@ export class AgentTranscriptView {
       this.scrollBack = 0;
       return lines;
     }
+    // Window silently while following the tail — an "earlier lines" marker
+    // carries no information the badge and scroll hint don't already. Only a
+    // scrolled-back view marks the newer lines it is hiding.
+    if (this.scrollBack === 0) {
+      this.lastMaxScroll = lines.length - maxRows;
+      return lines.slice(-maxRows);
+    }
     const contentRows = Math.max(1, maxRows - 1);
     this.lastMaxScroll = lines.length - contentRows;
     this.scrollBack = Math.min(this.scrollBack, this.lastMaxScroll);
     const end = lines.length - this.scrollBack;
     const shown = lines.slice(end - contentRows, end);
-    const hiddenAbove = end - contentRows;
-    const hiddenBelow = this.scrollBack;
-    const marker = [
-      hiddenAbove > 0 ? `… ${hiddenAbove} earlier lines` : undefined,
-      hiddenBelow > 0 ? `… +${hiddenBelow} newer lines (shift+↓)` : undefined,
-    ]
-      .filter(Boolean)
-      .join("  ");
-    return [marker, ...shown];
+    return [...shown, `… +${this.scrollBack} newer lines (shift+↓)`];
   }
 }
 

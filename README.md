@@ -821,8 +821,11 @@ commands keep their normal meaning. `esc` interrupts the agent's current turn
 still attached and promptable, until you give it a new instruction or leave.
 `←` from an empty editor goes back to the parent context (mirroring how the
 panel is entered), and `shift+↑`/`shift+↓` scroll the transcript. A one-line
-status sits under the transcript, and the rule directly above the editor
-carries an inverted badge naming the agent the editor currently feeds. While
+status sits under the transcript, and the editor's own top border carries a
+right-aligned inverted badge naming the agent the editor currently feeds
+(pi-agents wraps pi's editor via `setEditorComponent`, following pi's
+border-status pattern; it steps aside if another extension already provides a
+custom editor). While
 attached, the spawn is held: an idle settle without a result keeps the child
 alive for follow-up prompts; leaving an idle, resultless agent lets it settle
 normally.

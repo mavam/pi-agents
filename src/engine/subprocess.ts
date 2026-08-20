@@ -1284,9 +1284,7 @@ export function createSubprocessSpawnEngine(options?: {
           // A submitted result ends the conversation: the node's work is
           // done even while the process is still shutting down.
           if (submissionAccepted) {
-            throw new Error(
-              `Agent ${spec.agent} already submitted its result`,
-            );
+            throw new Error(`Agent ${spec.agent} already submitted its result`);
           }
           if (
             wasAborted ||

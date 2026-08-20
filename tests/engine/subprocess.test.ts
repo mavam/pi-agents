@@ -689,11 +689,21 @@ describe("subprocess spawn engine", () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
     const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "1",
+      toolName: "bash",
+      args: { command: "sleep 600" },
+    });
     await handle.interrupt?.();
     expect(proc.stdin.records.some((record) => record.type === "abort")).toBe(
       true,
     );
     expect(handle.status).toBe("running");
+    const items = handle.transcript?.() ?? [];
+    const tool = items.find((item) => item.kind === "tool");
+    expect(tool?.kind === "tool" ? tool.status : undefined).toBe("error");
+    expect(items.at(-1)?.kind).toBe("notice");
     finish(proc);
     await handle.wait();
   });

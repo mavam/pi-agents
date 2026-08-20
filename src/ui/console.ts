@@ -20,7 +20,7 @@ import {
   ToolExecutionComponent,
   UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import { type Component, Text, type TUI } from "@earendil-works/pi-tui";
 import type { TranscriptItem } from "../engine/types.js";
 import type { RunManager } from "../run/runs.js";
 import type { NodeView } from "../run/state.js";
@@ -127,6 +127,8 @@ export class AgentTranscriptView {
     switch (item.kind) {
       case "user":
         return new UserMessageComponent(item.text, getMarkdownTheme());
+      case "notice":
+        return new Text(`\u001b[2m⏹ ${item.text}\u001b[22m`, 1, 0);
       case "assistant": {
         const component = new AssistantMessageComponent(
           undefined,
@@ -175,7 +177,7 @@ export class AgentTranscriptView {
       if (result) component.updateResult(result, item.status === "running");
       return;
     }
-    // User messages are immutable once sent; recreate on the odd change.
+    // User messages and notices are immutable; recreate on the odd change.
     disposeComponent(slot.component);
     slot.component = this.createComponent(item);
   }

@@ -143,6 +143,7 @@ function jsonChars(value: unknown): number {
 function itemChars(item: TranscriptItem): number {
   switch (item.kind) {
     case "user":
+    case "notice":
       return item.text.length;
     case "assistant":
       return (
@@ -1306,6 +1307,22 @@ export function createSubprocessSpawnEngine(options?: {
           await startupPromise;
           if (wasAborted || settled || status !== "running") return;
           await sendCommand({ type: "abort" });
+          // Mirror the interactive session's Esc feedback: mark still-running
+          // tool calls as cut off and leave an interrupt marker.
+          for (const key of toolTranscriptKeys.values()) {
+            const item = transcriptStore.get(key);
+            if (item?.kind === "tool" && item.status === "running") {
+              transcriptStore.upsert({ ...item, status: "error" });
+            }
+          }
+          toolTranscriptKeys.clear();
+          transcriptStore.upsert({
+            key: `notice:${++activitySequence}`,
+            kind: "notice",
+            text: "Interrupted — agent is idle; send a new instruction to continue.",
+            at: Date.now(),
+          });
+          pushUpdate();
         },
         hold: () => {
           settleHolds += 1;

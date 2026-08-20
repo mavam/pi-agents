@@ -129,6 +129,13 @@ export class SpawnAborted extends Error {
 export type TranscriptItem = (
   | { key: string; kind: "user"; text: string; at: number }
   | {
+      /** Out-of-band event marker (e.g. a user interrupt), rendered dim. */
+      key: string;
+      kind: "notice";
+      text: string;
+      at: number;
+    }
+  | {
       key: string;
       kind: "assistant";
       text: string;

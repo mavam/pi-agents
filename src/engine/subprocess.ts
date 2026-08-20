@@ -1326,8 +1326,14 @@ export function createSubprocessSpawnEngine(options?: {
             }
           }
           toolTranscriptKeys.clear();
+          // Repeated Esc presses coalesce onto one marker instead of
+          // stacking a line per keypress.
+          const last = transcriptStore.snapshot().at(-1);
           transcriptStore.upsert({
-            key: `notice:${++activitySequence}`,
+            key:
+              last?.kind === "notice"
+                ? last.key
+                : `notice:${++activitySequence}`,
             kind: "notice",
             text: "Interrupted — agent is idle; send a new instruction to continue.",
             at: Date.now(),

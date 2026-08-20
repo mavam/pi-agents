@@ -10,11 +10,13 @@
  * without moving the editor or footer.
  *
  * While an agent is attached, the panel shows that agent's transcript with
- * pi's native message renderers plus one status line; the pi editor stays in
- * place as the agent's composer (input routed via the `input` event).
+ * pi's native message renderers plus one status line, padded to a constant
+ * height so the bottom region never changes size mid-attachment; the pi
+ * editor stays in place as the agent's composer (submissions intercepted at
+ * the editor, see ui/editor.ts).
  */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   type TUI,
@@ -170,6 +172,8 @@ export class RunPanel {
   private attachedView: AgentTranscriptView | undefined;
   /** The TUI from the last widget mount, for forced repaints. */
   private lastTui: TUI | undefined;
+  /** Whether the persistent panel component is currently mounted. */
+  private mounted = false;
   /** Last transcript snapshot, kept so a settled agent stays visible. */
   private attachedItems: readonly TranscriptItem[] | undefined;
 
@@ -185,7 +189,36 @@ export class RunPanel {
     // widget timers or emit display requests. The panel belongs to the TUI.
     if (context?.mode !== "tui") return;
     this.lastContext = context;
-    this.render(context);
+    // Mount one persistent component and let it pull live state per render.
+    // Replacing the component per update (the previous design) remounted the
+    // widget container on every progress tick, which — combined with a
+    // frame-to-frame height change — desynchronized pi's differential
+    // renderer (duplicated rows, scrambled bottom region).
+    if (!this.shouldShow()) {
+      this.stopTicking();
+      this.heldActivity.clear();
+      this.focused = false;
+      if (this.mounted) {
+        context.ui.setWidget(WIDGET_KEY, undefined);
+        this.mounted = false;
+      }
+      return;
+    }
+    this.startTicking();
+    if (!this.mounted) {
+      context.ui.setWidget(WIDGET_KEY, (tui, theme) => {
+        this.lastTui = tui;
+        return new PanelLines((width) => this.buildFrame(tui, theme, width));
+      });
+      this.mounted = true;
+      return;
+    }
+    this.lastTui?.requestRender?.();
+  }
+
+  private shouldShow(): boolean {
+    if (this.attached) return true;
+    return this.enabled && !this.suppressed && this.running().length > 0;
   }
 
   isHidden(runId: string): boolean {
@@ -491,18 +524,36 @@ export class RunPanel {
     return lines;
   }
 
-  private render(context: ExtensionContext): void {
-    if (this.disposed) return;
-    const running = this.enabled && !this.suppressed ? this.running() : [];
-    if (running.length === 0 && !this.attached) {
-      this.stopTicking();
-      this.heldActivity.clear();
-      this.focused = false;
-      context.ui.setWidget(WIDGET_KEY, undefined);
-      return;
-    }
-    this.startTicking();
+  /** One frame of the persistent component, from live state. */
+  private buildFrame(tui: TUI, theme: Theme, width: number): string[] {
+    if (this.disposed) return [];
+    const color: Colorize = (name, text) => theme.fg(name, text);
     const now = this.now();
+    const terminalRows = tui?.terminal?.rows ?? 24;
+    const rowsBudget = Math.max(4, Math.floor(terminalRows * MAX_HEIGHT_RATIO));
+    // The widget shares the persistent bottom region with the editor (which
+    // grows to 30% of the terminal while composing), the footer, and status
+    // rows. If their sum ever exceeds the screen, every redraw scrolls and
+    // orphans the previous frame in the scrollback — so the attached
+    // transcript reserves the editor's worst case explicitly instead of
+    // taking a flat share.
+    const attachedBudget = Math.max(
+      6,
+      Math.min(
+        Math.floor(terminalRows * 0.5),
+        terminalRows - Math.floor(terminalRows * 0.3) - EDITOR_RESERVE_ROWS,
+      ),
+    );
+    const attached = this.attachedLines(tui, width, attachedBudget, now, color);
+    if (attached) {
+      // Constant height for the whole attachment: a bottom region whose
+      // height changes with every streamed line is what desynchronized the
+      // differential renderer. Pad at the top so content hugs the editor.
+      while (attached.length < attachedBudget) attached.unshift("");
+      return attached;
+    }
+    const running = this.running();
+    if (running.length === 0) return [];
     const visibleIds = new Set(running.map((run) => run.header.id));
     for (const runId of this.heldActivity.keys()) {
       if (!visibleIds.has(runId)) this.heldActivity.delete(runId);
@@ -510,47 +561,14 @@ export class RunPanel {
     const activities = new Map(
       running.map((run) => [run.header.id, this.activityFor(run, now)]),
     );
-    context.ui.setWidget(WIDGET_KEY, (tui, theme) => {
-      this.lastTui = tui;
-      const color: Colorize = (name, text) => theme.fg(name, text);
-      const terminalRows = tui?.terminal?.rows ?? 24;
-      const rowsBudget = Math.max(
-        4,
-        Math.floor(terminalRows * MAX_HEIGHT_RATIO),
-      );
-      // The widget shares the persistent bottom region with the editor
-      // (which grows to 30% of the terminal while composing), the footer,
-      // and status rows. If their sum ever exceeds the screen, every redraw
-      // scrolls and orphans the previous frame in the scrollback — so the
-      // attached transcript reserves the editor's worst case explicitly
-      // instead of taking a flat share.
-      const attachedBudget = Math.max(
-        6,
-        Math.min(
-          Math.floor(terminalRows * 0.5),
-          terminalRows - Math.floor(terminalRows * 0.3) - EDITOR_RESERVE_ROWS,
-        ),
-      );
-      return new PanelLines((width) => {
-        const attached = this.attachedLines(
-          tui,
-          width,
-          attachedBudget,
-          now,
-          color,
-        );
-        if (attached) return attached;
-        return this.buildLines(width, rowsBudget, now, color, activities);
-      });
-    });
+    return this.buildLines(width, rowsBudget, now, color, activities);
   }
 
   private startTicking(): void {
     if (this.timer || this.disposed) return;
     this.timer = setInterval(() => {
       if (this.disposed) return;
-      const context = this.lastContext;
-      if (context) this.render(context);
+      this.update();
     }, TICK_MS);
     this.timer.unref?.();
   }

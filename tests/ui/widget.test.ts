@@ -838,6 +838,7 @@ describe("RunPanel lifecycle", () => {
     node.progressTool = "read";
     node.lastProgressAt = now;
     widget.update();
+    renderLast(); // A frame samples the candidate (pull model).
     now += 100;
     node.progressTool = undefined;
     node.lastProgressAt = now;

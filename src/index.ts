@@ -140,7 +140,7 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
     refreshModels(ctx.modelRegistry);
     rpc.setContext(ctx);
     focus.install(ctx);
-    installBadgeEditor(pi, ctx, widget);
+    installBadgeEditor(pi, ctx, widget, manager);
     reloadRunState(ctx);
     const trusted = isProjectTrusted(ctx);
     registerWorkflowCommands(pi, ctx.cwd, deps, trusted);

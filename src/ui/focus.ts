@@ -119,13 +119,17 @@ export class FocusController {
     const text = event.text.trim();
     if (!text || text.startsWith("/")) return undefined;
     const ctx = this.ctx;
+    const node = this.manager.state.runs
+      .get(attached.runId)
+      ?.nodes.get(attached.instance);
     const handle = this.manager.liveHandle(attached.runId, attached.instance);
-    if (!handle?.prompt) {
-      // The agent settled while the badge is still up. Never leak the text
-      // into the parent session; tell the user how to move on instead.
+    // A settled node (or a spawn that already submitted its result) takes no
+    // further input. Never leak the text into the parent session; tell the
+    // user how to move on instead.
+    if (node?.status !== "running" || !handle?.prompt) {
       ctx?.ui.notify(
-        "Agent settled — ← goes back; /agent-session opens its session.",
-        "warning",
+        "Agent settled and takes no further input — ← goes back; /agent-session opens its session.",
+        "error",
       );
       return { action: "handled" };
     }

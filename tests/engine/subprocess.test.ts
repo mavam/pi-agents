@@ -681,7 +681,7 @@ describe("subprocess spawn engine", () => {
     finish(proc);
     await handle.wait();
     await expect(handle.prompt?.("too late")).rejects.toThrow(
-      "no longer running",
+      "already submitted its result",
     );
   });
 

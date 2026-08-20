@@ -120,9 +120,9 @@ export function formatAttachedLine(
  * colors; every other C0 control byte is dropped.
  */
 export function sanitizeLine(line: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional
   return line
     .replaceAll("\t", "  ")
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately stripping C0 bytes
     .replace(/[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/g, "");
 }
 

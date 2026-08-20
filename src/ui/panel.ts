@@ -119,13 +119,12 @@ export function formatAttachedLine(
  * whole frame (duplicated panels, vanished editor). ESC is kept for SGR
  * colors; every other C0 control byte is dropped.
  */
-export function sanitizeLine(line: string): string {
-  return line
-    .replaceAll("\t", "  ")
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately stripping C0 bytes
-    .replace(/[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/g, "");
-}
+// biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately stripping C0 bytes
+const C0_CONTROL_BYTES = /[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/g;
 
+export function sanitizeLine(line: string): string {
+  return line.replaceAll("\t", "  ").replace(C0_CONTROL_BYTES, "");
+}
 class PanelLines implements Component {
   private readonly build: (width: number) => string[];
 

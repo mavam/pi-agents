@@ -10,7 +10,7 @@
  * without moving the editor or footer.
  *
  * Attaching opens the AgentPane (ui/console.ts) in the editor slot; while it
- * is open the panel is suppressed, since the pane carries the same status.
+ * is open the parent workflow overview is suppressed entirely.
  */
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";

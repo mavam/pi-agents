@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AgentPane,
   formatPendingPromptLines,
   sanitizeLine,
 } from "../../src/ui/console.js";
@@ -32,6 +33,52 @@ describe("sanitizeLine", () => {
       "beforeafter",
     );
     expect(sanitizeLine(`before${ESC}]unterminated`)).toBe("before");
+  });
+});
+
+describe("AgentPane", () => {
+  test("omits the parent workflow overview above the editor", () => {
+    const instance = "$.alpha";
+    const label = "Dummy alpha-beta-gamma sleep workflow";
+    const node = {
+      instance,
+      kind: "agent",
+      status: "running",
+      agent: "alpha",
+      startedAt: Date.now(),
+    };
+    const run = {
+      header: { label, cwd: process.cwd(), flow: { kind: "agent" } },
+      nodes: new Map([[instance, node]]),
+    };
+    const manager = {
+      state: { runs: new Map([["run-id", run]]) },
+      liveHandle: () => ({ transcript: () => [], hold: () => () => {} }),
+    };
+    const tui = { terminal: { rows: 24 }, requestRender() {} };
+    const theme = { fg: (_name: string, text: string) => text };
+    const keybindings = { matches: () => false };
+    const pane = new AgentPane(
+      tui as never,
+      theme as never,
+      keybindings as never,
+      {
+        manager: manager as never,
+        runId: "run-id",
+        instance,
+        done() {},
+      },
+    );
+    try {
+      const rendered = pane.render(100).join("\n");
+      // The run label remains only in the editor-border badge. It must not be
+      // repeated as a workflow status line between transcript and editor.
+      expect(rendered.match(new RegExp(label, "g"))).toHaveLength(1);
+      expect(rendered).not.toContain("❖");
+      expect(rendered).not.toContain("⏎ send");
+    } finally {
+      pane.dispose();
+    }
   });
 });
 

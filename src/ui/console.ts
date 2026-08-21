@@ -35,10 +35,8 @@ import {
 import type { SpawnHandle, TranscriptItem } from "../engine/types.js";
 import type { RunManager } from "../run/runs.js";
 import type { NodeView, RunView } from "../run/state.js";
-import { workNodes } from "../run/state.js";
 import { nodeDisplayName } from "./render.js";
-import { STATUS_STYLES } from "./status.js";
-import { type Colorize, formatElapsed } from "./widget.js";
+import type { Colorize } from "./widget.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -375,28 +373,6 @@ export function sanitizeLine(line: string): string {
   return result;
 }
 
-/** The one-line status shown under an attached agent transcript. Pure. */
-export function formatAttachedLine(
-  run: RunView,
-  node: NodeView,
-  now: number,
-  color: Colorize = (_c, t) => t,
-): string {
-  const presentation = STATUS_STYLES[node.status];
-  const siblings = workNodes(run).filter(
-    (candidate) =>
-      candidate.instance !== node.instance && candidate.status === "running",
-  ).length;
-  const dot = color("dim", " · ");
-  const parts = [
-    `${color("muted", "❖")} ${run.header.label ?? run.header.flow.kind} ${color("dim", "›")} ${color(presentation.color, presentation.icon)} ${nodeDisplayName(node)}`,
-    color("dim", node.agent ?? "ad-hoc"),
-    color("dim", formatElapsed((node.endedAt ?? now) - node.startedAt)),
-    siblings > 0 ? color("dim", `${siblings} sibling(s) running`) : undefined,
-  ].filter((part): part is string => part !== undefined);
-  return parts.join(dot);
-}
-
 const PANE_REFRESH_MS = 250;
 /** How long an inline flash message stays visible. */
 const FLASH_MS = 5_000;
@@ -429,9 +405,10 @@ export interface AgentPaneOptions {
 }
 
 /**
- * The attached-agent view: the agent's transcript (pi-native rendering), a
- * status line, and a real embedded CustomEditor whose top border carries the
- * agent badge. Mounted via ctx.ui.custom() in the editor slot — the one
+ * The attached-agent view: the agent's transcript (pi-native rendering) and
+ * a real embedded CustomEditor whose top border carries the agent badge. The
+ * parent workflow overview stays hidden while this focused view is open.
+ * Mounted via ctx.ui.custom() in the editor slot — the one
  * mechanism pi lays out and repaints reliably for large interactive content
  * (extension widgets in the dock are for small status lines).
  *
@@ -564,26 +541,12 @@ export class AgentPane implements Component {
       );
     }
 
-    const running = node?.status === "running";
-    const hints = running
-      ? "⏎ send · esc interrupt · ← back · shift+↑↓ scroll"
-      : node?.sessionFile
-        ? "agent settled — ← back · /agent-session opens its session"
-        : "agent settled · ← back";
     // A settled agent's cause of death must be visible in the pane, not
     // buried in run details.
     const failureLine =
       node?.status === "failed" && node.error
         ? [color("error", `✗ ${node.error}`)]
         : [];
-    const queuedPart =
-      pending.length > 0
-        ? `${color("warning", `${pending.length} queued`)}${color("dim", " · ")}`
-        : "";
-    const status =
-      run && node
-        ? `${formatAttachedLine(run, node, Date.now(), color)}${color("dim", " · ")}${queuedPart}${color("dim", hints)}`
-        : color("dim", "agent no longer known · ← back");
 
     const rows = this.tui.terminal?.rows ?? 24;
     const budget = Math.max(1, rows - 6);
@@ -591,7 +554,7 @@ export class AgentPane implements Component {
       ? [color("error", `⚠ ${this.flash.text}`)]
       : [];
     const fixedRows =
-      editorLines.length + 1 + failureLine.length + flashLines.length;
+      editorLines.length + failureLine.length + flashLines.length;
     const contentRows = Math.max(0, Math.min(budget, rows) - fixedRows);
     const transcriptReserve =
       flowItems.length > 0 ? Math.min(3, contentRows) : 0;
@@ -617,7 +580,6 @@ export class AgentPane implements Component {
     return [
       ...transcript.map(clamp),
       ...failureLine.map(clamp),
-      clamp(status),
       ...pendingLines.map(clamp),
       ...flashLines.map(clamp),
       ...editorLines,
@@ -665,8 +627,7 @@ export class AgentPane implements Component {
 
 /**
  * Attach to one agent: the pane for a running agent, its own pi session for
- * a settled one. Suppresses the run panel while the pane is open (the pane
- * carries the same status).
+ * a settled one. Suppresses the parent run overview while the pane is open.
  */
 export async function openAgentPane(
   ctx: ExtensionContext,

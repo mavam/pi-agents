@@ -141,16 +141,6 @@ export class AgentTranscriptView {
   private createComponent(item: TranscriptItem): Component {
     switch (item.kind) {
       case "user":
-        // Still in the child's steering queue: render as pi renders pending
-        // messages (dim, marked) until delivery is confirmed, at which point
-        // the rev bump recreates this slot as a normal user message.
-        if (item.queued) {
-          return new Text(
-            `\u001b[2m↻ queued — delivers after the current turn\u001b[22m\n${item.text}`,
-            1,
-            0,
-          );
-        }
         return new UserMessageComponent(item.text, getMarkdownTheme());
       case "notice":
         return new Text(`\u001b[2m⏹ ${item.text}\u001b[22m`, 1, 0);
@@ -482,6 +472,16 @@ export class AgentPane implements Component {
       this.flash = undefined;
     }
 
+    // Queued prompts live in a pending block above the editor (like pi's
+    // pending-message display), not in the transcript flow: their transcript
+    // position is only fixed at delivery.
+    const flowItems = this.items.filter(
+      (item) => !(item.kind === "user" && item.queued === true),
+    );
+    const pending = this.items.filter(
+      (item) => item.kind === "user" && item.queued === true,
+    );
+
     const editorLines = this.editor.render(width);
     if (run && node && editorLines.length > 0) {
       const label = ` ${nodeDisplayName(node)}${node.agent ? ` (${node.agent})` : ""} · ${run.header.label ?? run.header.flow.kind} `;
@@ -496,17 +496,21 @@ export class AgentPane implements Component {
       : node?.sessionFile
         ? "agent settled — ← back · /agent-session opens its session"
         : "agent settled · ← back";
-    const queued = this.items.filter(
-      (item) => item.kind === "user" && item.queued === true,
-    ).length;
     const queuedPart =
-      queued > 0
-        ? `${color("warning", `${queued} queued`)}${color("dim", " · ")}`
+      pending.length > 0
+        ? `${color("warning", `${pending.length} queued`)}${color("dim", " · ")}`
         : "";
     const status =
       run && node
         ? `${formatAttachedLine(run, node, Date.now(), color)}${color("dim", " · ")}${queuedPart}${color("dim", hints)}`
         : color("dim", "agent no longer known · ← back");
+
+    const pendingLines = pending.map((item) =>
+      color(
+        "dim",
+        `↻ queued · ${item.kind === "user" ? item.text.split("\n")[0] : ""}`,
+      ),
+    );
 
     const rows = this.tui.terminal?.rows ?? 24;
     const budget = Math.max(10, rows - 6);
@@ -515,13 +519,19 @@ export class AgentPane implements Component {
       : [];
     const transcriptRows = Math.max(
       3,
-      budget - editorLines.length - 1 - flashLines.length,
+      budget - editorLines.length - 1 - flashLines.length - pendingLines.length,
     );
     const transcript = this.view
-      .render(this.items, width, transcriptRows)
+      .render(flowItems, width, transcriptRows)
       .map((line) => sanitizeLine(line));
 
-    return [...transcript, status, ...flashLines, ...editorLines];
+    return [
+      ...transcript,
+      status,
+      ...pendingLines,
+      ...flashLines,
+      ...editorLines,
+    ];
   }
 
   handleInput(data: string): void {

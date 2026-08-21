@@ -226,6 +226,17 @@ class TranscriptStore {
     return this.byKey.get(key);
   }
 
+  /** Reposition an item at the chronological end (e.g. queued prompt
+   * delivered now). */
+  moveToEnd(key: string): void {
+    const item = this.byKey.get(key);
+    if (!item) return;
+    const index = this.items.indexOf(item);
+    if (index === -1 || index === this.items.length - 1) return;
+    this.items.splice(index, 1);
+    this.items.push(item);
+  }
+
   snapshot(): readonly TranscriptItem[] {
     return this.items;
   }
@@ -972,6 +983,10 @@ export function createSubprocessSpawnEngine(options?: {
               );
             if (match?.kind === "user") {
               transcriptStore.upsert({ ...match, queued: false });
+              // Delivery is the message's true chronological position: the
+              // child appends it to its context now, after everything the
+              // current turn streamed since the prompt was accepted.
+              transcriptStore.moveToEnd(match.key);
               pushUpdate();
             }
           }

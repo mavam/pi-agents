@@ -690,6 +690,9 @@ describe("subprocess spawn engine", () => {
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
     const proc = procs[0]?.proc as FakeProc;
     await handle.prompt?.("focus on tests");
+    // The current turn keeps streaming after the prompt is accepted.
+    proc.emitRecord({ type: "turn_start" });
+    proc.emitAssistant("still working on the previous instruction");
     const queued = handle
       .transcript?.()
       .find((item) => item.kind === "user" && item.text === "focus on tests");
@@ -707,6 +710,13 @@ describe("subprocess spawn engine", () => {
       .find((item) => item.kind === "user" && item.text === "focus on tests");
     expect(delivered?.kind === "user" ? delivered.queued : undefined).toBe(
       false,
+    );
+    // Delivery fixes the chronological position: the message moves after
+    // everything the turn streamed while it sat in the queue.
+    const items = handle.transcript?.() ?? [];
+    expect(items.at(-1)?.kind).toBe("user");
+    expect(items.at(-1)?.kind === "user" ? items.at(-1)?.text : "").toBe(
+      "focus on tests",
     );
     finish(proc);
     await handle.wait();

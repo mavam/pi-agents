@@ -1047,6 +1047,22 @@ export function createSubprocessSpawnEngine(options?: {
             typeof record.toolCallId === "string"
           ) {
             const toolName = activeTools.get(record.toolCallId);
+            if (toolName === RESULT_TOOL_NAME && record.isError === true) {
+              // The attach-hold gate (or a schema rejection) bounced the
+              // submission. The attempt is engine plumbing, but its refusal
+              // must be visible or the conversation reads as broken.
+              const last = transcriptStore.snapshot().at(-1);
+              transcriptStore.upsert({
+                key:
+                  last?.kind === "notice"
+                    ? last.key
+                    : `notice:${++activitySequence}`,
+                kind: "notice",
+                text: "Submission deferred — agent stays with you until you detach.",
+                at: Date.now(),
+              });
+              pushUpdate();
+            }
             if (toolName === RESULT_TOOL_NAME && record.isError !== true) {
               if (submissionAccepted) {
                 throw new Error(
@@ -1387,9 +1403,10 @@ export function createSubprocessSpawnEngine(options?: {
         interrupt: async () => {
           await startupPromise;
           if (wasAborted || settled || status !== "running") return;
-          await sendCommand({ type: "abort" });
-          // Mirror the interactive session's Esc feedback: mark still-running
-          // tool calls as cut off and leave an interrupt marker.
+          // Mirror the interactive session's Esc feedback at press time —
+          // before the abort round-trip, so an in-flight reply cannot slot
+          // in ahead of the marker: mark still-running tool calls as cut
+          // off and leave the interrupt marker immediately.
           for (const key of toolTranscriptKeys.values()) {
             const item = transcriptStore.get(key);
             if (item?.kind === "tool" && item.status === "running") {
@@ -1420,6 +1437,7 @@ export function createSubprocessSpawnEngine(options?: {
             at: Date.now(),
           });
           pushUpdate();
+          await sendCommand({ type: "abort" });
         },
         hold: () => {
           settleHolds += 1;

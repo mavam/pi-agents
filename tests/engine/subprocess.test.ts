@@ -737,6 +737,32 @@ describe("subprocess spawn engine", () => {
     await handle.wait();
   });
 
+  test("a rejected result submission leaves a visible deferral notice", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "r1",
+      toolName: RESULT_TOOL_NAME,
+      args: {},
+    });
+    proc.emitRecord({
+      type: "tool_execution_end",
+      toolCallId: "r1",
+      toolName: RESULT_TOOL_NAME,
+      result: { content: [{ type: "text", text: "Submission deferred" }] },
+      isError: true,
+    });
+    const notice = handle.transcript?.().at(-1);
+    expect(notice?.kind).toBe("notice");
+    if (notice?.kind === "notice") {
+      expect(notice.text).toContain("Submission deferred");
+    }
+    finish(proc);
+    await handle.wait();
+  });
+
   test("interrupt aborts the current turn without ending the spawn", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });

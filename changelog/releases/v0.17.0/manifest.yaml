@@ -1,0 +1,9 @@
+created: 2026-08-21
+title: First-class agent sessions and an interactive run panel
+intro: >-
+  This release gives every delegated agent a persistent Pi session, so you can attach
+  to running or completed agents and continue the conversation in place. It also adds
+  an interactive run panel and replaces the former tailing and steering interfaces.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.16.1

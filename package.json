@@ -1,7 +1,7 @@
 {
   "name": "pi-agents",
   "description": "A generic framework for agent orchestration in pi.",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "type": "module",
   "files": [
     "src",

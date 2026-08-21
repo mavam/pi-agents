@@ -27,7 +27,8 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { type Colorize, plainColorize, type RunWidget } from "./widget.js";
+import type { RunPanel } from "./panel.js";
+import { type Colorize, plainColorize } from "./widget.js";
 
 const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
@@ -193,7 +194,7 @@ export interface OverlayView {
   color?: Colorize;
   /** High-water mark of detail rows, so the pane never shrinks. */
   minDetailRows?: number;
-  /** Extra rows below the detail pane (the steer composer). */
+  /** Extra rows below the detail pane (the inline composer). */
   composerLines?: string[];
   /** Replaces the footer hints (e.g. while composing). */
   footerOverride?: string;
@@ -545,7 +546,7 @@ export class SplitPaneOverlay<T> implements Component {
 export async function openOverlay<T>(
   ctx: Pick<ExtensionContext, "ui">,
   spec: OverlaySpec<T>,
-  widget?: Pick<RunWidget, "setSuppressed">,
+  widget?: Pick<RunPanel, "setSuppressed">,
 ): Promise<void> {
   widget?.setSuppressed(true);
   try {

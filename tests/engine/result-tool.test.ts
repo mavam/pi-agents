@@ -209,3 +209,26 @@ describe("agent result tool", () => {
     ).toThrow("Invalid result schema");
   });
 });
+
+describe("attach-hold gating", () => {
+  test("defers submission while the hold file exists", async () => {
+    const holdFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "pi-agents-hold-")),
+      "attach-hold",
+    );
+    fs.writeFileSync(holdFile, "1");
+    process.env.PI_AGENTS_ATTACH_HOLD_FILE = holdFile;
+    try {
+      const tool = register();
+      await expect(
+        tool.execute("held-call", { result: "done" }),
+      ).rejects.toThrow("not visible as an assistant reply");
+      fs.rmSync(holdFile, { force: true });
+      const accepted = await tool.execute("free-call", { result: "done" });
+      expect(accepted.details).toEqual({ result: "done" });
+    } finally {
+      delete process.env.PI_AGENTS_ATTACH_HOLD_FILE;
+      fs.rmSync(path.dirname(holdFile), { recursive: true, force: true });
+    }
+  });
+});

@@ -32,6 +32,9 @@ import {
 
 export type { SpawnDefaults };
 
+/** While a user is attached, budget watchdogs re-check at this cadence. */
+const HELD_BUDGET_RECHECK_MS = 2_000;
+
 export interface RunnerOptions {
   engine: SpawnEngine;
   /** Default working directory for delegated processes. */
@@ -48,24 +51,28 @@ export interface RunnerOptions {
   budgetLimits?: EffectiveBudgets;
   /** Discovery caches shared with preflight, so resolution happens once. */
   catalogs?: CatalogCache;
+  /** Directory for delegated agents' own session files (one per run). */
+  sessionDir?: string;
   /** Observe a live handle; return a disposer that unregisters it. */
   onHandle?: (call: AgentCall, handle: SpawnHandle) => (() => void) | undefined;
 }
 
 /** The result contract appended to every delegated agent's system prompt. */
 export function delegationPreamble(): string {
+  // Sentences joined with spaces: phrase-level assertions (and models) must
+  // never be broken by source-line wrapping.
   return [
-    "You run non-interactively as a delegated agent inside a workflow:",
-    "this assignment is delegated work, not fresh user intent. Perform the",
-    "assignment directly. Do not invoke workflows or delegate it further;",
-    "if the assignment asks for delegation, perform the underlying work",
-    "yourself. Nobody can reply to you. Assistant messages are progress",
-    "only and are not returned to the caller. Complete the assignment by",
-    "submitting exactly one complete agent result through the provided",
-    "result-submission mechanism as your final action. If the assignment",
-    "cannot be completed, submit an error with a concrete reason instead",
-    "of fabricating a result.",
-  ].join("\n");
+    "You run as a delegated agent inside a workflow: this assignment is delegated work, not fresh user intent.",
+    "Perform the assignment directly.",
+    "Do not invoke workflows or delegate it further; if the assignment asks for delegation, perform the underlying work yourself.",
+    "A supervising user may attach to your session and send you messages mid-run.",
+    "Treat every such message as authoritative steering: reply to it briefly and directly in visible assistant text before any tool call, adjust course as it directs, and only then continue the assignment. Tool calls and result submissions do not count as replies.",
+    "If the user interrupts your current activity, do not blindly resume it — their next message overrides your previous plan.",
+    "Apart from these steering exchanges, assistant messages are progress notes and are not returned to the caller.",
+    "Complete the assignment by submitting exactly one complete agent result through the provided result-submission mechanism as your final action.",
+    "While a user is attached, submission may be deferred by the environment; keep engaging with them and submit once they leave.",
+    "If the assignment cannot be completed, or the user tells you to stop, submit an error with a concrete reason instead of fabricating a result.",
+  ].join(" ");
 }
 
 export function createAgentRunner(options: RunnerOptions): AgentRunner {
@@ -109,6 +116,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
       // Preserved exactly: the engine adds only its mandatory result tool.
       tools: resolved.tools,
       resultSchema: call.resultSchema,
+      sessionDir: options.sessionDir,
       env,
     });
     const unregisterHandle = options.onHandle?.(call, handle);
@@ -131,13 +139,19 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
 
     let agentTimer: ReturnType<typeof setTimeout> | undefined;
     if (limits.maxAgentDuration !== undefined) {
-      agentTimer = setTimeout(
-        () =>
-          cutOff(
-            `agent duration budget exceeded (maxAgentDuration: ${limits.maxAgentDuration}s)`,
-          ),
-        limits.maxAgentDuration * 1000,
-      );
+      const budgetMessage = `agent duration budget exceeded (maxAgentDuration: ${limits.maxAgentDuration}s)`;
+      const fire = () => {
+        // An attached user overrides automation timeouts: the promise that
+        // the agent stays until detach beats the duration watchdog. Re-check
+        // until the hold clears.
+        if (handle.held?.()) {
+          agentTimer = setTimeout(fire, HELD_BUDGET_RECHECK_MS);
+          agentTimer.unref?.();
+          return;
+        }
+        cutOff(budgetMessage);
+      };
+      agentTimer = setTimeout(fire, limits.maxAgentDuration * 1000);
       agentTimer.unref?.();
     }
 
@@ -148,7 +162,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
         // turnsStarted trips the cap the moment an over-budget turn begins;
         // completed-turn counts back it up for engines that don't report it.
         const turns = Math.max(update.turnsStarted ?? 0, update.usage.turns);
-        if (turns > limits.maxTurns) {
+        if (turns > limits.maxTurns && !handle.held?.()) {
           cutOff(`agent turn budget exceeded (maxTurns: ${limits.maxTurns})`);
         }
       }

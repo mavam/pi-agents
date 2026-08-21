@@ -232,6 +232,9 @@ export interface ExecuteOptions {
   cwd?: string;
   scope?: Scope;
   originSessionFile?: string;
+  /** True while a user is attached to any agent in this run. Run-level
+   * budget cancellation waits for the attachment to close. */
+  isHeld?: () => boolean;
 }
 
 export interface RunOutcome {
@@ -277,6 +280,8 @@ function cancelMessageOf(
   return undefined;
 }
 
+const HELD_BUDGET_RECHECK_MS = 250;
+
 class Interpreter {
   private readonly options: ExecuteOptions;
   private readonly budgets: BudgetActor;
@@ -291,6 +296,10 @@ class Interpreter {
     string,
     { tokens: number; cost: number }
   >();
+  /** A run-level budget breach waits here while an attached user holds any
+   * child. Only the first breach determines the eventual failure. */
+  private pendingBudgetMessage: string | undefined;
+  private heldBudgetTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: ExecuteOptions) {
     this.options = options;
@@ -301,6 +310,34 @@ class Interpreter {
 
   private emit(event: RunEvent): void {
     this.options.emit?.(event);
+  }
+
+  /** Apply a pending run-level breach once no user holds an agent. */
+  private checkPendingBudgetAbort(): void {
+    const controller = this.controller;
+    const message = this.pendingBudgetMessage;
+    if (!controller || controller.signal.aborted || message === undefined)
+      return;
+    if (this.options.isHeld?.()) {
+      if (!this.heldBudgetTimer) {
+        this.heldBudgetTimer = setTimeout(() => {
+          this.heldBudgetTimer = undefined;
+          this.checkPendingBudgetAbort();
+        }, HELD_BUDGET_RECHECK_MS);
+        this.heldBudgetTimer.unref?.();
+      }
+      return;
+    }
+    if (this.heldBudgetTimer) clearTimeout(this.heldBudgetTimer);
+    this.heldBudgetTimer = undefined;
+    controller.abort(new CancelledError("budget", message));
+  }
+
+  /** Abort for a run-level budget breach, deferring while a user is attached. */
+  private requestBudgetAbort(message: string): void {
+    if (!this.controller || this.controller.signal.aborted) return;
+    this.pendingBudgetMessage ??= message;
+    this.checkPendingBudgetAbort();
   }
 
   async run(): Promise<RunOutcome> {
@@ -317,11 +354,8 @@ class Interpreter {
     if (maxDuration !== undefined) {
       durationTimer = setTimeout(
         () =>
-          controller.abort(
-            new CancelledError(
-              "budget",
-              `run duration budget exceeded (maxDuration: ${maxDuration}s)`,
-            ),
+          this.requestBudgetAbort(
+            `run duration budget exceeded (maxDuration: ${maxDuration}s)`,
           ),
         maxDuration * 1000,
       );
@@ -377,6 +411,10 @@ class Interpreter {
       };
     } finally {
       if (durationTimer) clearTimeout(durationTimer);
+      if (this.heldBudgetTimer) clearTimeout(this.heldBudgetTimer);
+      this.heldBudgetTimer = undefined;
+      this.pendingBudgetMessage = undefined;
+      this.controller = undefined;
       external?.removeEventListener("abort", onExternalAbort);
     }
 
@@ -530,7 +568,7 @@ class Interpreter {
       await this.budgets.recordUsage(delta);
     } catch (error) {
       if (!(error instanceof BudgetExceededError)) throw error;
-      this.controller?.abort(new CancelledError("budget", error.message));
+      this.requestBudgetAbort(error.message);
     }
   }
 
@@ -548,10 +586,14 @@ class Interpreter {
       const result = await this.options.runAgent({
         ...call,
         onProgress: (progress) => {
+          this.checkPendingBudgetAbort();
           void this.recordUsageSnapshot(call.instance, progress.usage);
           call.onProgress?.(progress);
         },
       });
+      // A held agent can settle immediately after detach, before the polling
+      // timer runs. A pending breach must still win over that result.
+      this.checkPendingBudgetAbort();
       if (result.usage) {
         addUsage(this.usage, result.usage);
         // Reconcile against the final numbers: engines without progress

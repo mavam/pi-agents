@@ -19,7 +19,6 @@ import { MAX_MODEL_RESULT_CHARS } from "../../src/model/value.js";
 import type { RunEvent } from "../../src/run/events.js";
 import { RunManager } from "../../src/run/runs.js";
 import {
-  createWorkflowSteerTool as createSteerTool,
   createWorkflowInspectTool,
   createWorkflowListTool,
   createWorkflowResultTool,
@@ -34,7 +33,7 @@ import {
   type WorkflowCreateRenderState as WorkflowToolRenderState,
 } from "../../src/triggers/tool.js";
 import { NotificationManager } from "../../src/ui/notify.js";
-import { RunWidget } from "../../src/ui/widget.js";
+import { RunPanel } from "../../src/ui/panel.js";
 
 function makeDeps(engine: SpawnEngine): TriggerDeps {
   const manager = new RunManager({ engine });
@@ -46,7 +45,7 @@ function makeDeps(engine: SpawnEngine): TriggerDeps {
     pi,
     manager,
     notifications: new NotificationManager(pi, manager),
-    widget: new RunWidget(manager),
+    widget: new RunPanel(manager),
   };
 }
 
@@ -110,7 +109,7 @@ function fakeEngine(handler: (spec: SpawnSpec) => unknown): {
   };
 }
 
-function steerableEngine(): {
+function controllableEngine(): {
   engine: SpawnEngine;
   messages: string[];
   finish: () => void;
@@ -138,7 +137,7 @@ function steerableEngine(): {
             await completion;
             return { value: "ok", exitCode: 0, usage: emptyUsage() };
           },
-          async steer(message) {
+          async prompt(message) {
             messages.push(message);
           },
           abort() {},
@@ -657,51 +656,6 @@ describe("workflow_create tool", () => {
   });
 });
 
-describe("workflow_steer tool", () => {
-  test("resolves a run prefix, infers its sole instance, and queues once", async () => {
-    const controlled = steerableEngine();
-    const deps = makeDeps(controlled.engine);
-    const started = deps.manager.start({
-      flow: validateFlow({ kind: "agent", name: "echo", task: "wait" }),
-      cwd: projectDir,
-      scope: "project",
-      source: { kind: "tool" },
-    });
-    await waitFor(
-      () => deps.manager.steerableInstances(started.runId).length === 1,
-    );
-
-    const result = await createSteerTool(deps).execute(
-      "steer-1",
-      {
-        run: started.runId.slice(0, 8),
-        message: "  prioritize the regression  ",
-      },
-      undefined,
-      undefined,
-      ctx(),
-    );
-    expect(controlled.messages).toEqual(["prioritize the regression"]);
-    expect(result.details).toEqual({ runId: started.runId, instance: "$" });
-    expect((result.content[0] as { text: string }).text).toContain(
-      "Steering queued for $",
-    );
-
-    await expect(
-      createSteerTool(deps).execute(
-        "steer-2",
-        { run: started.runId, instance: "$.missing", message: "try this" },
-        undefined,
-        undefined,
-        ctx(),
-      ),
-    ).rejects.toThrow("is not steerable");
-
-    controlled.finish();
-    await started.done;
-  });
-});
-
 describe("directed workflow run tools", () => {
   test("scopes listing and lookup to the current session", async () => {
     const { engine } = fakeEngine(() => "unused");
@@ -837,8 +791,8 @@ describe("directed workflow run tools", () => {
     ).rejects.toThrow("Cursor 3 exceeds the 2 matching runs");
   });
 
-  test("inspects a live run and returns exact steerable instances", async () => {
-    const controlled = steerableEngine();
+  test("inspects a live run", async () => {
+    const controlled = controllableEngine();
     const deps = makeDeps(controlled.engine);
     const started = deps.manager.start({
       flow: validateFlow({ kind: "agent", name: "echo", task: "wait" }),
@@ -847,7 +801,7 @@ describe("directed workflow run tools", () => {
       source: { kind: "tool" },
     });
     await waitFor(
-      () => deps.manager.steerableInstances(started.runId).length === 1,
+      () => deps.manager.liveHandle(started.runId, "$") !== undefined,
     );
 
     const inspected = await createWorkflowInspectTool(deps).execute(
@@ -866,7 +820,6 @@ describe("directed workflow run tools", () => {
     expect(inspected.details.nodes[0]).toMatchObject({
       instance: "$",
       status: "running",
-      steerable: true,
     });
     expect((inspected.content[0] as { text: string }).text).not.toContain(
       '"value"',
@@ -1134,7 +1087,7 @@ describe("directed workflow run tools", () => {
   });
 
   test("stops live runs and treats completion races as settled", async () => {
-    const controlled = steerableEngine();
+    const controlled = controllableEngine();
     const deps = makeDeps(controlled.engine);
     const started = deps.manager.start({
       flow: validateFlow({ kind: "agent", task: "wait" }),
@@ -1177,14 +1130,12 @@ describe("directed workflow run tools", () => {
       createWorkflowListTool(deps),
       createWorkflowInspectTool(deps),
       createWorkflowResultTool(deps),
-      createSteerTool(deps),
       createWorkflowStopTool(deps),
     ];
     expect(tools.map((tool) => tool.name)).toEqual([
       "workflow_list",
       "workflow_inspect",
       "workflow_result",
-      "workflow_steer",
       "workflow_stop",
     ]);
     expect(createWorkflowStopTool(deps).promptGuidelines?.join(" ")).toContain(
@@ -1193,10 +1144,6 @@ describe("directed workflow run tools", () => {
     expect(
       JSON.stringify(createWorkflowStopTool(deps).parameters),
     ).not.toContain("message");
-    const steerSchema = JSON.stringify(createSteerTool(deps).parameters);
-    expect(steerSchema).toContain("message");
-    expect(steerSchema).toContain('"minLength":1');
-    expect(steerSchema).toContain('"maxLength":2000');
   });
 });
 

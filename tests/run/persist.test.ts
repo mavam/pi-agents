@@ -19,7 +19,7 @@ import { RunManager } from "../../src/run/runs.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
 import { createWorkflowCreateTool as createWorkflowTool } from "../../src/triggers/tool.js";
 import { NotificationManager } from "../../src/ui/notify.js";
-import { RunWidget } from "../../src/ui/widget.js";
+import { RunPanel } from "../../src/ui/panel.js";
 
 let projectDir: string;
 let sessionFile: string;
@@ -144,7 +144,7 @@ describe("background tool runs", () => {
       onEvent: (event) => notifications.handleRunEvent(event),
     });
     notifications = new NotificationManager(pi, manager);
-    const widget = new RunWidget(manager);
+    const widget = new RunPanel(manager);
     const deps: TriggerDeps = { pi, manager, notifications, widget };
     const widgetLines: Array<string[] | undefined> = [];
     const ctx = {

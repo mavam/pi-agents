@@ -20,13 +20,16 @@ import {
 import type { SpawnDefaults } from "../run/runner.js";
 import type { RunManager, StartedRun } from "../run/runs.js";
 import type { NotificationManager } from "../ui/notify.js";
-import type { RunWidget } from "../ui/widget.js";
+import type { RunPanel } from "../ui/panel.js";
 
 export interface TriggerDeps {
   pi: ExtensionAPI;
   manager: RunManager;
   notifications: NotificationManager;
-  widget: RunWidget;
+  widget: RunPanel;
+  /** Attach the editor and run panel to one agent (running → live attach,
+   * settled → its own pi session). Absent in tests that never attach. */
+  attach?: (ctx: ExtensionContext, runId: string, instance: string) => void;
 }
 
 export interface StartTriggeredRunOptions {

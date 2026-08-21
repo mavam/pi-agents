@@ -12,7 +12,7 @@ import { RunManager } from "../../src/run/runs.js";
 import { compactEventJson, HookManager } from "../../src/triggers/hooks.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
 import { NotificationManager } from "../../src/ui/notify.js";
-import { RunWidget } from "../../src/ui/widget.js";
+import { RunPanel } from "../../src/ui/panel.js";
 
 let projectDir: string;
 
@@ -75,7 +75,7 @@ function harness(options: HarnessOptions = {}) {
     pi,
     manager,
     notifications,
-    widget: new RunWidget(manager),
+    widget: new RunPanel(manager),
   };
   const hooks = new HookManager(pi, deps);
   hooks.install();

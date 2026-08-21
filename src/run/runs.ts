@@ -3,6 +3,8 @@
  * events out to sinks (UI refresh, persistence).
  */
 
+import * as os from "node:os";
+import * as path from "node:path";
 import type { SpawnEngine, SpawnHandle } from "../engine/types.js";
 import {
   type Budgets,
@@ -14,7 +16,7 @@ import {
 } from "../model/ast.js";
 import { collectInvocations } from "../model/validate.js";
 import { validateBudgets } from "./budgets.js";
-import type { RunEvent, RunSource, SteeringSource } from "./events.js";
+import type { RunEvent, RunSource } from "./events.js";
 import {
   type AgentRunner,
   executeFlow,
@@ -78,30 +80,22 @@ export type RunLookup =
   | { kind: "ambiguous"; matches: RunView[] }
   | { kind: "missing" };
 
-export const MAX_STEERING_MESSAGE_CHARS = 2_000;
-
-export type SteerResult =
-  | { status: "queued"; runId: string; instance: string }
-  | {
-      status: "unavailable";
-      reason: "run_not_live" | "instance_not_steerable";
-    }
-  | { status: "rejected"; error: string };
-
 interface LiveHandle {
   handle: SpawnHandle;
   path: string;
 }
 
-export function normalizeSteeringMessage(message: string): string {
-  const normalized = message.trim();
-  if (!normalized) throw new Error("steering message must not be empty");
-  if (normalized.length > MAX_STEERING_MESSAGE_CHARS) {
-    throw new Error(
-      `steering message must be at most ${MAX_STEERING_MESSAGE_CHARS} characters`,
-    );
-  }
-  return normalized;
+/** Directory for one run's delegated-agent session files: pi-agents-owned,
+ * outside the project's default session store so the picker stays clean. */
+export function agentSessionDir(runId: string): string {
+  return path.join(
+    os.homedir(),
+    ".pi",
+    "agent",
+    "sessions",
+    "pi-agents",
+    runId,
+  );
 }
 
 export class RunManager {
@@ -183,6 +177,7 @@ export class RunManager {
       resolveModel: opts.resolveModel,
       budgetLimits,
       catalogs,
+      sessionDir: agentSessionDir(runId),
       onHandle: (call, handle) => {
         let handles = this.liveHandles.get(runId);
         if (!handles) {
@@ -191,6 +186,19 @@ export class RunManager {
         }
         const live = { handle, path: call.path };
         handles.set(call.instance, live);
+        // Persist the child's session file as soon as it is known, so the
+        // agent stays attachable after it finishes (and across restarts).
+        void handle.nativeSession?.then((sessionFile) => {
+          if (!sessionFile) return;
+          this.emit(runId, {
+            type: "node_session",
+            at: Date.now(),
+            runId,
+            path: call.path,
+            instance: call.instance,
+            sessionFile,
+          });
+        });
         return () => {
           const current = this.liveHandles.get(runId);
           if (current?.get(call.instance) === live) {
@@ -214,7 +222,6 @@ export class RunManager {
               node.progressSummary = progress.summary;
               if (progress.summary !== undefined) node.progressSummaryAt = now;
             }
-            if (progress.tail !== undefined) node.progressTail = progress.tail;
             node.progressUsage = progress.usage;
             node.progressTool = progress.currentTool;
             node.lastProgressAt = now;
@@ -237,6 +244,14 @@ export class RunManager {
       cwd: opts.cwd,
       scope,
       originSessionFile: opts.originSessionFile,
+      isHeld: () => {
+        const handles = this.liveHandles.get(runId);
+        if (!handles) return false;
+        for (const { handle } of handles.values()) {
+          if (handle.held?.()) return true;
+        }
+        return false;
+      },
     }).finally(() => {
       this.controllers.delete(runId);
       this.persisters.delete(runId);
@@ -310,58 +325,11 @@ export class RunManager {
     return [...this.controllers.keys()];
   }
 
-  /** Exact instance ids of live child processes that support steering. */
-  steerableInstances(runId: string): string[] {
-    const handles = this.liveHandles.get(runId);
-    if (!handles) return [];
-    return [...handles.entries()].flatMap(([instance, live]) =>
-      live.handle.status === "running" && live.handle.steer ? [instance] : [],
-    );
-  }
-
-  /** Queue a correction for one live child and persist it after acceptance. */
-  async steer(
-    runId: string,
-    instance: string,
-    message: string,
-    source: SteeringSource,
-    caller?: string,
-  ): Promise<SteerResult> {
-    let normalized: string;
-    try {
-      normalized = normalizeSteeringMessage(message);
-    } catch (error) {
-      return {
-        status: "rejected",
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-    if (!this.controllers.has(runId)) {
-      return { status: "unavailable", reason: "run_not_live" };
-    }
+  /** The live spawn handle for one node instance, when its child is running.
+   * The interactive agent console attaches through this. */
+  liveHandle(runId: string, instance: string): SpawnHandle | undefined {
     const live = this.liveHandles.get(runId)?.get(instance);
-    if (!live?.handle.steer || live.handle.status !== "running") {
-      return { status: "unavailable", reason: "instance_not_steerable" };
-    }
-    try {
-      await live.handle.steer(normalized);
-    } catch (error) {
-      return {
-        status: "rejected",
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-    this.emit(runId, {
-      type: "node_steered",
-      at: Date.now(),
-      runId,
-      path: live.path,
-      instance,
-      message: normalized,
-      source,
-      caller,
-    });
-    return { status: "queued", runId, instance };
+    return live?.handle.status === "running" ? live.handle : undefined;
   }
 
   /** Find a run by full id or unique prefix. */

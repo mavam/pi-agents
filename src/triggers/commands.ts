@@ -21,12 +21,8 @@ import type { Scope, WorkflowDef } from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
 import { valueText } from "../model/value.js";
 import { isProjectTrusted } from "../run/persist.js";
-import {
-  type NodeView,
-  type RunView,
-  type SteeringEntry,
-  workNodes,
-} from "../run/state.js";
+import { type NodeView, type RunView, workNodes } from "../run/state.js";
+import { canAttachNode, openAgentSession } from "../ui/console.js";
 import { toMermaid } from "../ui/mermaid.js";
 import {
   type OverlayAction,
@@ -60,6 +56,7 @@ import { startTriggeredRun, type TriggerDeps } from "./start.js";
 export const RESERVED_COMMAND_NAMES = new Set([
   "agents",
   "agent",
+  "agent-session",
   "workflows",
   "workflow",
   "runs",
@@ -217,6 +214,86 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         lines.push(`- ⚠ ${diagnostic.filePath}: ${diagnostic.message}`);
       }
       sendInfo(pi, lines.join("\n"));
+    },
+  });
+
+  pi.registerCommand("agent-session", {
+    description:
+      "Open a settled delegated agent's own session: /agent-session <run-id> [node]",
+    getArgumentCompletions: (prefix) => {
+      const tokens = prefix.split(/\s+/);
+      const partial = tokens.at(-1) ?? "";
+      const done = tokens.slice(0, -1);
+      if (done.length === 0) {
+        return [...deps.manager.state.runs.values()]
+          .filter((run) =>
+            workNodes(run).some((node) => node.sessionFile !== undefined),
+          )
+          .map((run) => ({
+            value: shortId(run.header.id),
+            label: shortId(run.header.id),
+            description: run.header.label ?? run.header.flow.kind,
+          }))
+          .filter((completion) => completion.value.startsWith(partial));
+      }
+      const lookup = deps.manager.find(done[0] ?? "");
+      if (lookup.kind !== "found") return [];
+      return workNodes(lookup.run)
+        .filter((node) => node.sessionFile !== undefined)
+        .map((node) => ({
+          value: [done[0], node.instance].join(" "),
+          label: nodeDisplayName(node),
+          description: node.agent ?? "ad-hoc",
+        }))
+        .filter((completion) => completion.label.startsWith(partial));
+    },
+    handler: async (args, ctx) => {
+      const [runRef, nodeRef] = args.trim().split(/\s+/).filter(Boolean);
+      if (!runRef) {
+        sendInfo(pi, "Usage: `/agent-session <run-id> [node]`");
+        return;
+      }
+      const lookup = deps.manager.find(runRef);
+      if (lookup.kind === "missing") {
+        sendInfo(pi, `No run matching \`${runRef}\`. Try \`/workflows\`.`);
+        return;
+      }
+      if (lookup.kind === "ambiguous") {
+        sendInfo(
+          pi,
+          `Ambiguous run id \`${runRef}\`: ${lookup.matches.map((run) => shortId(run.header.id)).join(", ")}`,
+        );
+        return;
+      }
+      const run = lookup.run;
+      let node: NodeView | undefined;
+      if (nodeRef) {
+        const found = findNodeInRun(run, nodeRef);
+        if (found.kind !== "found") {
+          sendInfo(pi, `No unique agent matching \`${nodeRef}\` in this run.`);
+          return;
+        }
+        node = found.node;
+      } else {
+        const candidates = workNodes(run).filter(
+          (candidate) => candidate.sessionFile !== undefined,
+        );
+        if (candidates.length !== 1) {
+          sendInfo(
+            pi,
+            candidates.length === 0
+              ? "This run has no agent sessions to open."
+              : `Multiple agent sessions; specify one of: ${candidates.map((candidate) => `\`${nodeDisplayName(candidate)}\``).join(", ")}.`,
+          );
+          return;
+        }
+        node = candidates[0];
+      }
+      if (!node) return;
+      // Command handlers carry the command context, so switchSession is
+      // available here — this is the sanctioned session-switch path that the
+      // run panel prefills when it lacks one.
+      await openAgentSession(ctx, deps.manager, run.header.id, node);
     },
   });
 
@@ -388,15 +465,6 @@ export type WorkflowsItem =
   | { kind: "run"; run: RunView }
   | { kind: "node"; run: RunView; node: NodeView };
 
-/** Compact provenance marker for steering history in the overlay. */
-export function steeringMarker(
-  entry: Pick<SteeringEntry, "source" | "caller">,
-): string {
-  if (entry.source === "user") return "↪";
-  if (entry.source === "tool") return "✦";
-  return entry.caller ? `⇢ ${entry.caller}:` : "⇢";
-}
-
 // Run- and node-tier rendering and actions, shared between the unified
 // overlay's drill levels.
 
@@ -452,26 +520,9 @@ function runHeaderLine(run: RunView, color: Colorize): string {
 }
 
 function nodeDetail(node: NodeView, color: Colorize): string[] {
-  const steering = (node.steering ?? []).flatMap((entry) =>
-    entry.message
-      .split("\n")
-      .map((line, index) =>
-        color(
-          "accent",
-          index === 0 ? `${steeringMarker(entry)} ${line}` : `  ${line}`,
-        ),
-      ),
-  );
-  if (node.error)
-    return [
-      ...steering,
-      ...(steering.length > 0 ? [""] : []),
-      color("error", `✗ ${node.error}`),
-    ];
+  if (node.error) return [color("error", `✗ ${node.error}`)];
   if (node.status === "cancelled")
     return [
-      ...steering,
-      ...(steering.length > 0 ? [""] : []),
       color(
         "dim",
         `cancelled${node.cancelReason ? ` (${node.cancelReason})` : ""}`,
@@ -483,66 +534,14 @@ function nodeDetail(node: NodeView, color: Colorize): string[] {
       .filter((line) => line.trim() !== "")
       .slice(-3);
     return tail.length > 0
-      ? [...steering, ...tail.map((line) => color("dim", line))]
-      : [...steering, color("dim", "running…")];
+      ? tail.map((line) => color("dim", line))
+      : [color("dim", "running…")];
   }
   const output = valueText(node.value);
   const lines = output
     ? output.split("\n")
     : [color("dim", "(no output value)")];
-  lines.push("", color("dim", "⏎ post full output"));
-  return [...steering, ...(steering.length > 0 ? [""] : []), ...lines];
-}
-
-function canTailNode(node: NodeView): boolean {
-  return (
-    node.status === "running" ||
-    node.progressTail !== undefined ||
-    node.progressText !== undefined
-  );
-}
-
-function nodeTailDetail(node: NodeView, color: Colorize): string[] {
-  const lines: string[] = [];
-  if (node.steering.length > 0) {
-    lines.push(color("accent", "steering"));
-    for (const entry of node.steering) {
-      lines.push(
-        ...entry.message
-          .split("\n")
-          .map((line, index) =>
-            color(
-              "accent",
-              index === 0 ? `${steeringMarker(entry)} ${line}` : `  ${line}`,
-            ),
-          ),
-      );
-    }
-    lines.push("");
-  }
-
-  const tail = node.progressTail ?? node.progressText;
-  if (!tail) {
-    lines.push(
-      color(
-        "dim",
-        node.status === "running"
-          ? "waiting for output…"
-          : "(no live activity retained)",
-      ),
-    );
-    return lines;
-  }
-  for (const [index, entry] of tail.split("\n\n").entries()) {
-    if (index > 0) lines.push("");
-    const [header = "", ...body] = entry.split("\n");
-    if (header.startsWith("assistant ·")) lines.push(color("muted", header));
-    else if (header.startsWith("✗ ")) lines.push(color("error", header));
-    else if (header.startsWith("✓ ")) lines.push(color("success", header));
-    else if (header.startsWith("› ")) lines.push(color("warning", header));
-    else lines.push(header);
-    lines.push(...body);
-  }
+  lines.push("", color("dim", "o post full output"));
   return lines;
 }
 
@@ -557,7 +556,7 @@ function runDetail(run: RunView, color: Colorize): string[] {
   return lines;
 }
 
-/** Node-tier actions: post the full output, steer a live agent. */
+/** Node-tier actions: attach to the agent, or post the full output. */
 function nodeAction(
   key: string,
   run: RunView,
@@ -567,34 +566,30 @@ function nodeAction(
   ctx: ExtensionCommandContext,
 ): OverlayAction {
   if (key === "enter") {
+    if (canAttachNode(deps.manager, run.header.id, node)) {
+      // Defer past the overlay teardown so the editor regains focus first.
+      setTimeout(() => {
+        if (node.status === "running" && deps.attach) {
+          deps.attach(ctx, run.header.id, node.instance);
+        } else {
+          void openAgentSession(ctx, deps.manager, run.header.id, node).catch(
+            (error) => {
+              ctx.ui.notify(
+                error instanceof Error ? error.message : String(error),
+                "error",
+              );
+            },
+          );
+        }
+      }, 0);
+      return "close";
+    }
     sendInfo(pi, formatNodeResultFull(run, node));
     return "close";
   }
-  if (
-    key === "s" &&
-    deps.manager.steerableInstances(run.header.id).includes(node.instance)
-  ) {
-    return {
-      compose: {
-        label: "Steer",
-        submit: async (message) => {
-          const result = await deps.manager.steer(
-            run.header.id,
-            node.instance,
-            message,
-            "user",
-          );
-          ctx.ui.notify(
-            result.status === "queued"
-              ? "Steering queued — delivery follows the current tool-call batch."
-              : result.status === "rejected"
-                ? result.error
-                : "Agent is no longer steerable.",
-            result.status === "queued" ? "info" : "warning",
-          );
-        },
-      },
-    };
+  if (key === "o") {
+    sendInfo(pi, formatNodeResultFull(run, node));
+    return "close";
   }
   return undefined;
 }
@@ -725,7 +720,6 @@ export function buildWorkflowsSpec(
   // reselect when backing out.
   let drillGroup: { group: string; key: string } | undefined;
   let drillRunId: string | undefined;
-  let tailNodeInstance: string | undefined;
   // Discover once per overlay open: with live() active the overlay re-renders
   // every 500ms and must not hit the filesystem each render.
   const workflows = discoverWorkflows(ctx.cwd, scopeFor(ctx)).workflows;
@@ -741,8 +735,6 @@ export function buildWorkflowsSpec(
     );
   const drilledRun = (): RunView | undefined =>
     drillRunId ? deps.manager.state.runs.get(drillRunId) : undefined;
-  const tailedNode = (): NodeView | undefined =>
-    tailNodeInstance ? drilledRun()?.nodes.get(tailNodeInstance) : undefined;
   const nodeKey = (run: RunView, node: NodeView) =>
     `node:${run.header.id}:${node.instance}`;
   const groupOf = (item: WorkflowsItem): string =>
@@ -761,9 +753,6 @@ export function buildWorkflowsSpec(
   return {
     title: () => {
       const run = drilledRun();
-      const node = tailedNode();
-      if (run && node)
-        return `${node.status === "running" ? "Live tail" : "Tail"} · ${shortId(run.header.id)} · ${nodeDisplayName(node)}`;
       if (run) return `Run ${shortId(run.header.id)} · agents`;
       if (!drillGroup) return "Workflows";
       if (drillGroup.group === "all") return "Runs";
@@ -777,22 +766,19 @@ export function buildWorkflowsSpec(
           ? "No runs yet."
           : "No workflows found. Create .pi/workflows/<name>.yaml or ~/.pi/agent/workflows/<name>.yaml.",
     footer: () =>
-      tailNodeInstance
-        ? "⏎ post output · t agents · esc back"
-        : drillRunId
-          ? "↑↓ move · ⏎ post output · t tail · esc back"
-          : drillGroup
-            ? "↑↓ move · ⏎ inspect · a agents · r rerun · h hide · esc back"
-            : "↑↓ move · ⏎ runs · c compose · r run · n new · esc close",
+      drillRunId
+        ? "↑↓ move · ⏎ attach · o output · esc back"
+        : drillGroup
+          ? "↑↓ move · ⏎ inspect · a agents · r rerun · h hide · esc back"
+          : "↑↓ move · ⏎ runs · c compose · r run · n new · esc close",
     footerFor: (item) => {
       if (item.kind === "node") {
-        const steerable = deps.manager
-          .steerableInstances(item.run.header.id)
-          .includes(item.node.instance);
-        const tailing = tailNodeInstance === item.node.instance;
-        return tailing
-          ? `⏎ post output${steerable ? " · s steer" : ""} · t agents · esc back`
-          : `↑↓ move · ⏎ post output${canTailNode(item.node) ? " · t tail" : ""}${steerable ? " · s steer" : ""} · esc back`;
+        const attachable = canAttachNode(
+          deps.manager,
+          item.run.header.id,
+          item.node,
+        );
+        return `↑↓ move · ⏎ ${attachable ? "attach" : "post output"} · o output · esc back`;
       }
       if (item.kind === "run") return runFooter(item.run);
       if (item.kind === "workflow")
@@ -802,21 +788,12 @@ export function buildWorkflowsSpec(
     items: () => {
       const run = drilledRun();
       if (run) {
-        const nodes = workNodes(run);
-        if (tailNodeInstance) {
-          const node = nodes.find(
-            (candidate) => candidate.instance === tailNodeInstance,
-          );
-          if (node) return [{ kind: "node" as const, run, node }];
-          tailNodeInstance = undefined;
-        }
-        return nodes.map((node) => ({
+        return workNodes(run).map((node) => ({
           kind: "node" as const,
           run,
           node,
         }));
       }
-      tailNodeInstance = undefined;
       drillRunId = undefined; // Drilled run evicted: back to the run list.
       if (drillGroup) {
         return groupRuns(drillGroup.group)
@@ -875,10 +852,7 @@ export function buildWorkflowsSpec(
       return parts.join(color("dim", " · "));
     },
     detail: (item, color) => {
-      if (item.kind === "node")
-        return tailNodeInstance === item.node.instance
-          ? nodeTailDetail(item.node, color)
-          : nodeDetail(item.node, color);
+      if (item.kind === "node") return nodeDetail(item.node, color);
       if (item.kind === "run") return runDetail(item.run, color);
       if (item.kind === "workflow") {
         const { wf } = item;
@@ -941,22 +915,8 @@ export function buildWorkflowsSpec(
         ? recent.map((run) => formatRunOverviewLine(run))
         : [color("dim", "(no runs yet)")];
     },
-    detailWindow: (item) =>
-      item.kind === "node" && tailNodeInstance === item.node.instance
-        ? "tail"
-        : "head",
     onAction: (key, item) => {
       if (item.kind === "node") {
-        if (key === "t") {
-          if (tailNodeInstance === item.node.instance) {
-            tailNodeInstance = undefined;
-          } else if (canTailNode(item.node)) {
-            tailNodeInstance = item.node.instance;
-          } else {
-            return undefined;
-          }
-          return { selectKey: nodeKey(item.run, item.node) };
-        }
         return nodeAction(key, item.run, item.node, pi, deps, ctx);
       }
       if (item.kind === "run") {
@@ -1016,12 +976,6 @@ export function buildWorkflowsSpec(
       return undefined;
     },
     onCancel: () => {
-      if (tailNodeInstance) {
-        const run = drilledRun();
-        const node = tailedNode();
-        tailNodeInstance = undefined;
-        return run && node ? { selectKey: nodeKey(run, node) } : undefined;
-      }
       if (drillRunId) {
         const id = drillRunId;
         drillRunId = undefined;
@@ -1335,19 +1289,7 @@ export function formatNodeResultFull(run: RunView, node: NodeView): string {
   if (usage) lines.push(`- usage: ${usage}`);
   if (node.endedAt)
     lines.push(`- duration: ${formatElapsed(node.endedAt - node.startedAt)}`);
-  const steering = node.steering ?? [];
-  if (steering.length > 0) {
-    lines.push("", "### Steering");
-    for (const entry of steering) {
-      const source = `${entry.source}${entry.caller ? `:${entry.caller}` : ""}`;
-      lines.push(
-        "",
-        `- ${new Date(entry.at).toISOString()} (${source})`,
-        "",
-        fenced(entry.message),
-      );
-    }
-  }
+  if (node.sessionFile) lines.push(`- session: ${node.sessionFile}`);
   if (node.error) lines.push("", `⚠ ${node.error}`);
   if (node.status === "running") {
     lines.push("", "Still running — no output yet.");

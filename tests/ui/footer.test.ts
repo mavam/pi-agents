@@ -26,7 +26,6 @@ function activeRun(): RunView {
     agent: "worker",
     status: "completed",
     usage: usage(1_000, 500),
-    steering: [],
     startedAt: 1,
     endedAt: 2,
   };
@@ -37,7 +36,6 @@ function activeRun(): RunView {
     agent: "worker",
     status: "running",
     progressUsage: usage(400, 100),
-    steering: [],
     startedAt: 1,
   };
   return {

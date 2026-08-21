@@ -85,7 +85,7 @@ describe("run state reducer", () => {
     expect(state.runs.size).toBe(0);
   });
 
-  test("replays accepted steering messages on their node", async () => {
+  test("replays node session files onto their node", async () => {
     const events = await recordedEvents();
     const startedIndex = events.findIndex(
       (event) =>
@@ -93,27 +93,18 @@ describe("run state reducer", () => {
     );
     expect(startedIndex).toBeGreaterThanOrEqual(0);
     events.splice(startedIndex + 1, 0, {
-      type: "node_steered",
+      type: "node_session",
       at: 2,
       runId: "run-42",
       path: "$.steps[0]",
       instance: "$.steps[0]",
-      message: "focus on failures",
-      source: "rpc",
-      caller: "controller",
+      sessionFile: "/tmp/agent-session.jsonl",
     });
 
     expect(
       rebuildRunState(events).runs.get("run-42")?.nodes.get("$.steps[0]")
-        ?.steering,
-    ).toEqual([
-      {
-        at: 2,
-        message: "focus on failures",
-        source: "rpc",
-        caller: "controller",
-      },
-    ]);
+        ?.sessionFile,
+    ).toBe("/tmp/agent-session.jsonl");
   });
 });
 

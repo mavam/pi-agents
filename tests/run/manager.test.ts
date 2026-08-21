@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type {
   SpawnEngine,
   SpawnHandle,
+  SpawnProgress,
   SpawnSpec,
 } from "../../src/engine/types.js";
 import { emptyUsage } from "../../src/engine/types.js";
@@ -51,7 +52,7 @@ function fakeEngine(
   };
 }
 
-function steerableEngine(): {
+function promptableEngine(sessionFile?: string): {
   engine: SpawnEngine;
   messages: string[];
   finish: () => void;
@@ -75,11 +76,12 @@ function steerableEngine(): {
             return status;
           },
           updates: emptyUpdates(),
+          nativeSession: Promise.resolve(sessionFile),
           async wait() {
             await completion;
             return { value: "ok", exitCode: 0, usage: emptyUsage() };
           },
-          async steer(message) {
+          async prompt(message) {
             messages.push(message);
           },
           abort() {},
@@ -629,76 +631,132 @@ describe("empty tools allowlist", () => {
   });
 });
 
-describe("live steering", () => {
-  test("routes a validated message and records it only after acceptance", async () => {
-    const controlled = steerableEngine();
+describe("live handles and agent sessions", () => {
+  test("exposes the live handle and records the node session file", async () => {
+    const controlled = promptableEngine("/tmp/child-session.jsonl");
     const manager = new RunManager({ engine: controlled.engine });
-    const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
     const started = manager.start({
-      flow,
+      flow: { kind: "agent", task: "wait" },
       cwd: projectDir,
-      scope: "project",
       source: { kind: "tool" },
     });
-
-    await waitFor(() => manager.steerableInstances(started.runId).length === 1);
-    expect(manager.steerableInstances(started.runId)).toEqual(["$"]);
-    await expect(
-      manager.steer(
-        started.runId,
-        "$",
-        "  revise the conclusion  ",
-        "tool",
-        "parent-agent",
-      ),
-    ).resolves.toEqual({
-      status: "queued",
-      runId: started.runId,
-      instance: "$",
-    });
-    expect(controlled.messages).toEqual(["revise the conclusion"]);
+    await waitFor(() => manager.liveHandle(started.runId, "$") !== undefined);
+    const handle = manager.liveHandle(started.runId, "$");
+    expect(handle).toBeDefined();
+    await handle?.prompt?.("focus on failures");
+    expect(controlled.messages).toEqual(["focus on failures"]);
+    await waitFor(
+      () =>
+        manager.state.runs.get(started.runId)?.nodes.get("$")?.sessionFile !==
+        undefined,
+    );
     expect(
-      manager.state.runs.get(started.runId)?.nodes.get("$")?.steering,
-    ).toEqual([
-      expect.objectContaining({
-        message: "revise the conclusion",
-        source: "tool",
-        caller: "parent-agent",
-      }),
-    ]);
-
+      manager.state.runs.get(started.runId)?.nodes.get("$")?.sessionFile,
+    ).toBe("/tmp/child-session.jsonl");
     controlled.finish();
     await started.done;
-    expect(manager.steerableInstances(started.runId)).toEqual([]);
-    await expect(
-      manager.steer(started.runId, "$", "too late", "user"),
-    ).resolves.toEqual({ status: "unavailable", reason: "run_not_live" });
+    expect(manager.liveHandle(started.runId, "$")).toBeUndefined();
+  });
+});
+
+describe("budget watchdogs while held", () => {
+  test("run maxDuration waits for the live handle's hold", async () => {
+    let held = true;
+    let aborted = false;
+    let finish!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const engine: SpawnEngine = {
+      spawn() {
+        return {
+          status: "running",
+          updates: (async function* () {
+            while (!aborted) {
+              await new Promise((resolve) => setTimeout(resolve, 1));
+            }
+          })(),
+          held: () => held,
+          async wait() {
+            await completion;
+            return { value: "ok", exitCode: 0, usage: emptyUsage() };
+          },
+          abort() {
+            aborted = true;
+            finish();
+          },
+        };
+      },
+    };
+    const manager = new RunManager({ engine });
+    const started = manager.start({
+      flow: { kind: "agent", task: "chat" },
+      cwd: projectDir,
+      budgets: { maxDuration: 0.01 },
+      source: { kind: "tool" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(aborted).toBe(false);
+    expect(manager.state.runs.get(started.runId)?.nodes.get("$")?.status).toBe(
+      "running",
+    );
+    held = false;
+    const outcome = await started.done;
+    expect(aborted).toBe(true);
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("run duration budget exceeded");
   });
 
-  test("rejects empty and oversized messages before delivery", async () => {
-    const controlled = steerableEngine();
-    const manager = new RunManager({ engine: controlled.engine });
+  test("maxTurns does not cut an attached agent", async () => {
+    let held = true;
+    let finish!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const updates: SpawnProgress[] = [];
+    const engine: SpawnEngine = {
+      spawn() {
+        return {
+          status: "running",
+          updates: (async function* () {
+            while (true) {
+              const next = updates.shift();
+              if (next) yield next;
+              else if (held === false && updates.length === 0) return;
+              else await new Promise((resolve) => setTimeout(resolve, 1));
+            }
+          })(),
+          held: () => held,
+          async wait() {
+            await completion;
+            return { value: "ok", exitCode: 0, usage: emptyUsage() };
+          },
+          abort() {
+            finish();
+          },
+        };
+      },
+    };
+    const manager = new RunManager({ engine });
     const started = manager.start({
-      flow: validateFlow({ kind: "agent", name: "echo", task: "t" }),
+      flow: { kind: "agent", task: "chat" },
       cwd: projectDir,
-      scope: "project",
+      budgets: { maxTurns: 1 },
       source: { kind: "tool" },
     });
-    await waitFor(() => manager.steerableInstances(started.runId).length === 1);
-
-    expect(await manager.steer(started.runId, "$", "   ", "user")).toEqual({
-      status: "rejected",
-      error: "steering message must not be empty",
+    // Over budget while held: no cut.
+    updates.push({
+      text: "",
+      usage: { ...emptyUsage(), turns: 5 },
+      turnsStarted: 5,
     });
-    expect(
-      await manager.steer(started.runId, "$", "x".repeat(2_001), "user"),
-    ).toEqual({
-      status: "rejected",
-      error: "steering message must be at most 2000 characters",
-    });
-    expect(controlled.messages).toEqual([]);
-
-    controlled.finish();
-    await started.done;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(manager.state.runs.get(started.runId)?.nodes.get("$")?.status).toBe(
+      "running",
+    );
+    held = false;
+    finish();
+    const outcome = await started.done;
+    expect(outcome.status).toBe("completed");
   });
 });

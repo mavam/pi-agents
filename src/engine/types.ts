@@ -55,6 +55,9 @@ export interface SpawnSpec {
   tools?: string[];
   /** Optional JSON Schema for the submitted payload. Omit for a string. */
   resultSchema?: JsonSchema;
+  /** Directory for the delegated agent's own session file. Engines with
+   * native sessions write a real, later-attachable session there. */
+  sessionDir?: string;
   /** Extra environment variables for the child process. */
   env?: Record<string, string>;
 }
@@ -64,9 +67,6 @@ export interface SpawnProgress {
   text: string;
   /** Latest provider-supplied reasoning summary headline, when Pi exposes one. */
   summary?: string;
-  /** Bounded, chronological activity tail for live observation. Engines may
-   * omit this when they only support latest-text progress. */
-  tail?: string;
   usage: SpawnUsage;
   /** Tool currently executing, when the engine reports tool activity. */
   currentTool?: string;
@@ -120,14 +120,95 @@ export class SpawnAborted extends Error {
   }
 }
 
+export type TranscriptNoticeKind =
+  | "interrupted"
+  | "submission-deferred"
+  | "result-submitted"
+  | "detached";
+
+/**
+ * One entry in a delegated agent's live transcript. Engine-neutral: the
+ * subprocess engine builds these from pi RPC records; other engines may map
+ * their own event streams. Entries are mutable in place (streaming text and
+ * tool output update the same item), identified by `key`.
+ */
+export type TranscriptItem = (
+  | {
+      key: string;
+      kind: "user";
+      text: string;
+      /** True while the child session still holds this message in its
+       * steering queue; cleared when delivery is confirmed. */
+      queued?: boolean;
+      at: number;
+    }
+  | {
+      /** Out-of-band event marker, rendered dim with a semantic icon. */
+      key: string;
+      kind: "notice";
+      notice: TranscriptNoticeKind;
+      text: string;
+      at: number;
+    }
+  | {
+      key: string;
+      kind: "assistant";
+      text: string;
+      /** Latest reasoning summary headline for this turn, when available. */
+      summary?: string;
+      /** The engine's complete raw assistant message once the turn ends
+       * (pi's AgentMessage shape), for native transcript rendering. */
+      message?: unknown;
+      /** Streamed thinking text accumulated before the turn ends. */
+      thinking?: string;
+      /** True while this turn is still streaming. */
+      streaming?: boolean;
+      turn: number;
+      at: number;
+    }
+  | {
+      key: string;
+      kind: "tool";
+      label: string;
+      output?: string;
+      status: "running" | "ok" | "error";
+      /** Raw tool identity and payloads for native transcript rendering. */
+      toolName: string;
+      toolCallId: string;
+      args?: unknown;
+      /** Raw (partial or final) tool result in pi's result shape. */
+      result?: unknown;
+      at: number;
+    }
+) & {
+  /** Monotonically increasing per-transcript revision, bumped on every
+   * content change. Lets renderers detect same-length updates cheaply. */
+  rev?: number;
+};
+
 export interface SpawnHandle {
   readonly status: "running" | "completed" | "failed" | "aborted";
   updates: AsyncIterable<SpawnProgress>;
   /** Resolves with the outcome; rejects with AgentErrorResult, SpawnFailure,
    * or SpawnAborted. */
   wait(): Promise<SpawnOutcome>;
-  /** Queue a steering message; unavailable on engines without live input. */
-  steer?(message: string): Promise<void>;
+  /** Inject a user message into the running agent (delivered as steering when
+   * the agent is mid-turn); unavailable on engines without live input. */
+  prompt?(message: string): Promise<void>;
+  /** Interrupt the agent's current turn (like Esc in an interactive pi
+   * session) without ending the spawn; the agent stays promptable. */
+  interrupt?(): Promise<void>;
+  /** Keep the spawn alive across idle settles (an attached human may still
+   * prompt it). Returns a release; on release an idle, resultless agent
+   * settles normally. */
+  hold?(): () => void;
+  /** True while at least one hold is active (a user is attached). */
+  held?(): boolean;
+  /** Snapshot of the live transcript; unavailable on engines without one. */
+  transcript?(): readonly TranscriptItem[];
+  /** Path of the engine-native pi session file, once known. Engines without
+   * native sessions leave this undefined. */
+  nativeSession?: Promise<string | undefined>;
   abort(): void;
 }
 

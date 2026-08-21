@@ -4,10 +4,10 @@ import { validateFlow } from "../../src/model/validate.js";
 import type { RunEvent } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
 import { type RunView, rebuildRunState } from "../../src/run/state.js";
+import { RunPanel } from "../../src/ui/panel.js";
 import {
   type Colorize,
   formatRunWidget,
-  RunWidget,
   STALL_AFTER_MS,
   widgetProgress,
 } from "../../src/ui/widget.js";
@@ -710,7 +710,7 @@ describe("live activity", () => {
   });
 });
 
-describe("RunWidget suppression", () => {
+describe("RunPanel suppression", () => {
   function harness() {
     const runs = new Map<string, RunView>();
     runs.set("a", {
@@ -718,7 +718,7 @@ describe("RunWidget suppression", () => {
       header: { id: "a", source: { kind: "command" } },
       nodes: new Map(),
     } as unknown as RunView);
-    const widget = new RunWidget({ state: { runs } } as never);
+    const widget = new RunPanel({ state: { runs } } as never);
     const shown: unknown[] = [];
     const ctx = {
       mode: "tui",
@@ -762,7 +762,7 @@ describe("RunWidget suppression", () => {
   });
 });
 
-describe("RunWidget lifecycle", () => {
+describe("RunPanel lifecycle", () => {
   test("holds every workflow activity while coalescing newer ones", async () => {
     const run = await recordedRun(
       REVIEW_FLOW,
@@ -782,7 +782,7 @@ describe("RunWidget lifecycle", () => {
     node.progressSummary = "First headline";
     node.progressSummaryAt = now;
     node.lastProgressAt = now;
-    const widget = new RunWidget(
+    const widget = new RunPanel(
       { state: { runs: new Map([[run.header.id, run]]) } } as never,
       () => now,
     );
@@ -838,6 +838,7 @@ describe("RunWidget lifecycle", () => {
     node.progressTool = "read";
     node.lastProgressAt = now;
     widget.update();
+    renderLast(); // A frame samples the candidate (pull model).
     now += 100;
     node.progressTool = undefined;
     node.lastProgressAt = now;
@@ -874,7 +875,7 @@ describe("RunWidget lifecycle", () => {
       header: { id: "a", source: { kind: "command" } },
       nodes: new Map(),
     } as unknown as RunView);
-    const widget = new RunWidget({ state: { runs } } as never);
+    const widget = new RunPanel({ state: { runs } } as never);
     const shown: unknown[] = [];
     let contextActive = true;
     const ctx = {
@@ -899,5 +900,55 @@ describe("RunWidget lifecycle", () => {
     // after pi invalidates this extension's session context.
     expect(() => widget.update()).not.toThrow();
     expect(shown.length).toBe(count);
+  });
+});
+
+describe("RunPanel selection reconciliation", () => {
+  function fakeRun(id: string) {
+    return {
+      header: { id, label: id, flow: { kind: "agent", task: "t" } },
+      status: "running",
+      nodes: new Map([
+        [
+          "$",
+          {
+            path: "$",
+            instance: "$",
+            kind: "agent",
+            status: "running",
+            startedAt: 0,
+          },
+        ],
+      ]),
+      order: ["$"],
+      loopIterations: new Map(),
+      backgrounded: false,
+      createdAt: 0,
+    };
+  }
+
+  test("stale selections normalize to the first remaining row", () => {
+    const runs = new Map([
+      ["r1", fakeRun("r1")],
+      ["r2", fakeRun("r2")],
+    ]);
+    const manager = {
+      state: { runs, order: ["r1", "r2"] },
+      liveHandle: () => undefined,
+    } as never;
+    const panel = new RunPanel(manager);
+    panel.setFocused(true);
+    expect(panel.selectedRow()).toMatchObject({ kind: "run" });
+    // The selected run settles and leaves the visible set.
+    (runs.get("r1") as { status: string }).status = "completed";
+    const reconciled = panel.selectedRow();
+    expect(reconciled).toMatchObject({ kind: "run" });
+    expect(
+      reconciled?.kind === "run" ? reconciled.run.header.id : undefined,
+    ).toBe("r2");
+    // Movement acts on the reconciled selection, not the stale key. Runs
+    // auto-expand, so one step down lands on r2's agent row.
+    expect(panel.move(1)).toBe(true);
+    expect(panel.selectedRow()).toMatchObject({ kind: "node" });
   });
 });

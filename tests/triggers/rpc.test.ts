@@ -14,7 +14,6 @@ import {
   type RpcReply,
   RUN_EVENT_CHANNEL,
   type StartRpcData,
-  type SteerRpcData,
 } from "../../src/api.js";
 import type { SpawnEngine, SpawnSpec } from "../../src/engine/types.js";
 import { emptyUsage, SpawnAborted } from "../../src/engine/types.js";
@@ -23,7 +22,7 @@ import { RunManager } from "../../src/run/runs.js";
 import { RpcManager } from "../../src/triggers/rpc.js";
 import type { TriggerDeps } from "../../src/triggers/start.js";
 import { NotificationManager } from "../../src/ui/notify.js";
-import { RunWidget } from "../../src/ui/widget.js";
+import { RunPanel } from "../../src/ui/panel.js";
 
 class TestBus {
   private readonly handlers = new Map<string, Set<(data: unknown) => void>>();
@@ -69,7 +68,7 @@ function blockingEngine(specs: SpawnSpec[], steering: string[]): SpawnEngine {
         status: "running",
         updates: emptyUpdates(),
         wait: () => result,
-        steer: async (message) => {
+        prompt: async (message) => {
           steering.push(message);
         },
         abort: () => reject(new SpawnAborted(spec.agent)),
@@ -117,7 +116,7 @@ function harness(options: HarnessOptions = {}) {
     pi,
     manager,
     notifications,
-    widget: new RunWidget(manager),
+    widget: new RunPanel(manager),
   };
   const rpc = new RpcManager(pi, deps, "0.3.0");
   rpc.install();
@@ -288,53 +287,6 @@ describe("RpcManager", () => {
       params: { runId: started.data.runId },
     });
     expect(again.success).toBe(false);
-  });
-
-  test("steers the sole live instance and publishes attribution", async () => {
-    const { bus, manager, steering } = harness({ blocking: true });
-    const started = await call<StartRpcData>(bus, {
-      protocol: PROTOCOL_VERSION,
-      id: "start-steer",
-      op: "start",
-      params: { flow: { kind: "agent", task: "wait" } },
-    });
-    expect(started.success).toBe(true);
-    if (!started.success) return;
-    await until(
-      () => manager.steerableInstances(started.data.runId).length === 1,
-    );
-
-    const reply = await call<SteerRpcData>(bus, {
-      protocol: PROTOCOL_VERSION,
-      id: "steer-live",
-      caller: "test-dashboard",
-      op: "steer",
-      params: {
-        runId: started.data.runId,
-        message: "  inspect the retry path  ",
-      },
-    });
-    expect(reply).toEqual({
-      protocol: PROTOCOL_VERSION,
-      id: "steer-live",
-      success: true,
-      data: { runId: started.data.runId, instance: "$" },
-    });
-    expect(steering).toEqual(["inspect the retry path"]);
-    expect(
-      manager.state.runs.get(started.data.runId)?.nodes.get("$")?.steering,
-    ).toEqual([
-      expect.objectContaining({
-        message: "inspect the retry path",
-        source: "rpc",
-        caller: "test-dashboard",
-      }),
-    ]);
-
-    expect(manager.stop(started.data.runId)).toBe(true);
-    await until(
-      () => manager.state.runs.get(started.data.runId)?.status === "stopped",
-    );
   });
 
   test("validates protocol, operations, start shape, cwd, and trust", async () => {

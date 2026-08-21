@@ -6,10 +6,11 @@ import {
   RESULT_TOOL_NAME,
 } from "../../src/engine/result-tool.js";
 import {
+  attachedSupervisorPrompt,
   createSubprocessSpawnEngine,
   formatFailureReason,
   isChildProcessRunning,
-  MAX_ACTIVITY_TAIL_CHARS,
+  MAX_TRANSCRIPT_CHARS,
   type SpawnProcess,
 } from "../../src/engine/subprocess.js";
 import {
@@ -39,7 +40,9 @@ class FakeStdin extends EventEmitter {
 
 interface FakeProcOptions {
   promptStartsAgent?: boolean;
-  promptPrelude?: Array<Record<string, unknown>>;
+  promptPrelude?:
+    | Array<Record<string, unknown>>
+    | ((record: Record<string, unknown>) => Array<Record<string, unknown>>);
   manualGetState?: boolean;
 }
 
@@ -63,9 +66,11 @@ class FakeProc extends EventEmitter {
       if (record.type === "get_state" && this.options.manualGetState) return;
       queueMicrotask(() => {
         if (record.type === "prompt") {
-          for (const event of this.options.promptPrelude ?? []) {
-            this.emitRecord(event);
-          }
+          const prelude =
+            typeof this.options.promptPrelude === "function"
+              ? this.options.promptPrelude(record)
+              : (this.options.promptPrelude ?? []);
+          for (const event of prelude) this.emitRecord(event);
         }
         const commandSucceeded = record.type !== failCommand;
         this.emitRecord({
@@ -227,6 +232,15 @@ function finish(proc: FakeProc, text = "ok", value: unknown = text): void {
 }
 
 describe("subprocess spawn engine", () => {
+  test("marks attached prompts as requiring visible assistant text", () => {
+    const prompt = attachedSupervisorPrompt("what's up?");
+    expect(prompt).toContain("visible assistant text before using any tool");
+    expect(prompt).toContain("A tool call or result submission is not a reply");
+    expect(prompt).toContain(
+      "<supervisor-message>\nwhat's up?\n</supervisor-message>",
+    );
+  });
+
   test("builds the RPC invocation and initializes before prompting", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
@@ -240,7 +254,8 @@ describe("subprocess spawn engine", () => {
     });
     const spawned = procs[0] as (typeof procs)[number];
     expect(spawned.command).toBe("pi");
-    expect(spawned.args.slice(0, 3)).toEqual(["--mode", "rpc", "--no-session"]);
+    expect(spawned.args.slice(0, 2)).toEqual(["--mode", "rpc"]);
+    expect(spawned.args).toContain("--no-session");
     expect(spawned.args).not.toContain("-p");
     expect(spawned.args).toContain("some-model");
     expect(spawned.args).toContain("--thinking");
@@ -658,7 +673,7 @@ describe("subprocess spawn engine", () => {
     expect(handle.status).toBe("aborted");
   });
 
-  test("steer waits for readiness and receives correlated acknowledgement", async () => {
+  test("prompt waits for readiness and injects a steering-delivered message", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
       agent: "w",
@@ -666,15 +681,213 @@ describe("subprocess spawn engine", () => {
       cwd: "/tmp",
     });
     const proc = procs[0]?.proc as FakeProc;
-    await handle.steer?.("change course");
+    await handle.prompt?.("change course");
+    const injected = proc.stdin.records.filter(
+      (record) => record.type === "prompt",
+    );
+    expect(injected.at(-1)?.message).toBe(
+      attachedSupervisorPrompt("change course"),
+    );
+    expect(injected.at(-1)?.streamingBehavior).toBe("steer");
     expect(
-      proc.stdin.records.find((record) => record.type === "steer")?.message,
-    ).toBe("change course");
+      handle
+        .transcript?.()
+        .some((item) => item.kind === "user" && item.text === "change course"),
+    ).toBe(true);
     finish(proc);
     await handle.wait();
-    await expect(handle.steer?.("too late")).rejects.toThrow(
-      "no longer running",
+    await expect(handle.prompt?.("too late")).rejects.toThrow(
+      "already submitted its result",
     );
+  });
+
+  test("tracks queued prompts until the child confirms delivery", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await handle.prompt?.("focus on tests");
+    // The current turn keeps streaming after the prompt is accepted.
+    proc.emitRecord({ type: "turn_start" });
+    proc.emitAssistant("still working on the previous instruction");
+    const queued = handle
+      .transcript?.()
+      .find((item) => item.kind === "user" && item.text === "focus on tests");
+    expect(queued?.kind === "user" ? queued.queued : undefined).toBe(true);
+    // The child delivers the queued message: a user message starts.
+    proc.emitRecord({
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: attachedSupervisorPrompt("focus on tests"),
+          },
+        ],
+      },
+    });
+    const delivered = handle
+      .transcript?.()
+      .find((item) => item.kind === "user" && item.text === "focus on tests");
+    expect(delivered?.kind === "user" ? delivered.queued : undefined).toBe(
+      false,
+    );
+    // Delivery fixes the chronological position: the message moves after
+    // everything the turn streamed while it sat in the queue.
+    const items = handle.transcript?.() ?? [];
+    expect(items.at(-1)?.kind).toBe("user");
+    expect(items.at(-1)?.kind === "user" ? items.at(-1)?.text : "").toBe(
+      "focus on tests",
+    );
+    finish(proc);
+    await handle.wait();
+  });
+
+  test("an idle prompt is recorded before a racing delivery event", async () => {
+    const message = "continue after the interrupt";
+    const wireMessage = attachedSupervisorPrompt(message);
+    const { engine, procs } = makeEngine(undefined, undefined, {
+      promptPrelude: (record) =>
+        record.message === wireMessage
+          ? [
+              {
+                type: "message_start",
+                message: {
+                  role: "user",
+                  content: [{ type: "text", text: wireMessage }],
+                },
+              },
+            ]
+          : [],
+    });
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    const release = handle.hold?.();
+    await ready(proc);
+    proc.settle();
+    await handle.prompt?.(message);
+    const delivered = handle
+      .transcript?.()
+      .find((item) => item.kind === "user" && item.text === message);
+    expect(delivered?.kind === "user" ? delivered.queued : undefined).toBe(
+      false,
+    );
+    proc.emitRecord({ type: "agent_start" });
+    finish(proc);
+    await handle.wait();
+    release?.();
+  });
+
+  test("the interrupt notice reports stranded queued messages", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await handle.prompt?.("later instruction");
+    await handle.interrupt?.();
+    const notice = handle.transcript?.().at(-1);
+    expect(notice?.kind).toBe("notice");
+    if (notice?.kind === "notice") {
+      expect(notice.text).toBe("Interrupted: 2 messages remain queued");
+    }
+    finish(proc);
+    await handle.wait();
+  });
+
+  test("a rejected result submission leaves a visible deferral notice", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "r1",
+      toolName: RESULT_TOOL_NAME,
+      args: {},
+    });
+    proc.emitRecord({
+      type: "tool_execution_end",
+      toolCallId: "r1",
+      toolName: RESULT_TOOL_NAME,
+      result: { content: [{ type: "text", text: "Submission deferred" }] },
+      isError: true,
+    });
+    const notice = handle.transcript?.().at(-1);
+    expect(notice?.kind).toBe("notice");
+    if (notice?.kind === "notice") {
+      expect(notice.text).toBe("Submission deferred: detach to finish");
+    }
+    finish(proc);
+    await handle.wait();
+  });
+
+  test("interrupt aborts the current turn without ending the spawn", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "1",
+      toolName: "bash",
+      args: { command: "sleep 600" },
+    });
+    await handle.interrupt?.();
+    expect(proc.stdin.records.some((record) => record.type === "abort")).toBe(
+      true,
+    );
+    expect(handle.status).toBe("running");
+    const items = handle.transcript?.() ?? [];
+    const tool = items.find((item) => item.kind === "tool");
+    expect(tool?.kind === "tool" ? tool.status : undefined).toBe("error");
+    expect(items.at(-1)?.kind).toBe("notice");
+    finish(proc);
+    await handle.wait();
+  });
+
+  test("hold keeps an idle settle promptable until released", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    const release = handle.hold?.();
+    // Idle settle without a result: held spawns stay alive and promptable.
+    proc.emitRecord({ type: "agent_settled" });
+    await Bun.sleep(0);
+    expect(proc.stdin.ended).toBe(false);
+    proc.emitRecord({ type: "agent_start" });
+    await handle.prompt?.("continue with the fix");
+    // A settle after result submission always ends the spawn.
+    submitResult(proc, "result");
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    release?.();
+    expect(handle.status).toBe("completed");
+  });
+
+  test("release nudges a settled, resultless agent to finish", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    const release = handle.hold?.();
+    await handle.prompt?.("hello there");
+    // The agent settles without a result (its submission was gated).
+    proc.emitRecord({ type: "agent_settled" });
+    await Bun.sleep(0);
+    release?.();
+    await Bun.sleep(0);
+    const nudge = proc.stdin.records.filter(
+      (record) =>
+        record.type === "prompt" &&
+        typeof record.message === "string" &&
+        record.message.includes("detached"),
+    );
+    expect(nudge).toHaveLength(1);
+    expect(proc.stdin.ended).toBe(false);
+    // The nudged agent submits; the spawn completes normally.
+    proc.emitRecord({ type: "agent_start" });
+    submitResult(proc, "result");
+    proc.settle();
+    proc.close(0);
+    const outcome = await handle.wait();
+    expect(outcome.value).toBe("result");
   });
 
   test("streams progress updates", async () => {
@@ -699,17 +912,16 @@ describe("subprocess spawn engine", () => {
     expect(seen.slice(0, 2)).toEqual(["first", "second"]);
   });
 
-  test("keeps a bounded chronological tail of assistant and tool activity", async () => {
+  test("keeps a bounded chronological transcript of assistant and tool activity", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
       agent: "w",
       task: "t",
       cwd: "/tmp",
     });
-    const tails: string[] = [];
     const reader = (async () => {
-      for await (const update of handle.updates) {
-        if (update.tail) tails.push(update.tail);
+      for await (const _update of handle.updates) {
+        // Drain so the engine never blocks on a slow consumer.
       }
     })();
     const proc = procs[0]?.proc as FakeProc;
@@ -744,38 +956,91 @@ describe("subprocess spawn engine", () => {
     await handle.wait();
     await reader;
 
-    const tail = tails.at(-1) ?? "";
-    expect(tail).toContain("assistant · turn 1\nI will inspect the tests.");
-    expect(tail).toContain("✓ bash: bun test\n455 pass");
-    expect(tail).toContain("assistant · turn 2\nEverything passes.");
-    expect(tail.length).toBeLessThanOrEqual(MAX_ACTIVITY_TAIL_CHARS);
+    const items = handle.transcript?.() ?? [];
+    expect(items[0]).toMatchObject({ kind: "user", text: "t" });
+    expect(items[1]).toMatchObject({
+      kind: "assistant",
+      turn: 1,
+      text: "I will inspect the tests.",
+    });
+    expect(items[2]).toMatchObject({
+      kind: "tool",
+      label: "bash: bun test",
+      status: "ok",
+      output: "455 pass",
+    });
+    expect(items[3]).toMatchObject({
+      kind: "assistant",
+      turn: 2,
+      text: "Everything passes.",
+    });
   });
 
-  test("bounds a single oversized activity entry", async () => {
+  test("same-length transcript updates carry fresh revisions", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const reader = (async () => {
+      for await (const _update of handle.updates) {
+        // Drain so the engine never blocks on a slow consumer.
+      }
+    })();
+    const proc = procs[0]?.proc as FakeProc;
+    proc.emitRecord({
+      type: "tool_execution_start",
+      toolCallId: "1",
+      toolName: "bash",
+      args: { command: "tail -f log" },
+    });
+    const before = handle
+      .transcript?.()
+      .find((item) => item.kind === "tool")?.rev;
+    proc.emitRecord({
+      type: "tool_execution_end",
+      toolCallId: "1",
+      toolName: "bash",
+      // Identical length to a plausible prior window; only content differs.
+      result: { content: [{ type: "text", text: "line B" }] },
+      isError: false,
+    });
+    const item = handle.transcript?.().find((entry) => entry.kind === "tool");
+    expect(item?.kind).toBe("tool");
+    if (item?.kind === "tool") expect(item.output).toBe("line B");
+    expect(item?.rev).toBeGreaterThan(before ?? 0);
+    submitResult(proc, "result");
+    proc.settle();
+    proc.close(0);
+    await handle.wait();
+    await reader;
+  });
+
+  test("drops the oldest transcript entries past the character bound", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
       agent: "w",
       task: "t",
       cwd: "/tmp",
     });
-    let longestTail = "";
     const reader = (async () => {
-      for await (const update of handle.updates) {
-        if ((update.tail?.length ?? 0) > longestTail.length) {
-          longestTail = update.tail ?? longestTail;
-        }
+      for await (const _update of handle.updates) {
+        // Drain so the engine never blocks on a slow consumer.
       }
     })();
     const proc = procs[0]?.proc as FakeProc;
     proc.emitRecord({ type: "turn_start" });
-    proc.emitAssistant("x".repeat(MAX_ACTIVITY_TAIL_CHARS + 1_000));
+    proc.emitAssistant("early answer");
+    proc.emitRecord({ type: "turn_start" });
+    proc.emitAssistant("x".repeat(MAX_TRANSCRIPT_CHARS + 1_000));
+    const before = handle.transcript?.() ?? [];
+    expect(before).toHaveLength(1);
+    expect(before[0]?.kind).toBe("assistant");
+    if (before[0]?.kind === "assistant") {
+      expect(before[0].text.length).toBeLessThanOrEqual(MAX_TRANSCRIPT_CHARS);
+    }
     submitResult(proc, "result");
     proc.settle();
     proc.close(0);
     await handle.wait();
     await reader;
-    expect(longestTail.length).toBe(MAX_ACTIVITY_TAIL_CHARS);
-    expect(longestTail).toStartWith("… earlier activity omitted …\n");
   });
 
   test("strict JSONL preserves chunking, CRLF, and Unicode separators", async () => {
@@ -1292,36 +1557,36 @@ describe("overlapping tools and streamed text", () => {
     expect(seen.at(-1)).toBe("second partial");
   });
 
-  test("flushes the newest assistant tail when the stream is cut off", async () => {
+  test("keeps the newest streamed assistant text when the stream is cut off", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
       agent: "w",
       task: "t",
       cwd: "/tmp",
     });
-    const tails: string[] = [];
     const reader = (async () => {
-      for await (const update of handle.updates) {
-        if (update.tail) tails.push(update.tail);
+      for await (const _update of handle.updates) {
+        // Drain so the engine never blocks on a slow consumer.
       }
     })();
     const proc = procs[0]?.proc as FakeProc;
-    proc.emitRecord({ type: "turn_start" }); // starts the throttle window
+    proc.emitRecord({ type: "turn_start" });
     proc.emitRecord({
       type: "message_update",
-      assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "half an answer",
+      },
     });
-    const partial = (delta: string) =>
-      proc.emitRecord({
-        type: "message_update",
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
-      });
-    partial("half an");
-    partial(" answer"); // throttled, then flushed by close
-    proc.close(2);
-
+    proc.close(1);
     await expect(handle.wait()).rejects.toThrow(SpawnFailure);
     await reader;
-    expect(tails.at(-1)).toContain("assistant · turn 1\nhalf an answer");
+    const items = handle.transcript?.() ?? [];
+    expect(items.at(-1)).toMatchObject({
+      kind: "assistant",
+      turn: 1,
+      text: "half an answer",
+    });
   });
 });

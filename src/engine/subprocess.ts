@@ -1,11 +1,14 @@
 /**
  * Subprocess spawn engine: each spawn runs a fresh `pi` process in RPC mode,
- * sends one initial prompt, and keeps stdin open for steering and aborts.
+ * sends one initial prompt, and keeps stdin open for injected prompts and
+ * aborts.
  *
- *   pi --mode rpc --no-session --extension <result-tool>
+ *   pi --mode rpc [--session-dir <dir>] --extension <result-tool>
  *      [--model M] [--thinking T] [--tools a,b]
  *      [--append-system-prompt <tmpfile>]
  *
+ * The child writes a real pi session (attachable after the agent settles);
+ * its path is discovered via `get_state` and exposed as `nativeSession`.
  * The result payload schema travels through a private per-spawn file named by
  * PI_AGENTS_RESULT_SCHEMA_FILE.
  */
@@ -20,7 +23,11 @@ import {
   effectiveResultSchema,
   validateJsonSchema,
 } from "../model/json-schema.js";
-import { RESULT_SCHEMA_FILE_ENV_VAR, RESULT_TOOL_NAME } from "./result-tool.js";
+import {
+  RESULT_HOLD_FILE_ENV_VAR,
+  RESULT_SCHEMA_FILE_ENV_VAR,
+  RESULT_TOOL_NAME,
+} from "./result-tool.js";
 import {
   AgentErrorResult,
   emptyUsage,
@@ -32,6 +39,7 @@ import {
   type SpawnProgress,
   type SpawnSpec,
   type SpawnUsage,
+  type TranscriptItem,
 } from "./types.js";
 
 export type SpawnProcess = typeof spawn;
@@ -45,14 +53,30 @@ const FORCE_KILL_AFTER_MS = 5_000;
 const SUMMARY_DEBOUNCE_MS = 250;
 /** Minimum spacing between updates driven by streaming text deltas. */
 export const STREAM_PUSH_INTERVAL_MS = 250;
-/** Live tails are deliberately ephemeral and bounded. Only an accepted agent
- * result submission becomes a durable workflow value. */
-export const MAX_ACTIVITY_TAIL_CHARS = 64_000;
+/** Live transcripts are ephemeral and bounded. Only an accepted agent result
+ * submission becomes a durable workflow value; the child's own session file
+ * carries the full durable history. */
+export const MAX_TRANSCRIPT_CHARS = 512_000;
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 const MAX_TOOL_LABEL_CHARS = 240;
 const RESULT_TOOL_EXTENSION_PATH = fileURLToPath(
   new URL("./result-tool.ts", import.meta.url),
 );
+
+/** Put the live user's intent next to every injected prompt. The delegated
+ * system contract alone is too far from the latest message for some models:
+ * they otherwise resume the original task, call tools, or submit a result
+ * without producing any assistant text for the attached user to see. */
+export function attachedSupervisorPrompt(message: string): string {
+  return [
+    "A supervising user is attached to this delegated session.",
+    "Reply to their message in visible assistant text before using any tool, submitting a result, or resuming the assignment.",
+    "A tool call or result submission is not a reply. After replying, follow the message as the latest authoritative instruction.",
+    "<supervisor-message>",
+    message,
+    "</supervisor-message>",
+  ].join("\n");
+}
 
 class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -125,58 +149,124 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-interface ActivityTailEntry {
-  key: string;
-  text: string;
+function jsonChars(value: unknown): number {
+  if (value === undefined) return 0;
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
-/** Mutable entries let streaming assistant messages and tool output update in
- * place while completed entries stay in chronological order. */
-class ActivityTail {
-  private readonly entries: ActivityTailEntry[] = [];
-  private readonly entriesByKey = new Map<string, ActivityTailEntry>();
-  /** Length of snapshot(), including the blank lines between entries. */
-  private snapshotLength = 0;
+/** Full retained size of one item, raw payloads included. */
+function itemChars(item: TranscriptItem): number {
+  switch (item.kind) {
+    case "user":
+    case "notice":
+      return item.text.length;
+    case "assistant":
+      return (
+        item.text.length +
+        (item.summary?.length ?? 0) +
+        (item.thinking?.length ?? 0) +
+        jsonChars(item.message)
+      );
+    case "tool":
+      return (
+        item.label.length +
+        (item.output?.length ?? 0) +
+        jsonChars(item.args) +
+        jsonChars(item.result)
+      );
+  }
+}
 
-  upsert(key: string, text: string): void {
-    const existing = this.entriesByKey.get(key);
+const CLIP_MARKER = "… earlier output omitted …\n";
+
+/** Clip one pathologically large item in place, dropping its raw payloads. */
+function clipItem(item: TranscriptItem): void {
+  const keep = Math.max(1_000, MAX_TRANSCRIPT_CHARS - CLIP_MARKER.length);
+  if (item.kind === "assistant") {
+    item.message = undefined;
+    item.thinking = undefined;
+    if (item.text.length > keep) {
+      item.text = `${CLIP_MARKER}${item.text.slice(-keep)}`;
+    }
+    return;
+  }
+  if (item.kind === "tool") {
+    item.result = undefined;
+    item.args = undefined;
+    if (item.output !== undefined && item.output.length > keep) {
+      item.output = `${CLIP_MARKER}${item.output.slice(-keep)}`;
+    }
+    return;
+  }
+  if (item.text.length > keep) {
+    item.text = `${CLIP_MARKER}${item.text.slice(-keep)}`;
+  }
+}
+
+/** Chronological, bounded live transcript. Mutable entries let streaming
+ * assistant messages and tool output update in place while completed entries
+ * stay in order. The oldest entries fall off past MAX_TRANSCRIPT_CHARS. */
+class TranscriptStore {
+  private readonly items: TranscriptItem[] = [];
+  private readonly byKey = new Map<string, TranscriptItem>();
+  private chars = 0;
+  private revision = 0;
+
+  upsert(item: TranscriptItem): void {
+    item.rev = ++this.revision;
+    const existing = this.byKey.get(item.key);
     if (existing) {
-      this.snapshotLength += text.length - existing.text.length;
-      existing.text = text;
+      this.chars -= itemChars(existing);
+      Object.assign(existing, item);
+      this.chars += itemChars(existing);
     } else {
-      const entry = { key, text };
-      if (this.entries.length > 0) this.snapshotLength += 2;
-      this.entries.push(entry);
-      this.entriesByKey.set(key, entry);
-      this.snapshotLength += text.length;
+      this.items.push(item);
+      this.byKey.set(item.key, item);
+      this.chars += itemChars(item);
     }
-    this.trim();
-  }
-
-  snapshot(): string | undefined {
-    const text = this.entries.map((entry) => entry.text).join("\n\n");
-    return text || undefined;
-  }
-
-  private trim(): void {
-    while (
-      this.entries.length > 1 &&
-      this.snapshotLength > MAX_ACTIVITY_TAIL_CHARS
-    ) {
-      const removed = this.entries.shift();
+    while (this.items.length > 1 && this.chars > MAX_TRANSCRIPT_CHARS) {
+      const removed = this.items.shift();
       if (!removed) break;
-      this.entriesByKey.delete(removed.key);
-      this.snapshotLength -= removed.text.length + 2;
+      this.byKey.delete(removed.key);
+      this.chars -= itemChars(removed);
     }
-    const only = this.entries[0];
-    if (only && only.text.length > MAX_ACTIVITY_TAIL_CHARS) {
-      const marker = "… earlier activity omitted …\n";
-      const truncated = `${marker}${only.text.slice(
-        -(MAX_ACTIVITY_TAIL_CHARS - marker.length),
-      )}`;
-      this.snapshotLength += truncated.length - only.text.length;
-      only.text = truncated;
+    const only = this.items[0];
+    if (this.items.length === 1 && only && this.chars > MAX_TRANSCRIPT_CHARS) {
+      clipItem(only);
+      this.chars = itemChars(only);
     }
+  }
+
+  get(key: string): TranscriptItem | undefined {
+    return this.byKey.get(key);
+  }
+
+  delete(key: string): void {
+    const item = this.byKey.get(key);
+    if (!item) return;
+    this.byKey.delete(key);
+    const index = this.items.indexOf(item);
+    if (index !== -1) this.items.splice(index, 1);
+    this.chars -= itemChars(item);
+  }
+
+  /** Reposition an item at the chronological end (e.g. queued prompt
+   * delivered now). */
+  moveToEnd(key: string): void {
+    const item = this.byKey.get(key);
+    if (!item) return;
+    const index = this.items.indexOf(item);
+    if (index === -1 || index === this.items.length - 1) return;
+    this.items.splice(index, 1);
+    this.items.push(item);
+  }
+
+  snapshot(): readonly TranscriptItem[] {
+    return this.items;
   }
 }
 
@@ -286,6 +376,17 @@ function idleRpcState(value: unknown): boolean {
     throw new Error("Invalid get_state response from delegated pi");
   }
   return !value.isStreaming && value.pendingMessageCount === 0;
+}
+
+function userMessageText(message: Record<string, unknown>): string {
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .flatMap((part) =>
+      isRecord(part) && part.type === "text" && typeof part.text === "string"
+        ? [part.text]
+        : [],
+    )
+    .join("\n");
 }
 
 function messageText(message: AssistantMessage): string {
@@ -432,6 +533,7 @@ export function createSubprocessSpawnEngine(options?: {
       let wasAborted = false;
       let terminalFailure: Error | undefined;
       let submissionAccepted = false;
+      let settleHolds = 0;
       let resultValue: unknown;
       let agentErrorReason: string | undefined;
 
@@ -439,8 +541,12 @@ export function createSubprocessSpawnEngine(options?: {
       let latestText = "";
       /** Tools currently executing, in start order (they can overlap). */
       const activeTools = new Map<string, string>();
-      const activityTail = new ActivityTail();
-      const toolTailEntries = new Map<string, { key: string; label: string }>();
+      const transcriptStore = new TranscriptStore();
+      /** Injected prompts display their original text in the live transcript,
+       * while the child receives a supervisor wrapper. Match delivery events
+       * back to the original transcript item through this map. */
+      const queuedPromptDeliveries = new Map<string, string>();
+      const toolTranscriptKeys = new Map<string, string>();
       const streamedTextBlocks = new Map<number, string>();
       const streamedThinkingBlocks = new Map<number, string>();
       let latestSummary: string | undefined;
@@ -462,10 +568,18 @@ export function createSubprocessSpawnEngine(options?: {
       const args: string[] = [
         "--mode",
         "rpc",
-        "--no-session",
         "--extension",
         RESULT_TOOL_EXTENSION_PATH,
       ];
+      // Delegated agents write real pi sessions into a pi-agents-owned
+      // directory (never the project's default store, which would flood the
+      // session picker). Finished agents stay attachable via that file.
+      if (spec.sessionDir) {
+        fs.mkdirSync(spec.sessionDir, { recursive: true });
+        args.push("--session-dir", spec.sessionDir);
+      } else {
+        args.push("--no-session");
+      }
       for (const extensionPath of options?.extraExtensionPaths ?? []) {
         args.push("--extension", extensionPath);
       }
@@ -487,6 +601,7 @@ export function createSubprocessSpawnEngine(options?: {
         spec.systemPrompt?.trim() || undefined,
       );
       tempDir = spawnFiles.dir;
+      const holdFilePath = path.join(spawnFiles.dir, "attach-hold");
       if (spawnFiles.promptFilePath) {
         args.push("--append-system-prompt", spawnFiles.promptFilePath);
       }
@@ -613,7 +728,6 @@ export function createSubprocessSpawnEngine(options?: {
         updates.push({
           text: latestText,
           summary: latestSummary,
-          tail: activityTail.snapshot(),
           usage: { ...usage },
           currentTool,
           turnsStarted,
@@ -626,6 +740,12 @@ export function createSubprocessSpawnEngine(options?: {
         pendingSummary = undefined;
         if (!pending || pending === latestSummary) return;
         latestSummary = pending;
+        if (currentAssistantEntry) {
+          const item = transcriptStore.get(currentAssistantEntry);
+          if (item?.kind === "assistant") {
+            transcriptStore.upsert({ ...item, summary: pending });
+          }
+        }
         pushUpdate();
       };
 
@@ -642,13 +762,30 @@ export function createSubprocessSpawnEngine(options?: {
         summaryTimer.unref?.();
       };
 
-      const updateAssistantTail = (text: string) => {
+      const updateAssistantItem = (
+        text: string,
+        raw?: { message?: unknown; streaming?: boolean },
+      ) => {
         if (!text) return;
         currentAssistantEntry ??= `assistant:${++activitySequence}`;
-        activityTail.upsert(
-          currentAssistantEntry,
-          `assistant · turn ${Math.max(1, turnsStarted)}\n${text}`,
-        );
+        const existing = transcriptStore.get(currentAssistantEntry);
+        const prior = existing?.kind === "assistant" ? existing : undefined;
+        const thinking = [...streamedThinkingBlocks.entries()]
+          .sort(([left], [right]) => left - right)
+          .map(([, block]) => block)
+          .join("\n")
+          .trim();
+        transcriptStore.upsert({
+          key: currentAssistantEntry,
+          kind: "assistant",
+          text,
+          summary: prior?.summary,
+          message: raw?.message ?? prior?.message,
+          thinking: thinking || prior?.thinking,
+          streaming: raw?.streaming ?? true,
+          turn: Math.max(1, turnsStarted),
+          at: existing?.at ?? Date.now(),
+        });
       };
 
       /**
@@ -732,7 +869,7 @@ export function createSubprocessSpawnEngine(options?: {
         const startsNewEntry = currentAssistantEntry === undefined;
         if (text === latestText && !startsNewEntry) return;
         latestText = text;
-        updateAssistantTail(text);
+        updateAssistantItem(text);
         // Deltas arrive far faster than anyone can read; cap intermediate
         // tail snapshots and update fan-out. The close path flushes the last
         // delta when no message_end arrives.
@@ -763,7 +900,7 @@ export function createSubprocessSpawnEngine(options?: {
           const text = messageText(message);
           if (text) {
             latestText = text;
-            updateAssistantTail(text);
+            updateAssistantItem(text, { message, streaming: false });
           }
           const summary = messageReasoningSummary(message);
           if (summary !== undefined) queueSummary(summary);
@@ -845,6 +982,11 @@ export function createSubprocessSpawnEngine(options?: {
             streamedTextBlocks.clear();
             streamedThinkingBlocks.clear();
             currentAssistantEntry = undefined;
+            // The previous turn's outcome (e.g. a user interrupt's "aborted")
+            // must not describe this turn: a later process exit would blame
+            // a stale reason otherwise.
+            stopReason = undefined;
+            errorMessage = undefined;
             pushUpdate();
           }
           if (
@@ -855,6 +997,38 @@ export function createSubprocessSpawnEngine(options?: {
             streamedTextBlocks.clear();
             streamedThinkingBlocks.clear();
           }
+          // A user message starting means the child delivered a queued
+          // prompt (pi removes it from its steering queue at this moment);
+          // confirm the matching transcript item, FIFO.
+          if (
+            record.type === "message_start" &&
+            isRecord(record.message) &&
+            record.message.role === "user"
+          ) {
+            const delivered = userMessageText(record.message);
+            const injected = [...queuedPromptDeliveries].find(
+              ([, wireText]) => wireText === delivered,
+            );
+            const match = injected
+              ? transcriptStore.get(injected[0])
+              : transcriptStore
+                  .snapshot()
+                  .find(
+                    (item) =>
+                      item.kind === "user" &&
+                      item.queued === true &&
+                      item.text === delivered,
+                  );
+            if (injected) queuedPromptDeliveries.delete(injected[0]);
+            if (match?.kind === "user") {
+              transcriptStore.upsert({ ...match, queued: false });
+              // Delivery is the message's true chronological position: the
+              // child appends it to its context now, after everything the
+              // current turn streamed since the prompt was accepted.
+              transcriptStore.moveToEnd(match.key);
+              pushUpdate();
+            }
+          }
           if (record.type === "message_update") {
             recordPartialMessage(record);
           }
@@ -864,26 +1038,41 @@ export function createSubprocessSpawnEngine(options?: {
             typeof record.toolName === "string"
           ) {
             activeTools.set(record.toolCallId, record.toolName);
-            const entry = {
-              key: `tool:${++activitySequence}`,
-              label: toolLabel(record.toolName, record.args),
-            };
-            toolTailEntries.set(record.toolCallId, entry);
-            activityTail.upsert(entry.key, `› ${entry.label}`);
+            // The mandatory result-submission tool is engine plumbing, not
+            // agent activity; keep it out of the transcript.
+            if (record.toolName !== RESULT_TOOL_NAME) {
+              const key = `tool:${++activitySequence}`;
+              toolTranscriptKeys.set(record.toolCallId, key);
+              transcriptStore.upsert({
+                key,
+                kind: "tool",
+                label: toolLabel(record.toolName, record.args),
+                status: "running",
+                toolName: record.toolName,
+                toolCallId: record.toolCallId,
+                args: record.args,
+                at: Date.now(),
+              });
+            }
             pushUpdate();
           }
           if (
             record.type === "tool_execution_update" &&
             typeof record.toolCallId === "string"
           ) {
-            const entry = toolTailEntries.get(record.toolCallId);
+            const key = toolTranscriptKeys.get(record.toolCallId);
+            const item = key ? transcriptStore.get(key) : undefined;
             const output = toolOutput(record.partialResult);
             if (
-              entry &&
+              item?.kind === "tool" &&
               output &&
               Date.now() - lastStreamPushAt >= STREAM_PUSH_INTERVAL_MS
             ) {
-              activityTail.upsert(entry.key, `› ${entry.label}\n${output}`);
+              transcriptStore.upsert({
+                ...item,
+                output,
+                result: record.partialResult,
+              });
               pushUpdate();
             }
           }
@@ -892,6 +1081,23 @@ export function createSubprocessSpawnEngine(options?: {
             typeof record.toolCallId === "string"
           ) {
             const toolName = activeTools.get(record.toolCallId);
+            if (toolName === RESULT_TOOL_NAME && record.isError === true) {
+              // The attach-hold gate (or a schema rejection) bounced the
+              // submission. The attempt is engine plumbing, but its refusal
+              // must be visible or the conversation reads as broken.
+              const last = transcriptStore.snapshot().at(-1);
+              transcriptStore.upsert({
+                key:
+                  last?.kind === "notice"
+                    ? last.key
+                    : `notice:${++activitySequence}`,
+                kind: "notice",
+                notice: "submission-deferred",
+                text: "Submission deferred: detach to finish",
+                at: Date.now(),
+              });
+              pushUpdate();
+            }
             if (toolName === RESULT_TOOL_NAME && record.isError !== true) {
               if (submissionAccepted) {
                 throw new Error(
@@ -924,23 +1130,50 @@ export function createSubprocessSpawnEngine(options?: {
                 );
               }
               submissionAccepted = true;
+              // Result submission is engine plumbing and filtered from the
+              // transcript; leave a visible marker so an attached user sees
+              // that the agent finished (and with what).
+              const preview =
+                agentErrorReason !== undefined
+                  ? `error: ${clippedLine(agentErrorReason, 120)}`
+                  : typeof resultValue === "string"
+                    ? clippedLine(resultValue, 120)
+                    : clippedLine(JSON.stringify(resultValue) ?? "", 120);
+              transcriptStore.upsert({
+                key: `notice:${++activitySequence}`,
+                kind: "notice",
+                notice: "result-submitted",
+                text: `Result submitted${preview ? `: ${preview}` : ""}`,
+                at: Date.now(),
+              });
             }
             activeTools.delete(record.toolCallId);
-            const entry = toolTailEntries.get(record.toolCallId);
-            if (entry) {
-              const output = toolOutput(record.result);
-              activityTail.upsert(
-                entry.key,
-                `${record.isError === true ? "✗" : "✓"} ${entry.label}${output ? `\n${output}` : ""}`,
-              );
-              toolTailEntries.delete(record.toolCallId);
+            const key = toolTranscriptKeys.get(record.toolCallId);
+            const item = key ? transcriptStore.get(key) : undefined;
+            if (item?.kind === "tool") {
+              transcriptStore.upsert({
+                ...item,
+                output: toolOutput(record.result),
+                status: record.isError === true ? "error" : "ok",
+                result: record.result,
+              });
+              toolTranscriptKeys.delete(record.toolCallId);
             }
             pushUpdate();
           }
-          if (record.type === "agent_start") agentStarted = true;
+          if (record.type === "agent_start") {
+            agentStarted = true;
+            // A held spawn can be re-prompted after an idle settle; a new
+            // agent run un-settles it.
+            agentSettled = false;
+          }
           if (record.type === "agent_settled" && !agentSettled) {
             agentSettled = true;
-            endStdin();
+            // While held by an attached user, an idle settle without a
+            // result keeps the child alive for follow-up prompts. A settle
+            // after result submission always ends the spawn: the node's work
+            // is done and the workflow must not wait on the attachment.
+            if (settleHolds === 0 || submissionAccepted) endStdin();
           }
         } catch (error) {
           failProtocol(
@@ -958,6 +1191,7 @@ export function createSubprocessSpawnEngine(options?: {
             ...process.env,
             ...(spec.env ?? {}),
             [RESULT_SCHEMA_FILE_ENV_VAR]: spawnFiles.schemaFilePath,
+            [RESULT_HOLD_FILE_ENV_VAR]: holdFilePath,
           },
           shell: false,
           stdio: ["pipe", "pipe", "pipe"],
@@ -1007,7 +1241,7 @@ export function createSubprocessSpawnEngine(options?: {
             parseLine(finalLine);
           }
           if (currentAssistantEntry !== undefined) {
-            updateAssistantTail(latestText);
+            updateAssistantItem(latestText);
             pushUpdate();
           }
           settled = true;
@@ -1101,6 +1335,19 @@ export function createSubprocessSpawnEngine(options?: {
         });
       }
 
+      transcriptStore.upsert({
+        key: "user:task",
+        kind: "user",
+        text: spec.task,
+        queued: true,
+        at: Date.now(),
+      });
+
+      let resolveNativeSession!: (file: string | undefined) => void;
+      const nativeSession = new Promise<string | undefined>((resolve) => {
+        resolveNativeSession = resolve;
+      });
+
       const startupPromise = proc
         ? (async () => {
             try {
@@ -1118,9 +1365,18 @@ export function createSubprocessSpawnEngine(options?: {
             if (wasAborted) throw new SpawnAborted(spec.agent);
             await sendCommand({ type: "prompt", message: spec.task });
             promptAccepted = true;
-            if (agentStarted || agentSettled) return;
             const state = await sendCommand({ type: "get_state" });
-            if (!agentStarted && !agentSettled && idleRpcState(state.data)) {
+            const data = state.data;
+            if (
+              spec.sessionDir &&
+              isRecord(data) &&
+              typeof data.sessionFile === "string"
+            ) {
+              resolveNativeSession(data.sessionFile);
+            } else {
+              resolveNativeSession(undefined);
+            }
+            if (!agentStarted && !agentSettled && idleRpcState(data)) {
               throw new Error(
                 "Delegated pi accepted the prompt without starting an agent run",
               );
@@ -1129,30 +1385,161 @@ export function createSubprocessSpawnEngine(options?: {
         : Promise.reject(new Error("Delegated pi RPC process did not start"));
 
       startupPromise.catch((error) => {
+        resolveNativeSession(undefined);
         if (wasAborted || settled) return;
         failProtocol(
           `Failed to initialize delegated pi RPC process: ${error instanceof Error ? error.message : String(error)}`,
         );
       });
 
+      let injectedPrompts = 0;
       return {
         get status() {
           return status;
         },
         updates,
         wait: () => waitPromise,
-        steer: async (message: string) => {
+        nativeSession,
+        transcript: () => transcriptStore.snapshot(),
+        prompt: async (message: string) => {
           await startupPromise;
-          if (wasAborted || agentSettled || settled || status !== "running") {
+          // A submitted result ends the conversation: the node's work is
+          // done even while the process is still shutting down.
+          if (submissionAccepted) {
+            throw new Error(`Agent ${spec.agent} already submitted its result`);
+          }
+          if (
+            wasAborted ||
+            settled ||
+            status !== "running" ||
+            (agentSettled && settleHolds === 0)
+          ) {
             throw new Error(`Agent ${spec.agent} is no longer running`);
           }
-          await Promise.race([
-            sendCommand({ type: "steer", message }),
-            waitPromise.then(
-              () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
-              () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
-            ),
-          ]);
+          // Record the prompt before writing it. For an idle child, Pi can
+          // emit the user message_start immediately after the RPC response,
+          // before this promise resumes; the delivery event must have a
+          // queued item available to confirm.
+          const transcriptKey = `user:${++injectedPrompts}`;
+          const wireMessage = attachedSupervisorPrompt(message);
+          transcriptStore.upsert({
+            key: transcriptKey,
+            kind: "user",
+            text: message,
+            queued: true,
+            at: Date.now(),
+          });
+          queuedPromptDeliveries.set(transcriptKey, wireMessage);
+          pushUpdate();
+          try {
+            await Promise.race([
+              sendCommand({
+                type: "prompt",
+                message: wireMessage,
+                streamingBehavior: "steer",
+              }),
+              waitPromise.then(
+                () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
+                () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
+              ),
+            ]);
+          } catch (error) {
+            // Roll back a prompt that Pi rejected. Preserve it if a racing
+            // message_start already confirmed delivery.
+            const item = transcriptStore.get(transcriptKey);
+            if (item?.kind === "user" && item.queued === true) {
+              queuedPromptDeliveries.delete(transcriptKey);
+              transcriptStore.delete(transcriptKey);
+              pushUpdate();
+            }
+            throw error;
+          }
+        },
+        interrupt: async () => {
+          await startupPromise;
+          if (wasAborted || settled || status !== "running") return;
+          // Mirror the interactive session's Esc feedback at press time —
+          // before the abort round-trip, so an in-flight reply cannot slot
+          // in ahead of the marker: mark still-running tool calls as cut
+          // off and leave the interrupt marker immediately.
+          for (const key of toolTranscriptKeys.values()) {
+            const item = transcriptStore.get(key);
+            if (item?.kind === "tool" && item.status === "running") {
+              transcriptStore.upsert({ ...item, status: "error" });
+            }
+          }
+          toolTranscriptKeys.clear();
+          // Repeated Esc presses coalesce onto one marker instead of
+          // stacking a line per keypress. An interrupt strands queued
+          // steering (nothing runs to deliver it until the next turn);
+          // say so instead of letting messages silently disappear.
+          const stranded = transcriptStore
+            .snapshot()
+            .filter(
+              (item) => item.kind === "user" && item.queued === true,
+            ).length;
+          const last = transcriptStore.snapshot().at(-1);
+          transcriptStore.upsert({
+            key:
+              last?.kind === "notice"
+                ? last.key
+                : `notice:${++activitySequence}`,
+            kind: "notice",
+            notice: "interrupted",
+            text:
+              stranded > 0
+                ? `Interrupted: ${stranded} ${stranded === 1 ? "message remains" : "messages remain"} queued`
+                : "Interrupted: send a message to continue",
+            at: Date.now(),
+          });
+          pushUpdate();
+          await sendCommand({ type: "abort" });
+        },
+        held: () => settleHolds > 0,
+        hold: () => {
+          settleHolds += 1;
+          if (settleHolds === 1) {
+            try {
+              fs.writeFileSync(holdFilePath, "1");
+            } catch {
+              // Without the file the child simply is not gated.
+            }
+          }
+          let released = false;
+          return () => {
+            if (released) return;
+            released = true;
+            settleHolds -= 1;
+            if (settleHolds > 0) return;
+            try {
+              fs.rmSync(holdFilePath, { force: true });
+            } catch {
+              // Removal failures only mean the gate stays until exit.
+            }
+            if (stdinEnded || settled || wasAborted) return;
+            if (!agentSettled) return;
+            if (submissionAccepted) {
+              endStdin();
+              return;
+            }
+            // The gate may have blocked the agent's submission attempts; a
+            // settled, resultless agent gets one nudge to finish instead of
+            // being reaped into a "finished without a result" failure.
+            transcriptStore.upsert({
+              key: `notice:${++activitySequence}`,
+              kind: "notice",
+              notice: "detached",
+              text: "Detached: finishing assignment",
+              at: Date.now(),
+            });
+            void sendCommand({
+              type: "prompt",
+              message:
+                "The supervising user detached. Complete the assignment now and submit your result.",
+            }).catch(() => {
+              if (!stdinEnded && !settled) endStdin();
+            });
+          };
         },
         abort: () => {
           if (wasAborted || settled) return;

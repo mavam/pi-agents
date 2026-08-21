@@ -1375,6 +1375,24 @@ describe("run-level execution budgets", () => {
     expect(cancelled.reason).toBe("budget");
   });
 
+  test("maxDuration waits until an attached user releases the run", async () => {
+    let held = true;
+    let settled = false;
+    const pending = run(
+      agent("a", "t"),
+      (call) => hangUntilAbort(call.signal),
+      { budgets: { maxDuration: 0.01 }, isHeld: () => held },
+    ).finally(() => {
+      settled = true;
+    });
+    await Bun.sleep(30);
+    expect(settled).toBe(false);
+    held = false;
+    const { outcome } = await pending;
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("run duration budget exceeded");
+  });
+
   test("maxCost fails the run once cumulative cost exceeds it", async () => {
     // Each fake agent completion costs $0.01 (see makeRunner).
     const { outcome, calls } = await run(
@@ -1410,6 +1428,79 @@ describe("run-level execution budgets", () => {
       reason: string;
     };
     expect(cancelled.reason).toBe("budget");
+  });
+
+  test("token and cost breaches wait for an attached user", async () => {
+    let held = true;
+    const flow = validateFlow(agent("a", "t"), {});
+    const start = (
+      runId: string,
+      budgets: { maxTokens?: number; maxCost?: number },
+      usage: ReturnType<typeof emptyUsage>,
+    ) =>
+      executeFlow({
+        runId,
+        flow,
+        budgets,
+        isHeld: () => held,
+        runAgent: async (call) => {
+          call.onProgress?.({ text: "still attached", usage });
+          await hangUntilAbort(call.signal);
+          return { value: "unreachable" };
+        },
+      });
+
+    const tokenUsage = emptyUsage();
+    tokenUsage.input = 600;
+    const costUsage = emptyUsage();
+    costUsage.cost = 1;
+    let settled = 0;
+    const tokenRun = start(
+      "held-tokens",
+      { maxTokens: 500 },
+      tokenUsage,
+    ).finally(() => {
+      settled += 1;
+    });
+    const costRun = start("held-cost", { maxCost: 0.5 }, costUsage).finally(
+      () => {
+        settled += 1;
+      },
+    );
+    await Bun.sleep(30);
+    expect(settled).toBe(0);
+    held = false;
+    const [tokenOutcome, costOutcome] = await Promise.all([tokenRun, costRun]);
+    expect(tokenOutcome.error).toContain("token budget exceeded");
+    expect(costOutcome.error).toContain("cost budget exceeded");
+  });
+
+  test("a pending breach wins when an agent settles immediately after detach", async () => {
+    let held = true;
+    let finish!: () => void;
+    const releaseAgent = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const flow = validateFlow(agent("a", "t"), {});
+    const pending = executeFlow({
+      runId: "held-settle-race",
+      flow,
+      budgets: { maxTokens: 500 },
+      isHeld: () => held,
+      runAgent: async (call) => {
+        const usage = emptyUsage();
+        usage.input = 600;
+        call.onProgress?.({ text: "done", usage });
+        await releaseAgent;
+        return { value: "result", usage };
+      },
+    });
+    await Bun.sleep(30);
+    held = false;
+    finish();
+    const outcome = await pending;
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("token budget exceeded");
   });
 
   test("a budget-cut agent's partial text lands in node_failed", async () => {

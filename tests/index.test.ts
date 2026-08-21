@@ -51,7 +51,6 @@ describe("extension process boundary", () => {
       "workflow_list",
       "workflow_inspect",
       "workflow_result",
-      "workflow_steer",
       "workflow_stop",
     ]);
   });

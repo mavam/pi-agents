@@ -8,6 +8,9 @@ import {
 
 export const RESULT_TOOL_NAME = "pi_agents_submit_result";
 export const RESULT_SCHEMA_FILE_ENV_VAR = "PI_AGENTS_RESULT_SCHEMA_FILE";
+/** Names a file whose existence defers result submission: while a
+ * supervising user is attached, the agent may not terminate. */
+export const RESULT_HOLD_FILE_ENV_VAR = "PI_AGENTS_ATTACH_HOLD_FILE";
 
 function resultEnvelope(rawParams: unknown): AgentResultEnvelope {
   if (typeof rawParams !== "object" || rawParams === null) {
@@ -76,6 +79,17 @@ export default function resultToolExtension(pi: ExtensionAPI): void {
       parameters,
 
       async execute(_toolCallId, rawParams) {
+        // While a supervising user is attached, the agent may not terminate:
+        // the engine materializes a hold file for the attachment's lifetime,
+        // and the thrown tool error sends the model back to the conversation.
+        const holdFile = process.env[RESULT_HOLD_FILE_ENV_VAR];
+        if (holdFile && fs.existsSync(holdFile)) {
+          throw new Error(
+            "Submission deferred: a supervising user is attached to this " +
+              "session. Keep responding to them; submit again once they " +
+              "detach or tell you to finish.",
+          );
+        }
         // Provider adapters such as Anthropic preserve top-level properties
         // but cannot express the exclusive choice. A thrown tool error is
         // returned to the model so it can correct and resubmit the envelope.

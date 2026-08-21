@@ -780,22 +780,32 @@ describe("subprocess spawn engine", () => {
     expect(handle.status).toBe("completed");
   });
 
-  test("releasing the hold settles an idle, resultless spawn", async () => {
+  test("release nudges a settled, resultless agent to finish", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
     const proc = procs[0]?.proc as FakeProc;
     const release = handle.hold?.();
-    // Let startup (steering mode, task prompt, get_state) finish first.
-    await handle.prompt?.("are you there");
+    await handle.prompt?.("hello there");
+    // The agent settles without a result (its submission was gated).
     proc.emitRecord({ type: "agent_settled" });
     await Bun.sleep(0);
-    expect(proc.stdin.ended).toBe(false);
     release?.();
-    expect(proc.stdin.ended).toBe(true);
-    proc.close(0);
-    await expect(handle.wait()).rejects.toThrow(
-      "finished without submitting a result",
+    await Bun.sleep(0);
+    const nudge = proc.stdin.records.filter(
+      (record) =>
+        record.type === "prompt" &&
+        typeof record.message === "string" &&
+        record.message.includes("detached"),
     );
+    expect(nudge).toHaveLength(1);
+    expect(proc.stdin.ended).toBe(false);
+    // The nudged agent submits; the spawn completes normally.
+    proc.emitRecord({ type: "agent_start" });
+    submitResult(proc, "result");
+    proc.settle();
+    proc.close(0);
+    const outcome = await handle.wait();
+    expect(outcome.value).toBe("result");
   });
 
   test("streams progress updates", async () => {
@@ -938,14 +948,17 @@ describe("subprocess spawn engine", () => {
     proc.emitAssistant("early answer");
     proc.emitRecord({ type: "turn_start" });
     proc.emitAssistant("x".repeat(MAX_TRANSCRIPT_CHARS + 1_000));
+    const before = handle.transcript?.() ?? [];
+    expect(before).toHaveLength(1);
+    expect(before[0]?.kind).toBe("assistant");
+    if (before[0]?.kind === "assistant") {
+      expect(before[0].text.length).toBeLessThanOrEqual(MAX_TRANSCRIPT_CHARS);
+    }
     submitResult(proc, "result");
     proc.settle();
     proc.close(0);
     await handle.wait();
     await reader;
-    const items = handle.transcript?.() ?? [];
-    expect(items).toHaveLength(1);
-    expect(items[0]?.kind).toBe("assistant");
   });
 
   test("strict JSONL preserves chunking, CRLF, and Unicode separators", async () => {

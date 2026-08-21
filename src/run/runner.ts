@@ -67,6 +67,7 @@ export function delegationPreamble(): string {
     "If the user interrupts your current activity, do not blindly resume it — their next message overrides your previous plan.",
     "Apart from these steering exchanges, assistant messages are progress notes and are not returned to the caller.",
     "Complete the assignment by submitting exactly one complete agent result through the provided result-submission mechanism as your final action.",
+    "While a user is attached, submission may be deferred by the environment; keep engaging with them and submit once they leave or tell you to finish.",
     "If the assignment cannot be completed, or the user tells you to stop, submit an error with a concrete reason instead of fabricating a result.",
   ].join(" ");
 }

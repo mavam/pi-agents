@@ -23,7 +23,11 @@ import {
   effectiveResultSchema,
   validateJsonSchema,
 } from "../model/json-schema.js";
-import { RESULT_SCHEMA_FILE_ENV_VAR, RESULT_TOOL_NAME } from "./result-tool.js";
+import {
+  RESULT_HOLD_FILE_ENV_VAR,
+  RESULT_SCHEMA_FILE_ENV_VAR,
+  RESULT_TOOL_NAME,
+} from "./result-tool.js";
 import {
   AgentErrorResult,
   emptyUsage,
@@ -569,6 +573,7 @@ export function createSubprocessSpawnEngine(options?: {
         spec.systemPrompt?.trim() || undefined,
       );
       tempDir = spawnFiles.dir;
+      const holdFilePath = path.join(spawnFiles.dir, "attach-hold");
       if (spawnFiles.promptFilePath) {
         args.push("--append-system-prompt", spawnFiles.promptFilePath);
       }
@@ -1074,6 +1079,21 @@ export function createSubprocessSpawnEngine(options?: {
                 );
               }
               submissionAccepted = true;
+              // Result submission is engine plumbing and filtered from the
+              // transcript; leave a visible marker so an attached user sees
+              // that the agent finished (and with what).
+              const preview =
+                agentErrorReason !== undefined
+                  ? `error: ${clippedLine(agentErrorReason, 120)}`
+                  : typeof resultValue === "string"
+                    ? clippedLine(resultValue, 120)
+                    : clippedLine(JSON.stringify(resultValue) ?? "", 120);
+              transcriptStore.upsert({
+                key: `notice:${++activitySequence}`,
+                kind: "notice",
+                text: `Result submitted${preview ? ` — ${preview}` : ""}`,
+                at: Date.now(),
+              });
             }
             activeTools.delete(record.toolCallId);
             const key = toolTranscriptKeys.get(record.toolCallId);
@@ -1119,6 +1139,7 @@ export function createSubprocessSpawnEngine(options?: {
             ...process.env,
             ...(spec.env ?? {}),
             [RESULT_SCHEMA_FILE_ENV_VAR]: spawnFiles.schemaFilePath,
+            [RESULT_HOLD_FILE_ENV_VAR]: holdFilePath,
           },
           shell: false,
           stdio: ["pipe", "pipe", "pipe"],
@@ -1402,12 +1423,46 @@ export function createSubprocessSpawnEngine(options?: {
         },
         hold: () => {
           settleHolds += 1;
+          if (settleHolds === 1) {
+            try {
+              fs.writeFileSync(holdFilePath, "1");
+            } catch {
+              // Without the file the child simply is not gated.
+            }
+          }
           let released = false;
           return () => {
             if (released) return;
             released = true;
             settleHolds -= 1;
-            if (settleHolds === 0 && agentSettled && !stdinEnded) endStdin();
+            if (settleHolds > 0) return;
+            try {
+              fs.rmSync(holdFilePath, { force: true });
+            } catch {
+              // Removal failures only mean the gate stays until exit.
+            }
+            if (stdinEnded || settled || wasAborted) return;
+            if (!agentSettled) return;
+            if (submissionAccepted) {
+              endStdin();
+              return;
+            }
+            // The gate may have blocked the agent's submission attempts; a
+            // settled, resultless agent gets one nudge to finish instead of
+            // being reaped into a "finished without a result" failure.
+            transcriptStore.upsert({
+              key: `notice:${++activitySequence}`,
+              kind: "notice",
+              text: "User detached — finishing the assignment.",
+              at: Date.now(),
+            });
+            void sendCommand({
+              type: "prompt",
+              message:
+                "The supervising user detached. Complete the assignment now and submit your result.",
+            }).catch(() => {
+              if (!stdinEnded && !settled) endStdin();
+            });
           };
         },
         abort: () => {

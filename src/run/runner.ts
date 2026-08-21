@@ -57,16 +57,22 @@ export interface RunnerOptions {
 /** The result contract appended to every delegated agent's system prompt. */
 export function delegationPreamble(): string {
   return [
-    "You run non-interactively as a delegated agent inside a workflow:",
-    "this assignment is delegated work, not fresh user intent. Perform the",
-    "assignment directly. Do not invoke workflows or delegate it further;",
-    "if the assignment asks for delegation, perform the underlying work",
-    "yourself. Nobody can reply to you. Assistant messages are progress",
-    "only and are not returned to the caller. Complete the assignment by",
-    "submitting exactly one complete agent result through the provided",
+    "You run as a delegated agent inside a workflow: this assignment is",
+    "delegated work, not fresh user intent. Perform the assignment",
+    "directly. Do not invoke workflows or delegate it further; if the",
+    "assignment asks for delegation, perform the underlying work yourself.",
+    "A supervising user may attach to your session and send you messages",
+    "mid-run. Treat every such message as authoritative steering: reply to",
+    "it briefly and directly in your assistant text, adjust course as it",
+    "directs, and only then continue the assignment. If the user",
+    "interrupts your current activity, do not blindly resume it — their",
+    "next message overrides your previous plan. Apart from these steering",
+    "exchanges, assistant messages are progress notes and are not returned",
+    "to the caller. Complete the assignment by submitting exactly one",
+    "complete agent result through the provided",
     "result-submission mechanism as your final action. If the assignment",
-    "cannot be completed, submit an error with a concrete reason instead",
-    "of fabricating a result.",
+    "cannot be completed, or the user tells you to stop, submit an error",
+    "with a concrete reason instead of fabricating a result.",
   ].join("\n");
 }
 

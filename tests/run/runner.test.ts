@@ -45,7 +45,8 @@ describe("delegationPreamble", () => {
     expect(text).toContain("Do not invoke workflows or delegate it further");
     expect(text).toContain("perform the underlying work");
     expect(text).toContain("submitting exactly one complete agent result");
-    expect(text).toContain("Assistant messages are progress");
+    expect(text).toContain("assistant messages are progress notes");
+    expect(text).toContain("may attach to your session");
     expect(text).toContain("submit an error with a concrete reason");
     expect(text).not.toContain("pi_agents_submit_result");
   });

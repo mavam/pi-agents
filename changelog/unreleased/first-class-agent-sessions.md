@@ -19,8 +19,8 @@ Attaching to a running agent hides the run panel and opens an agent pane in
 the editor slot. The pane renders the live transcript with pi's message
 components and includes an embedded editor for talking to the agent. Press
 `esc` to interrupt the current turn and keep the agent attached, or press `←`
-from an empty editor to return to the parent session. An inverted badge names
-the attached agent. A settled agent opens as its own pi session with full
+from an empty editor to return to the parent session. A softly theme-colored
+badge names the attached agent. A settled agent opens as its own pi session with full
 history and tree navigation. You can also open it with `/agent-session`. The
 `/workflows` overlay uses the same `⏎` attach action, while `o` posts the full
 output. The parent workflow overview stays hidden while you are inside an

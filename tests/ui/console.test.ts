@@ -74,7 +74,18 @@ describe("AgentPane", () => {
       liveHandle: () => ({ transcript: () => [], hold: () => () => {} }),
     };
     const tui = { terminal: { rows: 24 }, requestRender() {} };
-    const theme = { fg: (_name: string, text: string) => text };
+    const foregrounds: string[] = [];
+    const backgrounds: string[] = [];
+    const theme = {
+      fg: (name: string, text: string) => {
+        foregrounds.push(name);
+        return text;
+      },
+      bg: (name: string, text: string) => {
+        backgrounds.push(name);
+        return text;
+      },
+    };
     const keybindings = { matches: () => false };
     const pane = new AgentPane(
       tui as never,
@@ -94,6 +105,8 @@ describe("AgentPane", () => {
       expect(rendered.match(new RegExp(label, "g"))).toHaveLength(1);
       expect(rendered).not.toContain("❖");
       expect(rendered).not.toContain("⏎ send");
+      expect(foregrounds).toContain("customMessageLabel");
+      expect(backgrounds).toContain("customMessageBg");
     } finally {
       pane.dispose();
     }

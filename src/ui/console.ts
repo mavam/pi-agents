@@ -297,21 +297,17 @@ export async function openAgentSession(
 // ---------------------------------------------------------------------------
 // The attached-agent pane: one focused component in the editor slot.
 
-/** Reverse-video wrap, so the label reads as a badge in any theme. */
-function inverted(text: string): string {
-  return `\u001b[7m${text}\u001b[27m`;
-}
-
-/** `──────── badge ──`: a border row with a right-aligned inverted badge. */
+/** `──────── badge ──`: a border row with a right-aligned themed badge. */
 export function badgeBorder(
   label: string,
   width: number,
   border: (text: string) => string,
+  badge: (text: string) => string,
 ): string {
   const tail = 2;
   const fitted = truncateToWidth(label, Math.max(1, width - tail - 2), "…");
   const lead = Math.max(1, width - visibleWidth(fitted) - tail);
-  return `${border("─".repeat(lead))}${inverted(fitted)}${border("─".repeat(tail))}`;
+  return `${border("─".repeat(lead))}${badge(fitted)}${border("─".repeat(tail))}`;
 }
 
 /**
@@ -542,8 +538,12 @@ export class AgentPane implements Component {
     const editorLines = this.editor.render(width);
     if (run && node && editorLines.length > 0) {
       const label = ` ${nodeDisplayName(node)}${node.agent ? ` (${node.agent})` : ""} · ${run.header.label ?? run.header.flow.kind} `;
-      editorLines[0] = badgeBorder(label, width, (text) =>
-        theme.fg("borderMuted", text),
+      editorLines[0] = badgeBorder(
+        label,
+        width,
+        (text) => theme.fg("borderMuted", text),
+        (text) =>
+          theme.bg("customMessageBg", theme.fg("customMessageLabel", text)),
       );
     }
 

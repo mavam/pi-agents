@@ -5,26 +5,19 @@
  *
  *   editor ── left (empty editor) / ctrl+q ──▶ panel
  *   panel  ── esc / → / typing ──▶ editor
- *   panel  ── ⏎ on a running agent ──▶ attached
- *   attached ── left (empty editor) ──▶ editor
+ *   panel  ── ⏎ on a running agent ──▶ AgentPane (ctx.ui.custom owns focus;
+ *                                      this handler goes dormant until it
+ *                                      closes)
  *
- * Attached mode keeps pi's editor in place as the agent's composer: the
- * panel shows the agent's transcript with pi's native message renderers, and
- * everything submitted from the editor is routed into the agent through the
- * `input` event (handleUserInput below). Esc interrupts the agent's current
- * turn — exactly like Esc in a normal pi session — left-arrow detaches, and
- * shift+↑↓ scroll. While attached, the spawn is held: an idle settle without
- * a result keeps the child promptable instead of ending the node.
+ * The AgentPane (ui/console.ts) is a single focused component in the editor
+ * slot with a real embedded editor, so no input routing happens here while
+ * attached.
  */
 
-import type {
-  ExtensionContext,
-  InputEvent,
-  InputEventResult,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, isKeyRelease, parseKey } from "@earendil-works/pi-tui";
 import type { RunManager } from "../run/runs.js";
-import { openAgentSession } from "./console.js";
+import { openAgentPane } from "./console.js";
 import type { RunPanel } from "./panel.js";
 
 /** True for input a user typed as text: no escape introducer, no control
@@ -40,8 +33,8 @@ export class FocusController {
   private readonly panel: RunPanel;
   private ctx: ExtensionContext | undefined;
   private unsubscribe: (() => void) | undefined;
-  /** Releases the attached spawn's settle-hold; set for the attachment. */
-  private releaseHold: (() => void) | undefined;
+  /** True while the AgentPane owns the editor slot and keyboard focus. */
+  private paneOpen = false;
   /** Duplicate-delivery guard: some terminal stacks hand the same chunk to
    * input listeners twice in immediate succession. */
   private lastData = "";
@@ -62,8 +55,6 @@ export class FocusController {
   }
 
   dispose(): void {
-    this.releaseHold?.();
-    this.releaseHold = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.ctx = undefined;
@@ -72,74 +63,27 @@ export class FocusController {
   /** Explicit entry point (ctrl+q shortcut) that works mid-composition. */
   focusPanel(ctx?: ExtensionContext): void {
     if (ctx) this.ctx = ctx;
-    if (this.panel.attachedTarget() || !this.panel.hasRows()) return;
+    if (this.paneOpen || !this.panel.hasRows()) return;
     this.panel.setFocused(true);
   }
 
-  /** Attach the editor and panel to one agent (also used by /workflows). */
+  /** Attach to one agent: the AgentPane for a running agent, its own pi
+   * session for a settled one (also used by the /workflows overlay). */
   attach(ctx: ExtensionContext, runId: string, instance: string): void {
     this.ctx = ctx;
-    const node = this.manager.state.runs.get(runId)?.nodes.get(instance);
-    if (!node) return;
-    if (node.status !== "running") {
-      void openAgentSession(ctx, this.manager, runId, node).catch((error) => {
+    if (this.paneOpen) return;
+    this.panel.setFocused(false);
+    this.paneOpen = true;
+    void openAgentPane(ctx, this.manager, this.panel, runId, instance)
+      .catch((error) => {
         ctx.ui.notify(
           error instanceof Error ? error.message : String(error),
           "error",
         );
+      })
+      .finally(() => {
+        this.paneOpen = false;
       });
-      return;
-    }
-    const handle = this.manager.liveHandle(runId, instance);
-    if (!handle) {
-      ctx.ui.notify("Agent is no longer attachable.", "warning");
-      return;
-    }
-    this.releaseHold?.();
-    this.releaseHold = handle.hold?.();
-    this.panel.setFocused(false);
-    this.panel.setAttached({ runId, instance });
-  }
-
-  detach(): void {
-    this.releaseHold?.();
-    this.releaseHold = undefined;
-    this.panel.setAttached(undefined);
-  }
-
-  /**
-   * Route editor submissions while attached: everything the user types goes
-   * to the attached agent (delivered as steering mid-turn). Slash commands
-   * keep their normal meaning, so /workflows and friends stay reachable.
-   * Wired into `pi.on("input", …)` by the extension entry point.
-   */
-  handleUserInput(event: InputEvent): InputEventResult | undefined {
-    const attached = this.panel.attachedTarget();
-    if (!attached || event.source !== "interactive") return undefined;
-    const text = event.text.trim();
-    if (!text || text.startsWith("/")) return undefined;
-    const ctx = this.ctx;
-    const node = this.manager.state.runs
-      .get(attached.runId)
-      ?.nodes.get(attached.instance);
-    const handle = this.manager.liveHandle(attached.runId, attached.instance);
-    // A settled node (or a spawn that already submitted its result) takes no
-    // further input. Never leak the text into the parent session; tell the
-    // user how to move on instead.
-    if (node?.status !== "running" || !handle?.prompt) {
-      ctx?.ui.notify(
-        "Agent settled and takes no further input — ← goes back; /agent-session opens its session.",
-        "error",
-      );
-      return { action: "handled" };
-    }
-    void handle.prompt(event.text).catch((error) => {
-      ctx?.ui.notify(
-        error instanceof Error ? error.message : String(error),
-        "warning",
-      );
-    });
-    return { action: "handled" };
   }
 
   private releaseToEditor(): void {
@@ -148,7 +92,7 @@ export class FocusController {
 
   private handle(data: string): { consume?: boolean } | undefined {
     const ctx = this.ctx;
-    if (!ctx) return undefined;
+    if (!ctx || this.paneOpen) return undefined;
     // Kitty keyboard protocol reports presses and releases separately, and
     // parseKey maps both to the same key name. Acting on releases would
     // double every navigation step; pi's own components ignore them too.
@@ -174,52 +118,6 @@ export class FocusController {
   ): { consume?: boolean } | undefined {
     const keybindings = getKeybindings();
     const key = parseKey(data) ?? data;
-
-    const attached = this.panel.attachedTarget();
-    if (attached) {
-      // Esc means the same thing as in a normal pi session: interrupt the
-      // agent's current turn. The held spawn stays alive and promptable.
-      if (keybindings.matches(data, "tui.select.cancel")) {
-        const handle = this.manager.liveHandle(
-          attached.runId,
-          attached.instance,
-        );
-        if (handle?.interrupt) {
-          void handle.interrupt().catch((error) => {
-            ctx.ui.notify(
-              error instanceof Error ? error.message : String(error),
-              "warning",
-            );
-          });
-          return { consume: true };
-        }
-        return undefined;
-      }
-      // Left from an empty editor goes back to the parent context, mirroring
-      // how the panel is entered.
-      if (key === "left" && ctx.ui.getEditorText() === "") {
-        this.detach();
-        return { consume: true };
-      }
-      if (key === "shift+up" || key === "ctrl+y") {
-        this.panel.scrollAttached(-1);
-        return { consume: true };
-      }
-      if (key === "shift+down") {
-        this.panel.scrollAttached(1);
-        return { consume: true };
-      }
-      if (key === "shift+pageUp") {
-        this.panel.scrollAttached(-10);
-        return { consume: true };
-      }
-      if (key === "shift+pageDown") {
-        this.panel.scrollAttached(10);
-        return { consume: true };
-      }
-      // Everything else belongs to the editor, which now feeds this agent.
-      return undefined;
-    }
 
     if (!this.panel.isFocused()) {
       // Enter the panel only from an empty editor, so left-arrow keeps its

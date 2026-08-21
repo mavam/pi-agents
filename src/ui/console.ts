@@ -14,16 +14,31 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   AssistantMessageComponent,
+  CustomEditor,
   type ExtensionCommandContext,
   type ExtensionContext,
   getMarkdownTheme,
+  getSelectListTheme,
+  type KeybindingsManager,
+  type Theme,
   ToolExecutionComponent,
   UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
-import { type Component, Text, type TUI } from "@earendil-works/pi-tui";
-import type { TranscriptItem } from "../engine/types.js";
+import {
+  type Component,
+  parseKey,
+  Text,
+  type TUI,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import type { SpawnHandle, TranscriptItem } from "../engine/types.js";
 import type { RunManager } from "../run/runs.js";
-import type { NodeView } from "../run/state.js";
+import type { NodeView, RunView } from "../run/state.js";
+import { workNodes } from "../run/state.js";
+import { nodeDisplayName } from "./render.js";
+import { STATUS_STYLES } from "./status.js";
+import { type Colorize, formatElapsed } from "./widget.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -273,4 +288,298 @@ export async function openAgentSession(
     if (!proceed) return;
   }
   await command.switchSession(node.sessionFile);
+}
+
+// ---------------------------------------------------------------------------
+// The attached-agent pane: one focused component in the editor slot.
+
+/** Reverse-video wrap, so the label reads as a badge in any theme. */
+function inverted(text: string): string {
+  return `\u001b[7m${text}\u001b[27m`;
+}
+
+/** `──────── badge ──`: a border row with a right-aligned inverted badge. */
+export function badgeBorder(
+  label: string,
+  width: number,
+  border: (text: string) => string,
+): string {
+  const tail = 2;
+  const fitted = truncateToWidth(label, Math.max(1, width - tail - 2), "…");
+  const lead = Math.max(1, width - visibleWidth(fitted) - tail);
+  return `${border("─".repeat(lead))}${inverted(fitted)}${border("─".repeat(tail))}`;
+}
+
+/**
+ * Neutralize characters that desynchronize the renderer's width accounting:
+ * tabs expand at the terminal's discretion and carriage returns rewind the
+ * cursor. ESC is kept for SGR colors; other C0 control bytes are dropped.
+ */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately stripping C0 bytes
+const C0_CONTROL_BYTES = /[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/g;
+
+export function sanitizeLine(line: string): string {
+  return line.replaceAll("\t", "  ").replace(C0_CONTROL_BYTES, "");
+}
+
+/** The one-line status shown under an attached agent transcript. Pure. */
+export function formatAttachedLine(
+  run: RunView,
+  node: NodeView,
+  now: number,
+  color: Colorize = (_c, t) => t,
+): string {
+  const presentation = STATUS_STYLES[node.status];
+  const siblings = workNodes(run).filter(
+    (candidate) =>
+      candidate.instance !== node.instance && candidate.status === "running",
+  ).length;
+  const dot = color("dim", " · ");
+  const parts = [
+    `${color("muted", "❖")} ${run.header.label ?? run.header.flow.kind} ${color("dim", "›")} ${color(presentation.color, presentation.icon)} ${nodeDisplayName(node)}`,
+    color("dim", node.agent ?? "ad-hoc"),
+    color("dim", formatElapsed((node.endedAt ?? now) - node.startedAt)),
+    siblings > 0 ? color("dim", `${siblings} sibling(s) running`) : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.join(dot);
+}
+
+const PANE_REFRESH_MS = 250;
+/** How long an inline flash message stays visible. */
+const FLASH_MS = 5_000;
+
+export interface AgentPaneOptions {
+  manager: RunManager;
+  runId: string;
+  instance: string;
+  done: () => void;
+}
+
+/**
+ * The attached-agent view: the agent's transcript (pi-native rendering), a
+ * status line, and a real embedded CustomEditor whose top border carries the
+ * agent badge. Mounted via ctx.ui.custom() in the editor slot — the one
+ * mechanism pi lays out and repaints reliably for large interactive content
+ * (extension widgets in the dock are for small status lines).
+ *
+ * Keys: type + ⏎ talks to the agent (delivered as steering mid-turn), esc
+ * interrupts its current turn, ← from an empty editor detaches, shift+↑↓
+ * scroll the transcript. Errors flash inline, in sequence with the view.
+ */
+export class AgentPane implements Component {
+  private readonly tui: TUI;
+  private readonly theme: Theme;
+  private readonly opts: AgentPaneOptions;
+  private readonly editor: CustomEditor;
+  private readonly view: AgentTranscriptView;
+  private readonly releaseHold: (() => void) | undefined;
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private items: readonly TranscriptItem[] = [];
+  private flash: { text: string; at: number } | undefined;
+  private disposed = false;
+
+  constructor(
+    tui: TUI,
+    theme: Theme,
+    keybindings: KeybindingsManager,
+    opts: AgentPaneOptions,
+  ) {
+    this.tui = tui;
+    this.theme = theme;
+    this.opts = opts;
+    const run = opts.manager.state.runs.get(opts.runId);
+    this.view = new AgentTranscriptView(tui, run?.header.cwd ?? process.cwd());
+    this.editor = new CustomEditor(
+      tui,
+      {
+        borderColor: (text) => theme.fg("borderMuted", text),
+        selectList: getSelectListTheme(),
+      },
+      keybindings,
+    );
+    this.editor.focused = true;
+    this.editor.onSubmit = (text) => this.submit(text);
+    this.editor.onEscape = () => this.interrupt();
+    this.releaseHold = this.handle()?.hold?.();
+    this.timer = setInterval(() => {
+      if (!this.disposed) this.tui.requestRender();
+    }, PANE_REFRESH_MS);
+    this.timer.unref?.();
+  }
+
+  private node(): NodeView | undefined {
+    return this.opts.manager.state.runs
+      .get(this.opts.runId)
+      ?.nodes.get(this.opts.instance);
+  }
+
+  private run(): RunView | undefined {
+    return this.opts.manager.state.runs.get(this.opts.runId);
+  }
+
+  private handle(): SpawnHandle | undefined {
+    return this.opts.manager.liveHandle(this.opts.runId, this.opts.instance);
+  }
+
+  private showFlash(text: string): void {
+    this.flash = { text, at: Date.now() };
+    this.tui.requestRender();
+  }
+
+  private submit(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (trimmed.startsWith("/")) {
+      this.showFlash("Commands run in the parent session — ← goes back first.");
+      return;
+    }
+    const node = this.node();
+    const handle = this.handle();
+    if (node?.status !== "running" || !handle?.prompt) {
+      this.showFlash(
+        "Agent settled and takes no further input — ← goes back; /agent-session opens its session.",
+      );
+      return;
+    }
+    this.editor.setText("");
+    this.editor.addToHistory(text);
+    void handle.prompt(text).catch((error) => {
+      this.showFlash(error instanceof Error ? error.message : String(error));
+    });
+  }
+
+  private interrupt(): void {
+    const handle = this.handle();
+    if (this.node()?.status !== "running" || !handle?.interrupt) return;
+    void handle.interrupt().catch((error) => {
+      this.showFlash(error instanceof Error ? error.message : String(error));
+    });
+  }
+
+  private close(): void {
+    this.dispose();
+    this.opts.done();
+  }
+
+  render(width: number): string[] {
+    const theme = this.theme;
+    const color: Colorize = (name, text) => theme.fg(name, text);
+    const run = this.run();
+    const node = this.node();
+    const handle = this.handle();
+    if (handle?.transcript) this.items = handle.transcript();
+    if (this.flash && Date.now() - this.flash.at > FLASH_MS) {
+      this.flash = undefined;
+    }
+
+    const editorLines = this.editor.render(width);
+    if (run && node && editorLines.length > 0) {
+      const label = ` ${nodeDisplayName(node)}${node.agent ? ` (${node.agent})` : ""} · ${run.header.label ?? run.header.flow.kind} `;
+      editorLines[0] = badgeBorder(label, width, (text) =>
+        theme.fg("borderMuted", text),
+      );
+    }
+
+    const running = node?.status === "running";
+    const hints = running
+      ? "⏎ send · esc interrupt · ← back · shift+↑↓ scroll"
+      : node?.sessionFile
+        ? "agent settled — ← back · /agent-session opens its session"
+        : "agent settled · ← back";
+    const status =
+      run && node
+        ? `${formatAttachedLine(run, node, Date.now(), color)}${color("dim", " · ")}${color("dim", hints)}`
+        : color("dim", "agent no longer known · ← back");
+
+    const rows = this.tui.terminal?.rows ?? 24;
+    const budget = Math.max(10, rows - 6);
+    const flashLines = this.flash
+      ? [color("error", `⚠ ${this.flash.text}`)]
+      : [];
+    const transcriptRows = Math.max(
+      3,
+      budget - editorLines.length - 1 - flashLines.length,
+    );
+    const transcript = this.view
+      .render(this.items, width, transcriptRows)
+      .map((line) => sanitizeLine(line));
+
+    return [...transcript, status, ...flashLines, ...editorLines];
+  }
+
+  handleInput(data: string): void {
+    const key = parseKey(data) ?? data;
+    if (key === "shift+up" || key === "ctrl+y") {
+      this.view.scrollBack = Math.min(
+        this.view.scrollBack + 1,
+        this.view.maxScroll(),
+      );
+    } else if (key === "shift+down") {
+      this.view.scrollBack = Math.max(0, this.view.scrollBack - 1);
+    } else if (key === "shift+pageUp") {
+      this.view.scrollBack = Math.min(
+        this.view.scrollBack + 10,
+        this.view.maxScroll(),
+      );
+    } else if (key === "shift+pageDown") {
+      this.view.scrollBack = Math.max(0, this.view.scrollBack - 10);
+    } else if (key === "left" && this.editor.getText() === "") {
+      this.close();
+      return;
+    } else {
+      this.editor.handleInput(data);
+    }
+    this.tui.requestRender();
+  }
+
+  invalidate(): void {
+    // State is pulled fresh on every render.
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    this.releaseHold?.();
+    this.view.dispose();
+  }
+}
+
+/**
+ * Attach to one agent: the pane for a running agent, its own pi session for
+ * a settled one. Suppresses the run panel while the pane is open (the pane
+ * carries the same status).
+ */
+export async function openAgentPane(
+  ctx: ExtensionContext,
+  manager: RunManager,
+  panel: { setSuppressed(value: boolean): void },
+  runId: string,
+  instance: string,
+): Promise<void> {
+  const node = manager.state.runs.get(runId)?.nodes.get(instance);
+  if (!node) return;
+  if (node.status !== "running") {
+    await openAgentSession(ctx, manager, runId, node);
+    return;
+  }
+  if (!manager.liveHandle(runId, instance)) {
+    ctx.ui.notify("Agent is no longer attachable.", "warning");
+    return;
+  }
+  panel.setSuppressed(true);
+  try {
+    await ctx.ui.custom<void>(
+      (tui, theme, keybindings, done) =>
+        new AgentPane(tui, theme, keybindings, {
+          manager,
+          runId,
+          instance,
+          done: () => done(undefined),
+        }),
+    );
+  } finally {
+    panel.setSuppressed(false);
+  }
 }

@@ -812,24 +812,21 @@ typing) returns focus to the editor.
 Because agent rows are color-coded by status, the running agents are visible
 at a glance.
 
-Attaching to a **running** agent turns the panel into that agent's live
-transcript, rendered with pi's own message components — assistant turns,
-thinking, and tool executions look exactly like the main conversation. The
-editor stays in place and becomes the agent's composer: everything you submit
-goes to the agent (delivered as steering while it is mid-turn), while slash
-commands keep their normal meaning. `esc` interrupts the agent's current turn
-— exactly like `esc` in a normal pi session — after which the agent idles,
-still attached and promptable, until you give it a new instruction or leave.
-`←` from an empty editor goes back to the parent context (mirroring how the
-panel is entered), and `shift+↑`/`shift+↓` scroll the transcript. A one-line
-status sits under the transcript, and the editor's own top border carries a
-right-aligned inverted badge naming the agent the editor currently feeds
-(pi-agents wraps pi's editor via `setEditorComponent`, following pi's
-border-status pattern; it steps aside if another extension already provides a
-custom editor). While
-attached, the spawn is held: an idle settle without a result keeps the child
-alive for follow-up prompts; leaving an idle, resultless agent lets it settle
-normally.
+Attaching to a **running** agent opens the agent pane in the editor slot
+(the same mechanism as the `/workflows` overlay): the agent's live
+transcript rendered with pi's own message components — assistant turns,
+thinking, and tool executions look exactly like the main conversation —
+with a status line and a real embedded pi editor beneath, whose top border
+carries a right-aligned inverted badge naming the agent. Everything you
+submit goes to the agent (delivered as steering while it is mid-turn).
+`esc` interrupts the agent's current turn — exactly like `esc` in a normal
+pi session — after which the agent idles, still attached and promptable,
+until you give it a new instruction or leave. `←` from an empty editor goes
+back to the parent context (mirroring how the panel is entered), and
+`shift+↑`/`shift+↓` scroll the transcript. While attached, the spawn is
+held: an idle settle without a result keeps the child alive for follow-up
+prompts; leaving an idle, resultless agent lets it settle normally. Slash
+commands belong to the parent session — press `←` first.
 Attaching to a **settled** agent opens
 the agent's own pi session as the active session — full editor, history, and
 tree navigation — since every delegated agent writes a real session file into

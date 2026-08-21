@@ -9,11 +9,8 @@
  * with c. Because the panel sits above the editor, expanding grows upward
  * without moving the editor or footer.
  *
- * While an agent is attached, the panel shows that agent's transcript with
- * pi's native message renderers plus one status line, padded to a constant
- * height so the bottom region never changes size mid-attachment; the pi
- * editor stays in place as the agent's composer (submissions intercepted at
- * the editor, see ui/editor.ts).
+ * Attaching opens the AgentPane (ui/console.ts) in the editor slot; while it
+ * is open the panel is suppressed, since the pane carries the same status.
  */
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -22,10 +19,9 @@ import {
   type TUI,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
-import type { TranscriptItem } from "../engine/types.js";
 import type { RunManager } from "../run/runs.js";
 import { type NodeView, type RunView, workNodes } from "../run/state.js";
-import { AgentTranscriptView } from "./console.js";
+import { sanitizeLine } from "./console.js";
 import { formatUsage, nodeDisplayName } from "./render.js";
 import { STATUS_STYLES } from "./status.js";
 import {
@@ -45,9 +41,6 @@ const TICK_MS = 1000;
 const SUMMARY_MIN_DISPLAY_MS = 3000;
 /** Focused-panel height cap, as a fraction of the terminal. */
 const MAX_HEIGHT_RATIO = 0.6;
-/** Rows reserved for the editor's borders, footer, status, and margin when
- * budgeting the attached transcript (on top of the editor's 30% growth). */
-const EDITOR_RESERVE_ROWS = 8;
 
 export type PanelRow =
   | { kind: "run"; run: RunView }
@@ -92,41 +85,6 @@ export function formatNodeLine(
   return parts.join(dot);
 }
 
-/** The one-line status shown under an attached agent transcript. Pure. */
-export function formatAttachedLine(
-  run: RunView,
-  node: NodeView,
-  now: number,
-  color: Colorize = (_c, t) => t,
-): string {
-  const presentation = STATUS_STYLES[node.status];
-  const siblings = workNodes(run).filter(
-    (candidate) =>
-      candidate.instance !== node.instance && candidate.status === "running",
-  ).length;
-  const dot = color("dim", " · ");
-  const parts = [
-    `${color("muted", "❖")} ${run.header.label ?? run.header.flow.kind} ${color("dim", "›")} ${color(presentation.color, presentation.icon)} ${nodeDisplayName(node)}`,
-    color("dim", node.agent ?? "ad-hoc"),
-    color("dim", formatElapsed((node.endedAt ?? now) - node.startedAt)),
-    siblings > 0 ? color("dim", `${siblings} sibling(s) running`) : undefined,
-  ].filter((part): part is string => part !== undefined);
-  return parts.join(dot);
-}
-
-/**
- * Neutralize characters that desynchronize the differential renderer's width
- * accounting: tabs expand at the terminal's discretion and carriage returns
- * rewind the cursor, so one raw tool-output line can wrap and orphan the
- * whole frame (duplicated panels, vanished editor). ESC is kept for SGR
- * colors; every other C0 control byte is dropped.
- */
-// biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately stripping C0 bytes
-const C0_CONTROL_BYTES = /[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/g;
-
-export function sanitizeLine(line: string): string {
-  return line.replaceAll("\t", "  ").replace(C0_CONTROL_BYTES, "");
-}
 class PanelLines implements Component {
   private readonly build: (width: number) => string[];
 
@@ -167,15 +125,10 @@ export class RunPanel {
   private selectedKey: string | undefined;
   /** Runs the user explicitly collapsed; everything else shows its agents. */
   private readonly collapsed = new Set<string>();
-  private attached: { runId: string; instance: string } | undefined;
-  /** Native transcript renderer for the attached agent; per attachment. */
-  private attachedView: AgentTranscriptView | undefined;
-  /** The TUI from the last widget mount, for forced repaints. */
+  /** The TUI from the last widget mount, for repaint requests. */
   private lastTui: TUI | undefined;
   /** Whether the persistent panel component is currently mounted. */
   private mounted = false;
-  /** Last transcript snapshot, kept so a settled agent stays visible. */
-  private attachedItems: readonly TranscriptItem[] | undefined;
 
   constructor(manager: RunManager, now: () => number = Date.now) {
     this.manager = manager;
@@ -217,7 +170,6 @@ export class RunPanel {
   }
 
   private shouldShow(): boolean {
-    if (this.attached) return true;
     return this.enabled && !this.suppressed && this.running().length > 0;
   }
 
@@ -271,39 +223,6 @@ export class RunPanel {
       const first = this.rows()[0];
       this.selectedKey = first ? rowKey(first) : undefined;
     }
-    this.update();
-  }
-
-  setAttached(value: { runId: string; instance: string } | undefined): void {
-    this.attached = value;
-    this.attachedView?.dispose();
-    this.attachedView = undefined;
-    this.attachedItems = undefined;
-    this.update();
-    // Attach/detach swaps the widget's entire content and height and the
-    // editor's border in one frame; the differential renderer can leave one
-    // stale row behind and then believe the screen matches. Force a full
-    // repaint on the next tick.
-    setTimeout(() => {
-      const tui = this.lastTui;
-      if (!tui || this.disposed) return;
-      tui.invalidate();
-      tui.requestRender(true);
-    }, 0);
-  }
-
-  attachedTarget(): { runId: string; instance: string } | undefined {
-    return this.attached;
-  }
-
-  /** Scroll the attached transcript; positive delta moves toward newer. */
-  scrollAttached(delta: number): void {
-    const view = this.attachedView;
-    if (!view) return;
-    view.scrollBack = Math.max(
-      0,
-      Math.min(view.scrollBack - delta, view.maxScroll()),
-    );
     this.update();
   }
 
@@ -419,52 +338,6 @@ export class RunPanel {
     return { ...held.activity, lastAt: candidate.lastAt };
   }
 
-  /** The attached agent's transcript (pi-native rendering) plus one status
-   * line at the bottom, next to the editor that now feeds this agent. */
-  private attachedLines(
-    tui: TUI,
-    width: number,
-    rowsBudget: number,
-    now: number,
-    color: Colorize,
-  ): string[] | undefined {
-    if (!this.attached) return undefined;
-    const { runId, instance } = this.attached;
-    const run = this.manager.state.runs.get(runId);
-    const node = run?.nodes.get(instance);
-    if (!run || !node) return undefined;
-    const handle = this.manager.liveHandle(runId, instance);
-    if (handle?.transcript) this.attachedItems = handle.transcript();
-    this.attachedView ??= new AgentTranscriptView(
-      tui,
-      run.header.cwd ?? process.cwd(),
-    );
-    const transcript = this.attachedView.render(
-      this.attachedItems ?? [],
-      width,
-      Math.max(3, rowsBudget - 2),
-    );
-    const hints =
-      node.status === "running"
-        ? "type to talk to this agent · esc interrupt · ← back · shift+↑↓ scroll"
-        : node.sessionFile
-          ? "agent settled — /agent-session opens it · ← back"
-          : "agent settled · ← back";
-    return [
-      ...transcript,
-      "",
-      `${formatAttachedLine(run, node, now, color)}${color("dim", " · ")}${color("dim", hints)}`,
-    ];
-  }
-
-  /** The attached run and node, for the badge in the editor's top border. */
-  attachedContext(): { run: RunView; node: NodeView } | undefined {
-    if (!this.attached) return undefined;
-    const run = this.manager.state.runs.get(this.attached.runId);
-    const node = run?.nodes.get(this.attached.instance);
-    return run && node ? { run, node } : undefined;
-  }
-
   private buildLines(
     width: number,
     rowsBudget: number,
@@ -531,27 +404,6 @@ export class RunPanel {
     const now = this.now();
     const terminalRows = tui?.terminal?.rows ?? 24;
     const rowsBudget = Math.max(4, Math.floor(terminalRows * MAX_HEIGHT_RATIO));
-    // The widget shares the persistent bottom region with the editor (which
-    // grows to 30% of the terminal while composing), the footer, and status
-    // rows. If their sum ever exceeds the screen, every redraw scrolls and
-    // orphans the previous frame in the scrollback — so the attached
-    // transcript reserves the editor's worst case explicitly instead of
-    // taking a flat share.
-    const attachedBudget = Math.max(
-      6,
-      Math.min(
-        Math.floor(terminalRows * 0.5),
-        terminalRows - Math.floor(terminalRows * 0.3) - EDITOR_RESERVE_ROWS,
-      ),
-    );
-    const attached = this.attachedLines(tui, width, attachedBudget, now, color);
-    if (attached) {
-      // Constant height for the whole attachment: a bottom region whose
-      // height changes with every streamed line is what desynchronized the
-      // differential renderer. Pad at the top so content hugs the editor.
-      while (attached.length < attachedBudget) attached.unshift("");
-      return attached;
-    }
     const running = this.running();
     if (running.length === 0) return [];
     const visibleIds = new Set(running.map((run) => run.header.id));
@@ -584,8 +436,6 @@ export class RunPanel {
     this.disposed = true;
     this.lastContext = undefined;
     this.heldActivity.clear();
-    this.attachedView?.dispose();
-    this.attachedView = undefined;
     this.stopTicking();
   }
 }

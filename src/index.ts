@@ -36,7 +36,6 @@ import {
 } from "./triggers/run-tools.js";
 import type { TriggerDeps } from "./triggers/start.js";
 import { createWorkflowCreateTool } from "./triggers/tool.js";
-import { installBadgeEditor } from "./ui/editor.js";
 import { FocusController } from "./ui/focus.js";
 import { FancyFooterRunReporter } from "./ui/footer.js";
 import { NotificationManager } from "./ui/notify.js";
@@ -93,10 +92,6 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
   };
   const refreshModels = createModelRefresher();
 
-  // While an agent is attached, editor submissions go to that agent instead
-  // of the main session; slash commands keep their normal meaning.
-  pi.on("input", (event) => focus.handleUserInput(event));
-
   registerRenderers(pi);
   pi.registerTool(createWorkflowCreateTool(deps));
   pi.registerTool(createWorkflowListTool(deps));
@@ -140,7 +135,6 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
     refreshModels(ctx.modelRegistry);
     rpc.setContext(ctx);
     focus.install(ctx);
-    installBadgeEditor(pi, ctx, widget, manager);
     reloadRunState(ctx);
     const trusted = isProjectTrusted(ctx);
     registerWorkflowCommands(pi, ctx.cwd, deps, trusted);

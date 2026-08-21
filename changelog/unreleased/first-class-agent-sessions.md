@@ -24,8 +24,10 @@ the attached agent. A settled agent opens as its own pi session with full
 history and tree navigation. You can also open it with `/agent-session`. The
 `/workflows` overlay uses the same `⏎` attach action, while `o` posts the full
 output. The parent workflow overview stays hidden while you are inside an
-agent, so its transcript ends cleanly at the editor border. Every attached message asks
-for a visible assistant reply before the agent uses tools or resumes its
+agent, so its transcript ends cleanly at the editor border. Pressing `esc`
+immediately switches the active tool to its failure background while
+cancellation completes. Every attached message asks for a visible assistant
+reply before the agent uses tools or resumes its
 assignment. A deferred result submission also tells the agent to emit the
 reply instead of ending with an invisible tool call. Per-agent and run-level
 budget cancellation waits until you detach, so a configured timeout or usage

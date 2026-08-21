@@ -3,6 +3,7 @@ import {
   AgentPane,
   formatPendingPromptLines,
   sanitizeLine,
+  toolResultPayload,
 } from "../../src/ui/console.js";
 
 const ESC = "\u001b";
@@ -33,6 +34,23 @@ describe("sanitizeLine", () => {
       "beforeafter",
     );
     expect(sanitizeLine(`before${ESC}]unterminated`)).toBe("before");
+  });
+});
+
+describe("toolResultPayload", () => {
+  test("turns an interrupted tool into a final error before output arrives", () => {
+    expect(
+      toolResultPayload({
+        key: "tool:1",
+        kind: "tool",
+        label: "sleep 10",
+        status: "error",
+        toolName: "bash",
+        toolCallId: "call-1",
+        args: { command: "sleep 10" },
+        at: Date.now(),
+      }),
+    ).toEqual({ content: [], isError: true });
   });
 });
 

@@ -43,7 +43,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** A pi-shaped tool result for ToolExecutionComponent.updateResult. */
-function toolResultPayload(item: TranscriptItem & { kind: "tool" }):
+export function toolResultPayload(item: TranscriptItem & { kind: "tool" }):
   | {
       content: Array<{ type: string; text?: string }>;
       details?: unknown;
@@ -63,6 +63,12 @@ function toolResultPayload(item: TranscriptItem & { kind: "tool" }):
       content: [{ type: "text", text: item.output }],
       isError: item.status === "error",
     };
+  }
+  // Esc marks the transcript item failed before the abort round-trip returns
+  // a tool result. Give Pi's native renderer an empty final error result so
+  // its background changes immediately instead of remaining pending-colored.
+  if (item.status === "error") {
+    return { content: [], isError: true };
   }
   return undefined;
 }

@@ -827,8 +827,9 @@ stays hidden while you are inside the agent. Everything you
 submit goes to the agent (delivered as steering while it is mid-turn). Each
 message tells the agent to answer in visible assistant text before it uses a
 tool or resumes the workflow.
-`esc` interrupts the agent's current turn — exactly like `esc` in a normal
-pi session — after which the agent idles, still attached and promptable,
+`esc` interrupts the agent's current turn and immediately marks its active
+tool as failed — exactly like `esc` in a normal pi session — after which the
+agent idles, still attached and promptable,
 until you give it a new instruction or leave. `←` from an empty editor goes
 back to the parent context (mirroring how the panel is entered), and
 `shift+↑`/`shift+↓` scroll the transcript. While attached, the spawn is

@@ -1492,7 +1492,7 @@ async function runWorkflowCommand(
     );
     // Command runs always go to the background; the result arrives as an
     // idle notification.
-    const started = startTriggeredRun(deps, {
+    startTriggeredRun(deps, {
       flow,
       cwd: ctx.cwd,
       scope: "both",
@@ -1507,7 +1507,6 @@ async function runWorkflowCommand(
       pi,
       formatWorkflowStartPreview(
         { name: wf.name, params: values },
-        started.runId,
         savedFlowTree,
       ),
     );

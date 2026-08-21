@@ -204,9 +204,7 @@ export function formatWorkflowResultPreview(
 ): string {
   const { runId, status, error } = result.details;
   const id = shortId(runId);
-  if (status === "running") {
-    return `\n${color("dim", `running in background · /workflow ${id}`)}`;
-  }
+  if (status === "running") return "";
   if (status === "completed") {
     const presentation = STATUS_STYLES.completed;
     const head = `\n${color(presentation.color, presentation.icon)} completed ${color("dim", `· /workflow ${id} result`)}`;
@@ -220,21 +218,10 @@ export function formatWorkflowResultPreview(
 /** Complete start message for direct slash-command invocations. */
 export function formatWorkflowStartPreview(
   call: WorkflowCallPreview,
-  runId: string,
   savedFlowTree: string,
   color: WorkflowPreviewColorize = plainPreview,
 ): string {
-  const preview =
-    formatWorkflowCallPreview(call, color, savedFlowTree) || "workflow";
-  const result = formatWorkflowResultPreview(
-    { details: { runId, status: "running" }, text: "" },
-    false,
-    color,
-  );
-  // The result formatter starts with one newline because tool calls render it
-  // in a separate component. Add another here to preserve the same gap when
-  // both slots share one command message.
-  return `${preview}\n${result}`;
+  return formatWorkflowCallPreview(call, color, savedFlowTree) || "workflow";
 }
 
 const renderMarkdownMessage: MessageRenderer = (message) =>

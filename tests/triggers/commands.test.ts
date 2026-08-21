@@ -149,10 +149,6 @@ task: compare {params.left} with {params.right}
       expect(preview).not.toContain("style:");
       expect(preview).not.toContain("context:");
       expect(preview).toContain("└─ ✦ ad-hoc · greet {params.target}");
-      expect(preview).toContain(
-        "\n\nrunning in background · /workflow 12345678",
-      );
-      expect(preview).not.toContain("Started run");
 
       await greet.handler('target="this pull request"', ctx);
       expect(messages).toHaveLength(2);

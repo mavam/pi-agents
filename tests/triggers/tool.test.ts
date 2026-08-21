@@ -1415,19 +1415,6 @@ describe("call and result previews", () => {
 
   test("result preview replaces the model-facing continuation text", async () => {
     const { formatResultPreview } = await import("../../src/triggers/tool.js");
-    const running = formatResultPreview(
-      {
-        details: { runId: "b3ca589a-0000", status: "running", label: "review" },
-        text: "Started workflow run … End your turn now — do not wait for it.",
-      },
-      false,
-    );
-    // Blank-line separated from the tree, icon-less and dim while live.
-    expect(running.startsWith("\n")).toBe(true);
-    expect(running).toContain("running in background · /workflow b3ca589a");
-    expect(running).not.toContain("◉");
-    expect(running).not.toContain("End your turn");
-
     const failed = formatResultPreview(
       {
         details: {

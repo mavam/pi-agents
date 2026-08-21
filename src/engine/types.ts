@@ -120,6 +120,12 @@ export class SpawnAborted extends Error {
   }
 }
 
+export type TranscriptNoticeKind =
+  | "interrupted"
+  | "submission-deferred"
+  | "result-submitted"
+  | "detached";
+
 /**
  * One entry in a delegated agent's live transcript. Engine-neutral: the
  * subprocess engine builds these from pi RPC records; other engines may map
@@ -137,9 +143,10 @@ export type TranscriptItem = (
       at: number;
     }
   | {
-      /** Out-of-band event marker (e.g. a user interrupt), rendered dim. */
+      /** Out-of-band event marker, rendered dim with a semantic icon. */
       key: string;
       kind: "notice";
+      notice: TranscriptNoticeKind;
       text: string;
       at: number;
     }

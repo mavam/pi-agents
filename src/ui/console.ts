@@ -32,7 +32,11 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import type { SpawnHandle, TranscriptItem } from "../engine/types.js";
+import type {
+  SpawnHandle,
+  TranscriptItem,
+  TranscriptNoticeKind,
+} from "../engine/types.js";
 import type { RunManager } from "../run/runs.js";
 import type { NodeView, RunView } from "../run/state.js";
 import { nodeDisplayName } from "./render.js";
@@ -89,6 +93,13 @@ function partialAssistantMessage(
 export function itemSignature(item: TranscriptItem): string {
   return `${item.kind}:${item.rev ?? 0}`;
 }
+
+const NOTICE_ICONS = {
+  interrupted: "⊘",
+  "submission-deferred": "○",
+  "result-submitted": "●",
+  detached: "←",
+} as const satisfies Record<TranscriptNoticeKind, string>;
 
 interface Slot {
   component: Component;
@@ -149,7 +160,11 @@ export class AgentTranscriptView {
       case "user":
         return new UserMessageComponent(item.text, getMarkdownTheme());
       case "notice":
-        return new Text(this.color("dim", `· ${item.text}`), 0, 0);
+        return new Text(
+          this.color("dim", `${NOTICE_ICONS[item.notice]} ${item.text}`),
+          0,
+          0,
+        );
       case "assistant": {
         const component = new AssistantMessageComponent(
           undefined,

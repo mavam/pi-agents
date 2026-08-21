@@ -67,24 +67,48 @@ describe("AgentTranscriptView", () => {
       },
     );
     try {
+      const now = Date.now();
       const lines = view.render(
         [
           {
             key: "notice:1",
             kind: "notice",
+            notice: "interrupted",
             text: "Interrupted: 1 message remains queued",
-            at: Date.now(),
+            at: now,
+          },
+          {
+            key: "notice:2",
+            kind: "notice",
+            notice: "submission-deferred",
+            text: "Submission deferred: detach to finish",
+            at: now,
+          },
+          {
+            key: "notice:3",
+            kind: "notice",
+            notice: "result-submitted",
+            text: "Result submitted: Finished.",
+            at: now,
+          },
+          {
+            key: "notice:4",
+            kind: "notice",
+            notice: "detached",
+            text: "Detached: finishing assignment",
+            at: now,
           },
         ],
         80,
-        3,
+        4,
       );
-      expect(lines).toHaveLength(1);
-      expect(lines[0]?.trimEnd()).toBe(
-        "· Interrupted: 1 message remains queued",
-      );
-      expect(lines[0]?.startsWith("·")).toBe(true);
-      expect(colors).toEqual(["dim"]);
+      expect(lines.map((line) => line.trimEnd())).toEqual([
+        "⊘ Interrupted: 1 message remains queued",
+        "○ Submission deferred: detach to finish",
+        "● Result submitted: Finished.",
+        "← Detached: finishing assignment",
+      ]);
+      expect(colors).toEqual(["dim", "dim", "dim", "dim"]);
     } finally {
       view.dispose();
     }

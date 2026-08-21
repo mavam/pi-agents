@@ -26,7 +26,8 @@ open it with `/agent-session`. The `/workflows` overlay uses the same `⏎`
 attach action, while `o` posts the full output. The parent workflow overview
 stays hidden while you are inside an agent, so its transcript ends cleanly at
 the editor border. Dim lifecycle notices now align at the left edge and use
-consistent sentence case, punctuation, and separators. Pressing `esc`
+consistent sentence case, punctuation, separators, and distinct semantic
+icons. Pressing `esc`
 immediately switches the active tool to its failure background while
 cancellation completes. Every attached message asks for a visible assistant
 reply before the agent uses tools or resumes its assignment. A deferred result

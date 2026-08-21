@@ -1092,6 +1092,7 @@ export function createSubprocessSpawnEngine(options?: {
                     ? last.key
                     : `notice:${++activitySequence}`,
                 kind: "notice",
+                notice: "submission-deferred",
                 text: "Submission deferred: detach to finish",
                 at: Date.now(),
               });
@@ -1141,6 +1142,7 @@ export function createSubprocessSpawnEngine(options?: {
               transcriptStore.upsert({
                 key: `notice:${++activitySequence}`,
                 kind: "notice",
+                notice: "result-submitted",
                 text: `Result submitted${preview ? `: ${preview}` : ""}`,
                 at: Date.now(),
               });
@@ -1483,6 +1485,7 @@ export function createSubprocessSpawnEngine(options?: {
                 ? last.key
                 : `notice:${++activitySequence}`,
             kind: "notice",
+            notice: "interrupted",
             text:
               stranded > 0
                 ? `Interrupted: ${stranded} ${stranded === 1 ? "message remains" : "messages remain"} queued`
@@ -1525,6 +1528,7 @@ export function createSubprocessSpawnEngine(options?: {
             transcriptStore.upsert({
               key: `notice:${++activitySequence}`,
               kind: "notice",
+              notice: "detached",
               text: "Detached: finishing assignment",
               at: Date.now(),
             });

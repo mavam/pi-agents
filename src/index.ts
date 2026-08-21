@@ -82,6 +82,13 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
   widget = new RunPanel(manager);
   footerReporter = new FancyFooterRunReporter(pi, manager);
   const focus = new FocusController(manager, widget);
+  // While a user is attached to an agent, nothing may wake the parent
+  // session; queued notifications deliver right after detach.
+  notifications.setDeliveryGate(() => focus.isPaneOpen());
+  focus.onPaneClosed = (ctx) => {
+    notifications.setContext(ctx);
+    notifications.flush(ctx);
+  };
 
   const deps: TriggerDeps = {
     pi,

@@ -37,6 +37,7 @@ interface TrackedRun {
 }
 
 export class NotificationManager {
+  private deliveryBlocked: (() => boolean) | undefined;
   private readonly pi: ExtensionAPI;
   private readonly manager: RunManager;
   private readonly tracked = new Map<string, TrackedRun>();
@@ -83,6 +84,11 @@ export class NotificationManager {
   }
 
   /** Deliver queued notifications when the origin session is current and idle. */
+  /** Block delivery (and parent wake-ups) while the predicate holds. */
+  setDeliveryGate(blocked: () => boolean): void {
+    this.deliveryBlocked = blocked;
+  }
+
   flush(ctx?: ExtensionContext): void {
     const context = ctx ?? this.currentContext;
     for (const [runId, tracked] of [...this.tracked.entries()]) {
@@ -180,6 +186,9 @@ export class NotificationManager {
     tracked: TrackedRun,
     ctx: ExtensionContext | undefined,
   ): boolean {
+    // While a user is attached to an agent, nothing may wake the parent
+    // session: queue and deliver after detach.
+    if (this.deliveryBlocked?.()) return false;
     if (!ctx || !isIdle(ctx)) return false;
     if (!tracked.originSessionFile) return true;
     return getSessionFile(ctx) === tracked.originSessionFile;

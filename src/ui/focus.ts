@@ -35,6 +35,8 @@ export class FocusController {
   private unsubscribe: (() => void) | undefined;
   /** True while the AgentPane owns the editor slot and keyboard focus. */
   private paneOpen = false;
+  /** Invoked after the pane closes (deliver queued notifications, etc.). */
+  onPaneClosed: ((ctx: ExtensionContext) => void) | undefined;
   /** Duplicate-delivery guard: some terminal stacks hand the same chunk to
    * input listeners twice in immediate succession. */
   private lastData = "";
@@ -83,7 +85,12 @@ export class FocusController {
       })
       .finally(() => {
         this.paneOpen = false;
+        this.onPaneClosed?.(ctx);
       });
+  }
+
+  isPaneOpen(): boolean {
+    return this.paneOpen;
   }
 
   private releaseToEditor(): void {

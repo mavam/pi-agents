@@ -195,6 +195,8 @@ export interface SpawnHandle {
    * prompt it). Returns a release; on release an idle, resultless agent
    * settles normally. */
   hold?(): () => void;
+  /** True while at least one hold is active (a user is attached). */
+  held?(): boolean;
   /** Snapshot of the live transcript; unavailable on engines without one. */
   transcript?(): readonly TranscriptItem[];
   /** Path of the engine-native pi session file, once known. Engines without

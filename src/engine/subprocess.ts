@@ -1439,6 +1439,7 @@ export function createSubprocessSpawnEngine(options?: {
           pushUpdate();
           await sendCommand({ type: "abort" });
         },
+        held: () => settleHolds > 0,
         hold: () => {
           settleHolds += 1;
           if (settleHolds === 1) {

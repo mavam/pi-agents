@@ -32,6 +32,9 @@ import {
 
 export type { SpawnDefaults };
 
+/** While a user is attached, budget watchdogs re-check at this cadence. */
+const HELD_BUDGET_RECHECK_MS = 2_000;
+
 export interface RunnerOptions {
   engine: SpawnEngine;
   /** Default working directory for delegated processes. */
@@ -136,13 +139,19 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
 
     let agentTimer: ReturnType<typeof setTimeout> | undefined;
     if (limits.maxAgentDuration !== undefined) {
-      agentTimer = setTimeout(
-        () =>
-          cutOff(
-            `agent duration budget exceeded (maxAgentDuration: ${limits.maxAgentDuration}s)`,
-          ),
-        limits.maxAgentDuration * 1000,
-      );
+      const budgetMessage = `agent duration budget exceeded (maxAgentDuration: ${limits.maxAgentDuration}s)`;
+      const fire = () => {
+        // An attached user overrides automation timeouts: the promise that
+        // the agent stays until detach beats the duration watchdog. Re-check
+        // until the hold clears.
+        if (handle.held?.()) {
+          agentTimer = setTimeout(fire, HELD_BUDGET_RECHECK_MS);
+          agentTimer.unref?.();
+          return;
+        }
+        cutOff(budgetMessage);
+      };
+      agentTimer = setTimeout(fire, limits.maxAgentDuration * 1000);
       agentTimer.unref?.();
     }
 
@@ -153,7 +162,7 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
         // turnsStarted trips the cap the moment an over-budget turn begins;
         // completed-turn counts back it up for engines that don't report it.
         const turns = Math.max(update.turnsStarted ?? 0, update.usage.turns);
-        if (turns > limits.maxTurns) {
+        if (turns > limits.maxTurns && !handle.held?.()) {
           cutOff(`agent turn budget exceeded (maxTurns: ${limits.maxTurns})`);
         }
       }

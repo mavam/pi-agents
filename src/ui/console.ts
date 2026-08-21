@@ -505,6 +505,12 @@ export class AgentPane implements Component {
       : node?.sessionFile
         ? "agent settled — ← back · /agent-session opens its session"
         : "agent settled · ← back";
+    // A settled agent's cause of death must be visible in the pane, not
+    // buried in run details.
+    const failureLine =
+      node?.status === "failed" && node.error
+        ? [color("error", `✗ ${node.error}`)]
+        : [];
     const queuedPart =
       pending.length > 0
         ? `${color("warning", `${pending.length} queued`)}${color("dim", " · ")}`
@@ -530,7 +536,11 @@ export class AgentPane implements Component {
       3,
       budget - editorLines.length - 1 - flashLines.length - pendingLines.length,
     );
-    const transcript = this.view.render(flowItems, width, transcriptRows);
+    const transcript = this.view.render(
+      flowItems,
+      width,
+      Math.max(3, transcriptRows - failureLine.length),
+    );
 
     // Final clamp on every line this pane builds: an overwide line is a hard
     // crash in pi's renderer. The embedded editor's own lines are pi's and
@@ -542,6 +552,7 @@ export class AgentPane implements Component {
     }
     return [
       ...transcript.map(clamp),
+      ...failureLine.map(clamp),
       clamp(status),
       ...pendingLines.map(clamp),
       ...flashLines.map(clamp),

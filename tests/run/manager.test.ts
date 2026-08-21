@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type {
   SpawnEngine,
   SpawnHandle,
+  SpawnProgress,
   SpawnSpec,
 } from "../../src/engine/types.js";
 import { emptyUsage } from "../../src/engine/types.js";
@@ -655,5 +656,60 @@ describe("live handles and agent sessions", () => {
     controlled.finish();
     await started.done;
     expect(manager.liveHandle(started.runId, "$")).toBeUndefined();
+  });
+});
+
+describe("budget watchdogs while held", () => {
+  test("maxTurns does not cut an attached agent", async () => {
+    let held = true;
+    let finish!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const updates: SpawnProgress[] = [];
+    const engine: SpawnEngine = {
+      spawn() {
+        return {
+          status: "running",
+          updates: (async function* () {
+            while (true) {
+              const next = updates.shift();
+              if (next) yield next;
+              else if (held === false && updates.length === 0) return;
+              else await new Promise((resolve) => setTimeout(resolve, 1));
+            }
+          })(),
+          held: () => held,
+          async wait() {
+            await completion;
+            return { value: "ok", exitCode: 0, usage: emptyUsage() };
+          },
+          abort() {
+            finish();
+          },
+        };
+      },
+    };
+    const manager = new RunManager({ engine });
+    const started = manager.start({
+      flow: { kind: "agent", task: "chat" },
+      cwd: projectDir,
+      budgets: { maxTurns: 1 },
+      source: { kind: "tool" },
+    });
+    // Over budget while held: no cut.
+    updates.push({
+      text: "",
+      usage: { ...emptyUsage(), turns: 5 },
+      turnsStarted: 5,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(manager.state.runs.get(started.runId)?.nodes.get("$")?.status).toBe(
+      "running",
+    );
+    held = false;
+    finish();
+    const outcome = await started.done;
+    expect(outcome.status).toBe("completed");
   });
 });

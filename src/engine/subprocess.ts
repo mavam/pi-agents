@@ -63,6 +63,21 @@ const RESULT_TOOL_EXTENSION_PATH = fileURLToPath(
   new URL("./result-tool.ts", import.meta.url),
 );
 
+/** Put the live user's intent next to every injected prompt. The delegated
+ * system contract alone is too far from the latest message for some models:
+ * they otherwise resume the original task, call tools, or submit a result
+ * without producing any assistant text for the attached user to see. */
+export function attachedSupervisorPrompt(message: string): string {
+  return [
+    "A supervising user is attached to this delegated session.",
+    "Reply to their message in visible assistant text before using any tool, submitting a result, or resuming the assignment.",
+    "A tool call or result submission is not a reply. After replying, follow the message as the latest authoritative instruction.",
+    "<supervisor-message>",
+    message,
+    "</supervisor-message>",
+  ].join("\n");
+}
+
 class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
   private readonly pending: Array<(value: IteratorResult<T>) => void> = [];
@@ -527,6 +542,10 @@ export function createSubprocessSpawnEngine(options?: {
       /** Tools currently executing, in start order (they can overlap). */
       const activeTools = new Map<string, string>();
       const transcriptStore = new TranscriptStore();
+      /** Injected prompts display their original text in the live transcript,
+       * while the child receives a supervisor wrapper. Match delivery events
+       * back to the original transcript item through this map. */
+      const queuedPromptDeliveries = new Map<string, string>();
       const toolTranscriptKeys = new Map<string, string>();
       const streamedTextBlocks = new Map<number, string>();
       const streamedThinkingBlocks = new Map<number, string>();
@@ -987,14 +1006,20 @@ export function createSubprocessSpawnEngine(options?: {
             record.message.role === "user"
           ) {
             const delivered = userMessageText(record.message);
-            const match = transcriptStore
-              .snapshot()
-              .find(
-                (item) =>
-                  item.kind === "user" &&
-                  item.queued === true &&
-                  item.text === delivered,
-              );
+            const injected = [...queuedPromptDeliveries].find(
+              ([, wireText]) => wireText === delivered,
+            );
+            const match = injected
+              ? transcriptStore.get(injected[0])
+              : transcriptStore
+                  .snapshot()
+                  .find(
+                    (item) =>
+                      item.kind === "user" &&
+                      item.queued === true &&
+                      item.text === delivered,
+                  );
+            if (injected) queuedPromptDeliveries.delete(injected[0]);
             if (match?.kind === "user") {
               transcriptStore.upsert({ ...match, queued: false });
               // Delivery is the message's true chronological position: the
@@ -1394,6 +1419,7 @@ export function createSubprocessSpawnEngine(options?: {
           // before this promise resumes; the delivery event must have a
           // queued item available to confirm.
           const transcriptKey = `user:${++injectedPrompts}`;
+          const wireMessage = attachedSupervisorPrompt(message);
           transcriptStore.upsert({
             key: transcriptKey,
             kind: "user",
@@ -1401,12 +1427,13 @@ export function createSubprocessSpawnEngine(options?: {
             queued: true,
             at: Date.now(),
           });
+          queuedPromptDeliveries.set(transcriptKey, wireMessage);
           pushUpdate();
           try {
             await Promise.race([
               sendCommand({
                 type: "prompt",
-                message,
+                message: wireMessage,
                 streamingBehavior: "steer",
               }),
               waitPromise.then(
@@ -1419,6 +1446,7 @@ export function createSubprocessSpawnEngine(options?: {
             // message_start already confirmed delivery.
             const item = transcriptStore.get(transcriptKey);
             if (item?.kind === "user" && item.queued === true) {
+              queuedPromptDeliveries.delete(transcriptKey);
               transcriptStore.delete(transcriptKey);
               pushUpdate();
             }

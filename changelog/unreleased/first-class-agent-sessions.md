@@ -23,9 +23,12 @@ from an empty editor to return to the parent session. An inverted badge names
 the attached agent. A settled agent opens as its own pi session with full
 history and tree navigation. You can also open it with `/agent-session`. The
 `/workflows` overlay uses the same `⏎` attach action, while `o` posts the full
-output. Per-agent and run-level budget cancellation waits until you detach, so
-a configured timeout or usage limit cannot end the agent while you are inside
-its pane.
+output. Every attached message now asks for a visible assistant reply before
+the agent uses tools or resumes its assignment. A deferred result submission
+also tells the agent to emit the reply instead of ending with an invisible
+tool call. Per-agent and run-level budget cancellation waits until you detach,
+so a configured timeout or usage limit cannot end the agent while you are
+inside its pane.
 
 Interactive attach replaces the previous tailing and steering features
 entirely: the `t` tail and `s` steer keys, the `workflow_steer` tool, and the

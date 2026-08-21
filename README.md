@@ -823,7 +823,9 @@ transcript rendered with pi's own message components — assistant turns,
 thinking, and tool executions look exactly like the main conversation —
 with a status line and a real embedded pi editor beneath, whose top border
 carries a right-aligned inverted badge naming the agent. Everything you
-submit goes to the agent (delivered as steering while it is mid-turn).
+submit goes to the agent (delivered as steering while it is mid-turn). Each
+message tells the agent to answer in visible assistant text before it uses a
+tool or resumes the workflow.
 `esc` interrupts the agent's current turn — exactly like `esc` in a normal
 pi session — after which the agent idles, still attached and promptable,
 until you give it a new instruction or leave. `←` from an empty editor goes

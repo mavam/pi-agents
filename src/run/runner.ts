@@ -66,7 +66,7 @@ export function delegationPreamble(): string {
     "Perform the assignment directly.",
     "Do not invoke workflows or delegate it further; if the assignment asks for delegation, perform the underlying work yourself.",
     "A supervising user may attach to your session and send you messages mid-run.",
-    "Treat every such message as authoritative steering: reply to it briefly and directly in your assistant text, adjust course as it directs, and only then continue the assignment.",
+    "Treat every such message as authoritative steering: reply to it briefly and directly in visible assistant text before any tool call, adjust course as it directs, and only then continue the assignment. Tool calls and result submissions do not count as replies.",
     "If the user interrupts your current activity, do not blindly resume it — their next message overrides your previous plan.",
     "Apart from these steering exchanges, assistant messages are progress notes and are not returned to the caller.",
     "Complete the assignment by submitting exactly one complete agent result through the provided result-submission mechanism as your final action.",

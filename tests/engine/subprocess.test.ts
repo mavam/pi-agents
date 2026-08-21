@@ -6,6 +6,7 @@ import {
   RESULT_TOOL_NAME,
 } from "../../src/engine/result-tool.js";
 import {
+  attachedSupervisorPrompt,
   createSubprocessSpawnEngine,
   formatFailureReason,
   isChildProcessRunning,
@@ -231,6 +232,15 @@ function finish(proc: FakeProc, text = "ok", value: unknown = text): void {
 }
 
 describe("subprocess spawn engine", () => {
+  test("marks attached prompts as requiring visible assistant text", () => {
+    const prompt = attachedSupervisorPrompt("what's up?");
+    expect(prompt).toContain("visible assistant text before using any tool");
+    expect(prompt).toContain("A tool call or result submission is not a reply");
+    expect(prompt).toContain(
+      "<supervisor-message>\nwhat's up?\n</supervisor-message>",
+    );
+  });
+
   test("builds the RPC invocation and initializes before prompting", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
@@ -675,7 +685,9 @@ describe("subprocess spawn engine", () => {
     const injected = proc.stdin.records.filter(
       (record) => record.type === "prompt",
     );
-    expect(injected.at(-1)?.message).toBe("change course");
+    expect(injected.at(-1)?.message).toBe(
+      attachedSupervisorPrompt("change course"),
+    );
     expect(injected.at(-1)?.streamingBehavior).toBe("steer");
     expect(
       handle
@@ -706,7 +718,12 @@ describe("subprocess spawn engine", () => {
       type: "message_start",
       message: {
         role: "user",
-        content: [{ type: "text", text: "focus on tests" }],
+        content: [
+          {
+            type: "text",
+            text: attachedSupervisorPrompt("focus on tests"),
+          },
+        ],
       },
     });
     const delivered = handle
@@ -728,15 +745,16 @@ describe("subprocess spawn engine", () => {
 
   test("an idle prompt is recorded before a racing delivery event", async () => {
     const message = "continue after the interrupt";
+    const wireMessage = attachedSupervisorPrompt(message);
     const { engine, procs } = makeEngine(undefined, undefined, {
       promptPrelude: (record) =>
-        record.message === message
+        record.message === wireMessage
           ? [
               {
                 type: "message_start",
                 message: {
                   role: "user",
-                  content: [{ type: "text", text: message }],
+                  content: [{ type: "text", text: wireMessage }],
                 },
               },
             ]

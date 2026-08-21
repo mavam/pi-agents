@@ -222,7 +222,7 @@ describe("attach-hold gating", () => {
       const tool = register();
       await expect(
         tool.execute("held-call", { result: "done" }),
-      ).rejects.toThrow("Submission deferred");
+      ).rejects.toThrow("not visible as an assistant reply");
       fs.rmSync(holdFile, { force: true });
       const accepted = await tool.execute("free-call", { result: "done" });
       expect(accepted.details).toEqual({ result: "done" });

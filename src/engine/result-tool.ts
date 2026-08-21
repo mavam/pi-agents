@@ -86,10 +86,11 @@ export default function resultToolExtension(pi: ExtensionAPI): void {
         if (holdFile && fs.existsSync(holdFile)) {
           throw new Error(
             "Submission deferred: a supervising user is attached to this " +
-              "session. Your previous message is already visible to them — " +
-              "do not repeat it and do not call this tool again now. Simply " +
-              "end your turn and wait for their next message; submit once " +
-              "they detach.",
+              "session. This tool call is not visible as an assistant reply. " +
+              "If you have not answered their latest message in assistant " +
+              "text during this turn, do that now. Do not call this tool " +
+              "again until they detach; after replying, end your turn and " +
+              "wait for their next message.",
           );
         }
         // Provider adapters such as Anthropic preserve top-level properties

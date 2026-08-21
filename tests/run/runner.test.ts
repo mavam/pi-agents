@@ -47,6 +47,8 @@ describe("delegationPreamble", () => {
     expect(text).toContain("submitting exactly one complete agent result");
     expect(text).toContain("assistant messages are progress notes");
     expect(text).toContain("may attach to your session");
+    expect(text).toContain("visible assistant text before any tool call");
+    expect(text).toContain("result submissions do not count as replies");
     expect(text).toContain("submit an error with a concrete reason");
     expect(text).not.toContain("pi_agents_submit_result");
   });

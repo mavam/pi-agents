@@ -108,15 +108,17 @@ function disposeComponent(component: Component): void {
 export class AgentTranscriptView {
   private readonly tui: TUI;
   private readonly cwd: string;
+  private readonly color: Colorize;
   private readonly slots = new Map<string, Slot>();
   /** Lines scrolled back from the bottom; 0 follows new output. */
   scrollBack = 0;
   /** Total overflow beyond the window in the last render. */
   private lastMaxScroll = 0;
 
-  constructor(tui: TUI, cwd: string) {
+  constructor(tui: TUI, cwd: string, color: Colorize = (_name, text) => text) {
     this.tui = tui;
     this.cwd = cwd;
+    this.color = color;
   }
 
   maxScroll(): number {
@@ -147,7 +149,7 @@ export class AgentTranscriptView {
       case "user":
         return new UserMessageComponent(item.text, getMarkdownTheme());
       case "notice":
-        return new Text(`\u001b[2m⏹ ${item.text}\u001b[22m`, 1, 0);
+        return new Text(this.color("dim", `· ${item.text}`), 0, 0);
       case "assistant": {
         const component = new AssistantMessageComponent(
           undefined,
@@ -389,13 +391,13 @@ export function formatPendingPromptLines(
 ): string[] {
   if (maxRows <= 0 || pending.length === 0) return [];
   const lineFor = (item: UserTranscriptItem) =>
-    color("dim", `↻ queued · ${item.text.split("\n")[0] ?? ""}`);
+    color("dim", `↻ Queued: ${item.text.split("\n")[0] ?? ""}`);
   if (pending.length <= maxRows) return pending.map(lineFor);
   if (maxRows === 1) {
-    return [color("dim", `↻ ${pending.length} queued messages`)];
+    return [color("dim", `↻ Queued: ${pending.length} messages`)];
   }
   const shown = pending.slice(0, maxRows - 1).map(lineFor);
-  shown.push(color("dim", `… +${pending.length - shown.length} more queued`));
+  shown.push(color("dim", `… ${pending.length - shown.length} more`));
   return shown;
 }
 
@@ -440,7 +442,11 @@ export class AgentPane implements Component {
     this.theme = theme;
     this.opts = opts;
     const run = opts.manager.state.runs.get(opts.runId);
-    this.view = new AgentTranscriptView(tui, run?.header.cwd ?? process.cwd());
+    this.view = new AgentTranscriptView(
+      tui,
+      run?.header.cwd ?? process.cwd(),
+      (name, text) => theme.fg(name, text),
+    );
     this.editor = new CustomEditor(
       tui,
       {
@@ -542,8 +548,7 @@ export class AgentPane implements Component {
         label,
         width,
         (text) => theme.fg("borderMuted", text),
-        (text) =>
-          theme.bg("customMessageBg", theme.fg("customMessageLabel", text)),
+        (text) => theme.bg("userMessageBg", theme.fg("userMessageText", text)),
       );
     }
 

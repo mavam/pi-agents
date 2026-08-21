@@ -787,7 +787,7 @@ describe("subprocess spawn engine", () => {
     const notice = handle.transcript?.().at(-1);
     expect(notice?.kind).toBe("notice");
     if (notice?.kind === "notice") {
-      expect(notice.text).toContain("queued message");
+      expect(notice.text).toBe("Interrupted: 2 messages remain queued");
     }
     finish(proc);
     await handle.wait();
@@ -813,7 +813,7 @@ describe("subprocess spawn engine", () => {
     const notice = handle.transcript?.().at(-1);
     expect(notice?.kind).toBe("notice");
     if (notice?.kind === "notice") {
-      expect(notice.text).toContain("Submission deferred");
+      expect(notice.text).toBe("Submission deferred: detach to finish");
     }
     finish(proc);
     await handle.wait();

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AgentPane,
+  AgentTranscriptView,
   formatPendingPromptLines,
   sanitizeLine,
   toolResultPayload,
@@ -51,6 +52,42 @@ describe("toolResultPayload", () => {
         at: Date.now(),
       }),
     ).toEqual({ content: [], isError: true });
+  });
+});
+
+describe("AgentTranscriptView", () => {
+  test("renders lifecycle notices flush-left with neutral dim styling", () => {
+    const colors: string[] = [];
+    const view = new AgentTranscriptView(
+      { requestRender() {} } as never,
+      process.cwd(),
+      (name, text) => {
+        colors.push(name);
+        return text;
+      },
+    );
+    try {
+      const lines = view.render(
+        [
+          {
+            key: "notice:1",
+            kind: "notice",
+            text: "Interrupted: 1 message remains queued",
+            at: Date.now(),
+          },
+        ],
+        80,
+        3,
+      );
+      expect(lines).toHaveLength(1);
+      expect(lines[0]?.trimEnd()).toBe(
+        "· Interrupted: 1 message remains queued",
+      );
+      expect(lines[0]?.startsWith("·")).toBe(true);
+      expect(colors).toEqual(["dim"]);
+    } finally {
+      view.dispose();
+    }
   });
 });
 
@@ -105,8 +142,8 @@ describe("AgentPane", () => {
       expect(rendered.match(new RegExp(label, "g"))).toHaveLength(1);
       expect(rendered).not.toContain("❖");
       expect(rendered).not.toContain("⏎ send");
-      expect(foregrounds).toContain("customMessageLabel");
-      expect(backgrounds).toContain("customMessageBg");
+      expect(foregrounds).toContain("userMessageText");
+      expect(backgrounds).toContain("userMessageBg");
     } finally {
       pane.dispose();
     }
@@ -124,12 +161,12 @@ describe("formatPendingPromptLines", () => {
 
   test("fits pending prompts into the available row budget", () => {
     expect(formatPendingPromptLines(pending, 3)).toEqual([
-      "↻ queued · message 1",
-      "↻ queued · message 2",
-      "… +3 more queued",
+      "↻ Queued: message 1",
+      "↻ Queued: message 2",
+      "… 3 more",
     ]);
     expect(formatPendingPromptLines(pending, 1)).toEqual([
-      "↻ 5 queued messages",
+      "↻ Queued: 5 messages",
     ]);
     expect(formatPendingPromptLines(pending, 0)).toEqual([]);
   });

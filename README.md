@@ -821,9 +821,9 @@ Attaching to a **running** agent opens the agent pane in the editor slot
 (the same mechanism as the `/workflows` overlay): the agent's live
 transcript rendered with pi's own message components — assistant turns,
 thinking, and tool executions look exactly like the main conversation —
-with a real embedded pi editor beneath, whose top border carries a
-right-aligned theme-colored badge naming the agent. The parent workflow overview
-stays hidden while you are inside the agent. Everything you
+with a real embedded pi editor beneath, whose top border carries a subtle,
+right-aligned badge using the theme's muted message colors. The parent
+workflow overview stays hidden while you are inside the agent. Everything you
 submit goes to the agent (delivered as steering while it is mid-turn). Each
 message tells the agent to answer in visible assistant text before it uses a
 tool or resumes the workflow.

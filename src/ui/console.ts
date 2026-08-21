@@ -315,11 +315,20 @@ export function badgeBorder(
  * tabs expand at the terminal's discretion and carriage returns rewind the
  * cursor. ESC is kept for SGR colors; other C0 control bytes are dropped.
  */
+// OSC sequences (pi wraps messages in OSC 133 semantic zones, terminated by
+// BEL) must be removed WHOLE first: stripping only their BEL terminator
+// leaves an unterminated OSC, and terminals then swallow everything that
+// follows - assistant replies rendered as nothing.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately stripping OSC sequences
+const OSC_SEQUENCES = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately stripping C0 bytes
 const C0_CONTROL_BYTES = /[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/g;
 
 export function sanitizeLine(line: string): string {
-  return line.replaceAll("\t", "  ").replace(C0_CONTROL_BYTES, "");
+  return line
+    .replace(OSC_SEQUENCES, "")
+    .replaceAll("\t", "  ")
+    .replace(C0_CONTROL_BYTES, "");
 }
 
 /** The one-line status shown under an attached agent transcript. Pure. */

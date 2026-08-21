@@ -685,6 +685,48 @@ describe("subprocess spawn engine", () => {
     );
   });
 
+  test("tracks queued prompts until the child confirms delivery", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await handle.prompt?.("focus on tests");
+    const queued = handle
+      .transcript?.()
+      .find((item) => item.kind === "user" && item.text === "focus on tests");
+    expect(queued?.kind === "user" ? queued.queued : undefined).toBe(true);
+    // The child delivers the queued message: a user message starts.
+    proc.emitRecord({
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "focus on tests" }],
+      },
+    });
+    const delivered = handle
+      .transcript?.()
+      .find((item) => item.kind === "user" && item.text === "focus on tests");
+    expect(delivered?.kind === "user" ? delivered.queued : undefined).toBe(
+      false,
+    );
+    finish(proc);
+    await handle.wait();
+  });
+
+  test("the interrupt notice reports stranded queued messages", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await handle.prompt?.("later instruction");
+    await handle.interrupt?.();
+    const notice = handle.transcript?.().at(-1);
+    expect(notice?.kind).toBe("notice");
+    if (notice?.kind === "notice") {
+      expect(notice.text).toContain("queued message");
+    }
+    finish(proc);
+    await handle.wait();
+  });
+
   test("interrupt aborts the current turn without ending the spawn", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });

@@ -339,6 +339,17 @@ function idleRpcState(value: unknown): boolean {
   return !value.isStreaming && value.pendingMessageCount === 0;
 }
 
+function userMessageText(message: Record<string, unknown>): string {
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .flatMap((part) =>
+      isRecord(part) && part.type === "text" && typeof part.text === "string"
+        ? [part.text]
+        : [],
+    )
+    .join("\n");
+}
+
 function messageText(message: AssistantMessage): string {
   const chunks: string[] = [];
   for (const part of message.content ?? []) {
@@ -942,6 +953,28 @@ export function createSubprocessSpawnEngine(options?: {
             streamedTextBlocks.clear();
             streamedThinkingBlocks.clear();
           }
+          // A user message starting means the child delivered a queued
+          // prompt (pi removes it from its steering queue at this moment);
+          // confirm the matching transcript item, FIFO.
+          if (
+            record.type === "message_start" &&
+            isRecord(record.message) &&
+            record.message.role === "user"
+          ) {
+            const delivered = userMessageText(record.message);
+            const match = transcriptStore
+              .snapshot()
+              .find(
+                (item) =>
+                  item.kind === "user" &&
+                  item.queued === true &&
+                  item.text === delivered,
+              );
+            if (match?.kind === "user") {
+              transcriptStore.upsert({ ...match, queued: false });
+              pushUpdate();
+            }
+          }
           if (record.type === "message_update") {
             recordPartialMessage(record);
           }
@@ -1218,6 +1251,7 @@ export function createSubprocessSpawnEngine(options?: {
         key: "user:task",
         kind: "user",
         text: spec.task,
+        queued: true,
         at: Date.now(),
       });
 
@@ -1309,6 +1343,7 @@ export function createSubprocessSpawnEngine(options?: {
             key: `user:${++injectedPrompts}`,
             kind: "user",
             text: message,
+            queued: true,
             at: Date.now(),
           });
           pushUpdate();
@@ -1327,7 +1362,14 @@ export function createSubprocessSpawnEngine(options?: {
           }
           toolTranscriptKeys.clear();
           // Repeated Esc presses coalesce onto one marker instead of
-          // stacking a line per keypress.
+          // stacking a line per keypress. An interrupt strands queued
+          // steering (nothing runs to deliver it until the next turn);
+          // say so instead of letting messages silently disappear.
+          const stranded = transcriptStore
+            .snapshot()
+            .filter(
+              (item) => item.kind === "user" && item.queued === true,
+            ).length;
           const last = transcriptStore.snapshot().at(-1);
           transcriptStore.upsert({
             key:
@@ -1335,7 +1377,10 @@ export function createSubprocessSpawnEngine(options?: {
                 ? last.key
                 : `notice:${++activitySequence}`,
             kind: "notice",
-            text: "Interrupted — agent is idle; send a new instruction to continue.",
+            text:
+              stranded > 0
+                ? `Interrupted — ${stranded} queued message(s) will be delivered with your next instruction.`
+                : "Interrupted — agent is idle; send a new instruction to continue.",
             at: Date.now(),
           });
           pushUpdate();

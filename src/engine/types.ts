@@ -127,7 +127,15 @@ export class SpawnAborted extends Error {
  * tool output update the same item), identified by `key`.
  */
 export type TranscriptItem = (
-  | { key: string; kind: "user"; text: string; at: number }
+  | {
+      key: string;
+      kind: "user";
+      text: string;
+      /** True while the child session still holds this message in its
+       * steering queue; cleared when delivery is confirmed. */
+      queued?: boolean;
+      at: number;
+    }
   | {
       /** Out-of-band event marker (e.g. a user interrupt), rendered dim. */
       key: string;

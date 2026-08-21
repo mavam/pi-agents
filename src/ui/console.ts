@@ -141,6 +141,16 @@ export class AgentTranscriptView {
   private createComponent(item: TranscriptItem): Component {
     switch (item.kind) {
       case "user":
+        // Still in the child's steering queue: render as pi renders pending
+        // messages (dim, marked) until delivery is confirmed, at which point
+        // the rev bump recreates this slot as a normal user message.
+        if (item.queued) {
+          return new Text(
+            `\u001b[2m↻ queued — delivers after the current turn\u001b[22m\n${item.text}`,
+            1,
+            0,
+          );
+        }
         return new UserMessageComponent(item.text, getMarkdownTheme());
       case "notice":
         return new Text(`\u001b[2m⏹ ${item.text}\u001b[22m`, 1, 0);
@@ -486,9 +496,16 @@ export class AgentPane implements Component {
       : node?.sessionFile
         ? "agent settled — ← back · /agent-session opens its session"
         : "agent settled · ← back";
+    const queued = this.items.filter(
+      (item) => item.kind === "user" && item.queued === true,
+    ).length;
+    const queuedPart =
+      queued > 0
+        ? `${color("warning", `${queued} queued`)}${color("dim", " · ")}`
+        : "";
     const status =
       run && node
-        ? `${formatAttachedLine(run, node, Date.now(), color)}${color("dim", " · ")}${color("dim", hints)}`
+        ? `${formatAttachedLine(run, node, Date.now(), color)}${color("dim", " · ")}${queuedPart}${color("dim", hints)}`
         : color("dim", "agent no longer known · ← back");
 
     const rows = this.tui.terminal?.rows ?? 24;

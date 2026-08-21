@@ -660,6 +660,53 @@ describe("live handles and agent sessions", () => {
 });
 
 describe("budget watchdogs while held", () => {
+  test("run maxDuration waits for the live handle's hold", async () => {
+    let held = true;
+    let aborted = false;
+    let finish!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const engine: SpawnEngine = {
+      spawn() {
+        return {
+          status: "running",
+          updates: (async function* () {
+            while (!aborted) {
+              await new Promise((resolve) => setTimeout(resolve, 1));
+            }
+          })(),
+          held: () => held,
+          async wait() {
+            await completion;
+            return { value: "ok", exitCode: 0, usage: emptyUsage() };
+          },
+          abort() {
+            aborted = true;
+            finish();
+          },
+        };
+      },
+    };
+    const manager = new RunManager({ engine });
+    const started = manager.start({
+      flow: { kind: "agent", task: "chat" },
+      cwd: projectDir,
+      budgets: { maxDuration: 0.01 },
+      source: { kind: "tool" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(aborted).toBe(false);
+    expect(manager.state.runs.get(started.runId)?.nodes.get("$")?.status).toBe(
+      "running",
+    );
+    held = false;
+    const outcome = await started.done;
+    expect(aborted).toBe(true);
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("run duration budget exceeded");
+  });
+
   test("maxTurns does not cut an attached agent", async () => {
     let held = true;
     let finish!: () => void;

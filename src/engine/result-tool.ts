@@ -89,7 +89,7 @@ export default function resultToolExtension(pi: ExtensionAPI): void {
               "session. Your previous message is already visible to them — " +
               "do not repeat it and do not call this tool again now. Simply " +
               "end your turn and wait for their next message; submit once " +
-              "they detach or tell you to finish.",
+              "they detach.",
           );
         }
         // Provider adapters such as Anthropic preserve top-level properties

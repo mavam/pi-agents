@@ -678,6 +678,11 @@ over-budget turn starts. An agent that has already settled successfully is
 never failed retroactively on its final usage alone, so engines that report
 usage only in their final outcome cannot be cut off mid-run.
 
+While you are attached to an agent, per-agent and run-level budget breaches
+wait until you detach. Usage accounting continues during the attachment. If a
+limit is exceeded, the agent or run stops after you return to the parent
+session.
+
 ## 🧭 Commands
 
 | Command               | Description                                          |

@@ -244,6 +244,14 @@ export class RunManager {
       cwd: opts.cwd,
       scope,
       originSessionFile: opts.originSessionFile,
+      isHeld: () => {
+        const handles = this.liveHandles.get(runId);
+        if (!handles) return false;
+        for (const { handle } of handles.values()) {
+          if (handle.held?.()) return true;
+        }
+        return false;
+      },
     }).finally(() => {
       this.controllers.delete(runId);
       this.persisters.delete(runId);

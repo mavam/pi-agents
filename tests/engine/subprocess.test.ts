@@ -39,7 +39,9 @@ class FakeStdin extends EventEmitter {
 
 interface FakeProcOptions {
   promptStartsAgent?: boolean;
-  promptPrelude?: Array<Record<string, unknown>>;
+  promptPrelude?:
+    | Array<Record<string, unknown>>
+    | ((record: Record<string, unknown>) => Array<Record<string, unknown>>);
   manualGetState?: boolean;
 }
 
@@ -63,9 +65,11 @@ class FakeProc extends EventEmitter {
       if (record.type === "get_state" && this.options.manualGetState) return;
       queueMicrotask(() => {
         if (record.type === "prompt") {
-          for (const event of this.options.promptPrelude ?? []) {
-            this.emitRecord(event);
-          }
+          const prelude =
+            typeof this.options.promptPrelude === "function"
+              ? this.options.promptPrelude(record)
+              : (this.options.promptPrelude ?? []);
+          for (const event of prelude) this.emitRecord(event);
         }
         const commandSucceeded = record.type !== failCommand;
         this.emitRecord({
@@ -720,6 +724,40 @@ describe("subprocess spawn engine", () => {
     );
     finish(proc);
     await handle.wait();
+  });
+
+  test("an idle prompt is recorded before a racing delivery event", async () => {
+    const message = "continue after the interrupt";
+    const { engine, procs } = makeEngine(undefined, undefined, {
+      promptPrelude: (record) =>
+        record.message === message
+          ? [
+              {
+                type: "message_start",
+                message: {
+                  role: "user",
+                  content: [{ type: "text", text: message }],
+                },
+              },
+            ]
+          : [],
+    });
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    const release = handle.hold?.();
+    await ready(proc);
+    proc.settle();
+    await handle.prompt?.(message);
+    const delivered = handle
+      .transcript?.()
+      .find((item) => item.kind === "user" && item.text === message);
+    expect(delivered?.kind === "user" ? delivered.queued : undefined).toBe(
+      false,
+    );
+    proc.emitRecord({ type: "agent_start" });
+    finish(proc);
+    await handle.wait();
+    release?.();
   });
 
   test("the interrupt notice reports stranded queued messages", async () => {

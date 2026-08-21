@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { sanitizeLine } from "../../src/ui/console.js";
+import {
+  formatPendingPromptLines,
+  sanitizeLine,
+} from "../../src/ui/console.js";
 
 const ESC = "\u001b";
 const BEL = "\u0007";
@@ -20,5 +23,36 @@ describe("sanitizeLine", () => {
       `${ESC}[7mbadge${ESC}[27m`,
     );
     expect(sanitizeLine("a\tb\rc")).toBe("a  bc");
+  });
+
+  test("strips terminal controls other than SGR", () => {
+    expect(sanitizeLine(`before${ESC}[2Jafter`)).toBe("beforeafter");
+    expect(sanitizeLine(`before${ESC}[Hafter`)).toBe("beforeafter");
+    expect(sanitizeLine(`before${ESC}Ppayload${ESC}\\after`)).toBe(
+      "beforeafter",
+    );
+    expect(sanitizeLine(`before${ESC}]unterminated`)).toBe("before");
+  });
+});
+
+describe("formatPendingPromptLines", () => {
+  const pending = Array.from({ length: 5 }, (_, index) => ({
+    key: `user:${index}`,
+    kind: "user" as const,
+    text: `message ${index + 1}`,
+    queued: true,
+    at: index,
+  }));
+
+  test("fits pending prompts into the available row budget", () => {
+    expect(formatPendingPromptLines(pending, 3)).toEqual([
+      "↻ queued · message 1",
+      "↻ queued · message 2",
+      "… +3 more queued",
+    ]);
+    expect(formatPendingPromptLines(pending, 1)).toEqual([
+      "↻ 5 queued messages",
+    ]);
+    expect(formatPendingPromptLines(pending, 0)).toEqual([]);
   });
 });

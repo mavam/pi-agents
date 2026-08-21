@@ -311,24 +311,68 @@ export function badgeBorder(
 }
 
 /**
- * Neutralize characters that desynchronize the renderer's width accounting:
- * tabs expand at the terminal's discretion and carriage returns rewind the
- * cursor. ESC is kept for SGR colors; other C0 control bytes are dropped.
+ * Neutralize characters that can desynchronize or control the terminal.
+ * Preserve only CSI SGR sequences produced by pi's theme renderers. Strip
+ * cursor movement, screen control, OSC/DCS/APC strings, malformed escapes,
+ * tabs, and remaining C0/C1 controls from agent-provided output.
  */
-// OSC sequences (pi wraps messages in OSC 133 semantic zones, terminated by
-// BEL) must be removed WHOLE first: stripping only their BEL terminator
-// leaves an unterminated OSC, and terminals then swallow everything that
-// follows - assistant replies rendered as nothing.
-// biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately stripping OSC sequences
-const OSC_SEQUENCES = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-// biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately stripping C0 bytes
-const C0_CONTROL_BYTES = /[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/g;
-
 export function sanitizeLine(line: string): string {
-  return line
-    .replace(OSC_SEQUENCES, "")
-    .replaceAll("\t", "  ")
-    .replace(C0_CONTROL_BYTES, "");
+  let result = "";
+  let index = 0;
+  while (index < line.length) {
+    const code = line.charCodeAt(index);
+    if (code === 0x1b) {
+      const next = line[index + 1];
+      if (next === "[") {
+        let end = index + 2;
+        while (end < line.length) {
+          const value = line.charCodeAt(end);
+          if (value >= 0x40 && value <= 0x7e) break;
+          if (value < 0x20 || value > 0x3f) break;
+          end += 1;
+        }
+        if (end < line.length) {
+          const final = line.charCodeAt(end);
+          if (final >= 0x40 && final <= 0x7e) {
+            if (line[end] === "m") result += line.slice(index, end + 1);
+            index = end + 1;
+            continue;
+          }
+        }
+        // An unterminated or malformed CSI owns the rest of this line.
+        break;
+      }
+      if (next && "]P^_X".includes(next)) {
+        const stringStart = index + 2;
+        const stringTerminator = line.indexOf("\u001b\\", stringStart);
+        const bellTerminator =
+          next === "]" ? line.indexOf("\u0007", stringStart) : -1;
+        const terminators = [stringTerminator, bellTerminator].filter(
+          (value) => value >= 0,
+        );
+        if (terminators.length === 0) break;
+        const terminator = Math.min(...terminators);
+        index = terminator + (terminator === bellTerminator ? 1 : 2);
+        continue;
+      }
+      // Other ESC sequences are two-byte terminal controls. A lone ESC is
+      // discarded as well.
+      index += next === undefined ? 1 : 2;
+      continue;
+    }
+    if (code === 0x09) {
+      result += "  ";
+      index += 1;
+      continue;
+    }
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+      index += 1;
+      continue;
+    }
+    result += line[index];
+    index += 1;
+  }
+  return result;
 }
 
 /** The one-line status shown under an attached agent transcript. Pure. */
@@ -356,6 +400,26 @@ export function formatAttachedLine(
 const PANE_REFRESH_MS = 250;
 /** How long an inline flash message stays visible. */
 const FLASH_MS = 5_000;
+
+type UserTranscriptItem = Extract<TranscriptItem, { kind: "user" }>;
+
+/** Fit queued prompts into a fixed row budget while keeping FIFO order. */
+export function formatPendingPromptLines(
+  pending: readonly UserTranscriptItem[],
+  maxRows: number,
+  color: Colorize = (_name, text) => text,
+): string[] {
+  if (maxRows <= 0 || pending.length === 0) return [];
+  const lineFor = (item: UserTranscriptItem) =>
+    color("dim", `↻ queued · ${item.text.split("\n")[0] ?? ""}`);
+  if (pending.length <= maxRows) return pending.map(lineFor);
+  if (maxRows === 1) {
+    return [color("dim", `↻ ${pending.length} queued messages`)];
+  }
+  const shown = pending.slice(0, maxRows - 1).map(lineFor);
+  shown.push(color("dim", `… +${pending.length - shown.length} more queued`));
+  return shown;
+}
 
 export interface AgentPaneOptions {
   manager: RunManager;
@@ -488,7 +552,8 @@ export class AgentPane implements Component {
       (item) => !(item.kind === "user" && item.queued === true),
     );
     const pending = this.items.filter(
-      (item) => item.kind === "user" && item.queued === true,
+      (item): item is UserTranscriptItem =>
+        item.kind === "user" && item.queued === true,
     );
 
     const editorLines = this.editor.render(width);
@@ -520,27 +585,26 @@ export class AgentPane implements Component {
         ? `${formatAttachedLine(run, node, Date.now(), color)}${color("dim", " · ")}${queuedPart}${color("dim", hints)}`
         : color("dim", "agent no longer known · ← back");
 
-    const pendingLines = pending.map((item) =>
-      color(
-        "dim",
-        `↻ queued · ${item.kind === "user" ? item.text.split("\n")[0] : ""}`,
-      ),
-    );
-
     const rows = this.tui.terminal?.rows ?? 24;
-    const budget = Math.max(10, rows - 6);
+    const budget = Math.max(1, rows - 6);
     const flashLines = this.flash
       ? [color("error", `⚠ ${this.flash.text}`)]
       : [];
-    const transcriptRows = Math.max(
-      3,
-      budget - editorLines.length - 1 - flashLines.length - pendingLines.length,
+    const fixedRows =
+      editorLines.length + 1 + failureLine.length + flashLines.length;
+    const contentRows = Math.max(0, Math.min(budget, rows) - fixedRows);
+    const transcriptReserve =
+      flowItems.length > 0 ? Math.min(3, contentRows) : 0;
+    const pendingLines = formatPendingPromptLines(
+      pending,
+      Math.max(0, contentRows - transcriptReserve),
+      color,
     );
-    const transcript = this.view.render(
-      flowItems,
-      width,
-      Math.max(3, transcriptRows - failureLine.length),
-    );
+    const transcriptRows = contentRows - pendingLines.length;
+    const transcript =
+      transcriptRows > 0
+        ? this.view.render(flowItems, width, transcriptRows)
+        : [];
 
     // Final clamp on every line this pane builds: an overwide line is a hard
     // crash in pi's renderer. The embedded editor's own lines are pi's and

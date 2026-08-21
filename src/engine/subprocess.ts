@@ -230,6 +230,15 @@ class TranscriptStore {
     return this.byKey.get(key);
   }
 
+  delete(key: string): void {
+    const item = this.byKey.get(key);
+    if (!item) return;
+    this.byKey.delete(key);
+    const index = this.items.indexOf(item);
+    if (index !== -1) this.items.splice(index, 1);
+    this.chars -= itemChars(item);
+  }
+
   /** Reposition an item at the chronological end (e.g. queued prompt
    * delivered now). */
   moveToEnd(key: string): void {
@@ -1380,25 +1389,41 @@ export function createSubprocessSpawnEngine(options?: {
           ) {
             throw new Error(`Agent ${spec.agent} is no longer running`);
           }
-          await Promise.race([
-            sendCommand({
-              type: "prompt",
-              message,
-              streamingBehavior: "steer",
-            }),
-            waitPromise.then(
-              () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
-              () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
-            ),
-          ]);
+          // Record the prompt before writing it. For an idle child, Pi can
+          // emit the user message_start immediately after the RPC response,
+          // before this promise resumes; the delivery event must have a
+          // queued item available to confirm.
+          const transcriptKey = `user:${++injectedPrompts}`;
           transcriptStore.upsert({
-            key: `user:${++injectedPrompts}`,
+            key: transcriptKey,
             kind: "user",
             text: message,
             queued: true,
             at: Date.now(),
           });
           pushUpdate();
+          try {
+            await Promise.race([
+              sendCommand({
+                type: "prompt",
+                message,
+                streamingBehavior: "steer",
+              }),
+              waitPromise.then(
+                () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
+                () => Promise.reject(new Error(`Agent ${spec.agent} settled`)),
+              ),
+            ]);
+          } catch (error) {
+            // Roll back a prompt that Pi rejected. Preserve it if a racing
+            // message_start already confirmed delivery.
+            const item = transcriptStore.get(transcriptKey);
+            if (item?.kind === "user" && item.queued === true) {
+              transcriptStore.delete(transcriptKey);
+              pushUpdate();
+            }
+            throw error;
+          }
         },
         interrupt: async () => {
           await startupPromise;

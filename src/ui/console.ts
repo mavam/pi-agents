@@ -521,15 +521,21 @@ export class AgentPane implements Component {
       3,
       budget - editorLines.length - 1 - flashLines.length - pendingLines.length,
     );
-    const transcript = this.view
-      .render(flowItems, width, transcriptRows)
-      .map((line) => sanitizeLine(line));
+    const transcript = this.view.render(flowItems, width, transcriptRows);
 
+    // Final clamp on every line this pane builds: an overwide line is a hard
+    // crash in pi's renderer. The embedded editor's own lines are pi's and
+    // already width-safe; our badge replacement on its top border is clamped.
+    const clamp = (line: string) =>
+      truncateToWidth(sanitizeLine(line), width, "…");
+    if (editorLines.length > 0) {
+      editorLines[0] = clamp(editorLines[0] ?? "");
+    }
     return [
-      ...transcript,
-      status,
-      ...pendingLines,
-      ...flashLines,
+      ...transcript.map(clamp),
+      clamp(status),
+      ...pendingLines.map(clamp),
+      ...flashLines.map(clamp),
       ...editorLines,
     ];
   }

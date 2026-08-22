@@ -234,16 +234,23 @@ text argument; use `workflow_create` when you need several named parameters.
 
 ### Human-facing results
 
-A workflow can return structured data while presenting one Markdown field to
-the user. Set `display` to that field's dot path:
+A run can return structured data while presenting one Markdown string to the
+user. The default is the `report` convention: when a structured result
+contains a top-level `report` string, completion cards and
+`/workflow <id> result` render it as Markdown. Without `report`, the UI shows
+the complete structured result. Parent workflows and `workflow_result` always
+receive the complete value; use `/workflow <id> raw` to inspect it.
+
+Saved workflows may instead pin an explicit dot path with `display`, which
+overrides the convention:
 
 ```yaml
 display: report
 ```
 
-Completion cards and `/workflow <id> result` show the selected field. Parent
-workflows and `workflow_result` still receive the complete value. Use
-`/workflow <id> raw` to inspect it.
+Presentation settings are best-effort: an invalid or missing `display` path
+degrades to a warning and the complete result — it never blocks or fails a
+run.
 
 ### Agent results
 

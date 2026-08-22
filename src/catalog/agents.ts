@@ -270,17 +270,53 @@ function escapeXmlAttribute(value: string): string {
 // Model agent injection after skill injection: provide a structured XML block
 // with stable location/reference metadata plus the normalized agent metadata and
 // body.
+/**
+ * Best-effort executability check for the advertised catalog. Availability
+ * can change between prompt rendering and a later call, so this reduces
+ * staleness but is not a guarantee; runtime resolution errors remain
+ * authoritative.
+ */
+export interface AgentAvailability {
+  /** Return unresolvable skill names for a profile's skill list. */
+  missingSkills?: (skills: string[]) => string[];
+  /** Return true when the model reference resolves. */
+  modelResolves?: (ref: string) => boolean;
+}
+
+function unavailableReason(
+  agent: Agent,
+  availability: AgentAvailability | undefined,
+): string | undefined {
+  if (!availability) return undefined;
+  const missing = availability.missingSkills?.(agent.skills) ?? [];
+  if (missing.length > 0) {
+    return `requires unavailable skill(s): ${missing.join(", ")}`;
+  }
+  if (agent.model && availability.modelResolves?.(agent.model) === false) {
+    return `requires unavailable model: ${agent.model}`;
+  }
+  return undefined;
+}
+
 export function buildAgentsPrompt(
   cwd: string,
   scope: Scope,
+  availability?: AgentAvailability,
 ): { prompt: string; diagnostics: Diagnostic[] } {
   const discovery = discoverAgents(cwd, scope);
-  const agents = [...discovery.agents].sort((left, right) => {
+  const sorted = [...discovery.agents].sort((left, right) => {
     if (left.source !== right.source) {
       return left.source === "project" ? -1 : 1;
     }
     return left.name.localeCompare(right.name);
   });
+  const unavailable: Array<{ agent: Agent; reason: string }> = [];
+  const agents: Agent[] = [];
+  for (const agent of sorted) {
+    const reason = unavailableReason(agent, availability);
+    if (reason) unavailable.push({ agent, reason });
+    else agents.push(agent);
+  }
 
   const lines = [
     `<agents scope="${escapeXmlAttribute(scope)}" cwd="${escapeXmlAttribute(cwd)}">`,
@@ -333,6 +369,18 @@ export function buildAgentsPrompt(
 
       lines.push("  </agent>");
     }
+  }
+
+  if (unavailable.length > 0) {
+    lines.push(
+      '  <unavailable note="These profiles exist but cannot run right now; do not select them.">',
+    );
+    for (const { agent, reason } of unavailable) {
+      lines.push(
+        `    <agent name="${escapeXmlAttribute(agent.name)}" source="${escapeXmlAttribute(agent.source)}">${escapeXmlText(reason)}</agent>`,
+      );
+    }
+    lines.push("  </unavailable>");
   }
 
   if (discovery.diagnostics.length > 0) {

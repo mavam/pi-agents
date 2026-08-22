@@ -5,8 +5,9 @@
  */
 
 import type { Scope } from "../model/ast.js";
-import { buildAgentsPrompt } from "./agents.js";
-import type { ModelCatalog } from "./models.js";
+import { type AgentAvailability, buildAgentsPrompt } from "./agents.js";
+import { type ModelCatalog, resolveModelReference } from "./models.js";
+import { discoverSkills, resolveSkills } from "./skills.js";
 import { discoverWorkflows } from "./workflows.js";
 
 function escapeXmlText(value: string): string {
@@ -100,7 +101,21 @@ export function buildSystemPromptAppendix(
   catalog?: ModelCatalog,
 ): string {
   const scope: Scope = trusted ? "both" : "user";
-  const agents = buildAgentsPrompt(cwd, scope);
+  // Best-effort executability filter (staleness reduction, not a guarantee):
+  // profiles whose skills or model cannot resolve are advertised separately
+  // with a reason instead of being selectable.
+  const skillCatalog = discoverSkills(cwd, scope);
+  const availability: AgentAvailability = {
+    missingSkills: (skills) =>
+      resolveSkills(skills, skillCatalog).failures.map(({ name }) => name),
+    ...(catalog
+      ? {
+          modelResolves: (ref: string) =>
+            resolveModelReference(ref, catalog).ok,
+        }
+      : {}),
+  };
+  const agents = buildAgentsPrompt(cwd, scope, availability);
   const workflows = buildWorkflowsPrompt(cwd, scope);
   const parts = [
     "The following reusable agent profiles are available to the `workflow_create` tool (optional: agent leaves without `name` run as anonymous ad-hoc agents):",

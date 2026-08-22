@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { ModelCatalog } from "../../src/catalog/models.js";
 import {
   buildModelsPrompt,
   buildSystemPromptAppendix,
-} from "../../src/catalog/prompt.js";
+} from "../../src/presentation/prompt.js";
 
 describe("buildModelsPrompt", () => {
   test("renders providers, authentication, and models", () => {
@@ -65,6 +68,7 @@ describe("buildSystemPromptAppendix", () => {
       ],
     });
     expect(appendix).toContain("models are available to delegated agents");
+    expect(appendix).toContain("without `profile`");
     expect(appendix).toContain("<models note=");
   });
 
@@ -72,5 +76,39 @@ describe("buildSystemPromptAppendix", () => {
     expect(buildSystemPromptAppendix(process.cwd())).not.toContain(
       "<models note=",
     );
+  });
+
+  test("uses runtime invocation rules to classify unavailable profiles", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "pi-agents-prompt-"));
+    try {
+      const directory = path.join(cwd, ".pi", "agents");
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(
+        path.join(directory, "valid.md"),
+        "---\nname: valid\ndescription: valid profile\n---\nRun.\n",
+      );
+      writeFileSync(
+        path.join(directory, "recursive.md"),
+        "---\nname: recursive\ndescription: cannot run\ntools: [workflow_create]\n---\nRun.\n",
+      );
+
+      const appendix = buildSystemPromptAppendix(cwd, true, {
+        providers: [
+          {
+            id: "openai-codex",
+            subscription: true,
+            modelIds: ["gpt-5.6-terra"],
+          },
+        ],
+      });
+      expect(appendix).toContain('<agent name="valid"');
+      expect(appendix).toContain("<unavailable");
+      expect(appendix).toContain('<agent name="recursive"');
+      expect(appendix).toContain(
+        "delegated agents cannot use orchestration tools",
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });

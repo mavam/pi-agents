@@ -4,11 +4,14 @@
  * trigger, and params only, never flow bodies.
  */
 
+import {
+  type AgentAvailability,
+  buildAgentsPrompt,
+} from "../catalog/agents.js";
+import { type ModelCatalog, resolveModelReference } from "../catalog/models.js";
+import { discoverWorkflows } from "../catalog/workflows.js";
 import type { Scope } from "../model/ast.js";
-import { type AgentAvailability, buildAgentsPrompt } from "./agents.js";
-import { type ModelCatalog, resolveModelReference } from "./models.js";
-import { discoverSkills, resolveSkills } from "./skills.js";
-import { discoverWorkflows } from "./workflows.js";
+import { CatalogCache, resolveInvocation } from "../run/invocation.js";
 
 function escapeXmlText(value: string): string {
   return value
@@ -101,24 +104,32 @@ export function buildSystemPromptAppendix(
   catalog?: ModelCatalog,
 ): string {
   const scope: Scope = trusted ? "both" : "user";
-  // Best-effort executability filter (staleness reduction, not a guarantee):
-  // profiles whose skills or model cannot resolve are advertised separately
-  // with a reason instead of being selectable.
-  const skillCatalog = discoverSkills(cwd, scope);
-  const availability: AgentAvailability = {
-    missingSkills: (skills) =>
-      resolveSkills(skills, skillCatalog).failures.map(({ name }) => name),
-    ...(catalog
-      ? {
-          modelResolves: (ref: string) =>
-            resolveModelReference(ref, catalog).ok,
-        }
-      : {}),
+  // Prompt-time availability is best effort because files and authentication
+  // may change later. It still uses the runtime resolver so both checks apply
+  // the same profile, skill, model, tool, scope, and trust rules.
+  const catalogs = new CatalogCache();
+  const availability: AgentAvailability = (agent) => {
+    const resolution = resolveInvocation(
+      { profile: agent.name },
+      {
+        cwd,
+        scope,
+        trusted,
+        catalogs,
+        ...(catalog
+          ? {
+              resolveModel: (ref: string) =>
+                resolveModelReference(ref, catalog),
+            }
+          : {}),
+      },
+    );
+    return resolution.ok ? undefined : resolution.problems.join("; ");
   };
   const agents = buildAgentsPrompt(cwd, scope, availability);
   const workflows = buildWorkflowsPrompt(cwd, scope);
   const parts = [
-    "The following reusable agent profiles are available to the `workflow_create` tool (optional: agent leaves without `name` run as anonymous ad-hoc agents):",
+    "The following reusable agent profiles are available to the `workflow_create` tool (optional: agent leaves without `profile` run as anonymous ad-hoc agents):",
     agents.prompt,
     "",
     "The following saved workflows can be invoked with `workflow_create({name, params})` when the user asks for a workflow or for delegation. This catalog is a reference, not an invitation: a workflow existing for a task is never by itself a reason to run one.",

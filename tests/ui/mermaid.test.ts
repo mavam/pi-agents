@@ -9,7 +9,7 @@ describe("toMermaid", () => {
       steps: [
         {
           kind: "agent",
-          name: "scout",
+          profile: "scout",
           task: "list",
           json: {
             type: ["null", "boolean", "number", "string", "array", "object"],
@@ -19,22 +19,22 @@ describe("toMermaid", () => {
         {
           kind: "parallel",
           branches: {
-            b: { kind: "agent", name: "y", task: "tb" },
-            a: { kind: "agent", name: "x", task: "ta" },
+            b: { kind: "agent", profile: "y", task: "tb" },
+            a: { kind: "agent", profile: "x", task: "ta" },
           },
           mode: { quorum: 2 },
-          reduce: { agent: "syn", task: "merge {branches}" },
+          reduce: { profile: "syn", task: "merge {branches}" },
         },
         {
           kind: "map",
           over: "{files}",
-          body: { kind: "agent", name: "reviewer", task: "review {item}" },
+          body: { kind: "agent", profile: "reviewer", task: "review {item}" },
         },
         {
           kind: "loop",
           body: {
             kind: "agent",
-            name: "fixer",
+            profile: "fixer",
             task: "fix",
             json: {
               type: ["null", "boolean", "number", "string", "array", "object"],
@@ -50,7 +50,7 @@ describe("toMermaid", () => {
           condition: { eq: ["done", false] },
           body: {
             kind: "agent",
-            name: "finisher",
+            profile: "finisher",
             task: "finish {current}",
             json: {
               type: ["null", "boolean", "number", "string", "array", "object"],
@@ -85,11 +85,11 @@ describe("toMermaid", () => {
         cases: [
           {
             when: { eq: ["status", "approved"] },
-            then: { kind: "agent", name: "shipper", task: "ship" },
+            then: { kind: "agent", profile: "shipper", task: "ship" },
           },
           {
             when: { or: [{ exists: "findings" }, { eq: ["retry", true] }] },
-            then: { kind: "agent", name: "fixer", task: "fix" },
+            then: { kind: "agent", profile: "fixer", task: "fix" },
           },
         ],
         else: { kind: "value", value: "done", label: "outcome" },
@@ -140,7 +140,7 @@ describe("toMermaid", () => {
                 params: [{ name: "target" }],
                 flow: {
                   kind: "agent",
-                  name: "reviewer",
+                  profile: "reviewer",
                   task: "review {params.target}",
                 },
               }

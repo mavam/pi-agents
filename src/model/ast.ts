@@ -100,12 +100,11 @@ export const ADHOC_LABEL = "ad-hoc";
 export interface AgentNode extends BaseNode, AgentExecutionOptions {
   kind: "agent";
   /**
-   * Agent name (matches a discovered agent's frontmatter `name`). When
-   * absent, the task runs as an anonymous ad-hoc agent: no catalog lookup and
-   * no profile system prompt. Every execution option — skills and tools
-   * included — remains available per call.
+   * Profile to load (matches a discovered agent's frontmatter `name`). When
+   * absent, the task runs as an anonymous ad-hoc agent with no catalog lookup
+   * or profile system prompt. Every execution option remains available.
    */
-  name?: string;
+  profile?: string;
   /** Task prompt; may interpolate `{bindings}`. */
   task: string;
   /** Optional JSON Schema for a machine-readable result. Omit for text. */
@@ -126,8 +125,8 @@ export type ParMode = "all" | "any" | { quorum: number };
  * fall back to the run's.
  */
 export interface Reduce extends AgentExecutionOptions {
-  /** Agent name; absent runs the reducer as an anonymous ad-hoc agent. */
-  agent?: string;
+  /** Profile to load; absent runs the reducer as an anonymous ad-hoc agent. */
+  profile?: string;
   /** Task prompt; interpolates `{branches}` (parallel) or `{items}` (map). */
   task: string;
   /** Optional JSON Schema for a machine-readable result. Omit for text. */

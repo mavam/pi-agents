@@ -12,4 +12,4 @@ result contains a top-level `report` string, completion cards and
 structured value remains available to the calling model, parent workflows, and
 `workflow_result`. A saved workflow's explicit `display` path still takes
 precedence, and a missing or non-string path now falls back to `report` before
-the raw result. Setting `display` on model-facing calls is deprecated.
+the raw result. Model-facing calls no longer accept `display`.

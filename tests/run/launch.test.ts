@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expandSavedFlow, prepareLaunch } from "../../src/run/launch.js";
+import { expandSavedWorkflow } from "../../src/catalog/workflows.js";
+import { prepareLaunch } from "../../src/run/launch.js";
 
 let cwd: string;
 
@@ -79,6 +80,38 @@ describe("prepareLaunch", () => {
     expect(plan.warnings[0]).toContain("Ignored 'params'");
   });
 
+  test("recoverable: invalid labels are ignored and saved defaults apply", () => {
+    const inline = prepareLaunch({
+      cwd,
+      trusted: true,
+      flow: { kind: "agent", task: "x" },
+      label: "   ",
+    });
+    expect(inline.label).toBeUndefined();
+    expect(inline.warnings[0]).toContain("Ignored invalid 'label'");
+
+    const saved = prepareLaunch({
+      cwd,
+      trusted: true,
+      workflow: "greet",
+      params: { target: "world" },
+      label: 42,
+    });
+    expect(saved.label).toBe("greet");
+    expect(saved.warnings[0]).toContain("Ignored invalid 'label'");
+  });
+
+  test("rejects invalid budgets during preparation", () => {
+    expect(() =>
+      prepareLaunch({
+        cwd,
+        trusted: true,
+        flow: { kind: "value", value: null },
+        budgets: { maxAgents: -1 },
+      }),
+    ).toThrow("budget 'maxAgents'");
+  });
+
   test("saved workflow supplies label and display defaults", () => {
     const plan = prepareLaunch({
       cwd,
@@ -120,9 +153,9 @@ describe("prepareLaunch", () => {
   });
 });
 
-describe("expandSavedFlow", () => {
+describe("expandSavedWorkflow", () => {
   test("expands a saved workflow and hides failures", () => {
-    expect(expandSavedFlow("greet", cwd)?.flow.kind).toBe("agent");
-    expect(expandSavedFlow("nope", cwd)).toBeUndefined();
+    expect(expandSavedWorkflow("greet", cwd)?.flow.kind).toBe("agent");
+    expect(expandSavedWorkflow("nope", cwd)).toBeUndefined();
   });
 });

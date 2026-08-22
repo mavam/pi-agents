@@ -72,7 +72,7 @@ export function formatNodeLine(
   const dot = color("dim", " · ");
   const parts = [
     `${icon} ${nodeDisplayName(node)}`,
-    color("dim", node.agent ?? "ad-hoc"),
+    color("dim", node.profile ?? "ad-hoc"),
     color("dim", elapsed),
     usage ? color("dim", usage) : undefined,
     activity

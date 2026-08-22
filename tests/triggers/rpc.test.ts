@@ -291,7 +291,7 @@ describe("RpcManager", () => {
 
   test("validates protocol, operations, start shape, cwd, and trust", async () => {
     writeWorkflow("project-only-rpc");
-    const { bus } = harness({ trusted: false });
+    const { bus, manager } = harness({ trusted: false });
     const requests = [
       {
         protocol: 99,
@@ -345,6 +345,26 @@ describe("RpcManager", () => {
     if (softDisplay.success) {
       const data = softDisplay.data as { runId: string; warnings?: string[] };
       expect(data.warnings?.[0]).toContain("Ignored invalid 'display'");
+      expect(manager.state.runs.get(data.runId)?.header.warnings).toEqual(
+        data.warnings,
+      );
+    }
+
+    const softLabel = await call<StartRpcData>(bus, {
+      protocol: PROTOCOL_VERSION,
+      id: "bad-label",
+      op: "start",
+      params: {
+        flow: { kind: "value", value: null },
+        label: "   ",
+      },
+    });
+    expect(softLabel.success).toBe(true);
+    if (softLabel.success) {
+      expect(softLabel.data.warnings?.[0]).toContain("Ignored invalid 'label'");
+      expect(
+        manager.state.runs.get(softLabel.data.runId)?.header.label,
+      ).toBeUndefined();
     }
   });
 

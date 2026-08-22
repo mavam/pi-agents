@@ -123,7 +123,7 @@ describe("AgentPane", () => {
       instance,
       kind: "agent",
       status: "running",
-      agent: "alpha",
+      profile: "alpha",
       startedAt: Date.now(),
     };
     const run = {

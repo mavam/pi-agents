@@ -168,7 +168,7 @@ describe("background tool runs", () => {
     const result = await tool.execute(
       "t1",
       {
-        flow: { kind: "agent", name: "echo", task: "hi" },
+        flow: { kind: "agent", profile: "echo", task: "hi" },
         scope: "project",
         label: "bg-test",
       },
@@ -228,7 +228,7 @@ describe("background tool runs", () => {
     const manager = new RunManager({ engine });
     const events: RunEvent[] = [];
     const { done } = manager.start({
-      flow: { kind: "agent", name: "echo", task: "t" },
+      flow: { kind: "agent", profile: "echo", task: "t" },
       cwd: projectDir,
       scope: "project",
       source: { kind: "tool" },

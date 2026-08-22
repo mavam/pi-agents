@@ -11,12 +11,12 @@ async function recordedEvents(): Promise<RunEvent[]> {
   const flow = validateFlow({
     kind: "sequence",
     steps: [
-      { kind: "agent", name: "scout", task: "look" },
+      { kind: "agent", profile: "scout", task: "look" },
       {
         kind: "parallel",
         branches: {
-          a: { kind: "agent", name: "x", task: "ta" },
-          b: { kind: "agent", name: "x", task: "tb" },
+          a: { kind: "agent", profile: "x", task: "ta" },
+          b: { kind: "agent", profile: "x", task: "tb" },
         },
       },
     ],
@@ -27,6 +27,7 @@ async function recordedEvents(): Promise<RunEvent[]> {
     flow,
     label: "test run",
     display: "report",
+    warnings: ["Ignored invalid presentation metadata."],
     runAgent: async (call) => ({ value: `out-${call.task}` }),
     emit: (event) => events.push(event),
   });
@@ -42,11 +43,14 @@ describe("run state reducer", () => {
     expect(run?.status).toBe("completed");
     expect(run?.header.label).toBe("test run");
     expect(run?.header.display).toBe("report");
+    expect(run?.header.warnings).toEqual([
+      "Ignored invalid presentation metadata.",
+    ]);
     expect(run?.value).toEqual({ a: "out-ta", b: "out-tb" });
     const scout = run?.nodes.get("$.steps[0]");
     expect(scout).toMatchObject({
       kind: "agent",
-      agent: "scout",
+      profile: "scout",
       status: "completed",
       value: "out-look",
     });

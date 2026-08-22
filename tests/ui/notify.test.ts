@@ -41,6 +41,7 @@ function addRun(
     workflow?: string;
     kind?: "agent" | "value";
     display?: string;
+    warnings?: string[];
   },
 ): void {
   manager.state.runs.set(runId, {
@@ -48,6 +49,7 @@ function addRun(
       id: runId,
       label: options.label,
       display: options.display,
+      warnings: options.warnings,
       source: { kind: "tool", workflow: options.workflow },
       flow:
         options.kind === "value"
@@ -305,6 +307,19 @@ describe("NotificationManager", () => {
     );
     expect(sent[0]?.message.details?.body).toContain('```json\n{\n  "summary"');
     expect(sent[0]?.message.content).toContain(JSON.stringify(value, null, 2));
+  });
+
+  test("includes persisted launch warnings in completion cards", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    addRun(manager, "run-warning", {
+      warnings: ["Ignored invalid 'label' (must be a non-empty string)."],
+    });
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    notifications.track("run-warning", "session.jsonl", false);
+    notifications.handleRunEvent(completed("run-warning"));
+
+    expect(sent[0]?.message.details?.body).toContain("Ignored invalid 'label'");
   });
 
   test("delivers complete long results before the host controls", () => {

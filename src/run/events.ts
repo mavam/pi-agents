@@ -1,5 +1,5 @@
 /**
- * Run-event schema v4. Runs are event-sourced: everything the UI and history
+ * Run-event schema v5. Runs are event-sourced: everything the UI and history
  * need is reconstructable by replaying these events. Nodes are addressed by
  * static `path` (position in the flow tree) plus dynamic `instance` (the path
  * with `@item` / `#iteration` suffixes interleaved for dynamic multiplicity).
@@ -8,7 +8,7 @@
 import type { SpawnUsage } from "../engine/types.js";
 import type { Budgets, FlowNode, NodeKind, Scope } from "../model/ast.js";
 
-export const RUN_EVENT_TYPE = "pi-agents:run-event:v4";
+export const RUN_EVENT_TYPE = "pi-agents:run-event:v5";
 
 export type RunStatus = "running" | "completed" | "failed" | "stopped";
 
@@ -36,6 +36,8 @@ export interface RunHeader {
   label?: string;
   /** Saved-workflow result path selected for human-facing rendering. */
   display?: string;
+  /** Recoverable request problems that did not prevent this run. */
+  warnings?: string[];
   source: RunSource;
   /** The expanded flow (workflow refs inlined). */
   flow: FlowNode;
@@ -57,7 +59,7 @@ export type RunEvent =
       path: string;
       instance: string;
       kind: NodeKind | "reduce";
-      agent?: string;
+      profile?: string;
       label?: string;
     }
   | {

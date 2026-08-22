@@ -8,107 +8,97 @@ algebra's core capabilities (data flow, structured results, fan-out/merge).
 The plan is now sequenced. Phases 1–3 are committed work. Phase 4 is gated on
 telemetry and a completed design spec.
 
-## Architectural baseline
+## Stable architecture
 
-The layering is already mostly right, and the plan builds on it rather than
-replacing it:
+The revised design uses one operation at the trigger boundary and keeps its
+internal stages separate. A single large launch function would centralize
+control but couple Pi session state, catalog I/O, validation, persistence, and
+execution. The stable boundary is therefore one public operation backed by
+three focused stages:
 
-- `model/` — pure flow algebra: AST, validation, interpolation, predicates.
-  No I/O, no UI, no discovery.
-- `catalog/` — the only discovery layer: agents, skills, workflows, models,
-  scoped by trust.
-- `run/` — execution: `invocation.ts` is already "the one place" that
-  resolves what an agent runs with; `interpreter.ts`/`runner.ts` execute;
-  `persist.ts` records. `triggers/start.ts` is the shared run-start path.
-- `triggers/` — entry surfaces (tool, commands, hooks, RPC). Should contain
-  surface I/O and formatting only.
-- `ui/` — presentation. Consumes results; never influences control flow.
-- `engine/` — the subprocess boundary.
+```text
+surface parser
+  -> launchTriggeredRun
+       -> prepareLaunch
+       -> RunManager.start
+  -> surface formatter
+```
 
-**The structural gap:** there is no launch layer. Each of the four trigger
-surfaces hand-assembles the same pipeline — trust/scope clamp →
-`discoverWorkflows` → `resolveWorkflowByName` → `validateFlow` →
-`normalizeDisplayPath` → `startTriggeredRun` — in slightly different orders
-with slightly different rules (`tool.ts:376-399`, `rpc.ts:174-206`,
-`hooks.ts:147-165`, `commands.ts:1444-1490`). Every inconsistency this plan
-addresses is a symptom of that missing module, not of any one surface.
+- `prepareLaunch` applies request policy: trust and scope, saved-workflow
+  resolution, flow and budget validation, and recoverable presentation
+  normalization. It returns a `LaunchPlan`.
+- `launchTriggeredRun` is the only fresh-run entry for tool, command, hook,
+  and RPC adapters. It adds active Pi session defaults, model resolution,
+  persistence, notifications, and background behavior. It passes the complete
+  plan to the manager instead of exposing a field-mapping protocol to each
+  trigger.
+- `RunManager.start` owns execution preflight and remains a defensive boundary
+  for internal and programmatic callers. It resolves profiles, skills, models,
+  and tools through `resolveInvocation` before the interpreter runs.
+- `rerunTriggeredRun` is a separate operation for persisted run headers. A
+  persisted flow is already expanded, so reparsing it as author input would
+  reject derived workflow fields.
 
-**One misplacement:** `normalizeDisplayPath` lives in `model/ast.ts`, so the
-pure model layer throws on a presentation concern. That layering violation is
-why the original display bug was possible at all.
+The source tree has these dependency roles:
 
-Invariants this plan establishes (and that later work must preserve):
+- `model/`: Pure flow algebra, validation, interpolation, and predicates. It
+  has no I/O, discovery, or presentation policy.
+- `catalog/`: Resource parsing and discovery. Catalog rendering may receive an
+  availability function, but it does not define runtime executability.
+- `presentation/`: Pi-independent presentation policy and model-prompt
+  rendering. `result.ts` owns labels, display paths, the `report` convention,
+  and result fallback order.
+- `run/`: Execution, invocation resolution, budgets, persistence, and state.
+  It has no TUI dependency.
+- `triggers/`: Pi entry adapters. Catalog reads for command registration, hook
+  routing, listings, and previews are queries rather than launch resolution.
+- `ui/`: TUI components. UI code consumes run state and presentation policy.
+- `engine/`: The subprocess boundary.
 
-1. Triggers parse surface input and format surface output; they do not
-   discover, resolve, or validate.
-2. `model/` stays pure and knows nothing about presentation.
-3. `catalog/` is the only module that discovers; `run/invocation.ts` is the
-   only module that resolves.
-4. Presentation concerns (`display`, `report`, labels) live in `ui/` and the
-   launch layer, and can warn but never abort.
-5. New entry surfaces call the launch contract; they never reassemble the
-   pipeline.
+The architecture preserves these invariants:
 
-A cheap drift check lives in the test suite (`tests/architecture.test.ts`):
-`validateFlow` or `normalizeDisplayPath` used anywhere under `src/triggers/`
-is a regression — execution validation goes through the launch layer.
-Catalog reads for routing or listing (hook event filtering, `/workflows`
-listings) remain legitimate in triggers.
+1. Fresh runs from every trigger call `launchTriggeredRun` exactly once.
+2. Only `triggers/start.ts` may call `prepareLaunch` or `RunManager.start` for
+   a fresh trigger request.
+3. `prepareLaunch` is the only request-policy implementation.
+4. `resolveInvocation` is the only definition of whether an agent invocation
+   can run. Prompt-time profile availability uses it too.
+5. Recoverable request warnings are persisted in `RunHeader` and remain
+   visible through run inspection after the initiating response is gone.
+6. `model/`, `catalog/`, and `run/` never import from `ui/`.
+7. Presentation selection can warn but never change execution control flow.
 
-## Phase 1: Reclassify presentation errors (ship immediately)
+`tests/architecture.test.ts` enforces the import and entry-point rules. Contract
+tests cover warning persistence and prompt/runtime availability agreement.
 
-**Problem:** `normalizeDisplayPath` throws at request time
-(`src/model/ast.ts`, called from the tool and `src/triggers/rpc.ts`), so an
-invalid `display` aborts an otherwise valid run. Render time already does the
-right thing: `src/ui/render.ts` falls back to the complete result with a
-warning when the path is missing or non-string.
+## Phase 1: Reclassify presentation errors
 
-**Change:**
+Invalid request-time `display` and `label` values now produce warnings instead
+of launch errors. `prepareLaunch` normalizes both through
+`presentation/result.ts`, and `run_created` persists the warnings in the run
+header. Saved-workflow definitions still validate `display` strictly because a
+bad definition should produce a catalog diagnostic before selection.
 
-- Invalid `display` and invalid `label` become warnings attached to the run,
-  never launch errors. The run starts; presentation falls back to the complete
-  result.
-- Fatal remains fatal: invalid tasks, flows, resources, budgets, scopes, and
-  permissions abort with node-path errors as today.
-- Missing optional values use documented defaults.
+Fatal request problems remain fatal: invalid flows, resources, budgets,
+scopes, and permissions stop the launch before a run ID is allocated.
 
-- Relocate display-path handling out of `model/ast.ts` — the model layer must
-  not carry presentation logic (invariant 2). Its new home is the launch
-  layer introduced in Phase 2; as an interim step it may move to `ui/` next to
-  the existing fallback in `render.ts`.
+## Phase 2: One trigger launch operation
 
-This is deliberately the previously discarded "provisional display patch,"
-reframed as the first instance of the fatal/recoverable classification rather
-than a one-off. It fixes the original bug in one small change and nothing in
-later phases depends on delaying it.
+Every fresh trigger path now reduces to:
 
-## Phase 2: One launch contract
+```text
+parse surface input -> launchTriggeredRun -> format surface output
+```
 
-**Problem:** The typebox schema, `validateFlow`, and resource preflight
-enforce different rules at different times across `tool.ts`, `rpc.ts`,
-`hooks.ts`, and `api.ts`.
+The preparation stage remains directly testable, while the trigger operation
+owns the transition from a plan to a started run. This avoids both earlier
+failure modes: duplicated request policy in every trigger and a public
+prepare-then-start protocol whose fields could drift.
 
-**Change:** Introduce the missing launch layer — one module (e.g.
-`src/run/launch.ts`) that owns the request pipeline end to end: trust/scope
-clamping, workflow discovery and resolution, flow validation, budget checks,
-and presentation normalization. Every entry point (tool, commands, hooks,
-RPC, extension API) reduces to: parse surface input → call the contract →
-format surface output. It produces either:
-
-- a validated launch plan, or
-- actionable errors plus recoverable warnings (per the Phase 1
-  classification).
-
-Error completeness is scoped honestly: **complete at the top level,
-best-effort within nodes.** A malformed parent node reports one error at its
-node path without cascading synthetic errors from children that were never
-meaningfully parseable.
-
-This phase is a refactor with no intended behavior change beyond error/warning
-uniformity. It is also the architectural payoff of the plan: after it, the
-four trigger surfaces stop importing `validateFlow`/`discoverWorkflows`
-directly (enforced by the drift check), the contract is testable in one place,
-and Phase 4's telemetry has a single choke point to instrument.
+Error completeness remains complete at the top level and best effort within a
+malformed node. Resource preflight stays in `RunManager` because it needs the
+active model registry and the catalog cache shared with execution. The trigger
+operation still exposes one failure boundary to callers.
 
 ## Phase 3: Predictable results and an honest catalog
 
@@ -134,19 +124,21 @@ Ownership of `report` must be explicit per shape:
   use and may know their result shape). `display` on a saved workflow
   overrides the `report` convention.
 
-`display` on model-facing calls is deprecated but accepted (warning, Phase 1
-semantics) until Phase 4 resolves the tool surface.
+Model-facing calls do not accept `display`; they use the `report` convention.
+Programmatic launch requests may still set `display`, and saved workflows may
+pin it in their definitions.
 
 ### 3b. Best-effort executable catalog
 
-Advertise only profiles whose skills, models, and dependencies resolve in the
-rendered scope; list unusable profiles separately with a reason.
+Advertise only profiles that pass `resolveInvocation` in the rendered
+`cwd`/`scope`; list unusable profiles separately with the runtime reason. The
+prompt builder injects this check into catalog formatting, so the catalog does
+not maintain a second definition of executability.
 
 Scoped honestly: the catalog is rendered into the system prompt once per
-session, while auth, skill availability, and trust-clamped scope
-(`effectiveScope`) are evaluated per request with per-request `cwd`/`scope`.
-This is **staleness reduction, not a guarantee.** Runtime errors for
-unavailable resources stay, and stay actionable, regardless.
+session, while authentication, resource availability, and trust-clamped scope
+are evaluated again for each request. This is staleness reduction, not a
+guarantee. Runtime errors remain authoritative and actionable.
 
 ## Phase 4: Simplified model-facing API (gated)
 
@@ -184,9 +176,9 @@ must specify:
 4. **Concurrency.** `group` takes an optional `concurrency`. Dynamic `map`
    is intentionally excluded: the calling model expands lists into static
    agents itself; document this explicitly.
-5. **Profiles and placement.** Agent entries keep `name` (profile from
-   `<agents>`), `cwd`, and `scope`. Dropping profile selection would be a
-   regression, not a simplification.
+5. **Profiles and placement.** Agent entries keep `profile` (a name from
+   `<agents>`), `cwd`, and `scope`. Omitting `profile` creates an anonymous
+   agent.
 6. **Discriminated union.** The request carries an explicit discriminant
    (e.g. `"run": "agent" | "group" | "workflow"`) rather than mutually
    exclusive optional keys — otherwise the top level reintroduces the exact
@@ -218,8 +210,8 @@ must specify:
 }
 ```
 
-Single agent (`"run": "agent"`, one agent entry with `task`, `name`, `model`,
-`thinking`, `skills`, `tools`, `json`, `cwd`, `scope`) and saved workflow
+Single agent (`"run": "agent"`, one agent entry with `task`, `profile`,
+`model`, `thinking`, `skills`, `tools`, `json`, `cwd`, `scope`) and saved workflow
 (`"run": "workflow"`, `name` + `params`) follow the same envelope. Sequential
 groups use `"mode": "sequence"` with `{previous}`/`{<id>}` references.
 
@@ -228,42 +220,36 @@ The simplified API **compiles into the existing algebra** (`agent`,
 internal and programmatic representation; saved workflows keep the full
 grammar.
 
-## Phase 5: Migration
+## Phase 5: Replacement
 
-- Saved-workflow format and the programmatic `flow` type are preserved
-  unchanged throughout.
-- Model-facing raw `flow` stays accepted (with `coerceInlineFlow`) until Gate
-  A/B pass and the simplified API demonstrably covers the observed common
-  cases; then it is deprecated with a warning, then removed from the tool
-  schema (while remaining in the programmatic API).
-- **Prompt material is a first-class migration surface.** The algebra lives in
-  the tool description (`FLOW_REFERENCE`), the use gate (`USE_GATE`), and the
-  promptGuidelines that `tool.ts` requires be kept in sync. The Phase 4
-  rollout includes rewriting all three together, since model-behavior
-  regressions will originate there, not in the schema.
-- `display` on model-facing calls: warn in Phase 3, remove with the Phase 4
-  tool schema. Saved workflows keep `display` permanently.
+- Saved-workflow format and the programmatic `flow` type remain unchanged.
+- Model-facing raw `flow` stays until Gates A and B pass and the replacement
+  covers the observed common cases. The replacement then removes `flow` from
+  the tool schema in one breaking change while the programmatic API keeps it.
+- Prompt material changes in the same commit as the tool schema. The algebra
+  lives in the tool description (`FLOW_REFERENCE`), the use gate (`USE_GATE`),
+  and the `promptGuidelines` that `tool.ts` requires to stay in sync.
+- Model-facing calls do not accept `display`. Saved workflows keep `display`.
 
 ## What changed from the previous draft
 
-- An explicit architectural baseline: named layers, five invariants, the
-  missing launch module identified as the root cause of the per-surface
-  drift, and a mechanical drift check. No new abstraction beyond that one
-  module — the existing `model`/`catalog`/`run`/`triggers`/`ui` split is
-  kept as is.
-- Phase 1 also relocates display handling out of `model/ast.ts`, fixing the
-  layering violation that produced the original bug.
-- Phase 2 is reframed from "error uniformity" to "introduce the launch
-  layer"; uniform errors fall out of it.
-
-- The display patch is Phase 1, not discarded — it was the fatal/recoverable
-  classification in miniature.
+- The launch boundary is one trigger operation with separate preparation and
+  execution stages, not one module that owns unrelated dependencies.
+- `presentation/` now owns Pi-independent result and metadata policy. This
+  keeps `model/`, `catalog/`, and `run/` independent of the TUI layer.
+- Recoverable warnings are persisted with run state instead of existing only
+  in the initiating tool or RPC response.
+- Prompt-time profile availability uses `resolveInvocation`, so prompt and
+  runtime checks cannot acquire different rules.
+- The drift check enforces the actual seam: trigger files cannot prepare or
+  start fresh runs outside `triggers/start.ts`.
 - Error completeness is promised only at the top level.
-- The catalog change is labeled best-effort; runtime errors remain.
+- Catalog availability remains best effort because resources can change after
+  prompt rendering; runtime errors remain authoritative.
 - The simplified API is gated on telemetry and now specifies data flow,
   `json`, merge, concurrency, profiles, and a discriminated envelope — the
   previous draft could not express fan-out-and-merge and left sequence data
   flow undefined.
 - `map` is explicitly excluded with its workaround documented, rather than
   silently dropped.
-- Prompt-material migration is called out as its own work item.
+- Prompt material changes atomically with any model-facing schema replacement.

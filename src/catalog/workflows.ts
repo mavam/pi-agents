@@ -3,7 +3,7 @@
  * `.yml`, `.json` — the extension decides the parser). One object per file:
  * name, description, trigger, display, on, debounce, params, optional doc
  * prose, and the flow expression (either a `flow:` tree or the flat
- * `agent:`/`task:` single-unit form).
+ * `profile:`/`task:` single-unit form).
  *
  * Discovery layers package-bundled defaults, user
  * `~/.pi/agent/workflows`, and the nearest project `.pi/workflows` walking up
@@ -28,7 +28,7 @@ import {
   parseFlowNode,
   validateFlow,
 } from "../model/validate.js";
-import { normalizeDisplayPath } from "../ui/display.js";
+import { normalizeDisplayPath } from "../presentation/result.js";
 import type { Diagnostic } from "./agents.js";
 import {
   applyBundledWorkflowsSetting,
@@ -72,12 +72,11 @@ export const HOOKABLE_EVENTS = [
 const HOOKABLE_EVENT_SET: ReadonlySet<string> = new Set(HOOKABLE_EVENTS);
 
 /**
- * Keys that only exist in the flat single-unit form. Each maps to a field on
- * the normalized `AgentNode` ('agent' becomes 'name'), and each is rejected
- * alongside `flow:`.
+ * Keys that only exist in the flat single-unit form. Each maps directly to a
+ * field on the normalized `AgentNode` and is rejected alongside `flow:`.
  */
 const FLAT_ONLY_KEYS = [
-  "agent",
+  "profile",
   "task",
   "model",
   "thinking",
@@ -122,7 +121,7 @@ function toErrorMessage(e: unknown): string {
 /**
  * The flow expression: either an explicit `flow:` tree or the flat
  * single-unit form (`task:` plus any agent-call option), which normalizes to a
- * bare agent leaf. Without `agent:` the leaf is anonymous and runs as an
+ * bare agent leaf. Without `profile:` the leaf is anonymous and runs as an
  * ad-hoc agent. The flat form is pure sugar: it must produce exactly the
  * `AgentNode` the equivalent `flow:` tree would.
  */
@@ -130,11 +129,11 @@ function extractRawFlow(
   fm: Record<string, unknown>,
 ): { ok: true; flow: unknown } | { ok: false; error: string } {
   const hasFlow = fm.flow !== undefined;
-  const hasFlat = fm.agent !== undefined || fm.task !== undefined;
+  const hasFlat = fm.profile !== undefined || fm.task !== undefined;
   if (hasFlow && hasFlat) {
     return {
       ok: false,
-      error: "Use either 'flow:' or the flat 'agent:'/'task:' form, not both",
+      error: "Use either 'flow:' or the flat 'profile:'/'task:' form, not both",
     };
   }
   if (hasFlow) {
@@ -151,11 +150,11 @@ function extractRawFlow(
     return { ok: true, flow: fm.flow };
   }
   if (hasFlat) {
-    if (fm.agent !== undefined) {
-      if (typeof fm.agent !== "string" || !fm.agent.trim()) {
+    if (fm.profile !== undefined) {
+      if (typeof fm.profile !== "string" || !fm.profile.trim()) {
         return {
           ok: false,
-          error: "Invalid 'agent' (must be a non-empty string)",
+          error: "Invalid 'profile' (must be a non-empty string)",
         };
       }
     }
@@ -180,16 +179,14 @@ function extractRawFlow(
       } else if (typeof value !== "string") {
         return { ok: false, error: `Invalid '${key}' (must be a string)` };
       }
-      // 'agent' is the flat spelling of the node's 'name'.
-      if (key === "agent") node.name = (value as string).trim();
-      else node[key] = value;
+      node[key] = key === "profile" ? (value as string).trim() : value;
     }
     return { ok: true, flow: node };
   }
   return {
     ok: false,
     error:
-      "No flow found: add a 'flow:' key, or the flat form ('task:' with an optional 'agent:')",
+      "No flow found: add a 'flow:' key, or the flat form ('task:' with an optional 'profile:')",
   };
 }
 
@@ -672,4 +669,26 @@ export function resolveWorkflowByName(
     workflows.find((wf) => wf.name === name) ??
     workflows.find((wf) => wf.name.toLowerCase() === name.toLowerCase())
   );
+}
+
+/** Expand a saved workflow for catalog previews without starting a run. */
+export function expandSavedWorkflow(
+  name: string,
+  cwd: string,
+  scope: Scope = "both",
+): { name: string; flow: FlowNode } | undefined {
+  try {
+    const { workflows } = discoverWorkflows(cwd, scope);
+    const def = resolveWorkflowByName(workflows, name);
+    if (!def) return undefined;
+    const flow = validateFlow(structuredClone(def.flow) as unknown, {
+      resolveWorkflow: (candidate) =>
+        resolveWorkflowByName(workflows, candidate),
+      selfName: def.name,
+      params: def.params,
+    });
+    return { name: def.name, flow };
+  } catch {
+    return undefined;
+  }
 }

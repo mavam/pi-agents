@@ -14,16 +14,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
+import { expandSavedWorkflow } from "../catalog/workflows.js";
 import type { Budgets, Scope } from "../model/ast.js";
 import { truncateModelResult, valueText } from "../model/value.js";
 import type { RunStatus } from "../run/events.js";
 import type { RunOutcome } from "../run/interpreter.js";
-import {
-  coerceInlineFlow,
-  expandSavedFlow,
-  prepareLaunch,
-} from "../run/launch.js";
-import { isProjectTrusted } from "../run/persist.js";
 import {
   formatUsage,
   formatWorkflowCallPreview,
@@ -33,7 +28,7 @@ import {
   type WorkflowPreviewState,
 } from "../ui/render.js";
 import { renderWorkflowTree } from "../ui/tree.js";
-import { startTriggeredRun, type TriggerDeps } from "./start.js";
+import { launchTriggeredRun, type TriggerDeps } from "./start.js";
 
 /**
  * Delegation is expensive and surprising when unasked for, so the tool is
@@ -53,9 +48,9 @@ Mentioning "workflow" or "flow" is not a request; neither is asking about a save
 For a run that already exists, never call this tool: use workflow_list, workflow_inspect, workflow_result, or workflow_stop.`;
 
 const FLOW_REFERENCE = `A flow is a JSON expression tree; every node yields a value. Node kinds:
-- {"kind":"agent","task":"...","name":"...","json":{"type":"object","properties":{...},"required":[...],"additionalProperties":false},"model":"provider/id from <models> (bare id resolves to the earliest listed provider)","thinking":"...","skills":["..."],"tools":["..."],"cwd":"...","scope":"user"|"project"|"both"} — one delegated agent (leaf; a bare agent node is a valid flow). Omit "name" for an anonymous ad-hoc agent; set it only to use a profile from <agents>. Omit "json" for a string result; include a substantive JSON Schema Draft 7 object for a machine-readable result. Every execution option works with or without "name". "skills" is a closed selection: omit it on an anonymous call to retain ambient discovery, name exactly the skills to inject, or use [] to disable discovery. A named call inherits its profile's closed skill list unless the node replaces it. "tools" is a tool allowlist ([] means no tools) and likewise replaces a named profile's list.
+- {"kind":"agent","task":"...","profile":"name from <agents>","json":{"type":"object","properties":{...},"required":[...],"additionalProperties":false},"model":"provider/id from <models> (bare id resolves to the earliest listed provider)","thinking":"...","skills":["..."],"tools":["..."],"cwd":"...","scope":"user"|"project"|"both"} — one delegated agent (leaf; a bare agent node is a valid flow). Omit "profile" for an anonymous ad-hoc agent; set it only to use a profile from <agents>. Branch keys identify parallel agents; do not copy a branch key into "profile". Omit "json" for a string result; include a substantive JSON Schema Draft 7 object for a machine-readable result. Every execution option works with or without "profile". "skills" is a closed selection: omit it on an anonymous call to retain ambient discovery, name exactly the skills to inject, or use [] to disable discovery. A profiled call inherits its profile's closed skill list unless the node replaces it. "tools" is a tool allowlist ([] means no tools) and likewise replaces a profile's list.
 - {"kind":"sequence","steps":[node,...]} — steps in order; value = the last step's.
-- {"kind":"parallel","branches":{"a":node,...},"mode":"all"|"any"|{"quorum":n},"onError":"fail"|"collect","concurrency":n,"reduce":{"task":"merge {branches}","agent":"..."}} — concurrent branches; value = {branch: value}, or the winner's value for "any". A reduce spec takes the same execution options as an agent node ("agent" is its spelling of "name").
+- {"kind":"parallel","branches":{"a":node,...},"mode":"all"|"any"|{"quorum":n},"onError":"fail"|"collect","concurrency":n,"reduce":{"task":"merge {branches}","profile":"name from <agents>"}} — concurrent branches; value = {branch: value}, or the winner's value for "any". A reduce spec takes the same execution options as an agent node.
 - {"kind":"map","over":"{binding}","body":node,"concurrency":n,"reduce":{"task":"merge {items}"}} — run body per element of the array {binding}; the body sees {item} and {index}; value = array of body values.
 - {"kind":"loop","body":node,"max":n,"until":predicate} — bounded do-until: run body at least once (it sees {iteration} and {last}), then stop when the predicate holds over its JSON value.
 - {"kind":"while","on":"{binding}","condition":predicate,"body":node,"max":n} — bounded pre-checked iteration: while the predicate holds over the carried value, run body with {current} and {iteration}; the body's value becomes the next current value. The node returns the current value without saying whether the condition failed or the cap was reached, so encode convergence in that value when the distinction matters. Predicates: {"eq":["path",value]}, "ne", "gt", "lt", {"exists":"path"}, {"empty":"path"}, "and", "or", "not".
@@ -69,8 +64,6 @@ Data flows ONLY through explicit references: "as":"x" names a step's value; late
  * sent once per request, not twice. */
 export const FLOW_PARAM_DESCRIPTION =
   'Inline flow expression to run (instead of "name"). Node grammar: see the tool description.';
-
-export { coerceInlineFlow };
 
 const WorkflowCreateParams = Type.Object({
   name: Type.Optional(
@@ -91,12 +84,6 @@ const WorkflowCreateParams = Type.Object({
   ),
   label: Type.Optional(
     Type.String({ description: "Short human-readable label for this run." }),
-  ),
-  display: Type.Optional(
-    Type.String({
-      description:
-        'Deprecated: prefer a top-level "report" string in the final result. Dot path to a Markdown string in the final value for human-facing rendering; overrides a saved workflow\'s display path. Invalid paths degrade to a warning.',
-    }),
   ),
   budgets: Type.Optional(
     Type.Object(
@@ -207,7 +194,7 @@ export function resolveSavedFlowTree(
   cwd: string,
   color?: ToolColorize,
 ): string | undefined {
-  const expanded = expandSavedFlow(name, cwd);
+  const expanded = expandSavedWorkflow(name, cwd);
   if (!expanded) return undefined;
   return renderWorkflowTree(expanded.name, expanded.flow, color);
 }
@@ -260,7 +247,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
       "workflow_create only starts new runs. For an existing run, use workflow_list, workflow_inspect, workflow_result, or workflow_stop.",
       "Once a workflow is requested: prefer a saved workflow via workflow_create({name, params}) when one in <workflows> matches; otherwise compose an inline flow — a bare agent leaf for one isolated task, or sequence/parallel/map/loop/while for multi-agent work.",
       "Route deterministically with `switch` instead of asking an agent to decide: predicates over a JSON binding pick exactly one arm; use a `value` arm to yield data without spawning an agent.",
-      "Omit the agent name for one-off delegation; it is only needed to select a reusable profile from <agents>. Never invent agent names or create agent-definition files merely to execute an ad-hoc flow — an anonymous node can select skills, tools, model, and thinking directly.",
+      "Omit `profile` for one-off delegation. Set it only to a name listed in <agents>; branch keys already identify parallel agents. Never invent profiles or create profile files for ad-hoc work. Anonymous nodes can still select skills, tools, model, and thinking.",
       "Request a skill by name on the node that needs it. An unknown skill fails the run before anything spawns, so do not guess names; take them from <available_skills>.",
       "An unknown model fails the run before anything spawns; take identifiers from <models>.",
       'In flows, thread data explicitly: bind sequence steps with "as" and reference {name}/{previous} in later tasks; declare a concrete "json" schema when downstream steps need structured access.',
@@ -324,21 +311,6 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
       _onUpdate,
       ctx: ExtensionContext,
     ) {
-      const plan = prepareLaunch({
-        flow: params.flow,
-        workflow: params.name,
-        params: params.params,
-        label: params.label,
-        display: params.display,
-        cwd: params.cwd ?? ctx.cwd,
-        scope: params.scope as Scope | undefined,
-        trusted: isProjectTrusted(ctx),
-        budgets: params.budgets as Budgets | undefined,
-      });
-      const label = plan.label;
-      const warningsText = plan.warnings.length
-        ? `\n${plan.warnings.map((warning) => `Warning: ${warning}`).join("\n")}`
-        : "";
       // Interactive sessions background immediately: the tool returns right
       // away, progress shows in the widget, and the result arrives as an
       // idle notification. Headless modes stay foreground.
@@ -346,17 +318,24 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
       // children have nobody to answer it. Only the interactive TUI should
       // background runs; print/JSON/RPC modes must await nested workflows.
       const background = ctx.mode === "tui";
-      const { runId, done } = startTriggeredRun(deps, {
-        flow: plan.flow,
-        cwd: plan.cwd,
-        scope: plan.scope,
-        label,
-        display: plan.display,
-        budgets: plan.budgets,
-        source: { kind: "tool", workflow: plan.workflowName },
+      const { runId, done, plan } = launchTriggeredRun(deps, {
+        request: {
+          flow: params.flow,
+          workflow: params.name,
+          params: params.params,
+          label: params.label,
+          cwd: params.cwd ?? ctx.cwd,
+          scope: params.scope as Scope | undefined,
+          budgets: params.budgets as Budgets | undefined,
+        },
+        source: { kind: "tool" },
         ctx,
         background,
       });
+      const label = plan.label;
+      const warningsText = plan.warnings.length
+        ? `\n${plan.warnings.map((warning) => `Warning: ${warning}`).join("\n")}`
+        : "";
 
       if (background) {
         const id = shortId(runId);

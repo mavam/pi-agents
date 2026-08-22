@@ -115,6 +115,10 @@ export class NotificationManager {
       const rendered = presented
         ? renderResultValue(display.value, presented)
         : "(no output)";
+      const warnings = [
+        ...(run?.header.warnings ?? []),
+        ...(display.warning ? [display.warning] : []),
+      ];
       return {
         kind: "run_final",
         version: 2,
@@ -125,9 +129,10 @@ export class NotificationManager {
         agents: event.agents,
         copyable: Boolean(presented),
         bodyKind: "result",
-        body: display.warning
-          ? `> ⚠ ${display.warning}\n\n${rendered}`
-          : rendered,
+        body:
+          warnings.length > 0
+            ? `${warnings.map((warning) => `> ⚠ ${warning}`).join("\n")}\n\n${rendered}`
+            : rendered,
         modelBody: result
           ? renderResultValue(
               event.value,
@@ -151,7 +156,10 @@ export class NotificationManager {
         agents: event.agents,
         copyable: false,
         bodyKind: "error",
-        body: event.error ?? "unknown error",
+        body:
+          run?.header.warnings && run.header.warnings.length > 0
+            ? `${run.header.warnings.map((warning) => `> ⚠ ${warning}`).join("\n")}\n\n${event.error ?? "unknown error"}`
+            : (event.error ?? "unknown error"),
         at: event.at,
       };
     }

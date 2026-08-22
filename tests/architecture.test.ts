@@ -1,10 +1,9 @@
 /**
  * Structural drift checks for the launch contract (docs/plans/launch-contract.md).
  *
- * Trigger surfaces parse surface input and format surface output; the launch
- * layer (src/run/launch.ts) owns validation and saved-workflow resolution for
- * execution. Catalog reads for routing or listing (hook event filtering,
- * /workflows listings) remain legitimate in triggers.
+ * Trigger surfaces parse and format. Only the trigger launch adapter may
+ * prepare a fresh request or start a manager run. Catalog reads for routing,
+ * listing, and previews remain legitimate in triggers.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -32,11 +31,25 @@ describe("architecture invariants", () => {
     }
   });
 
+  test("only the trigger launch adapter prepares or starts fresh runs", () => {
+    for (const { file, text } of triggerSources()) {
+      if (file === "src/triggers/start.ts") continue;
+      expect(
+        text.includes("prepareLaunch"),
+        `${file} prepares a launch; use launchTriggeredRun`,
+      ).toBe(false);
+      expect(
+        text.includes("manager.start("),
+        `${file} starts the manager directly; use launchTriggeredRun`,
+      ).toBe(false);
+    }
+  });
+
   test("triggers do not normalize display paths themselves", () => {
     for (const { file, text } of triggerSources()) {
       expect(
         text.includes("normalizeDisplayPath"),
-        `${file} normalizes display paths; go through run/launch.ts`,
+        `${file} normalizes display paths; use launchTriggeredRun`,
       ).toBe(false);
     }
   });
@@ -54,6 +67,20 @@ describe("architecture invariants", () => {
         text.includes("../ui/"),
         `src/model/${name} imports from ui/`,
       ).toBe(false);
+    }
+  });
+
+  test("catalog and run layers do not depend on the TUI layer", () => {
+    for (const directory of ["catalog", "run"]) {
+      const sourceDir = path.join(import.meta.dir, "..", "src", directory);
+      for (const name of readdirSync(sourceDir)) {
+        if (!name.endsWith(".ts")) continue;
+        const text = readFileSync(path.join(sourceDir, name), "utf8");
+        expect(
+          text.includes("../ui/"),
+          `src/${directory}/${name} imports from ui/`,
+        ).toBe(false);
+      }
     }
   });
 });

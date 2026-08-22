@@ -10,11 +10,11 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { buildModelCatalog, createModelRefresher } from "./catalog/models.js";
-import { buildSystemPromptAppendix } from "./catalog/prompt.js";
 import {
   createSubprocessSpawnEngine,
   DEPTH_ENV_VAR,
 } from "./engine/subprocess.js";
+import { buildSystemPromptAppendix } from "./presentation/prompt.js";
 import {
   getSessionFile,
   isProjectTrusted,

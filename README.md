@@ -57,8 +57,8 @@ The model can create an inline workflow without any agent or workflow files:
 }
 ```
 
-An agent without a `name` is an anonymous, ad-hoc agent. It inherits the
-current model and thinking level unless the node overrides them.
+An agent without a `profile` is anonymous and ad hoc. It inherits the current
+model and thinking level unless the node overrides them.
 
 ## 📖 Core concepts
 
@@ -147,7 +147,7 @@ Reference it from a workflow:
 
 ```yaml
 kind: agent
-name: planner
+profile: planner
 task: Plan the requested change
 ```
 
@@ -248,9 +248,10 @@ overrides the convention:
 display: report
 ```
 
-Presentation settings are best-effort: an invalid or missing `display` path
-degrades to a warning and the complete result — it never blocks or fails a
-run.
+Request-time presentation settings are best effort. An invalid `display` or
+`label`, or a `display` path that is missing from the completed value, produces
+a run warning and falls back without failing execution. Saved workflow files
+validate `display` strictly and report malformed definitions in the catalog.
 
 ### Agent results
 
@@ -580,9 +581,10 @@ await agents.stop(runId);
 stopListening();
 ```
 
-The client supports `start`, `stop`, `list`, and `onRunEvent`. Runs started by
-extensions obey the current session's budgets, resource scope, and project
-trust settings.
+The client supports `start`, `stop`, `list`, and `onRunEvent`. A successful
+`start` response may include `warnings` for recoverable request problems. Runs
+started by extensions obey the current session's budgets, resource scope, and
+project trust settings.
 
 ## 🧰 Requirements
 

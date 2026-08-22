@@ -16,9 +16,7 @@ import {
   type StartRpcData,
   type StopRpcData,
 } from "../api.js";
-import { prepareLaunch } from "../run/launch.js";
-import { isProjectTrusted } from "../run/persist.js";
-import { startTriggeredRun, type TriggerDeps } from "./start.js";
+import { launchTriggeredRun, type TriggerDeps } from "./start.js";
 
 const REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/;
 const MAX_CALLER_LENGTH = 128;
@@ -158,31 +156,26 @@ export class RpcManager {
 
     const workflow = optionalString(raw.workflow, "workflow");
     const params = stringParams(raw.params);
-    const label = optionalString(raw.label, "label");
     const cwd = resolveCwd(raw.cwd, ctx);
-    const plan = prepareLaunch({
-      flow: raw.flow,
-      workflow,
-      params,
-      label,
-      display: raw.display,
-      cwd,
-      trusted: isProjectTrusted(ctx),
-    });
     this.deps.notifications.setContext(ctx);
-    const started = startTriggeredRun(this.deps, {
-      flow: plan.flow,
-      cwd: plan.cwd,
-      scope: plan.scope,
-      label: plan.label,
-      display: plan.display,
-      source: { kind: "rpc", workflow: plan.workflowName, caller },
+    const started = launchTriggeredRun(this.deps, {
+      request: {
+        flow: raw.flow,
+        workflow,
+        params,
+        label: raw.label,
+        display: raw.display,
+        cwd,
+      },
+      source: { kind: "rpc", caller },
       ctx,
       background: true,
     });
     return {
       runId: started.runId,
-      ...(plan.warnings.length ? { warnings: plan.warnings } : {}),
+      ...(started.plan.warnings.length
+        ? { warnings: started.plan.warnings }
+        : {}),
     };
   }
 

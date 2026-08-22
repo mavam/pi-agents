@@ -6,7 +6,8 @@ authors:
 created: 2026-08-22T05:58:59.138075Z
 ---
 
-The advertised agent catalog now checks executability: profiles whose skills
-or model cannot resolve in the current scope are listed separately with a
-reason instead of being selectable. This is best-effort staleness reduction;
-runtime resolution errors remain authoritative.
+The advertised agent catalog now uses the runtime invocation resolver to
+check profiles. Profiles with unavailable skills or models, forbidden tools,
+or another runtime resolution problem are listed separately with the same
+reason that launch preflight would report. This remains a best-effort check;
+resources can change after prompt rendering.

@@ -2,11 +2,10 @@
  * The launch contract: the one place that turns a raw start request into a
  * validated launch plan.
  *
- * Every entry surface (tool, slash command, event hook, RPC, extension API)
- * reduces to: parse surface input → `prepareLaunch` → format surface output.
- * Triggers must not discover workflows for execution, resolve saved
- * definitions, or validate flows themselves — a drift check in the test
- * suite enforces this.
+ * `prepareLaunch` is the surface-independent preparation stage. Trigger
+ * surfaces call `launchTriggeredRun`, which invokes this stage and starts the
+ * prepared plan through `RunManager`. No trigger maps a plan into start
+ * options itself.
  *
  * Problems are classified explicitly:
  * - Fatal (thrown): invalid flows, unknown workflows, untrusted project
@@ -26,7 +25,8 @@ import {
   type Scope,
 } from "../model/ast.js";
 import { validateFlow } from "../model/validate.js";
-import { softDisplayPath } from "../ui/display.js";
+import { softDisplayPath, softLabel } from "../presentation/result.js";
+import { validateBudgets } from "./budgets.js";
 
 /** A start request as written by any entry surface. */
 export interface LaunchRequest {
@@ -36,7 +36,8 @@ export interface LaunchRequest {
   workflow?: string;
   /** Literal parameters for a saved workflow. */
   params?: Record<string, string>;
-  label?: string;
+  /** Requested human-readable label; invalid values degrade to a warning. */
+  label?: unknown;
   /** Requested display path; invalid values degrade to a warning. */
   display?: unknown;
   cwd: string;
@@ -80,31 +81,6 @@ export function coerceInlineFlow(flow: unknown): unknown {
 }
 
 /**
- * Expand a saved workflow into its validated flow tree, for rendering.
- * Returns undefined when the workflow is unknown or fails validation.
- */
-export function expandSavedFlow(
-  name: string,
-  cwd: string,
-  scope: Scope = "both",
-): { name: string; flow: FlowNode } | undefined {
-  try {
-    const { workflows } = discoverWorkflows(cwd, scope);
-    const def = resolveWorkflowByName(workflows, name);
-    if (!def) return undefined;
-    const flow = validateFlow(structuredClone(def.flow) as unknown, {
-      resolveWorkflow: (candidate) =>
-        resolveWorkflowByName(workflows, candidate),
-      selfName: def.name,
-      params: def.params,
-    });
-    return { name: def.name, flow };
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * Validate a launch request into a plan, or throw with actionable errors.
  *
  * Fatal errors are complete at the top level; within a malformed flow node,
@@ -136,12 +112,16 @@ export function prepareLaunch(request: LaunchRequest): LaunchPlan {
   const resolveWorkflow = (name: string) =>
     resolveWorkflowByName(workflows, name);
 
-  const requested = softDisplayPath(request.display);
-  if (requested.warning) warnings.push(requested.warning);
+  validateBudgets(request.budgets);
+
+  const requestedDisplay = softDisplayPath(request.display);
+  if (requestedDisplay.warning) warnings.push(requestedDisplay.warning);
+  const requestedLabel = softLabel(request.label);
+  if (requestedLabel.warning) warnings.push(requestedLabel.warning);
 
   let raw: unknown;
-  let label = request.label;
-  let display = requested.display;
+  let label = requestedLabel.label;
+  let display = requestedDisplay.display;
   let workflowName: string | undefined;
   if (hasWorkflow && request.workflow !== undefined) {
     const def = resolveWorkflow(request.workflow);
@@ -154,7 +134,7 @@ export function prepareLaunch(request: LaunchRequest): LaunchPlan {
     raw = { kind: "workflow", name: def.name, params: request.params ?? {} };
     workflowName = def.name;
     label = label ?? def.name;
-    display = requested.display ?? def.display;
+    display = requestedDisplay.display ?? def.display;
   } else {
     raw = coerceInlineFlow(request.flow);
   }

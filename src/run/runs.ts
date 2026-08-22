@@ -53,6 +53,8 @@ export interface StartRunOptions {
   label?: string;
   /** Saved-workflow result path selected for human-facing rendering. */
   display?: string;
+  /** Recoverable request problems to persist with the run. */
+  warnings?: string[];
   params?: Record<string, unknown>;
   budgets?: Budgets;
   source: RunSource;
@@ -237,6 +239,7 @@ export class RunManager {
       emit,
       label: opts.label,
       display: opts.display,
+      warnings: opts.warnings,
       source: opts.source,
       params: opts.params,
       budgets,

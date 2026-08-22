@@ -12,12 +12,12 @@ import {
 } from "../../src/run/interpreter.js";
 
 const agent = (
-  name: string,
+  profile: string,
   task: string,
   extra: Record<string, unknown> = {},
 ) => ({
   kind: "agent",
-  name,
+  profile,
   task,
   ...extra,
 });
@@ -93,7 +93,7 @@ describe("seq and bindings", () => {
         agent("planner", "plan using {map}"),
         agent("worker", "implement {previous} against {map}"),
       ),
-      (call) => `${call.agent}-result`,
+      (call) => `${call.profile}-result`,
     );
     expect(outcome.status).toBe("completed");
     expect(outcome.value).toBe("worker-result");
@@ -115,7 +115,8 @@ describe("seq and bindings", () => {
         }),
         agent("worker", "fix {scout.files.0}"),
       ),
-      (call) => (call.agent === "scout" ? { files: ["a.ts", "b.ts"] } : "done"),
+      (call) =>
+        call.profile === "scout" ? { files: ["a.ts", "b.ts"] } : "done",
     );
     expect(calls[1]?.task).toBe("fix a.ts");
     expect(calls[0]?.resultSchema).toMatchObject({ type: expect.anything() });
@@ -160,12 +161,12 @@ describe("execution option forwarding", () => {
       {
         kind: "parallel",
         branches: { a: { kind: "agent", task: "a" } },
-        reduce: { task: "merge {branches}", agent: "synth", ...options },
+        reduce: { task: "merge {branches}", profile: "synth", ...options },
       },
       () => "ok",
       { cwd: "/run", scope: "both" },
     );
-    expect(calls.at(-1)).toMatchObject({ agent: "synth", ...options });
+    expect(calls.at(-1)).toMatchObject({ profile: "synth", ...options });
   });
 
   test("a reducer without overrides inherits the run's cwd and scope", async () => {
@@ -214,7 +215,7 @@ describe("parallel", () => {
         },
       },
       (call) =>
-        call.agent === "f" ? "fast-wins" : hangUntilAbort(call.signal),
+        call.profile === "f" ? "fast-wins" : hangUntilAbort(call.signal),
     );
     expect(outcome.status).toBe("completed");
     expect(outcome.value).toBe("fast-wins");
@@ -255,7 +256,7 @@ describe("parallel", () => {
         },
       },
       (call) => {
-        if (call.agent === "b") throw new Error("boom");
+        if (call.profile === "b") throw new Error("boom");
         return hangUntilAbort(call.signal);
       },
     );
@@ -275,7 +276,7 @@ describe("parallel", () => {
         branches: { good: agent("g", "ok"), bad: agent("b", "explode") },
       },
       (call) => {
-        if (call.agent === "b") throw new Error("boom");
+        if (call.profile === "b") throw new Error("boom");
         return "fine";
       },
     );
@@ -291,7 +292,7 @@ describe("parallel", () => {
         branches: { good: agent("g", "ok"), bad: agent("b", "blocked") },
       },
       (call) => {
-        if (call.agent === "b") {
+        if (call.profile === "b") {
           throw new AgentErrorResult("b", "required context is unavailable");
         }
         return "fine";
@@ -342,12 +343,12 @@ describe("parallel", () => {
       {
         kind: "parallel",
         branches: { a: agent("x", "ta"), b: agent("x", "tb") },
-        reduce: { agent: "syn", task: "merge {branches}" },
+        reduce: { profile: "syn", task: "merge {branches}" },
       },
-      (call) => (call.agent === "syn" ? "merged!" : `v-${call.task}`),
+      (call) => (call.profile === "syn" ? "merged!" : `v-${call.task}`),
     );
     expect(outcome.value).toBe("merged!");
-    const reduceCall = calls.find((call) => call.agent === "syn");
+    const reduceCall = calls.find((call) => call.profile === "syn");
     expect(reduceCall?.task).toContain('"a": "v-ta"');
     expect(reduceCall?.path).toBe("$.reduce");
     const started = eventTypes(events, "node_started").find(
@@ -374,7 +375,7 @@ describe("map", () => {
         },
       ),
       (call) => {
-        if (call.agent === "scout") return ["a.ts", "b.ts", "c.ts"];
+        if (call.profile === "scout") return ["a.ts", "b.ts", "c.ts"];
         return `reviewed ${call.task.split(" ")[1]}`;
       },
     );
@@ -384,7 +385,7 @@ describe("map", () => {
       "reviewed c.ts",
     ]);
     const reviewTasks = calls
-      .filter((call) => call.agent === "reviewer")
+      .filter((call) => call.profile === "reviewer")
       .map((call) => call.task);
     expect(reviewTasks).toEqual([
       "review a.ts at 0",
@@ -408,7 +409,7 @@ describe("map", () => {
           body: agent("r", "review {item}"),
         },
       ),
-      (call) => (call.agent === "s" ? ["x", "y"] : "ok"),
+      (call) => (call.profile === "s" ? ["x", "y"] : "ok"),
     );
     const instances = eventTypes(events, "node_started").map(
       (e) => (e as { instance: string }).instance,
@@ -432,7 +433,7 @@ describe("map", () => {
           body: agent("r", "review {item}"),
         },
       ),
-      (call) => (call.agent === "s" ? { not: "array" } : "ok"),
+      (call) => (call.profile === "s" ? { not: "array" } : "ok"),
     );
     expect(outcome.status).toBe("failed");
     expect(outcome.error).toContain("must resolve to a JSON array, got object");
@@ -455,7 +456,7 @@ describe("map", () => {
         },
       ),
       (call) => {
-        if (call.agent === "s") return ["a", "b"];
+        if (call.profile === "s") return ["a", "b"];
         if (call.task === "review a") throw new Error("bad item");
         return hangUntilAbort(call.signal);
       },
@@ -477,17 +478,17 @@ describe("map", () => {
           kind: "map",
           over: "{files}",
           body: agent("r", "review {item}"),
-          reduce: { agent: "syn", task: "combine {items}" },
+          reduce: { profile: "syn", task: "combine {items}" },
         },
       ),
       (call) => {
-        if (call.agent === "s") return ["a"];
-        if (call.agent === "syn") return "combined";
+        if (call.profile === "s") return ["a"];
+        if (call.profile === "syn") return "combined";
         return "r-a";
       },
     );
     expect(outcome.value).toBe("combined");
-    expect(calls.find((call) => call.agent === "syn")?.task).toContain("r-a");
+    expect(calls.find((call) => call.profile === "syn")?.task).toContain("r-a");
   });
 });
 
@@ -568,12 +569,12 @@ describe("while", () => {
         },
       ),
       (call) =>
-        call.agent === "seed"
+        call.profile === "seed"
           ? { continue: false, round: null }
           : { continue: false, round: 0 },
     );
     expect(outcome.value).toEqual({ continue: false, round: null });
-    expect(calls.map((call) => call.agent)).toEqual(["seed"]);
+    expect(calls.map((call) => call.profile)).toEqual(["seed"]);
     expect(eventTypes(events, "loop_iteration")).toHaveLength(0);
   });
 
@@ -600,7 +601,7 @@ describe("while", () => {
         },
       ),
       (call) => {
-        if (call.agent === "seed") return { continue: true, round: -1 };
+        if (call.profile === "seed") return { continue: true, round: -1 };
         round += 1;
         return { continue: round < 3, round: round - 1 };
       },
@@ -639,13 +640,13 @@ describe("while", () => {
         },
       ),
       (call) =>
-        call.agent === "seed"
+        call.profile === "seed"
           ? { continue: true, round: -1 }
           : { continue: true, round: 0 },
       { budgets: { maxIterations: 2 } },
     );
     expect(outcome.value).toEqual({ continue: true, round: 0 });
-    expect(calls.filter((call) => call.agent === "worker")).toHaveLength(2);
+    expect(calls.filter((call) => call.profile === "worker")).toHaveLength(2);
   });
 
   test("an inner on resolves outer {current} before its body shadows it", async () => {
@@ -683,7 +684,7 @@ describe("while", () => {
         },
       ),
       (call) =>
-        call.agent === "seed"
+        call.profile === "seed"
           ? { outer: true, inner: true, label: "outer" }
           : { outer: false, inner: false, label: "inner" },
     );
@@ -729,7 +730,7 @@ describe("while", () => {
         },
       ),
       (call) =>
-        call.agent === "seed"
+        call.profile === "seed"
           ? [{ continue: true, name: "a" }]
           : { continue: false },
     );
@@ -756,7 +757,7 @@ describe("while", () => {
         },
       ),
       (call) => {
-        if (call.agent === "seed") return { continue: true };
+        if (call.profile === "seed") return { continue: true };
         queueMicrotask(() => controller.abort());
         return hangUntilAbort(call.signal);
       },
@@ -780,7 +781,7 @@ describe("workflow refs", () => {
     ],
     flow: {
       kind: "agent",
-      name: "reviewer",
+      profile: "reviewer",
       task: "review {params.target} at {params.depth}",
     } as FlowNode,
   };
@@ -792,7 +793,7 @@ describe("workflow refs", () => {
         name: "review",
         params: { target: "{spot}" },
       }),
-      (call) => (call.agent === "scout" ? "src/core" : "review-done"),
+      (call) => (call.profile === "scout" ? "src/core" : "review-done"),
       {},
       (name) => (name === "review" ? reviewDef : undefined),
     );
@@ -981,11 +982,13 @@ describe("switch", () => {
         agent("fallback", "c"),
       ),
       (call) =>
-        call.agent === "gate" ? { status: "approved" } : `${call.agent}-ran`,
+        call.profile === "gate"
+          ? { status: "approved" }
+          : `${call.profile}-ran`,
     );
     expect(outcome.status).toBe("completed");
     expect(outcome.value).toBe("first-ran");
-    expect(calls.map((call) => call.agent)).toEqual(["gate", "first"]);
+    expect(calls.map((call) => call.profile)).toEqual(["gate", "first"]);
   });
 
   test("falls through to else when no case matches", async () => {
@@ -995,10 +998,12 @@ describe("switch", () => {
         agent("fallback", "c"),
       ),
       (call) =>
-        call.agent === "gate" ? { status: "rejected" } : `${call.agent}-ran`,
+        call.profile === "gate"
+          ? { status: "rejected" }
+          : `${call.profile}-ran`,
     );
     expect(outcome.value).toBe("fallback-ran");
-    expect(calls.map((call) => call.agent)).toEqual(["gate", "fallback"]);
+    expect(calls.map((call) => call.profile)).toEqual(["gate", "fallback"]);
   });
 
   test("the switch's value binds via as for later steps", async () => {
@@ -1019,7 +1024,7 @@ describe("switch", () => {
         },
         agent("closer", "wrap up {outcome}"),
       ),
-      (call) => (call.agent === "gate" ? { go: 1 } : `${call.agent}-done`),
+      (call) => (call.profile === "gate" ? { go: 1 } : `${call.profile}-done`),
     );
     expect(calls[2]?.task).toBe("wrap up worker-done");
   });
@@ -1065,7 +1070,7 @@ describe("switch", () => {
         cases: [{ when: { eq: ["", "yes"] }, then: agent("worker", "go") }],
         else: agent("idle", "idle"),
       }),
-      (call) => (call.agent === "gate" ? "yes" : `${call.agent}-ran`),
+      (call) => (call.profile === "gate" ? "yes" : `${call.profile}-ran`),
     );
     expect(outcome.value).toBe("worker-ran");
   });
@@ -1074,9 +1079,9 @@ describe("switch", () => {
     const routed = async (when: unknown) => {
       const { calls } = await run(
         gateSwitch([{ when, then: agent("hit", "h") }], agent("miss", "m")),
-        (call) => (call.agent === "gate" ? {} : "done"),
+        (call) => (call.profile === "gate" ? {} : "done"),
       );
-      return calls[1]?.agent;
+      return calls[1]?.profile;
     };
     expect(await routed({ eq: ["missing", "x"] })).toBe("miss");
     expect(await routed({ exists: "missing" })).toBe("miss");
@@ -1102,10 +1107,10 @@ describe("switch", () => {
           else: agent("starter", "start"),
         },
       },
-      (call) => (call.agent === "starter" ? "continue" : "done"),
+      (call) => (call.profile === "starter" ? "continue" : "done"),
     );
     expect(outcome.value).toBe("done");
-    expect(calls.map((call) => call.agent)).toEqual(["starter", "resumer"]);
+    expect(calls.map((call) => call.profile)).toEqual(["starter", "resumer"]);
     const instances = eventTypes(events, "node_started").map(
       (event) => (event as { instance: string }).instance,
     );
@@ -1119,7 +1124,7 @@ describe("switch", () => {
         [{ when: { eq: ["status", "approved"] }, then: agent("shipper", "s") }],
         agent("reporter", "r"),
       ),
-      (call) => (call.agent === "gate" ? { status: "approved" } : "shipped"),
+      (call) => (call.profile === "gate" ? { status: "approved" } : "shipped"),
     );
     const started = eventTypes(events, "node_started") as {
       path: string;
@@ -1148,7 +1153,7 @@ describe("switch", () => {
         agent("idle", "idle"),
       ),
       (call) => {
-        if (call.agent === "gate") return { go: true };
+        if (call.profile === "gate") return { go: true };
         queueMicrotask(() => controller.abort());
         return hangUntilAbort(call.signal);
       },
@@ -1168,7 +1173,7 @@ describe("switch", () => {
         [{ when: { exists: "go" }, then: agent("worker", "work") }],
         agent("idle", "idle"),
       ),
-      (call) => (call.agent === "gate" ? { go: 1 } : "ok"),
+      (call) => (call.profile === "gate" ? { go: 1 } : "ok"),
       { budgets: { maxAgents: 2 } },
     );
     expect(outcome.status).toBe("completed");
@@ -1329,10 +1334,10 @@ describe("value", () => {
         },
       ),
       (call) =>
-        call.agent === "review" ? { pr: false, outcome: "clean" } : "gated",
+        call.profile === "review" ? { pr: false, outcome: "clean" } : "gated",
     );
     expect(outcome.value).toEqual({ outcome: "clean", gated: false });
-    expect(calls.map((call) => call.agent)).toEqual(["review"]);
+    expect(calls.map((call) => call.profile)).toEqual(["review"]);
   });
 });
 

@@ -11,8 +11,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
-import { resolvePath } from "../model/interpolate.js";
 import { parseFlowNode } from "../model/validate.js";
+
+export {
+  type SelectedDisplayValue,
+  selectDisplayValue,
+} from "../presentation/result.js";
+
 import { valueText } from "../model/value.js";
 import type { RunSource, RunStatus } from "../run/events.js";
 import type { NodeView, RunView } from "../run/state.js";
@@ -310,66 +315,6 @@ export function formatValuePreview(value: unknown, maxChars = 400): string {
   return `${text.slice(0, maxChars)}…`;
 }
 
-export interface SelectedDisplayValue {
-  /** The declared Markdown string, or the original value as a fallback. */
-  value: unknown;
-  /** Whether the declared path resolved to a string. */
-  selected: boolean;
-  /** Why a declared path fell back to the raw value. */
-  warning?: string;
-}
-
-/**
- * The `report` result convention: a structured result may carry a top-level
- * `report` string with human-facing Markdown. It is a soft convention, not a
- * reserved key — a non-string `report` degrades to the complete result,
- * never to an error or warning.
- */
-function selectReportValue(value: unknown): SelectedDisplayValue {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    typeof (value as Record<string, unknown>).report === "string"
-  ) {
-    return {
-      value: (value as Record<string, unknown>).report as string,
-      selected: true,
-    };
-  }
-  return { value, selected: false };
-}
-
-/**
- * Select a run's human-facing Markdown result. Fallback chain: explicit
- * `display` path (saved workflows) → `report` convention → complete result.
- * Presentation selection can warn but never fails.
- */
-export function selectDisplayValue(
-  value: unknown,
-  display: string | undefined,
-): SelectedDisplayValue {
-  if (!display) return selectReportValue(value);
-  const fallback = selectReportValue(value);
-  const shown = fallback.selected
-    ? "showing the `report` field"
-    : "showing the raw result";
-  const resolved = resolvePath(value, display.split("."));
-  if (!resolved.found) {
-    return {
-      ...fallback,
-      warning: `Display path \`${display}\` was not found; ${shown}.`,
-    };
-  }
-  if (typeof resolved.value !== "string") {
-    return {
-      ...fallback,
-      warning: `Display path \`${display}\` resolved to a non-string value; ${shown}.`,
-    };
-  }
-  return { value: resolved.value, selected: true };
-}
-
 /** Wrap text in a code fence long enough to contain embedded backticks. */
 export function fenced(text: string, language?: string): string {
   const runs = text.match(/`+/g) ?? [];
@@ -387,10 +332,10 @@ export function renderResultValue(value: unknown, text: string): string {
  * Short human name for a node instance path: `$.branches.bugs` → `bugs`,
  * `$.reduce` → `reduce`, `$.body@2` → `@2`, `$.steps[1].body#3` → `2#3`,
  * `$.cases[0].then` → `case 1`, `$.else` → `else`.
- * A bare-agent root (`$`) falls back to the label, agent name, or kind.
+ * A bare-agent root (`$`) falls back to its label, profile, or kind.
  */
 export function nodeDisplayName(
-  node: Pick<NodeView, "instance" | "label" | "agent" | "kind">,
+  node: Pick<NodeView, "instance" | "label" | "profile" | "kind">,
 ): string {
   const name = node.instance
     .replace(/^\$/, "")
@@ -402,7 +347,7 @@ export function nodeDisplayName(
     )
     .replaceAll(".body", "")
     .replace(/^\./, "");
-  return name || (node.label ?? node.agent ?? node.kind);
+  return name || (node.label ?? node.profile ?? node.kind);
 }
 
 export function formatRunOverviewLine(run: RunView): string {

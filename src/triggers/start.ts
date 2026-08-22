@@ -1,8 +1,11 @@
 /**
- * Shared run-start path for every trigger surface (tool, slash command, event
- * hook, RPC): creates the sidecar persistence origin, captures session defaults
- * (model/thinking), starts the run, and handles background bookkeeping
- * (notification tracking + widget refresh).
+ * Pi trigger adapter for launching runs.
+ *
+ * Fresh requests enter through `launchTriggeredRun`. It prepares the request,
+ * enriches the plan with active-session dependencies, and starts the run.
+ * Trigger surfaces never translate a `LaunchPlan` into manager options.
+ * Persisted runs use the separate `rerunTriggeredRun` path because their flow
+ * is already expanded and validated.
  */
 
 import type {
@@ -10,8 +13,12 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { buildModelCatalog, resolveModelReference } from "../catalog/models.js";
-import type { Budgets, FlowNode, Scope } from "../model/ast.js";
-import type { RunSource } from "../run/events.js";
+import type { RunHeader, RunSource } from "../run/events.js";
+import {
+  type LaunchPlan,
+  type LaunchRequest,
+  prepareLaunch,
+} from "../run/launch.js";
 import {
   createOrigin,
   createPersister,
@@ -27,22 +34,28 @@ export interface TriggerDeps {
   manager: RunManager;
   notifications: NotificationManager;
   widget: RunPanel;
-  /** Attach the editor and run panel to one agent (running → live attach,
-   * settled → its own pi session). Absent in tests that never attach. */
+  /** Attach the editor and run panel to one agent. */
   attach?: (ctx: ExtensionContext, runId: string, instance: string) => void;
 }
 
-export interface StartTriggeredRunOptions {
-  flow: FlowNode;
-  cwd: string;
-  scope?: Scope;
-  label?: string;
-  /** Saved-workflow result path selected for human-facing rendering. */
-  display?: string;
-  budgets?: Budgets;
+export type TriggerLaunchRequest = Omit<LaunchRequest, "trusted">;
+
+export interface LaunchTriggeredRunOptions {
+  request: TriggerLaunchRequest;
   source: RunSource;
   ctx: ExtensionContext;
-  /** Move to background immediately (notifications deliver the result). */
+  /** Move to the background immediately and notify on completion. */
+  background: boolean;
+}
+
+export interface StartedTriggeredRun extends StartedRun {
+  /** The normalized plan, including recoverable launch warnings. */
+  plan: LaunchPlan;
+}
+
+export interface RerunTriggeredRunOptions {
+  header: RunHeader;
+  ctx: ExtensionContext;
   background: boolean;
 }
 
@@ -60,41 +73,82 @@ function sessionDefaults(
   };
 }
 
-export function startTriggeredRun(
+function startPreparedRun(
   deps: TriggerDeps,
-  opts: StartTriggeredRunOptions,
+  plan: LaunchPlan,
+  source: RunSource,
+  ctx: ExtensionContext,
+  background: boolean,
 ): StartedRun {
-  const origin = createOrigin(opts.ctx);
-  const modelCatalog = opts.ctx.modelRegistry
-    ? buildModelCatalog(opts.ctx.modelRegistry)
+  const origin = createOrigin(ctx);
+  const modelCatalog = ctx.modelRegistry
+    ? buildModelCatalog(ctx.modelRegistry)
     : undefined;
   const started = deps.manager.start({
-    flow: opts.flow,
-    cwd: opts.cwd,
-    scope: opts.scope,
-    label: opts.label,
-    display: opts.display,
-    budgets: opts.budgets,
-    source: opts.source,
+    flow: plan.flow,
+    cwd: plan.cwd,
+    scope: plan.scope,
+    label: plan.label,
+    display: plan.display,
+    warnings: plan.warnings,
+    budgets: plan.budgets,
+    source,
     originSessionFile: origin.sessionFile,
-    defaults: sessionDefaults(deps.pi, opts.ctx),
+    defaults: sessionDefaults(deps.pi, ctx),
     resolveModel: modelCatalog
       ? (ref) => resolveModelReference(ref, modelCatalog)
       : undefined,
-    trusted: isProjectTrusted(opts.ctx),
+    trusted: isProjectTrusted(ctx),
     onEvent: createPersister(origin),
   });
-  if (opts.background) {
+  if (background) {
     // Tool-launched runs wake the agent on completion so it can continue its
-    // task; command- and hook-launched runs only display their result.
+    // task. Command-, hook-, and RPC-launched runs only display their result.
     deps.notifications.track(
       started.runId,
       origin.sessionFile,
-      opts.source.kind === "tool",
+      source.kind === "tool",
     );
     deps.manager.markBackgrounded(started.runId);
     started.done.catch(() => {});
   }
-  deps.widget.update(opts.ctx);
+  deps.widget.update(ctx);
   return started;
+}
+
+/** Prepare and start one fresh request through the complete trigger contract. */
+export function launchTriggeredRun(
+  deps: TriggerDeps,
+  opts: LaunchTriggeredRunOptions,
+): StartedTriggeredRun {
+  const plan = prepareLaunch({
+    ...opts.request,
+    trusted: isProjectTrusted(opts.ctx),
+  });
+  const source: RunSource = plan.workflowName
+    ? { ...opts.source, workflow: plan.workflowName }
+    : opts.source;
+  return {
+    ...startPreparedRun(deps, plan, source, opts.ctx, opts.background),
+    plan,
+  };
+}
+
+/** Start a persisted, already-prepared run without reparsing its expanded flow. */
+export function rerunTriggeredRun(
+  deps: TriggerDeps,
+  opts: RerunTriggeredRunOptions,
+): StartedRun {
+  const { header } = opts;
+  const plan: LaunchPlan = {
+    flow: header.flow,
+    cwd: header.cwd ?? opts.ctx.cwd,
+    scope: header.scope ?? "both",
+    label: header.label,
+    display: header.display,
+    budgets: header.budgets,
+    workflowName: header.source.workflow,
+    warnings: [...(header.warnings ?? [])],
+  };
+  return startPreparedRun(deps, plan, header.source, opts.ctx, opts.background);
 }

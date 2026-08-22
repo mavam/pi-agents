@@ -430,7 +430,7 @@ function parseAgent(
     obj,
     [
       "kind",
-      "name",
+      "profile",
       "task",
       "json",
       "output",
@@ -445,7 +445,7 @@ function parseAgent(
   return {
     kind: "agent",
     ...parseBase(obj, path, issues),
-    name: optionalNonEmptyString(obj, "name", path, issues),
+    profile: optionalNonEmptyString(obj, "profile", path, issues),
     task: requiredString(obj, "task", path, issues),
     json: optionalJsonSchema(obj, path, issues),
     ...parseAgentExecutionOptions(obj, path, issues),
@@ -482,13 +482,13 @@ function parseReduce(
   if (!obj) return undefined;
   checkKeys(
     obj,
-    ["agent", "task", "json", "output", ...EXECUTION_OPTION_KEYS],
+    ["profile", "task", "json", "output", ...EXECUTION_OPTION_KEYS],
     path,
     issues,
   );
   removedOutputField(obj, path, issues);
   return {
-    agent: optionalNonEmptyString(obj, "agent", path, issues),
+    profile: optionalNonEmptyString(obj, "profile", path, issues),
     task: requiredString(obj, "task", path, issues),
     json: optionalJsonSchema(obj, path, issues),
     ...parseAgentExecutionOptions(obj, path, issues),
@@ -1335,7 +1335,7 @@ export interface InvocationRequirement {
   /** Static flow path, e.g. "$.steps[1]" or "$.branches.security.reduce". */
   path: string;
   /** Profile name; absent for anonymous (ad-hoc) calls. */
-  agent?: string;
+  profile?: string;
   model?: string;
   skills?: string[];
   cwd?: string;
@@ -1357,13 +1357,13 @@ export function collectInvocations(
   const requirements: InvocationRequirement[] = [];
   const add = (requirement: InvocationRequirement): void => {
     if (
-      requirement.agent === undefined &&
+      requirement.profile === undefined &&
       requirement.model === undefined &&
       requirement.skills === undefined
     )
       return;
     const key = [
-      requirement.agent ?? "",
+      requirement.profile ?? "",
       requirement.model ?? "",
       (requirement.skills ?? []).join(","),
       requirement.cwd ?? "",
@@ -1376,7 +1376,7 @@ export function collectInvocations(
   const addReduce = (reduce: Reduce, path: string): void =>
     add({
       path: reducePath(path),
-      agent: reduce.agent,
+      profile: reduce.profile,
       ...(reduce.model !== undefined ? { model: reduce.model } : {}),
       skills: reduce.skills,
       cwd: reduce.cwd,
@@ -1387,7 +1387,7 @@ export function collectInvocations(
       case "agent":
         add({
           path,
-          agent: current.name,
+          profile: current.profile,
           ...(current.model !== undefined ? { model: current.model } : {}),
           skills: current.skills,
           cwd: current.cwd,
@@ -1429,26 +1429,26 @@ export function collectInvocations(
   return requirements;
 }
 
-/** All named agents an expanded flow can spawn (reduce agents included); anonymous calls are skipped. */
-export function collectAgentNames(node: FlowNode): Set<string> {
+/** All profiles selected by an expanded flow; anonymous calls are skipped. */
+export function collectProfileNames(node: FlowNode): Set<string> {
   const names = new Set<string>();
   const visit = (current: FlowNode): void => {
     switch (current.kind) {
       case "agent":
-        if (current.name !== undefined) names.add(current.name);
+        if (current.profile !== undefined) names.add(current.profile);
         return;
       case "sequence":
         for (const step of current.steps) visit(step);
         return;
       case "parallel":
         for (const branch of Object.values(current.branches)) visit(branch);
-        if (current.reduce?.agent !== undefined)
-          names.add(current.reduce.agent);
+        if (current.reduce?.profile !== undefined)
+          names.add(current.reduce.profile);
         return;
       case "map":
         visit(current.body);
-        if (current.reduce?.agent !== undefined)
-          names.add(current.reduce.agent);
+        if (current.reduce?.profile !== undefined)
+          names.add(current.reduce.profile);
         return;
       case "loop":
       case "while":

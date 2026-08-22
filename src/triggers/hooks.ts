@@ -20,10 +20,9 @@ import {
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
 import type { WorkflowDef } from "../model/ast.js";
-import { prepareLaunch } from "../run/launch.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { sendInfo } from "../ui/render.js";
-import { startTriggeredRun, type TriggerDeps } from "./start.js";
+import { launchTriggeredRun, type TriggerDeps } from "./start.js";
 
 const MAX_EVENT_JSON_CHARS = 4000;
 const DROPPED_EVENT_KEYS = new Set([
@@ -151,25 +150,19 @@ export class HookManager {
       );
       const wf = resolveWorkflowByName(workflows, name);
       if (!wf?.on?.includes(eventName)) return;
-      const plan = prepareLaunch({
-        workflow: wf.name,
-        params: {
-          event: escapeBraces(
-            compactEventJson({ type: eventName, ...(event as object) }),
-          ),
-        },
-        label: `${wf.name} (on ${eventName})`,
-        cwd: ctx.cwd,
-        trusted,
-      });
       this.deps.notifications.setContext(ctx);
-      const started = startTriggeredRun(this.deps, {
-        flow: plan.flow,
-        cwd: plan.cwd,
-        scope: plan.scope,
-        label: plan.label,
-        display: plan.display,
-        source: { kind: "hook", workflow: wf.name, event: eventName },
+      const started = launchTriggeredRun(this.deps, {
+        request: {
+          workflow: wf.name,
+          params: {
+            event: escapeBraces(
+              compactEventJson({ type: eventName, ...(event as object) }),
+            ),
+          },
+          label: `${wf.name} (on ${eventName})`,
+          cwd: ctx.cwd,
+        },
+        source: { kind: "hook", event: eventName },
         ctx,
         background: true,
       });

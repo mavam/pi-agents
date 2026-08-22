@@ -117,21 +117,21 @@ describe("skills and tools precedence", () => {
     },
     {
       what: "named omitted → inherits the profile",
-      call: { agent: "reviewer" },
+      call: { profile: "reviewer" },
       skills: ["code-review"],
       disableSkillDiscovery: true,
       tools: ["read", "grep"],
     },
     {
       what: "named explicit → replaces the profile",
-      call: { agent: "reviewer", skills: ["gh"], tools: ["find"] },
+      call: { profile: "reviewer", skills: ["gh"], tools: ["find"] },
       skills: ["gh"],
       disableSkillDiscovery: true,
       tools: ["find"],
     },
     {
       what: "named empty → clears the profile",
-      call: { agent: "reviewer", skills: [], tools: [] },
+      call: { profile: "reviewer", skills: [], tools: [] },
       skills: [],
       disableSkillDiscovery: true,
       tools: [],
@@ -153,7 +153,7 @@ describe("skills and tools precedence", () => {
 
   test("a named profile without skills still closes ambient discovery", () => {
     writeAgent(projectDir, "reviewer");
-    const invocation = resolveOk({ agent: "reviewer" });
+    const invocation = resolveOk({ profile: "reviewer" });
     expect(invocation.skills).toEqual([]);
     expect(invocation.disableSkillDiscovery).toBe(true);
   });
@@ -162,7 +162,7 @@ describe("skills and tools precedence", () => {
     writeAgent(projectDir, "reviewer", {
       tools: "[read, workflow_create]",
     });
-    const resolution = resolve({ agent: "reviewer" });
+    const resolution = resolve({ profile: "reviewer" });
     expect(resolution.ok).toBe(false);
     if (resolution.ok) throw new Error("expected resolution failure");
     expect(resolution.problems.join("\n")).toContain(
@@ -177,7 +177,7 @@ describe("skills and tools precedence", () => {
     writeAgent(projectDir, "reviewer", {
       tools: "[workflow_create]",
     });
-    expect(resolveOk({ agent: "reviewer", tools: ["read"] }).tools).toEqual([
+    expect(resolveOk({ profile: "reviewer", tools: ["read"] }).tools).toEqual([
       "read",
     ]);
   });
@@ -197,10 +197,10 @@ describe("skills and tools precedence", () => {
     };
 
     const call = resolveInvocation(
-      { agent: "reviewer", model: "call-model" },
+      { profile: "reviewer", model: "call-model" },
       context,
     );
-    const profile = resolveInvocation({ agent: "reviewer" }, context);
+    const profile = resolveInvocation({ profile: "reviewer" }, context);
     const session = resolveInvocation({}, context);
     if (!call.ok || !profile.ok || !session.ok)
       throw new Error("resolution failed");
@@ -240,7 +240,7 @@ describe("model resolution", () => {
   test("validates and canonicalizes a profile model", () => {
     writeAgent(projectDir, "terra-agent", { model: "terra" });
     const resolution = resolveInvocation(
-      { agent: "terra-agent" },
+      { profile: "terra-agent" },
       {
         cwd: projectDir,
         scope: "both",
@@ -340,21 +340,23 @@ describe("skill resolution", () => {
   });
 
   test("every problem in one invocation is reported together", () => {
-    const resolution = resolve({ agent: "nobody", skills: ["nothing"] });
+    const resolution = resolve({ profile: "nobody", skills: ["nothing"] });
     expect(resolution.ok).toBe(false);
     if (resolution.ok) return;
     expect(resolution.problems).toHaveLength(2);
-    expect(resolution.problems.join("; ")).toContain("unknown agent 'nobody'");
+    expect(resolution.problems.join("; ")).toContain(
+      "unknown profile 'nobody'",
+    );
     expect(resolution.problems.join("; ")).toContain("unknown skill 'nothing'");
   });
 
   test("profile-declared skills resolve, and a stale one fails the call", () => {
     writeAgent(projectDir, "good", { skills: "[gh]" });
     writeAgent(projectDir, "stale", { skills: "[gone]" });
-    expect(resolveOk({ agent: "good" }).skills.map((s) => s.name)).toEqual([
+    expect(resolveOk({ profile: "good" }).skills.map((s) => s.name)).toEqual([
       "gh",
     ]);
-    const resolution = resolve({ agent: "stale" });
+    const resolution = resolve({ profile: "stale" });
     expect(resolution.ok).toBe(false);
     if (!resolution.ok)
       expect(resolution.problems[0]).toContain("unknown skill 'gone'");
@@ -420,7 +422,7 @@ describe("one project root per cwd", () => {
     writeSkill(projectSkills(inner), "inner-only");
 
     const resolution = resolveInvocation(
-      { agent: "outer-reviewer", skills: ["inner-only"] },
+      { profile: "outer-reviewer", skills: ["inner-only"] },
       {
         cwd: inner,
         scope: "both",
@@ -432,7 +434,9 @@ describe("one project root per cwd", () => {
     if (resolution.ok) return;
     // The inner root wins: its skill resolves, the outer profile does not.
     expect(resolution.problems).toHaveLength(1);
-    expect(resolution.problems[0]).toContain("unknown agent 'outer-reviewer'");
+    expect(resolution.problems[0]).toContain(
+      "unknown profile 'outer-reviewer'",
+    );
   });
 
   test("without a nested .pi both come from the outer root", () => {
@@ -440,7 +444,7 @@ describe("one project root per cwd", () => {
     const inner = path.join(projectDir, "sub", "deeper");
     fs.mkdirSync(inner, { recursive: true });
     const resolution = resolveInvocation(
-      { agent: "outer-reviewer" },
+      { profile: "outer-reviewer" },
       {
         cwd: inner,
         scope: "both",
@@ -556,7 +560,7 @@ describe("catalog cache", () => {
     };
     writeAgent(projectDir, "plain");
     resolveInvocation({}, context);
-    resolveInvocation({ agent: "plain" }, context);
+    resolveInvocation({ profile: "plain" }, context);
     resolveInvocation({ skills: [] }, context);
     expect(catalogs.skillScans).toBe(0);
 

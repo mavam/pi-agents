@@ -103,11 +103,11 @@ function build(
   color: TreeColorize,
 ): DisplayNode[] {
   const reduceNode = (
-    reduce: { agent?: string; task: string },
+    reduce: { profile?: string; task: string },
     parentPath: string,
   ): DisplayNode => ({
     icon: KIND_ICONS.reduce,
-    text: `reduce${color("dim", " → ")}${reduce.agent ?? ADHOC_LABEL}${color("dim", " · ")}${colorizeRefs(preview(reduce.task), color)}`,
+    text: `reduce${color("dim", " → ")}${reduce.profile ?? ADHOC_LABEL}${color("dim", " · ")}${colorizeRefs(preview(reduce.task), color)}`,
     path: reducePath(parentPath),
     children: [],
   });
@@ -116,7 +116,7 @@ function build(
       return [
         {
           icon: KIND_ICONS.agent,
-          text: `${node.name ?? ADHOC_LABEL}${binding(node, color)}${color("dim", " · ")}${colorizeRefs(preview(node.task), color)}`,
+          text: `${node.profile ?? ADHOC_LABEL}${binding(node, color)}${color("dim", " · ")}${colorizeRefs(preview(node.task), color)}`,
           path,
           children: [],
         },

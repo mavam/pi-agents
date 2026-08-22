@@ -296,6 +296,7 @@ interface WorkflowInspectDetails {
   startedAt: string;
   endedAt?: string;
   error?: string;
+  warnings?: string[];
   agents?: number;
   usage?: RunView["usage"];
   tree: string;
@@ -305,7 +306,7 @@ interface WorkflowInspectDetails {
   nodes: Array<{
     instance: string;
     name: string;
-    agent?: string;
+    profile?: string;
     kind: string;
     status: string;
     startedAt: string;
@@ -377,6 +378,9 @@ export function createWorkflowInspectTool(
       if (details.error) {
         lines.push(theme.fg("error", oneLine(details.error, 200)));
       }
+      for (const warning of details.warnings ?? []) {
+        lines.push(theme.fg("warning", oneLine(warning, 200)));
+      }
       lines.push(
         options.expanded
           ? details.tree
@@ -424,6 +428,7 @@ export function createWorkflowInspectTool(
             ? undefined
             : new Date(run.endedAt).toISOString(),
         error: run.error,
+        warnings: run.header.warnings,
         agents: run.agents,
         usage: run.usage,
         tree: compactText(renderRunTree(run) || "(no nodes yet)", 10_000) ?? "",
@@ -433,7 +438,7 @@ export function createWorkflowInspectTool(
         nodes: nodes.slice(cursor, end).map((node) => ({
           instance: node.instance,
           name: nodeDisplayName(node),
-          agent: node.agent,
+          profile: node.profile,
           kind: node.kind,
           status: node.status,
           startedAt: new Date(node.startedAt).toISOString(),

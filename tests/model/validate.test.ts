@@ -2,19 +2,19 @@ import { describe, expect, test } from "bun:test";
 import YAML from "yaml";
 import type { FlowNode, WorkflowLike } from "../../src/model/ast.js";
 import {
-  collectAgentNames,
   collectInvocations,
+  collectProfileNames,
   FlowValidationError,
   validateFlow,
 } from "../../src/model/validate.js";
 
 const agent = (
-  name: string,
+  profile: string,
   task: string,
   extra: Record<string, unknown> = {},
 ) => ({
   kind: "agent",
-  name,
+  profile,
   task,
   ...extra,
 });
@@ -74,10 +74,10 @@ describe("structural validation", () => {
     expectIssue(agent("a", "t", { retries: 3 }), "unknown key 'retries'");
   });
 
-  test("agent requires a task; name is optional", () => {
+  test("agent requires a task; profile is optional", () => {
     expectIssue({ kind: "agent" }, "'task' must be a non-empty string");
     expectIssue(
-      { kind: "agent", name: "a" },
+      { kind: "agent", profile: "a" },
       "'task' must be a non-empty string",
     );
     expectValid({ kind: "agent", task: "do the thing" });
@@ -92,10 +92,25 @@ describe("structural validation", () => {
     });
   });
 
-  test("a present name must be non-empty", () => {
+  test("a present profile must be non-empty", () => {
     expectIssue(
-      { kind: "agent", name: "", task: "t" },
-      "'name' must be a non-empty string when present",
+      { kind: "agent", profile: "", task: "t" },
+      "'profile' must be a non-empty string when present",
+    );
+  });
+
+  test("old profile selector fields are rejected", () => {
+    expectIssue(
+      { kind: "agent", name: "scout", task: "t" },
+      "unknown key 'name'",
+    );
+    expectIssue(
+      {
+        kind: "parallel",
+        branches: { a: { kind: "agent", task: "t" } },
+        reduce: { agent: "worker", task: "merge {branches}" },
+      },
+      "$.reduce: unknown key 'agent'",
     );
   });
 
@@ -244,12 +259,12 @@ describe("structural validation", () => {
     );
   });
 
-  test("reduce requires a task; agent is optional", () => {
+  test("reduce requires a task; profile is optional", () => {
     expectIssue(
       {
         kind: "parallel",
         branches: { a: agent("x", "t") },
-        reduce: { agent: "r" },
+        reduce: { profile: "r" },
       },
       "$.reduce: 'task' must be a non-empty string",
     );
@@ -262,9 +277,9 @@ describe("structural validation", () => {
       {
         kind: "parallel",
         branches: { a: agent("x", "t") },
-        reduce: { agent: "", task: "merge {branches}" },
+        reduce: { profile: "", task: "merge {branches}" },
       },
-      "$.reduce: 'agent' must be a non-empty string when present",
+      "$.reduce: 'profile' must be a non-empty string when present",
     );
   });
 
@@ -661,13 +676,13 @@ describe("binding scope", () => {
     expectValid({
       kind: "parallel",
       branches: { a: agent("x", "t") },
-      reduce: { agent: "syn", task: "merge {branches}" },
+      reduce: { profile: "syn", task: "merge {branches}" },
     });
     expectIssue(
       {
         kind: "parallel",
         branches: { a: agent("x", "t") },
-        reduce: { agent: "syn", task: "merge {items}" },
+        reduce: { profile: "syn", task: "merge {items}" },
       },
       "$.reduce.task: {items} is only available in a map reduce task",
     );
@@ -676,7 +691,7 @@ describe("binding scope", () => {
         kind: "map",
         over: "{files}",
         body: agent("r", "review {item}"),
-        reduce: { agent: "syn", task: "merge {items}" },
+        reduce: { profile: "syn", task: "merge {items}" },
       }),
     );
   });
@@ -687,7 +702,7 @@ describe("binding scope", () => {
         kind: "map",
         over: "{goal.files}",
         body: agent("r", "review {item}"),
-        reduce: { agent: "syn", task: "merge {items} against {goal}" },
+        reduce: { profile: "syn", task: "merge {items} against {goal}" },
       }),
     );
     expectIssue(
@@ -695,7 +710,7 @@ describe("binding scope", () => {
         kind: "map",
         over: "{files}",
         body: agent("r", "review {item}"),
-        reduce: { agent: "syn", task: "merge {item}" },
+        reduce: { profile: "syn", task: "merge {item}" },
       }),
       "$.steps[1].reduce.task: {item} is only available inside a map body",
     );
@@ -726,16 +741,16 @@ describe("workflow expansion", () => {
       branches: {
         bugs: {
           kind: "agent",
-          name: "reviewer",
+          profile: "reviewer",
           task: "bugs in {params.target}",
         },
         style: {
           kind: "agent",
-          name: "reviewer",
+          profile: "reviewer",
           task: "style in {params.target}",
         },
       },
-      reduce: { agent: "synthesizer", task: "merge {branches}" },
+      reduce: { profile: "synthesizer", task: "merge {branches}" },
     } as FlowNode,
   };
 
@@ -827,7 +842,7 @@ describe("workflow expansion", () => {
     const leaky: WorkflowLike = {
       name: "leaky",
       params: [],
-      flow: { kind: "agent", name: "a", task: "use {map}" } as FlowNode,
+      flow: { kind: "agent", profile: "a", task: "use {map}" } as FlowNode,
     };
     expectIssue(
       seq(agent("scout", "t", { as: "map" }), {
@@ -859,7 +874,7 @@ describe("workflow expansion", () => {
     const self: WorkflowLike = {
       name: "self",
       params: [],
-      flow: { kind: "agent", name: "a", task: "t" } as FlowNode,
+      flow: { kind: "agent", profile: "a", task: "t" } as FlowNode,
     };
     expectIssue(
       { kind: "workflow", name: "self" },
@@ -884,7 +899,7 @@ describe("workflow expansion", () => {
   });
 });
 
-describe("collectAgentNames", () => {
+describe("collectProfileNames", () => {
   test("collects leaves, reducers, and inlined workflow agents", () => {
     const flow = validateFlow(
       seq(
@@ -893,7 +908,7 @@ describe("collectAgentNames", () => {
           kind: "map",
           over: "{files}",
           body: agent("reviewer", "review {item}"),
-          reduce: { agent: "synthesizer", task: "merge {items}" },
+          reduce: { profile: "synthesizer", task: "merge {items}" },
         },
         {
           kind: "workflow",
@@ -909,14 +924,14 @@ describe("collectAgentNames", () => {
                 params: [{ name: "target" }],
                 flow: {
                   kind: "agent",
-                  name: "inner-agent",
+                  profile: "inner-agent",
                   task: "use {params.target}",
                 } as FlowNode,
               }
             : undefined,
       },
     );
-    expect([...collectAgentNames(flow)].sort()).toEqual([
+    expect([...collectProfileNames(flow)].sort()).toEqual([
       "inner-agent",
       "reviewer",
       "scout",
@@ -933,7 +948,7 @@ describe("collectAgentNames", () => {
       },
       reduce: { task: "merge {branches}" },
     });
-    expect([...collectAgentNames(flow)]).toEqual(["reviewer"]);
+    expect([...collectProfileNames(flow)]).toEqual(["reviewer"]);
   });
 });
 
@@ -1042,14 +1057,14 @@ describe("collectInvocations", () => {
     expect(collectInvocations(flow)).toEqual([
       {
         path: "$.steps[1]",
-        agent: "scout",
+        profile: "scout",
         skills: undefined,
         cwd: "/elsewhere",
         scope: "user",
       },
       {
         path: "$.steps[2]",
-        agent: undefined,
+        profile: undefined,
         skills: ["code-review"],
         cwd: undefined,
         scope: undefined,
@@ -1065,7 +1080,7 @@ describe("collectInvocations", () => {
         body: { kind: "agent", task: "review {item}" },
         reduce: {
           task: "merge {items}",
-          agent: "synthesizer",
+          profile: "synthesizer",
           skills: ["gh"],
           cwd: "/elsewhere",
           scope: "project",
@@ -1076,7 +1091,7 @@ describe("collectInvocations", () => {
     expect(collectInvocations(flow)).toEqual([
       {
         path: "$.reduce",
-        agent: "synthesizer",
+        profile: "synthesizer",
         skills: ["gh"],
         cwd: "/elsewhere",
         scope: "project",
@@ -1095,7 +1110,7 @@ describe("collectInvocations", () => {
     expect(collectInvocations(flow)).toEqual([
       {
         path: "$.branches.a",
-        agent: undefined,
+        profile: undefined,
         model: "terra",
         skills: undefined,
         cwd: undefined,
@@ -1103,7 +1118,7 @@ describe("collectInvocations", () => {
       },
       {
         path: "$.reduce",
-        agent: undefined,
+        profile: undefined,
         model: "spark",
         skills: undefined,
         cwd: undefined,
@@ -1286,7 +1301,7 @@ describe("switch validation", () => {
     const inner: WorkflowLike = {
       name: "inner",
       params: [],
-      flow: { kind: "agent", name: "worker", task: "work" } as FlowNode,
+      flow: { kind: "agent", profile: "worker", task: "work" } as FlowNode,
     };
     const resolve = (name: string) =>
       [inner, cyclic].find((def) => def.name === name);
@@ -1306,7 +1321,7 @@ describe("switch validation", () => {
       gateSwitch({ else: { kind: "workflow", name: "inner" } }),
       { resolveWorkflow: resolve },
     );
-    expect(collectAgentNames(flow)).toContain("worker");
+    expect(collectProfileNames(flow)).toContain("worker");
     expectIssue(
       { kind: "workflow", name: "cyclic" },
       "workflow cycle: cyclic → cyclic",
@@ -1316,11 +1331,11 @@ describe("switch validation", () => {
 
   test("agents in every arm are collected", () => {
     const flow = validateFlow(gateSwitch());
-    const names = collectAgentNames(flow);
+    const names = collectProfileNames(flow);
     for (const name of ["shipper", "fixer", "checker", "reporter"]) {
       expect(names).toContain(name);
     }
-    expect(collectInvocations(flow).map((req) => req.agent)).toContain(
+    expect(collectInvocations(flow).map((req) => req.profile)).toContain(
       "reporter",
     );
   });

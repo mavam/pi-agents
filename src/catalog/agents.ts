@@ -271,32 +271,11 @@ function escapeXmlAttribute(value: string): string {
 // with stable location/reference metadata plus the normalized agent metadata and
 // body.
 /**
- * Best-effort executability check for the advertised catalog. Availability
- * can change between prompt rendering and a later call, so this reduces
- * staleness but is not a guarantee; runtime resolution errors remain
- * authoritative.
+ * Best-effort runtime check for one profile in the rendered catalog context.
+ * The caller supplies the check so catalog formatting does not duplicate
+ * invocation-resolution policy.
  */
-export interface AgentAvailability {
-  /** Return unresolvable skill names for a profile's skill list. */
-  missingSkills?: (skills: string[]) => string[];
-  /** Return true when the model reference resolves. */
-  modelResolves?: (ref: string) => boolean;
-}
-
-function unavailableReason(
-  agent: Agent,
-  availability: AgentAvailability | undefined,
-): string | undefined {
-  if (!availability) return undefined;
-  const missing = availability.missingSkills?.(agent.skills) ?? [];
-  if (missing.length > 0) {
-    return `requires unavailable skill(s): ${missing.join(", ")}`;
-  }
-  if (agent.model && availability.modelResolves?.(agent.model) === false) {
-    return `requires unavailable model: ${agent.model}`;
-  }
-  return undefined;
-}
+export type AgentAvailability = (agent: Agent) => string | undefined;
 
 export function buildAgentsPrompt(
   cwd: string,
@@ -313,7 +292,7 @@ export function buildAgentsPrompt(
   const unavailable: Array<{ agent: Agent; reason: string }> = [];
   const agents: Agent[] = [];
   for (const agent of sorted) {
-    const reason = unavailableReason(agent, availability);
+    const reason = availability?.(agent);
     if (reason) unavailable.push({ agent, reason });
     else agents.push(agent);
   }
@@ -324,7 +303,7 @@ export function buildAgentsPrompt(
 
   if (agents.length === 0) {
     lines.push(
-      "  <none>No named agent profiles were discovered for this cwd and scope. Anonymous ad-hoc agents remain available by omitting `name`.</none>",
+      "  <none>No executable agent profiles are available for this cwd and scope. Anonymous ad-hoc agents remain available by omitting `profile`.</none>",
     );
   } else {
     for (const agent of agents) {

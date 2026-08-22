@@ -467,15 +467,16 @@ describe("command registration", () => {
     expect(result).not.toContain('"outcome": "changes_required"');
     expect(result).toContain("`/workflow aaaa1111 raw`");
 
+    // A missing display path falls back to the `report` convention before
+    // the raw result.
     run.header.display = "summary";
     await workflow?.handler("aaaa1111 result", fakeCtx());
     const fallback = messages.at(-1) ?? "";
     const warning =
-      "> ⚠ Display path `summary` was not found; showing the raw result.";
+      "> ⚠ Display path `summary` was not found; showing the `report` field.";
     expect(fallback).toContain(warning);
-    expect(fallback.indexOf(warning)).toBeLessThan(
-      fallback.indexOf('"outcome": "changes_required"'),
-    );
+    expect(fallback).toContain("# Human-facing report");
+    expect(fallback).not.toContain('"outcome": "changes_required"');
 
     await workflow?.handler("aaaa1111 raw", fakeCtx());
     const raw = messages.at(-1) ?? "";

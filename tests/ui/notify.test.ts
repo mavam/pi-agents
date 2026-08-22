@@ -233,6 +233,21 @@ describe("NotificationManager", () => {
     expect(content).toContain('workflow_result({run:"run-1"})');
   });
 
+  test("renders a conventional `report` string instead of structured data", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    notifications.track("run-report", "session.jsonl", false);
+    const report = "# Findings\n\nAll good.";
+    notifications.handleRunEvent(
+      completed("run-report", { findings: ["one"], report }),
+    );
+    // The human-facing body renders the report; the model-facing content
+    // keeps the complete structured value.
+    expect(sent[0]?.message.details?.body).toBe(report);
+    expect(sent[0]?.message.content).toContain('"findings"');
+  });
+
   test("keeps complete long structured results as highlighted JSON", () => {
     const { sent, pi, manager, makeCtx } = makeFakes();
     const notifications = new NotificationManager(pi, manager);
@@ -240,7 +255,7 @@ describe("NotificationManager", () => {
     notifications.track("run-1", "session.jsonl", false);
     const result = {
       findings: ["one", "two"],
-      report: "x".repeat(700),
+      summary: "x".repeat(700),
       tail: "complete-tail",
     };
     notifications.handleRunEvent(completed("run-1", result));

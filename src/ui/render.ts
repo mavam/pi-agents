@@ -319,25 +319,52 @@ export interface SelectedDisplayValue {
   warning?: string;
 }
 
-/** Select a run's declared human-facing Markdown result. */
+/**
+ * The `report` result convention: a structured result may carry a top-level
+ * `report` string with human-facing Markdown. It is a soft convention, not a
+ * reserved key — a non-string `report` degrades to the complete result,
+ * never to an error or warning.
+ */
+function selectReportValue(value: unknown): SelectedDisplayValue {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as Record<string, unknown>).report === "string"
+  ) {
+    return {
+      value: (value as Record<string, unknown>).report as string,
+      selected: true,
+    };
+  }
+  return { value, selected: false };
+}
+
+/**
+ * Select a run's human-facing Markdown result. Fallback chain: explicit
+ * `display` path (saved workflows) → `report` convention → complete result.
+ * Presentation selection can warn but never fails.
+ */
 export function selectDisplayValue(
   value: unknown,
   display: string | undefined,
 ): SelectedDisplayValue {
-  if (!display) return { value, selected: false };
+  if (!display) return selectReportValue(value);
+  const fallback = selectReportValue(value);
+  const shown = fallback.selected
+    ? "showing the `report` field"
+    : "showing the raw result";
   const resolved = resolvePath(value, display.split("."));
   if (!resolved.found) {
     return {
-      value,
-      selected: false,
-      warning: `Display path \`${display}\` was not found; showing the raw result.`,
+      ...fallback,
+      warning: `Display path \`${display}\` was not found; ${shown}.`,
     };
   }
   if (typeof resolved.value !== "string") {
     return {
-      value,
-      selected: false,
-      warning: `Display path \`${display}\` resolved to a non-string value; showing the raw result.`,
+      ...fallback,
+      warning: `Display path \`${display}\` resolved to a non-string value; ${shown}.`,
     };
   }
   return { value: resolved.value, selected: true };

@@ -1,8 +1,7 @@
 # 🤖 pi-agents
 
-Run explicit, composable multi-agent workflows in
-[Pi](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent).
-Use one agent for a focused task, run several in parallel, or connect agents
+Run explicit, composable multi-agent workflows in [Pi](https://pi.dev). Use one
+agent for a focused task, run several in parallel, or connect agents
 with sequences, maps, loops, conditions, and reducers.
 
 Every workflow node returns a value. Data moves between nodes only through
@@ -596,12 +595,6 @@ The `pi` executable must be available on `PATH` for delegated agents.
 - Use `/workflow <id> agents` to identify the delegated agent that failed.
 - Open a settled agent with `/agent-session <run-id> [node]` when you need its
   complete conversation and tool history.
-
-## 🧹 Uninstall
-
-```sh
-pi remove npm:pi-agents
-```
 
 ## 📄 License
 

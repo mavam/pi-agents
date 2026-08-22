@@ -1,0 +1,10 @@
+created: 2026-08-22
+title: Versioned workflow contracts
+intro: >-
+  This release introduces explicit agent profile selectors and a versioned workflow
+  protocol, making reusable orchestration contracts clearer and safer. It also improves
+  workflow launches with resilient presentation handling, quieter previews, and more
+  useful structured result reports.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.17.0

@@ -238,8 +238,10 @@ A run can return structured data while presenting one Markdown string to the
 user. The default is the `report` convention: when a structured result
 contains a top-level `report` string, completion cards and
 `/workflow <id> result` render it as Markdown. Without `report`, the UI shows
-the complete structured result. Parent workflows and `workflow_result` always
-receive the complete value; use `/workflow <id> raw` to inspect it.
+the complete structured result. Parent workflows always receive the complete
+value. `workflow_result` returns the complete value by default and applies the
+human-facing selection only with `view: "presented"`; use `/workflow <id> raw`
+to inspect it in the UI.
 
 Saved workflows may instead pin an explicit dot path with `display`, which
 overrides the convention:

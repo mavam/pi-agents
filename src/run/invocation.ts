@@ -91,6 +91,16 @@ export type InvocationResolution =
   | { ok: true; invocation: ResolvedInvocation }
   | { ok: false; cwd: string; scope: Scope; problems: string[] };
 
+/** Apply runtime invocation rules when deciding whether to advertise a profile. */
+export function createProfileAvailability(
+  context: InvocationContext,
+): (profile: Agent) => string | undefined {
+  return (profile) => {
+    const resolution = resolveInvocation({ profile: profile.name }, context);
+    return resolution.ok ? undefined : resolution.problems.join("; ");
+  };
+}
+
 /**
  * Per-run memo of agent and skill discovery, keyed by effective cwd and scope.
  * Skill bodies are cached inside each `SkillCatalog`, so preflight's read

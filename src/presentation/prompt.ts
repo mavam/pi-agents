@@ -8,10 +8,9 @@ import {
   type AgentAvailability,
   buildAgentsPrompt,
 } from "../catalog/agents.js";
-import { type ModelCatalog, resolveModelReference } from "../catalog/models.js";
+import type { ModelCatalog } from "../catalog/models.js";
 import { discoverWorkflows } from "../catalog/workflows.js";
 import type { Scope } from "../model/ast.js";
-import { CatalogCache, resolveInvocation } from "../run/invocation.js";
 
 function escapeXmlText(value: string): string {
   return value
@@ -102,30 +101,9 @@ export function buildSystemPromptAppendix(
   cwd: string,
   trusted = true,
   catalog?: ModelCatalog,
+  availability?: AgentAvailability,
 ): string {
   const scope: Scope = trusted ? "both" : "user";
-  // Prompt-time availability is best effort because files and authentication
-  // may change later. It still uses the runtime resolver so both checks apply
-  // the same profile, skill, model, tool, scope, and trust rules.
-  const catalogs = new CatalogCache();
-  const availability: AgentAvailability = (agent) => {
-    const resolution = resolveInvocation(
-      { profile: agent.name },
-      {
-        cwd,
-        scope,
-        trusted,
-        catalogs,
-        ...(catalog
-          ? {
-              resolveModel: (ref: string) =>
-                resolveModelReference(ref, catalog),
-            }
-          : {}),
-      },
-    );
-    return resolution.ok ? undefined : resolution.problems.join("; ");
-  };
   const agents = buildAgentsPrompt(cwd, scope, availability);
   const workflows = buildWorkflowsPrompt(cwd, scope);
   const parts = [
@@ -149,4 +127,33 @@ export function buildSystemPromptAppendix(
     );
   }
   return parts.join("\n");
+}
+
+/** Cache the rendered appendix until its session context or model set changes. */
+export class PromptAppendixCache {
+  private key?: string;
+  private appendix?: string;
+
+  get(
+    cwd: string,
+    trusted: boolean,
+    catalog: ModelCatalog | undefined,
+    availability: () => AgentAvailability,
+  ): string {
+    const key = JSON.stringify([cwd, trusted, catalog]);
+    if (this.key === key && this.appendix !== undefined) return this.appendix;
+    this.key = key;
+    this.appendix = buildSystemPromptAppendix(
+      cwd,
+      trusted,
+      catalog,
+      availability(),
+    );
+    return this.appendix;
+  }
+
+  clear(): void {
+    this.key = undefined;
+    this.appendix = undefined;
+  }
 }

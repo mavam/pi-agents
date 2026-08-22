@@ -118,11 +118,8 @@ describe("structural validation", () => {
     expectValid(agent("a", "t", { model: "some-model", thinking: "low" }));
   });
 
-  test("removed output field points at json", () => {
-    expectIssue(
-      agent("a", "t", { output: "yaml" }),
-      "$.output: 'output' was removed; omit it for string results or replace it with a concrete 'json' schema",
-    );
+  test("unknown result fields are rejected", () => {
+    expectIssue(agent("a", "t", { output: "yaml" }), "unknown key 'output'");
   });
 
   test("agent scope is an enum", () => {
@@ -203,7 +200,7 @@ describe("structural validation", () => {
         branches: { a: agent("a", "t") },
         reduce: { task: "merge {branches}", output: "json" },
       },
-      "$.reduce.output: 'output' was removed",
+      "$.reduce: unknown key 'output'",
     );
   });
 

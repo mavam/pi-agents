@@ -2,11 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { discoverAgents } from "../../src/catalog/agents.js";
 import type { ModelCatalog } from "../../src/catalog/models.js";
 import {
   buildModelsPrompt,
   buildSystemPromptAppendix,
+  PromptAppendixCache,
 } from "../../src/presentation/prompt.js";
+import {
+  CatalogCache,
+  createProfileAvailability,
+  resolveInvocation,
+} from "../../src/run/invocation.js";
 
 describe("buildModelsPrompt", () => {
   test("renders providers, authentication, and models", () => {
@@ -92,7 +99,7 @@ describe("buildSystemPromptAppendix", () => {
         "---\nname: recursive\ndescription: cannot run\ntools: [workflow_create]\n---\nRun.\n",
       );
 
-      const appendix = buildSystemPromptAppendix(cwd, true, {
+      const modelCatalog: ModelCatalog = {
         providers: [
           {
             id: "openai-codex",
@@ -100,15 +107,67 @@ describe("buildSystemPromptAppendix", () => {
             modelIds: ["gpt-5.6-terra"],
           },
         ],
-      });
+      };
+      const context = {
+        cwd,
+        scope: "both" as const,
+        trusted: true,
+        catalogs: new CatalogCache(),
+      };
+      const availability = createProfileAvailability(context);
+      const appendix = buildSystemPromptAppendix(
+        cwd,
+        true,
+        modelCatalog,
+        availability,
+      );
       expect(appendix).toContain('<agent name="valid"');
       expect(appendix).toContain("<unavailable");
       expect(appendix).toContain('<agent name="recursive"');
       expect(appendix).toContain(
         "delegated agents cannot use orchestration tools",
       );
+
+      const recursive = discoverAgents(cwd, "both").agents.find(
+        (profile) => profile.name === "recursive",
+      );
+      if (!recursive) throw new Error("missing recursive profile");
+      const direct = resolveInvocation({ profile: recursive.name }, context);
+      if (direct.ok) throw new Error("expected recursive profile to fail");
+      expect(availability(recursive)).toBe(direct.problems.join("; "));
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+});
+
+describe("PromptAppendixCache", () => {
+  test("renders once per session context and invalidates explicitly", () => {
+    const cache = new PromptAppendixCache();
+    const catalog: ModelCatalog = { providers: [] };
+    let availabilityBuilds = 0;
+    const availability = () => {
+      availabilityBuilds += 1;
+      return () => undefined;
+    };
+
+    const first = cache.get(process.cwd(), true, catalog, availability);
+    const second = cache.get(process.cwd(), true, catalog, availability);
+    expect(second).toBe(first);
+    expect(availabilityBuilds).toBe(1);
+
+    cache.clear();
+    cache.get(process.cwd(), true, catalog, availability);
+    expect(availabilityBuilds).toBe(2);
+
+    cache.get(
+      process.cwd(),
+      true,
+      {
+        providers: [{ id: "test", subscription: false, modelIds: ["model"] }],
+      },
+      availability,
+    );
+    expect(availabilityBuilds).toBe(3);
   });
 });

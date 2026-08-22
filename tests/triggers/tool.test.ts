@@ -831,9 +831,22 @@ describe("directed workflow run tools", () => {
     await started.done;
     const tool = createWorkflowResultTool(deps);
 
-    const presented = await tool.execute(
+    const complete = await tool.execute(
       "result-1",
       { run: started.runId },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    const completeText = (complete.content[0] as { text: string }).text;
+    expect(complete.details.view).toBe("raw");
+    expect(completeText).toContain('"report"');
+    expect(completeText).toContain('"findings"');
+    expect(complete.details.truncated).toBe(false);
+
+    const presented = await tool.execute(
+      "result-presented",
+      { run: started.runId, view: "presented" },
       undefined,
       undefined,
       ctx(),
@@ -841,7 +854,6 @@ describe("directed workflow run tools", () => {
     expect((presented.content[0] as { text: string }).text).toContain(
       "# Review\n\nApproved.",
     );
-    expect(presented.details.truncated).toBe(false);
 
     const selected = await tool.execute(
       "result-2",
@@ -915,7 +927,7 @@ describe("directed workflow run tools", () => {
     await fallbackStarted.done;
     const fallback = await tool.execute(
       "result-display-fallback",
-      { run: fallbackStarted.runId },
+      { run: fallbackStarted.runId, view: "presented" },
       undefined,
       undefined,
       ctx(),
@@ -1060,6 +1072,13 @@ describe("directed workflow run tools", () => {
     expect(
       JSON.stringify(createWorkflowStopTool(deps).parameters),
     ).not.toContain("message");
+    expect(
+      (
+        createWorkflowResultTool(deps).parameters as unknown as {
+          properties: { view: { default: string } };
+        }
+      ).properties.view.default,
+    ).toBe("raw");
   });
 });
 

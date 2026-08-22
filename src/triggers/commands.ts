@@ -19,6 +19,7 @@ import {
 } from "../catalog/workflows.js";
 import type { Scope, WorkflowDef } from "../model/ast.js";
 import { valueText } from "../model/value.js";
+import { selectDisplayValue } from "../presentation/result.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { type NodeView, type RunView, workNodes } from "../run/state.js";
 import { canAttachNode, openAgentSession } from "../ui/console.js";
@@ -37,7 +38,6 @@ import {
   formatWorkflowCallPreview,
   nodeDisplayName,
   renderResultValue,
-  selectDisplayValue,
   sendInfo,
   shortId,
 } from "../ui/render.js";

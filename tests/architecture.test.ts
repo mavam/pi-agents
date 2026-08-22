@@ -83,4 +83,24 @@ describe("architecture invariants", () => {
       }
     }
   });
+
+  test("presentation policy does not depend on runtime or TUI modules", () => {
+    const sourceDir = path.join(import.meta.dir, "..", "src", "presentation");
+    for (const name of readdirSync(sourceDir)) {
+      if (!name.endsWith(".ts")) continue;
+      const text = readFileSync(path.join(sourceDir, name), "utf8");
+      expect(
+        text.includes("../run/"),
+        `src/presentation/${name} imports from run/; inject runtime policy`,
+      ).toBe(false);
+      expect(
+        text.includes("../ui/"),
+        `src/presentation/${name} imports from ui/`,
+      ).toBe(false);
+      expect(
+        text.includes("@earendil-works/pi-"),
+        `src/presentation/${name} depends on Pi`,
+      ).toBe(false);
+    }
+  });
 });

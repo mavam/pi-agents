@@ -149,19 +149,6 @@ function checkKeys(
   }
 }
 
-function removedOutputField(
-  obj: Record<string, unknown>,
-  path: string,
-  issues: Issues,
-): void {
-  if (!Object.hasOwn(obj, "output")) return;
-  issues.push({
-    path: `${path}.output`,
-    message:
-      "'output' was removed; omit it for string results or replace it with a concrete 'json' schema",
-  });
-}
-
 function optionalJsonSchema(
   obj: Record<string, unknown>,
   path: string,
@@ -433,7 +420,6 @@ function parseAgent(
       "profile",
       "task",
       "json",
-      "output",
       ...EXECUTION_OPTION_KEYS,
       "as",
       "label",
@@ -441,7 +427,6 @@ function parseAgent(
     path,
     issues,
   );
-  removedOutputField(obj, path, issues);
   return {
     kind: "agent",
     ...parseBase(obj, path, issues),
@@ -482,11 +467,10 @@ function parseReduce(
   if (!obj) return undefined;
   checkKeys(
     obj,
-    ["profile", "task", "json", "output", ...EXECUTION_OPTION_KEYS],
+    ["profile", "task", "json", ...EXECUTION_OPTION_KEYS],
     path,
     issues,
   );
-  removedOutputField(obj, path, issues);
   return {
     profile: optionalNonEmptyString(obj, "profile", path, issues),
     task: requiredString(obj, "task", path, issues),

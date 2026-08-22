@@ -1,14 +1,11 @@
 /**
- * Run-event schema v5. Runs are event-sourced: everything the UI and history
- * need is reconstructable by replaying these events. Nodes are addressed by
- * static `path` (position in the flow tree) plus dynamic `instance` (the path
- * with `@item` / `#iteration` suffixes interleaved for dynamic multiplicity).
+ * Run events are the source of truth for live state, persisted history, and
+ * external observers. Nodes use a static flow `path` plus a dynamic `instance`
+ * that includes map-item and loop-iteration suffixes.
  */
 
 import type { SpawnUsage } from "../engine/types.js";
 import type { Budgets, FlowNode, NodeKind, Scope } from "../model/ast.js";
-
-export const RUN_EVENT_TYPE = "pi-agents:run-event:v5";
 
 export type RunStatus = "running" | "completed" | "failed" | "stopped";
 

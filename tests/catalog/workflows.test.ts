@@ -183,16 +183,16 @@ flow:
     ).toContain("Invalid 'skills' (must be an array of strings)");
   });
 
-  test("rejects the removed flat output field with migration guidance", () => {
+  test("rejects unknown flat-form fields", () => {
     expect(
       parseWorkflowFile(
         writeWorkflow(
-          "legacy-output.yaml",
-          "name: legacy-output\ndescription: d\ntask: t\noutput: json\n",
+          "unknown-output.yaml",
+          "name: unknown-output\ndescription: d\ntask: t\noutput: json\n",
         ),
         "project",
       ),
-    ).toContain("'output' field was removed");
+    ).toContain("Unsupported keys: output");
   });
 
   test("flat form requires a task", () => {
@@ -384,15 +384,9 @@ flow:
     expect(workflows.map((wf) => wf.name).sort()).toEqual(["fixit", "review"]);
   });
 
-  test("stale .md workflow files get a migration diagnostic", () => {
-    writeWorkflow("old.md", "---\nname: old\ndescription: d\n---\n");
-    const { workflows, diagnostics } = discoverWorkflows(projectDir, "project");
-    expect(workflows).toEqual([]);
-    expect(diagnostics[0]?.message).toContain("rename to .yaml");
-  });
-
   test("non-workflow extensions are ignored", () => {
     writeWorkflow("notes.txt", "not a workflow");
+    writeWorkflow("notes.md", "---\nname: notes\n---\nnot a workflow");
     const { workflows, diagnostics } = discoverWorkflows(projectDir, "project");
     expect(workflows).toEqual([]);
     expect(diagnostics).toEqual([]);

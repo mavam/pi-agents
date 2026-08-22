@@ -8,6 +8,7 @@ import {
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { resolvePath } from "../model/interpolate.js";
+import { selectDisplayValue } from "../presentation/result.js";
 import type { RunStatus } from "../run/events.js";
 import { getSessionFile } from "../run/persist.js";
 import type { RunManager } from "../run/runs.js";
@@ -18,7 +19,6 @@ import {
   formatRunSource,
   formatUsage,
   nodeDisplayName,
-  selectDisplayValue,
   shortId,
 } from "../ui/render.js";
 import { STATUS_STYLES } from "../ui/status.js";
@@ -477,8 +477,8 @@ const WorkflowResultParams = Type.Object({
   view: Type.Optional(
     StringEnum(["presented", "raw"] as const, {
       description:
-        "Use the run's display selection or serialize the underlying value. Defaults to presented.",
-      default: "presented",
+        'Return the complete value as JSON with "raw", or apply human-facing result selection with "presented". Defaults to raw.',
+      default: "raw",
     }),
   ),
   path: Type.Optional(
@@ -524,7 +524,7 @@ export function createWorkflowResultTool(
   return {
     name: "workflow_result",
     label: "Workflow Result",
-    description: `Retrieve a persisted workflow run result or one node result. Results are paginated by character offset; calls default to ${DEFAULT_RESULT_LIMIT} characters, accept up to ${MAX_RESULT_LIMIT}, and report nextCursor when more remain. Use path to select part of a structured value and view raw to preserve its JSON representation.`,
+    description: `Retrieve a persisted workflow run result or one node result. Results are paginated by character offset; calls default to ${DEFAULT_RESULT_LIMIT} characters, accept up to ${MAX_RESULT_LIMIT}, and report nextCursor when more remain. The default raw view preserves the complete value; use presented only for the human-facing display selection.`,
     promptSnippet:
       "Retrieve a workflow run or node result, with path selection and pagination",
     promptGuidelines: [
@@ -641,7 +641,7 @@ export function createWorkflowResultTool(
         value = resolved.value;
       }
 
-      const view = params.view ?? "presented";
+      const view = params.view ?? "raw";
       let warning: string | undefined;
       if (!node && !path && view === "presented") {
         const display = selectDisplayValue(value, run.header.display);

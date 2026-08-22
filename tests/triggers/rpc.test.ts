@@ -168,7 +168,10 @@ describe("RpcManager", () => {
     bus.on("unrelated-channel", () => {
       injected = true;
     });
-    const reply = await call<{ protocol: 1; version: string }>(bus, {
+    const reply = await call<{
+      protocol: typeof PROTOCOL_VERSION;
+      version: string;
+    }>(bus, {
       protocol: PROTOCOL_VERSION,
       id: "ping-1",
       op: "ping",

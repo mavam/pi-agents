@@ -4,6 +4,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { emptyUsage } from "../../src/engine/types.js";
+import { PROTOCOL_VERSION } from "../../src/protocol.js";
 import type { RunEvent } from "../../src/run/events.js";
 import type { RunManager } from "../../src/run/runs.js";
 import { NotificationManager } from "../../src/ui/notify.js";
@@ -101,6 +102,7 @@ describe("NotificationManager", () => {
     notifications.handleRunEvent(completed("run-1"));
     expect(sent).toHaveLength(1);
     expect(sent[0]?.options).toEqual({ triggerTurn: true });
+    expect(sent[0]?.message.details?.protocol).toBe(PROTOCOL_VERSION);
     expect(sent[0]?.message.content).toContain(
       "Continue your task using this result.",
     );

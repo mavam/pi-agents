@@ -303,10 +303,6 @@ export function parseWorkflowFile(
     return `Could not parse ${path.extname(filePath).slice(1)}: ${toErrorMessage(e)}`;
   }
 
-  if (Object.hasOwn(fm, "output")) {
-    return "The 'output' field was removed; omit it for string results or replace it with a concrete 'json' schema";
-  }
-
   const unknownKeys = Object.keys(fm).filter((k) => !ALLOWED_KEYS.has(k));
   if (unknownKeys.length > 0) {
     return `Unsupported keys: ${unknownKeys.join(", ")}. Allowed keys: ${[...ALLOWED_KEYS].join(", ")}.`;
@@ -413,15 +409,6 @@ function loadWorkflowsFromDir(
   for (const entry of entries) {
     if (!entry.isFile() && !entry.isSymbolicLink()) continue;
     const filePath = path.join(dir, entry.name);
-    if (entry.name.endsWith(".md")) {
-      diagnostics.push({
-        source,
-        filePath,
-        message:
-          "Workflows are pure YAML/JSON files now; rename to .yaml (frontmatter keys become top-level keys, prose moves to 'doc:').",
-      });
-      continue;
-    }
     if (!WORKFLOW_EXTENSIONS.includes(path.extname(entry.name))) continue;
     const result = parseWorkflowFile(filePath, source);
     if (typeof result === "string")

@@ -28,5 +28,6 @@ task: Review the change
 
 Reducers and flat single-agent workflows use the same `profile` field. Omit it
 for an anonymous ad-hoc agent. Parallel branch keys such as `alpha` identify
-branches and no longer resemble profile selectors. Existing run history from
-the earlier flow schema is not loaded.
+branches and no longer resemble profile selectors. The event and RPC protocol
+is now version 2, and persisted run records use that same versioned envelope.
+Records from other protocol versions are ignored.

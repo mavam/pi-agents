@@ -7,9 +7,10 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { FlowNode } from "./model/ast.js";
+import { PROTOCOL_VERSION } from "./protocol.js";
 import type { RunEvent, RunSource, RunStatus } from "./run/events.js";
 
-export const PROTOCOL_VERSION = 1 as const;
+export { PROTOCOL_VERSION };
 export const RUN_EVENT_CHANNEL = "pi-agents:run-event";
 export const READY_CHANNEL = "pi-agents:ready";
 export const RPC_REQUEST_CHANNEL = "pi-agents:rpc:request";

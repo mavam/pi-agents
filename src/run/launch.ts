@@ -93,9 +93,7 @@ export function prepareLaunch(request: LaunchRequest): LaunchPlan {
   const hasFlow = request.flow !== undefined;
   const hasWorkflow = request.workflow !== undefined;
   if (Number(hasFlow) + Number(hasWorkflow) !== 1) {
-    throw new Error(
-      'pass exactly one of "name" (saved workflow) or "flow" (inline expression)',
-    );
+    throw new Error("provide exactly one saved workflow or inline flow");
   }
   if (hasFlow && request.params !== undefined) {
     warnings.push(

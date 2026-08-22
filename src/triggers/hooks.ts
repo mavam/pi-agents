@@ -151,7 +151,7 @@ export class HookManager {
       const wf = resolveWorkflowByName(workflows, name);
       if (!wf?.on?.includes(eventName)) return;
       this.deps.notifications.setContext(ctx);
-      const started = launchTriggeredRun(this.deps, {
+      launchTriggeredRun(this.deps, {
         request: {
           workflow: wf.name,
           params: {
@@ -166,7 +166,6 @@ export class HookManager {
         ctx,
         background: true,
       });
-      void started;
     } catch (error) {
       sendInfo(
         this.pi,

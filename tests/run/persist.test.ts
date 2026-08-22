@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { SpawnEngine } from "../../src/engine/types.js";
 import { emptyUsage } from "../../src/engine/types.js";
+import { PROTOCOL_VERSION } from "../../src/protocol.js";
 import type { RunEvent } from "../../src/run/events.js";
 import {
   appendRunEvent,
@@ -77,6 +78,15 @@ describe("sidecar persistence", () => {
     expect(fs.readFileSync(sessionFile, "utf-8")).toBe(
       '{"type":"session","id":"s1"}\n',
     );
+    const records = fs
+      .readFileSync(sidecarPath(sessionFile), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records[0]).toMatchObject({
+      protocol: PROTOCOL_VERSION,
+      event: { type: "loop_iteration", iteration: 0 },
+    });
     const events = readRunEvents(sessionFile);
     expect(events).toHaveLength(2);
     expect(events[1]).toMatchObject({ type: "loop_iteration", iteration: 1 });
@@ -105,7 +115,24 @@ describe("sidecar persistence", () => {
     expect(readRunEvents(sessionFile)).toEqual([]);
     fs.writeFileSync(
       sidecarPath(sessionFile),
-      `${JSON.stringify(event(0))}\nnot json\n${JSON.stringify(event(1))}\n`,
+      [
+        JSON.stringify({ protocol: PROTOCOL_VERSION, event: event(0) }),
+        "not json",
+        JSON.stringify({ protocol: 999, event: event(1) }),
+        JSON.stringify(event(1)),
+        JSON.stringify({
+          protocol: PROTOCOL_VERSION,
+          event: {
+            type: "node_started",
+            at: 1,
+            runId: "r",
+            path: "$",
+            instance: "$",
+            kind: "bogus",
+          },
+        }),
+        JSON.stringify({ protocol: PROTOCOL_VERSION, event: event(1) }),
+      ].join("\n"),
     );
     expect(readRunEvents(sessionFile)).toHaveLength(2);
   });
@@ -170,7 +197,7 @@ describe("background tool runs", () => {
       {
         flow: { kind: "agent", profile: "echo", task: "hi" },
         scope: "project",
-        label: "bg-test",
+        label: " ",
       },
       undefined,
       undefined,
@@ -214,6 +241,9 @@ describe("background tool runs", () => {
     fresh.absorbHistory(events);
     expect(fresh.state.runs.get(runId)?.status).toBe("completed");
     expect(fresh.state.runs.get(runId)?.value).toBe("all done");
+    expect(fresh.state.runs.get(runId)?.header.warnings).toEqual([
+      "Ignored invalid 'label' (must be a non-empty string).",
+    ]);
   });
 
   test("absorbHistory marks unresumable running runs as stopped", async () => {

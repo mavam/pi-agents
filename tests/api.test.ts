@@ -35,6 +35,10 @@ function makePi(bus: TestBus): ExtensionAPI {
 }
 
 describe("public pi-agents client", () => {
+  test("uses the current event and RPC protocol", () => {
+    expect(PROTOCOL_VERSION).toBe(2);
+  });
+
   test("handles a synchronous correlated reply and sends caller identity", async () => {
     const bus = new TestBus();
     let request!: RpcRequest;

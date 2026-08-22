@@ -148,7 +148,7 @@ export function rerunTriggeredRun(
     display: header.display,
     budgets: header.budgets,
     workflowName: header.source.workflow,
-    warnings: [...(header.warnings ?? [])],
+    warnings: [],
   };
   return startPreparedRun(deps, plan, header.source, opts.ctx, opts.background);
 }

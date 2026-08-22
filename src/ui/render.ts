@@ -12,13 +12,8 @@ import {
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
 import { parseFlowNode } from "../model/validate.js";
-
-export {
-  type SelectedDisplayValue,
-  selectDisplayValue,
-} from "../presentation/result.js";
-
 import { valueText } from "../model/value.js";
+import { PROTOCOL_VERSION } from "../protocol.js";
 import type { RunSource, RunStatus } from "../run/events.js";
 import type { NodeView, RunView } from "../run/state.js";
 import { STATUS_STYLES } from "./status.js";
@@ -30,17 +25,16 @@ export const NOTIFICATION_TYPE = "pi-agents:notification";
 
 interface RunNotificationBase {
   kind: "run_final";
-  version: 2;
+  protocol: typeof PROTOCOL_VERSION;
   runId: string;
   label?: string;
   usage?: string;
   agents: number;
-  /** Earlier version-2 notifications omit this and are treated as not copyable. */
-  copyable?: boolean;
+  copyable: boolean;
   at: number;
 }
 
-/** Versioned display data for final-run notifications. Message content remains
+/** Protocol-tagged data for final-run notifications. Message content remains
  * the model-facing source of truth; these fields drive only the TUI card. */
 export type RunNotificationDetails = RunNotificationBase &
   (
@@ -64,12 +58,12 @@ function isRunNotificationDetails(
   const details = value as Record<string, unknown>;
   if (
     details.kind !== "run_final" ||
-    details.version !== 2 ||
+    details.protocol !== PROTOCOL_VERSION ||
     typeof details.runId !== "string" ||
     (details.label !== undefined && typeof details.label !== "string") ||
     (details.usage !== undefined && typeof details.usage !== "string") ||
     typeof details.agents !== "number" ||
-    (details.copyable !== undefined && typeof details.copyable !== "boolean") ||
+    typeof details.copyable !== "boolean" ||
     typeof details.at !== "number"
   ) {
     return false;

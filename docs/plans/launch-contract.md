@@ -132,13 +132,13 @@ pin it in their definitions.
 
 Advertise only profiles that pass `resolveInvocation` in the rendered
 `cwd`/`scope`; list unusable profiles separately with the runtime reason. The
-prompt builder injects this check into catalog formatting, so the catalog does
-not maintain a second definition of executability.
+extension composition root injects this check into prompt rendering, so neither
+the presentation nor catalog layer defines executability.
 
-Scoped honestly: the catalog is rendered into the system prompt once per
-session, while authentication, resource availability, and trust-clamped scope
-are evaluated again for each request. This is staleness reduction, not a
-guarantee. Runtime errors remain authoritative and actionable.
+The rendered appendix is cached by session context and available model set,
+then cleared on session start. Runtime launch still reevaluates authentication,
+resources, node-level cwd and scope overrides, and trust. Prompt availability
+reduces stale choices but never replaces runtime validation.
 
 ## Phase 4: Simplified model-facing API (gated)
 

@@ -352,7 +352,7 @@ export function buildAgentsPrompt(
 
   if (unavailable.length > 0) {
     lines.push(
-      '  <unavailable note="These profiles exist but cannot run right now; do not select them.">',
+      '  <unavailable note="These profiles do not resolve in the catalog context. Select one only with node overrides that resolve the reported problem.">',
     );
     for (const { agent, reason } of unavailable) {
       lines.push(

@@ -196,7 +196,9 @@ export interface WorkflowResultPreviewDetails {
   error?: string;
 }
 
-/** Render the metadata below a workflow invocation or completed tool call. */
+/** Render the metadata below a settled workflow invocation or tool call. Live
+ * runs have no metadata line — the workflow widget already shows progress — so
+ * callers skip this for `running`. */
 export function formatWorkflowResultPreview(
   result: { details: WorkflowResultPreviewDetails; text: string },
   expanded: boolean,
@@ -204,7 +206,6 @@ export function formatWorkflowResultPreview(
 ): string {
   const { runId, status, error } = result.details;
   const id = shortId(runId);
-  if (status === "running") return "";
   if (status === "completed") {
     const presentation = STATUS_STYLES.completed;
     const head = `\n${color(presentation.color, presentation.icon)} completed ${color("dim", `· /workflow ${id} result`)}`;
@@ -213,15 +214,6 @@ export function formatWorkflowResultPreview(
   const presentation = STATUS_STYLES[status];
   const head = `\n${color(presentation.color, presentation.icon)} ${status}${error ? ` ${color("dim", `— ${oneLine(error, 120)}`)}` : ""} ${color("dim", `· /workflow ${id}`)}`;
   return expanded ? `${head}\n${result.text}` : head;
-}
-
-/** Complete start message for direct slash-command invocations. */
-export function formatWorkflowStartPreview(
-  call: WorkflowCallPreview,
-  savedFlowTree: string,
-  color: WorkflowPreviewColorize = plainPreview,
-): string {
-  return formatWorkflowCallPreview(call, color, savedFlowTree) || "workflow";
 }
 
 const renderMarkdownMessage: MessageRenderer = (message) =>

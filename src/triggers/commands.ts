@@ -35,7 +35,7 @@ import {
   formatRunSource,
   formatUsage,
   formatValuePreview,
-  formatWorkflowStartPreview,
+  formatWorkflowCallPreview,
   nodeDisplayName,
   renderResultValue,
   selectDisplayValue,
@@ -1505,10 +1505,11 @@ async function runWorkflowCommand(
     const savedFlowTree = renderFlowTree(flow);
     sendInfo(
       pi,
-      formatWorkflowStartPreview(
+      formatWorkflowCallPreview(
         { name: wf.name, params: values },
+        undefined,
         savedFlowTree,
-      ),
+      ) || "workflow",
     );
   } catch (error) {
     sendInfo(pi, `⚠ ${error instanceof Error ? error.message : String(error)}`);

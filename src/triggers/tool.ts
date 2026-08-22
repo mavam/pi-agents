@@ -341,12 +341,13 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
               error: live.error ?? result.details.error,
             }
           : result.details;
-      const preview = formatResultPreview(
-        { details, text },
-        options.expanded,
-        color,
+      // A live run needs no status line; the workflow widget shows progress.
+      if (details.status === "running") return new Container();
+      return new Text(
+        formatResultPreview({ details, text }, options.expanded, color),
+        1,
+        0,
       );
-      return preview ? new Text(preview, 1, 0) : new Container();
     },
     async execute(
       _toolCallId,

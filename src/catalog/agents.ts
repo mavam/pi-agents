@@ -270,17 +270,32 @@ function escapeXmlAttribute(value: string): string {
 // Model agent injection after skill injection: provide a structured XML block
 // with stable location/reference metadata plus the normalized agent metadata and
 // body.
+/**
+ * Best-effort runtime check for one profile in the rendered catalog context.
+ * The caller supplies the check so catalog formatting does not duplicate
+ * invocation-resolution policy.
+ */
+export type AgentAvailability = (agent: Agent) => string | undefined;
+
 export function buildAgentsPrompt(
   cwd: string,
   scope: Scope,
+  availability?: AgentAvailability,
 ): { prompt: string; diagnostics: Diagnostic[] } {
   const discovery = discoverAgents(cwd, scope);
-  const agents = [...discovery.agents].sort((left, right) => {
+  const sorted = [...discovery.agents].sort((left, right) => {
     if (left.source !== right.source) {
       return left.source === "project" ? -1 : 1;
     }
     return left.name.localeCompare(right.name);
   });
+  const unavailable: Array<{ agent: Agent; reason: string }> = [];
+  const agents: Agent[] = [];
+  for (const agent of sorted) {
+    const reason = availability?.(agent);
+    if (reason) unavailable.push({ agent, reason });
+    else agents.push(agent);
+  }
 
   const lines = [
     `<agents scope="${escapeXmlAttribute(scope)}" cwd="${escapeXmlAttribute(cwd)}">`,
@@ -288,7 +303,7 @@ export function buildAgentsPrompt(
 
   if (agents.length === 0) {
     lines.push(
-      "  <none>No named agent profiles were discovered for this cwd and scope. Anonymous ad-hoc agents remain available by omitting `name`.</none>",
+      "  <none>No executable agent profiles are available for this cwd and scope. Anonymous ad-hoc agents remain available by omitting `profile`.</none>",
     );
   } else {
     for (const agent of agents) {
@@ -333,6 +348,18 @@ export function buildAgentsPrompt(
 
       lines.push("  </agent>");
     }
+  }
+
+  if (unavailable.length > 0) {
+    lines.push(
+      '  <unavailable note="These profiles do not resolve in the catalog context. Select one only with node overrides that resolve the reported problem.">',
+    );
+    for (const { agent, reason } of unavailable) {
+      lines.push(
+        `    <agent name="${escapeXmlAttribute(agent.name)}" source="${escapeXmlAttribute(agent.source)}">${escapeXmlText(reason)}</agent>`,
+      );
+    }
+    lines.push("  </unavailable>");
   }
 
   if (discovery.diagnostics.length > 0) {

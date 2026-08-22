@@ -18,15 +18,15 @@ const tagged: Colorize = (color, text) => `<${color}>${text}</>`;
 const REVIEW_FLOW = {
   kind: "parallel",
   branches: {
-    bugs: { kind: "agent", name: "reviewer", task: "bugs" },
-    clarity: { kind: "agent", name: "reviewer", task: "clarity" },
+    bugs: { kind: "agent", profile: "reviewer", task: "bugs" },
+    clarity: { kind: "agent", profile: "reviewer", task: "clarity" },
   },
-  reduce: { agent: "worker", task: "merge {branches}" },
+  reduce: { profile: "worker", task: "merge {branches}" },
 };
 
 async function recordedRun(
   raw: unknown,
-  handler: (agent: string | undefined, task: string) => unknown,
+  handler: (profile: string | undefined, task: string) => unknown,
   keep: (event: RunEvent) => boolean = () => true,
 ): Promise<RunView> {
   const flow = validateFlow(raw);
@@ -36,7 +36,7 @@ async function recordedRun(
     flow,
     label: "review",
     budgets: { maxAgents: 200 },
-    runAgent: async (call) => ({ value: handler(call.agent, call.task) }),
+    runAgent: async (call) => ({ value: handler(call.profile, call.task) }),
     emit: (event) => events.push(event),
   });
   const run = rebuildRunState(events.filter(keep)).runs.get("w1");
@@ -97,7 +97,7 @@ describe("formatRunWidget", () => {
   });
 
   test("a single-agent counter keeps pending and running status colors", async () => {
-    const flow = { kind: "agent", name: "reviewer", task: "review" };
+    const flow = { kind: "agent", profile: "reviewer", task: "review" };
     const pending = await recordedRun(
       flow,
       () => "ok",
@@ -129,7 +129,7 @@ describe("formatRunWidget", () => {
         steps: [
           {
             kind: "agent",
-            name: "scout",
+            profile: "scout",
             task: "list",
             json: {
               type: ["null", "boolean", "number", "string", "array", "object"],
@@ -139,7 +139,7 @@ describe("formatRunWidget", () => {
           {
             kind: "map",
             over: "{files}",
-            body: { kind: "agent", name: "reviewer", task: "review {item}" },
+            body: { kind: "agent", profile: "reviewer", task: "review {item}" },
           },
         ],
       },
@@ -158,7 +158,7 @@ describe("formatRunWidget", () => {
       steps: [
         {
           kind: "agent",
-          name: "gate",
+          profile: "gate",
           task: "inspect",
           json: {
             type: ["null", "boolean", "number", "string", "array", "object"],
@@ -174,13 +174,13 @@ describe("formatRunWidget", () => {
               then: {
                 kind: "sequence",
                 steps: [
-                  { kind: "agent", name: "fixer", task: "fix" },
-                  { kind: "agent", name: "checker", task: "recheck" },
+                  { kind: "agent", profile: "fixer", task: "fix" },
+                  { kind: "agent", profile: "checker", task: "recheck" },
                 ],
               },
             },
           ],
-          else: { kind: "agent", name: "reporter", task: "report" },
+          else: { kind: "agent", profile: "reporter", task: "report" },
         },
       ],
     };
@@ -209,7 +209,7 @@ describe("formatRunWidget", () => {
         steps: [
           {
             kind: "agent",
-            name: "scout",
+            profile: "scout",
             task: "scan",
             json: {
               type: ["null", "boolean", "number", "string", "array", "object"],
@@ -232,8 +232,8 @@ describe("formatRunWidget", () => {
       kind: "parallel",
       onError: "collect",
       branches: {
-        good: { kind: "agent", name: "a", task: "t" },
-        bad: { kind: "agent", name: "b", task: "t" },
+        good: { kind: "agent", profile: "a", task: "t" },
+        bad: { kind: "agent", profile: "b", task: "t" },
       },
     };
     const run = await recordedRun(flow, (agent) => {
@@ -295,7 +295,7 @@ describe("formatRunWidget", () => {
         steps: [
           {
             kind: "agent",
-            name: "explorer",
+            profile: "explorer",
             task: "map",
             json: {
               type: ["null", "boolean", "number", "string", "array", "object"],
@@ -305,27 +305,27 @@ describe("formatRunWidget", () => {
           {
             kind: "parallel",
             branches: {
-              bugs: { kind: "agent", name: "reviewer", task: "b {map}" },
-              clarity: { kind: "agent", name: "reviewer", task: "c {map}" },
+              bugs: { kind: "agent", profile: "reviewer", task: "b {map}" },
+              clarity: { kind: "agent", profile: "reviewer", task: "c {map}" },
               security: {
                 kind: "sequence",
                 steps: [
-                  { kind: "agent", name: "explorer", task: "s {map}" },
-                  { kind: "agent", name: "reviewer", task: "a {previous}" },
+                  { kind: "agent", profile: "explorer", task: "s {map}" },
+                  { kind: "agent", profile: "reviewer", task: "a {previous}" },
                 ],
               },
             },
-            reduce: { agent: "worker", task: "merge {branches}" },
+            reduce: { profile: "worker", task: "merge {branches}" },
           },
           {
             kind: "map",
             over: "{map.hotspots}",
-            body: { kind: "agent", name: "worker", task: "fix {item}" },
+            body: { kind: "agent", profile: "worker", task: "fix {item}" },
           },
           {
             kind: "loop",
             max: 2,
-            body: { kind: "agent", name: "reviewer", task: "verify" },
+            body: { kind: "agent", profile: "reviewer", task: "verify" },
           },
         ],
       },
@@ -347,12 +347,12 @@ describe("formatRunWidget", () => {
           {
             kind: "parallel",
             branches: {
-              x: { kind: "agent", name: "a", task: "t" },
+              x: { kind: "agent", profile: "a", task: "t" },
               sec: {
                 kind: "sequence",
                 steps: [
-                  { kind: "agent", name: "b", task: "t" },
-                  { kind: "agent", name: "c", task: "t" },
+                  { kind: "agent", profile: "b", task: "t" },
+                  { kind: "agent", profile: "c", task: "t" },
                 ],
               },
             },
@@ -386,7 +386,7 @@ describe("formatRunWidget", () => {
         steps: [
           {
             kind: "agent",
-            name: "gate",
+            profile: "gate",
             task: "inspect",
             json: {
               type: ["null", "boolean", "number", "string", "array", "object"],
@@ -399,10 +399,10 @@ describe("formatRunWidget", () => {
             cases: [
               {
                 when: { eq: ["status", "findings"] },
-                then: { kind: "agent", name: "fixer", task: "fix" },
+                then: { kind: "agent", profile: "fixer", task: "fix" },
               },
             ],
-            else: { kind: "agent", name: "reporter", task: "report" },
+            else: { kind: "agent", profile: "reporter", task: "report" },
           },
         ],
       },
@@ -429,7 +429,7 @@ describe("formatRunWidget", () => {
         steps: [
           {
             kind: "agent",
-            name: "scout",
+            profile: "scout",
             task: "list",
             json: {
               type: ["null", "boolean", "number", "string", "array", "object"],
@@ -439,7 +439,7 @@ describe("formatRunWidget", () => {
           {
             kind: "map",
             over: "{files}",
-            body: { kind: "agent", name: "reviewer", task: "review {item}" },
+            body: { kind: "agent", profile: "reviewer", task: "review {item}" },
           },
         ],
       },
@@ -468,7 +468,7 @@ describe("formatRunWidget", () => {
         steps: [
           {
             kind: "agent",
-            name: "scout",
+            profile: "scout",
             task: "list",
             json: {
               type: ["null", "boolean", "number", "string", "array", "object"],
@@ -478,8 +478,8 @@ describe("formatRunWidget", () => {
           {
             kind: "map",
             over: "{files}",
-            body: { kind: "agent", name: "reviewer", task: "review {item}" },
-            reduce: { agent: "worker", task: "merge {items}" },
+            body: { kind: "agent", profile: "reviewer", task: "review {item}" },
+            reduce: { profile: "worker", task: "merge {items}" },
           },
         ],
       },
@@ -507,7 +507,7 @@ describe("formatRunWidget", () => {
         kind: "sequence",
         steps: Array.from({ length: 8 }, (_, i) => ({
           kind: "agent",
-          name: `a${i}`,
+          profile: `a${i}`,
           task: "t",
         })),
       },
@@ -537,16 +537,16 @@ describe("formatRunWidget width budgeting", () => {
             kind: "sequence",
             steps: Array.from({ length: 50 }, () => ({
               kind: "agent",
-              name: "ok",
+              profile: "ok",
               task: "work",
             })),
           },
-          { kind: "agent", name: "fail", task: "stop" },
+          { kind: "agent", profile: "fail", task: "stop" },
           {
             kind: "sequence",
             steps: Array.from({ length: 50 }, () => ({
               kind: "agent",
-              name: "pending",
+              profile: "pending",
               task: "work",
             })),
           },

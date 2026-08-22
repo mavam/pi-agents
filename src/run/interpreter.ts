@@ -52,8 +52,8 @@ import { CancelledError, type PoolOutcome, runPool } from "./scheduler.js";
 // Agent runner abstraction (implemented over the spawn engine; faked in tests)
 
 export interface AgentCall {
-  /** Agent name; absent spawns an anonymous ad-hoc agent (no catalog lookup). */
-  agent?: string;
+  /** Profile name; absent spawns an anonymous ad-hoc agent. */
+  profile?: string;
   task: string;
   /** Optional JSON Schema for a machine-readable result. Omit for text. */
   resultSchema?: JsonSchema;
@@ -222,6 +222,8 @@ export interface ExecuteOptions {
   label?: string;
   /** Saved-workflow result path selected for human-facing rendering. */
   display?: string;
+  /** Recoverable request problems persisted with the run. */
+  warnings?: string[];
   source?: RunSource;
   /** Resolved top-level params (saved workflow invocations). */
   params?: Record<string, unknown>;
@@ -369,6 +371,7 @@ class Interpreter {
         id: this.options.runId,
         label: this.options.label,
         display: this.options.display,
+        warnings: this.options.warnings,
         source: this.options.source ?? { kind: "tool" },
         flow: this.options.flow,
         params: this.options.params,
@@ -451,7 +454,7 @@ class Interpreter {
       path,
       instance,
       kind: node.kind,
-      agent: node.kind === "agent" ? node.name : undefined,
+      profile: node.kind === "agent" ? node.profile : undefined,
       label: node.label,
     });
     try {
@@ -620,7 +623,7 @@ class Interpreter {
   ): Promise<{ value: unknown; usage?: SpawnUsage }> {
     const task = renderTemplate(node.task, envResolver(env));
     return await this.callAgent({
-      agent: node.name,
+      profile: node.profile,
       task,
       resultSchema: node.json,
       model: node.model,
@@ -683,14 +686,14 @@ class Interpreter {
       path,
       instance,
       kind: "reduce",
-      agent: reduce.agent,
+      profile: reduce.profile,
     });
     try {
       const task = renderTemplate(reduce.task, envResolver(env, reduceRoot));
       // A reducer is an agent call like any other: same overrides, with the
       // run's cwd and scope as the fallback.
       const result = await this.callAgent({
-        agent: reduce.agent,
+        profile: reduce.profile,
         task,
         resultSchema: reduce.json,
         model: reduce.model,

@@ -10,6 +10,8 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { truncateModelResult, valueText } from "../model/value.js";
+import { selectDisplayValue } from "../presentation/result.js";
+import { PROTOCOL_VERSION } from "../protocol.js";
 import type { RunEvent } from "../run/events.js";
 import { getSessionFile, isIdle } from "../run/persist.js";
 import type { RunManager } from "../run/runs.js";
@@ -19,7 +21,6 @@ import {
   NOTIFICATION_TYPE,
   type RunNotificationDetails,
   renderResultValue,
-  selectDisplayValue,
   shortId,
 } from "./render.js";
 import { STATUS_STYLES } from "./status.js";
@@ -115,9 +116,13 @@ export class NotificationManager {
       const rendered = presented
         ? renderResultValue(display.value, presented)
         : "(no output)";
+      const warnings = [
+        ...(run?.header.warnings ?? []),
+        ...(display.warning ? [display.warning] : []),
+      ];
       return {
         kind: "run_final",
-        version: 2,
+        protocol: PROTOCOL_VERSION,
         runId: event.runId,
         label,
         status: event.status,
@@ -125,9 +130,10 @@ export class NotificationManager {
         agents: event.agents,
         copyable: Boolean(presented),
         bodyKind: "result",
-        body: display.warning
-          ? `> ⚠ ${display.warning}\n\n${rendered}`
-          : rendered,
+        body:
+          warnings.length > 0
+            ? `${warnings.map((warning) => `> ⚠ ${warning}`).join("\n")}\n\n${rendered}`
+            : rendered,
         modelBody: result
           ? renderResultValue(
               event.value,
@@ -143,7 +149,7 @@ export class NotificationManager {
     if (event.status === "failed") {
       return {
         kind: "run_final",
-        version: 2,
+        protocol: PROTOCOL_VERSION,
         runId: event.runId,
         label,
         status: event.status,
@@ -151,13 +157,16 @@ export class NotificationManager {
         agents: event.agents,
         copyable: false,
         bodyKind: "error",
-        body: event.error ?? "unknown error",
+        body:
+          run?.header.warnings && run.header.warnings.length > 0
+            ? `${run.header.warnings.map((warning) => `> ⚠ ${warning}`).join("\n")}\n\n${event.error ?? "unknown error"}`
+            : (event.error ?? "unknown error"),
         at: event.at,
       };
     }
     return {
       kind: "run_final",
-      version: 2,
+      protocol: PROTOCOL_VERSION,
       runId: event.runId,
       label,
       status: event.status,

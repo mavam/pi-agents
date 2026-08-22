@@ -42,7 +42,7 @@ export interface SpawnDefaults {
 /** An invocation as written: a profile selector plus execution overrides. */
 export interface InvocationCall extends AgentExecutionOptions {
   /** Profile name; absent runs an anonymous ad-hoc agent. */
-  agent?: string;
+  profile?: string;
 }
 
 /** Run-level context every invocation resolves against. */
@@ -90,6 +90,16 @@ export interface ResolvedInvocation {
 export type InvocationResolution =
   | { ok: true; invocation: ResolvedInvocation }
   | { ok: false; cwd: string; scope: Scope; problems: string[] };
+
+/** Apply runtime invocation rules when deciding whether to advertise a profile. */
+export function createProfileAvailability(
+  context: InvocationContext,
+): (profile: Agent) => string | undefined {
+  return (profile) => {
+    const resolution = resolveInvocation({ profile: profile.name }, context);
+    return resolution.ok ? undefined : resolution.problems.join("; ");
+  };
+}
 
 /**
  * Per-run memo of agent and skill discovery, keyed by effective cwd and scope.
@@ -146,7 +156,7 @@ function resolveProfile(
       return { profile: resolution.agent };
     case "ambiguous":
       return {
-        problem: `ambiguous agent '${name}' ${where(cwd, scope)} (${resolution.matches
+        problem: `ambiguous profile '${name}' ${where(cwd, scope)} (${resolution.matches
           .map((a) => a.name)
           .join(", ")})`,
       };
@@ -160,7 +170,7 @@ function resolveProfile(
         ? ` (${related.map((d) => `${d.filePath}: ${d.message}`).join("; ")})`
         : "";
       return {
-        problem: `unknown agent '${name}' ${where(cwd, scope)}. Available: ${formatAgentList(discovery.agents)}${hint}`,
+        problem: `unknown profile '${name}' ${where(cwd, scope)}. Remove 'profile' for a one-off agent. Available profiles: ${formatAgentList(discovery.agents)}${hint}`,
       };
     }
   }
@@ -180,8 +190,13 @@ export function resolveInvocation(
   const problems: string[] = [];
 
   let profile: Agent | undefined;
-  if (call.agent !== undefined) {
-    const resolution = resolveProfile(call.agent, cwd, scope, context.catalogs);
+  if (call.profile !== undefined) {
+    const resolution = resolveProfile(
+      call.profile,
+      cwd,
+      scope,
+      context.catalogs,
+    );
     if ("profile" in resolution) profile = resolution.profile;
     else problems.push(resolution.problem);
   }

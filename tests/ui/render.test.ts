@@ -1,11 +1,11 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { PROTOCOL_VERSION } from "../../src/protocol.js";
 import {
   formatRunNotificationControls,
   type RunNotificationDetails,
   renderResultValue,
   renderRunNotification,
-  selectDisplayValue,
 } from "../../src/ui/render.js";
 
 beforeAll(() => initTheme(undefined, false));
@@ -24,7 +24,7 @@ type CompletedDetails = Extract<
 function details(overrides: Partial<CompletedDetails> = {}): CompletedDetails {
   return {
     kind: "run_final",
-    version: 2,
+    protocol: PROTOCOL_VERSION,
     runId: "9a7eb000-full",
     label: "dummy-node-exploration-2",
     status: "completed",
@@ -42,7 +42,7 @@ function finalDetails(
 ): RunNotificationDetails {
   const base = {
     kind: "run_final" as const,
-    version: 2 as const,
+    protocol: PROTOCOL_VERSION,
     runId: "9a7eb000-full",
     label: "dummy-node-exploration-2",
     agents: 1,
@@ -85,34 +85,6 @@ describe("structured result rendering", () => {
     expect(renderResultValue({ report: "```markdown" }, json)).toBe(
       `\`\`\`\`json\n${json}\n\`\`\`\``,
     );
-  });
-
-  test("selects a nested Markdown display path", () => {
-    const value = {
-      review: { markdown: "# Code Review" },
-      findings: [{ id: "BUG-1" }],
-    };
-
-    expect(selectDisplayValue(value, "review.markdown")).toEqual({
-      value: "# Code Review",
-      selected: true,
-    });
-  });
-
-  test("explains missing and non-string display fallbacks", () => {
-    const value = { summary: { text: "not directly renderable" } };
-
-    expect(selectDisplayValue(value, "report")).toEqual({
-      value,
-      selected: false,
-      warning: "Display path `report` was not found; showing the raw result.",
-    });
-    expect(selectDisplayValue(value, "summary")).toEqual({
-      value,
-      selected: false,
-      warning:
-        "Display path `summary` resolved to a non-string value; showing the raw result.",
-    });
   });
 });
 
@@ -185,16 +157,7 @@ describe("run notification renderer", () => {
     expect(output).not.toContain("[copy|");
   });
 
-  test("treats earlier version-2 cards without a copyable flag as read-only", () => {
-    const { copyable: _copyable, ...earlierDetails } = details();
-    const output = render(earlierDetails);
-
-    expect(output).toContain("<success>● completed</success>");
-    expect(output).toContain("[result|raw|agents]");
-    expect(output).not.toContain("[copy|");
-  });
-
-  test("rejects inconsistent version-2 details and falls back to content", () => {
+  test("rejects inconsistent protocol details and falls back to content", () => {
     const output = render(
       {
         ...details(),
@@ -210,20 +173,20 @@ describe("run notification renderer", () => {
     expect(output).not.toContain("<muted>❖</muted>");
   });
 
-  test("falls back to message Markdown for legacy persisted details", () => {
+  test("falls back to message Markdown for invalid persisted details", () => {
     const output = render(
       {
         kind: "run_final",
-        runId: "legacy-run",
-        label: "legacy",
+        runId: "invalid-run",
+        label: "invalid",
         status: "completed",
-        text: "duplicated legacy content",
+        text: "ignored invalid content",
         at: 1,
       },
-      "**Legacy run completed.**",
+      "**Fallback content.**",
     );
 
-    expect(output).toContain("Legacy run completed.");
+    expect(output).toContain("Fallback content.");
     expect(output).not.toContain("<muted>❖</muted>");
   });
 });

@@ -173,7 +173,7 @@ beforeEach(() => {
   );
   writeFile(
     ".pi/workflows/greet.yaml",
-    'name: greet\ndescription: greets a target\ndisplay: report\nparams:\n  - name: target\n    required: true\nflow: { kind: agent, name: echo, task: "greet {params.target}" }\n',
+    'name: greet\ndescription: greets a target\ndisplay: report\nparams:\n  - name: target\n    required: true\nflow: { kind: agent, profile: echo, task: "greet {params.target}" }\n',
   );
 });
 
@@ -194,7 +194,7 @@ describe("workflow_create tool", () => {
     const result = await tool.execute(
       "t1",
       {
-        flow: { kind: "agent", name: "echo", task: "hello" },
+        flow: { kind: "agent", profile: "echo", task: "hello" },
         scope: "project",
       },
       undefined,
@@ -214,7 +214,7 @@ describe("workflow_create tool", () => {
     const result = await tool.execute(
       "t1s",
       {
-        flow: JSON.stringify({ kind: "agent", name: "echo", task: "hello" }),
+        flow: JSON.stringify({ kind: "agent", profile: "echo", task: "hello" }),
         scope: "project",
       },
       undefined,
@@ -240,59 +240,6 @@ describe("workflow_create tool", () => {
     ).rejects.toThrow(/not valid JSON/);
   });
 
-  test("stores a display path for an inline structured result", async () => {
-    const { engine } = fakeEngine(() => ({
-      review: { markdown: "# Code Review" },
-      findings: [],
-    }));
-    const deps = makeDeps(engine);
-    const tool = createWorkflowTool(deps);
-    const result = await tool.execute(
-      "t-display",
-      {
-        flow: {
-          kind: "agent",
-          task: "review",
-          json: {
-            type: "object",
-            properties: {
-              review: { type: "object" },
-              findings: { type: "array" },
-            },
-          },
-        },
-        display: " review.markdown ",
-      },
-      undefined,
-      undefined,
-      ctx(),
-    );
-
-    expect(
-      deps.manager.state.runs.get(result.details.runId)?.header.display,
-    ).toBe("review.markdown");
-
-    const arrayResult = await tool.execute(
-      "t-display-array",
-      {
-        flow: {
-          kind: "value",
-          value: [{ markdown: "# Array review" }],
-        },
-        display: "0.markdown",
-      },
-      undefined,
-      undefined,
-      ctx(),
-    );
-    expect(
-      deps.manager.state.runs.get(arrayResult.details.runId)?.header.display,
-    ).toBe("0.markdown");
-    expect((arrayResult.content[0] as { text: string }).text).toContain(
-      "# Array review",
-    );
-  });
-
   test("runs a saved workflow by name with params", async () => {
     const { engine } = fakeEngine((spec) => `ran: ${spec.task}`);
     const deps = makeDeps(engine);
@@ -312,55 +259,13 @@ describe("workflow_create tool", () => {
     ).toBe("report");
   });
 
-  test("lets a call override a saved workflow's display path", async () => {
-    const { engine } = fakeEngine(() => "ok");
-    const deps = makeDeps(engine);
-    const tool = createWorkflowTool(deps);
-    const result = await tool.execute(
-      "t-display-override",
-      {
-        name: "greet",
-        params: { target: "world" },
-        display: "summary",
-        scope: "project",
-      },
-      undefined,
-      undefined,
-      ctx(),
-    );
-
-    expect(
-      deps.manager.state.runs.get(result.details.runId)?.header.display,
-    ).toBe("summary");
-  });
-
-  test("rejects an invalid display path before starting a run", async () => {
-    const { engine } = fakeEngine(() => "ok");
-    const deps = makeDeps(engine);
-    const tool = createWorkflowTool(deps);
-
-    await expect(
-      tool.execute(
-        "t-invalid-display",
-        {
-          flow: { kind: "agent", task: "review" },
-          display: "review markdown",
-        },
-        undefined,
-        undefined,
-        ctx(),
-      ),
-    ).rejects.toThrow("Invalid 'display'");
-    expect(deps.manager.state.runs.size).toBe(0);
-  });
-
   test("passes the agent tools allowlist to the engine", async () => {
     const { engine, specs } = fakeEngine(() => "ok");
     const tool = createWorkflowTool(makeDeps(engine));
     await tool.execute(
       "t3",
       {
-        flow: { kind: "agent", name: "reviewer", task: "review" },
+        flow: { kind: "agent", profile: "reviewer", task: "review" },
         scope: "project",
       },
       undefined,
@@ -398,7 +303,7 @@ describe("workflow_create tool", () => {
     expect(specs[0]?.tools).toEqual([]);
   });
 
-  test("a named node replaces its profile's tools and skills", async () => {
+  test("a profiled node replaces its profile's tools and skills", async () => {
     writeFile(
       ".pi/skills/code-review/SKILL.md",
       "---\nname: code-review\ndescription: review code\n---\nRate findings by severity.\n",
@@ -410,7 +315,7 @@ describe("workflow_create tool", () => {
       {
         flow: {
           kind: "agent",
-          name: "reviewer",
+          profile: "reviewer",
           task: "review",
           skills: ["code-review"],
           tools: ["find"],
@@ -504,7 +409,7 @@ describe("workflow_create tool", () => {
         {
           flow: {
             kind: "sequence",
-            steps: [{ kind: "agent", name: "echo", task: "use {ghost}" }],
+            steps: [{ kind: "agent", profile: "echo", task: "use {ghost}" }],
           },
           scope: "project",
         },
@@ -515,18 +420,23 @@ describe("workflow_create tool", () => {
     ).rejects.toThrow("$.steps[0].task: unknown reference {ghost}");
   });
 
-  test("unknown agents are caught in preflight before any spawn", async () => {
+  test("unknown profiles are caught in preflight before any spawn", async () => {
     const { engine, specs } = fakeEngine(() => "ok");
     const tool = createWorkflowTool(makeDeps(engine));
     await expect(
       tool.execute(
         "t7",
-        { flow: { kind: "agent", name: "ghost", task: "t" }, scope: "project" },
+        {
+          flow: { kind: "agent", profile: "ghost", task: "t" },
+          scope: "project",
+        },
         undefined,
         undefined,
         ctx(),
       ),
-    ).rejects.toThrow("unknown agent 'ghost'");
+    ).rejects.toThrow(
+      /unknown profile 'ghost'.*Remove 'profile' for a one-off agent/,
+    );
     expect(specs).toHaveLength(0);
   });
 
@@ -569,8 +479,9 @@ describe("workflow_create tool", () => {
             {
               kind: "parallel",
               branches: {
-                a: { kind: "agent", task: "review A using {map}" },
-                b: { kind: "agent", task: "review B using {map}" },
+                alpha: { kind: "agent", task: "review alpha using {map}" },
+                beta: { kind: "agent", task: "review beta using {map}" },
+                gamma: { kind: "agent", task: "review gamma using {map}" },
               },
               reduce: { task: "merge {branches}" },
             },
@@ -584,7 +495,7 @@ describe("workflow_create tool", () => {
     );
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain('status="completed"');
-    expect(specs).toHaveLength(4);
+    expect(specs).toHaveLength(5);
     expect(new Set(specs.map((spec) => spec.agent))).toEqual(
       new Set(["ad-hoc"]),
     );
@@ -606,7 +517,10 @@ describe("workflow_create tool", () => {
     const tool = createWorkflowTool(makeDeps(failingEngine));
     const result = await tool.execute(
       "t8",
-      { flow: { kind: "agent", name: "echo", task: "boom" }, scope: "project" },
+      {
+        flow: { kind: "agent", profile: "echo", task: "boom" },
+        scope: "project",
+      },
       undefined,
       undefined,
       ctx(),
@@ -639,7 +553,7 @@ describe("workflow_create tool", () => {
     const tool = createWorkflowTool(makeDeps(engine));
     const result = await tool.execute(
       "t-rpc",
-      { flow: { kind: "agent", name: "echo", task: "nested" } },
+      { flow: { kind: "agent", profile: "echo", task: "nested" } },
       undefined,
       undefined,
       {
@@ -795,7 +709,7 @@ describe("directed workflow run tools", () => {
     const controlled = controllableEngine();
     const deps = makeDeps(controlled.engine);
     const started = deps.manager.start({
-      flow: validateFlow({ kind: "agent", name: "echo", task: "wait" }),
+      flow: validateFlow({ kind: "agent", profile: "echo", task: "wait" }),
       cwd: projectDir,
       scope: "project",
       source: { kind: "tool" },
@@ -819,8 +733,10 @@ describe("directed workflow run tools", () => {
     expect(inspected.details.tree).toContain("echo");
     expect(inspected.details.nodes[0]).toMatchObject({
       instance: "$",
+      profile: "echo",
       status: "running",
     });
+    expect(inspected.details.nodes[0]).not.toHaveProperty("agent");
     expect((inspected.content[0] as { text: string }).text).not.toContain(
       '"value"',
     );
@@ -915,9 +831,22 @@ describe("directed workflow run tools", () => {
     await started.done;
     const tool = createWorkflowResultTool(deps);
 
-    const presented = await tool.execute(
+    const complete = await tool.execute(
       "result-1",
       { run: started.runId },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    const completeText = (complete.content[0] as { text: string }).text;
+    expect(complete.details.view).toBe("raw");
+    expect(completeText).toContain('"report"');
+    expect(completeText).toContain('"findings"');
+    expect(complete.details.truncated).toBe(false);
+
+    const presented = await tool.execute(
+      "result-presented",
+      { run: started.runId, view: "presented" },
       undefined,
       undefined,
       ctx(),
@@ -925,7 +854,6 @@ describe("directed workflow run tools", () => {
     expect((presented.content[0] as { text: string }).text).toContain(
       "# Review\n\nApproved.",
     );
-    expect(presented.details.truncated).toBe(false);
 
     const selected = await tool.execute(
       "result-2",
@@ -999,7 +927,7 @@ describe("directed workflow run tools", () => {
     await fallbackStarted.done;
     const fallback = await tool.execute(
       "result-display-fallback",
-      { run: fallbackStarted.runId },
+      { run: fallbackStarted.runId, view: "presented" },
       undefined,
       undefined,
       ctx(),
@@ -1144,6 +1072,13 @@ describe("directed workflow run tools", () => {
     expect(
       JSON.stringify(createWorkflowStopTool(deps).parameters),
     ).not.toContain("message");
+    expect(
+      (
+        createWorkflowResultTool(deps).parameters as unknown as {
+          properties: { view: { default: string } };
+        }
+      ).properties.view.default,
+    ).toBe("raw");
   });
 });
 
@@ -1189,7 +1124,7 @@ describe("call and result previews", () => {
   test("inline flows render as the icon tree", async () => {
     const { formatCallPreview } = await import("../../src/triggers/tool.js");
     const preview = formatCallPreview({
-      flow: { kind: "agent", name: "echo", task: "hello" },
+      flow: { kind: "agent", profile: "echo", task: "hello" },
     });
     expect(preview).toBe("✦ echo · hello");
   });
@@ -1449,7 +1384,10 @@ describe("live result rendering", () => {
     } as unknown as ExtensionContext;
     const result = await tool.execute(
       "t-live",
-      { flow: { kind: "agent", name: "echo", task: "hi" }, scope: "project" },
+      {
+        flow: { kind: "agent", profile: "echo", task: "hi" },
+        scope: "project",
+      },
       undefined,
       undefined,
       uiCtx,
@@ -1495,12 +1433,12 @@ describe("project trust", () => {
     await expect(
       tool.execute(
         "t-trust-1",
-        { flow: { kind: "agent", name: "echo", task: "hi" } },
+        { flow: { kind: "agent", profile: "echo", task: "hi" } },
         undefined,
         undefined,
         untrustedCtx(),
       ),
-    ).rejects.toThrow("unknown agent 'echo'");
+    ).rejects.toThrow("unknown profile 'echo'");
     expect(specs).toHaveLength(0);
     await expect(
       tool.execute(
@@ -1520,7 +1458,7 @@ describe("project trust", () => {
       tool.execute(
         "t-trust-3",
         {
-          flow: { kind: "agent", name: "echo", task: "hi" },
+          flow: { kind: "agent", profile: "echo", task: "hi" },
           scope: "project",
         },
         undefined,
@@ -1566,7 +1504,7 @@ describe("project trust", () => {
         {
           flow: {
             kind: "agent",
-            name: "echo",
+            profile: "echo",
             task: "hi",
             scope: "project",
           },
@@ -1575,7 +1513,7 @@ describe("project trust", () => {
         undefined,
         untrustedCtx(),
       ),
-    ).rejects.toThrow("unknown agent 'echo'");
+    ).rejects.toThrow("unknown profile 'echo'");
     expect(specs).toHaveLength(0);
   });
 });
@@ -1656,20 +1594,17 @@ describe("workflow_create tool description", () => {
     }
   });
 
-  test("the schema explains human-facing display selection", () => {
+  test("the schema omits display and teaches the report convention", () => {
     const tool = createWorkflowTool(makeDeps(inertEngine));
     const schema = tool.parameters as unknown as {
-      properties: { display: { type: string; description?: string } };
+      properties: Record<string, unknown>;
     };
 
-    expect(schema.properties.display).toMatchObject({ type: "string" });
-    expect(schema.properties.display.description).toContain(
-      "Markdown string in the final value",
-    );
-    expect(tool.description).toContain('"display":"path.to.markdown"');
+    expect(schema.properties).not.toHaveProperty("display");
+    expect(tool.description).toContain('top-level "report" string');
     expect(
       tool.promptGuidelines?.some((line) =>
-        line.includes("structured data with a human-readable Markdown field"),
+        line.includes('top-level "report" string'),
       ),
     ).toBe(true);
   });
@@ -1692,6 +1627,9 @@ describe("workflow_create tool description", () => {
     expect(tool.description).toContain("{previous}");
     expect(tool.description).toContain("{current}");
     expect(tool.description).toContain('"as"');
+    expect(tool.description).toContain('"profile":"name from <agents>"');
+    expect(tool.description).toContain("Branch keys identify parallel agents");
+    expect(tool.description).not.toContain('"agent":"..."');
     expect(tool.description).toContain(
       '"model":"provider/id from <models> (bare id resolves to the earliest listed provider)"',
     );

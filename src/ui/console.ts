@@ -558,7 +558,7 @@ export class AgentPane implements Component {
 
     const editorLines = this.editor.render(width);
     if (run && node && editorLines.length > 0) {
-      const label = ` ${nodeDisplayName(node)}${node.agent ? ` (${node.agent})` : ""} · ${run.header.label ?? run.header.flow.kind} `;
+      const label = ` ${nodeDisplayName(node)}${node.profile ? ` (${node.profile})` : ""} · ${run.header.label ?? run.header.flow.kind} `;
       editorLines[0] = badgeBorder(
         label,
         width,

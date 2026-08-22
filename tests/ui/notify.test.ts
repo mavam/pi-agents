@@ -4,6 +4,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { emptyUsage } from "../../src/engine/types.js";
+import { PROTOCOL_VERSION } from "../../src/protocol.js";
 import type { RunEvent } from "../../src/run/events.js";
 import type { RunManager } from "../../src/run/runs.js";
 import { NotificationManager } from "../../src/ui/notify.js";
@@ -41,6 +42,7 @@ function addRun(
     workflow?: string;
     kind?: "agent" | "value";
     display?: string;
+    warnings?: string[];
   },
 ): void {
   manager.state.runs.set(runId, {
@@ -48,6 +50,7 @@ function addRun(
       id: runId,
       label: options.label,
       display: options.display,
+      warnings: options.warnings,
       source: { kind: "tool", workflow: options.workflow },
       flow:
         options.kind === "value"
@@ -99,6 +102,7 @@ describe("NotificationManager", () => {
     notifications.handleRunEvent(completed("run-1"));
     expect(sent).toHaveLength(1);
     expect(sent[0]?.options).toEqual({ triggerTurn: true });
+    expect(sent[0]?.message.details?.protocol).toBe(PROTOCOL_VERSION);
     expect(sent[0]?.message.content).toContain(
       "Continue your task using this result.",
     );
@@ -233,6 +237,21 @@ describe("NotificationManager", () => {
     expect(content).toContain('workflow_result({run:"run-1"})');
   });
 
+  test("renders a conventional `report` string instead of structured data", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    notifications.track("run-report", "session.jsonl", false);
+    const report = "# Findings\n\nAll good.";
+    notifications.handleRunEvent(
+      completed("run-report", { findings: ["one"], report }),
+    );
+    // The human-facing body renders the report; the model-facing content
+    // keeps the complete structured value.
+    expect(sent[0]?.message.details?.body).toBe(report);
+    expect(sent[0]?.message.content).toContain('"findings"');
+  });
+
   test("keeps complete long structured results as highlighted JSON", () => {
     const { sent, pi, manager, makeCtx } = makeFakes();
     const notifications = new NotificationManager(pi, manager);
@@ -240,7 +259,7 @@ describe("NotificationManager", () => {
     notifications.track("run-1", "session.jsonl", false);
     const result = {
       findings: ["one", "two"],
-      report: "x".repeat(700),
+      summary: "x".repeat(700),
       tail: "complete-tail",
     };
     notifications.handleRunEvent(completed("run-1", result));
@@ -290,6 +309,19 @@ describe("NotificationManager", () => {
     );
     expect(sent[0]?.message.details?.body).toContain('```json\n{\n  "summary"');
     expect(sent[0]?.message.content).toContain(JSON.stringify(value, null, 2));
+  });
+
+  test("includes persisted launch warnings in completion cards", () => {
+    const { sent, pi, manager, makeCtx } = makeFakes();
+    addRun(manager, "run-warning", {
+      warnings: ["Ignored invalid 'label' (must be a non-empty string)."],
+    });
+    const notifications = new NotificationManager(pi, manager);
+    notifications.setContext(makeCtx(true));
+    notifications.track("run-warning", "session.jsonl", false);
+    notifications.handleRunEvent(completed("run-warning"));
+
+    expect(sent[0]?.message.details?.body).toContain("Ignored invalid 'label'");
   });
 
   test("delivers complete long results before the host controls", () => {

@@ -18,7 +18,7 @@ export interface NodeView {
   path: string;
   instance: string;
   kind: NodeKind | "reduce";
-  agent?: string;
+  profile?: string;
   label?: string;
   status: NodeStatus;
   value?: unknown;
@@ -96,7 +96,7 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
         path: event.path,
         instance: event.instance,
         kind: event.kind,
-        agent: event.agent,
+        profile: event.profile,
         label: event.label,
         status: "running",
         startedAt: event.at,

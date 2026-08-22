@@ -4,10 +4,13 @@
  * trigger, and params only, never flow bodies.
  */
 
+import {
+  type AgentAvailability,
+  buildAgentsPrompt,
+} from "../catalog/agents.js";
+import type { ModelCatalog } from "../catalog/models.js";
+import { discoverWorkflows } from "../catalog/workflows.js";
 import type { Scope } from "../model/ast.js";
-import { buildAgentsPrompt } from "./agents.js";
-import type { ModelCatalog } from "./models.js";
-import { discoverWorkflows } from "./workflows.js";
 
 function escapeXmlText(value: string): string {
   return value
@@ -98,12 +101,13 @@ export function buildSystemPromptAppendix(
   cwd: string,
   trusted = true,
   catalog?: ModelCatalog,
+  availability?: AgentAvailability,
 ): string {
   const scope: Scope = trusted ? "both" : "user";
-  const agents = buildAgentsPrompt(cwd, scope);
+  const agents = buildAgentsPrompt(cwd, scope, availability);
   const workflows = buildWorkflowsPrompt(cwd, scope);
   const parts = [
-    "The following reusable agent profiles are available to the `workflow_create` tool (optional: agent leaves without `name` run as anonymous ad-hoc agents):",
+    "The following reusable agent profiles are available to the `workflow_create` tool (optional: agent leaves without `profile` run as anonymous ad-hoc agents):",
     agents.prompt,
     "",
     "The following saved workflows can be invoked with `workflow_create({name, params})` when the user asks for a workflow or for delegation. This catalog is a reference, not an invitation: a workflow existing for a task is never by itself a reason to run one.",
@@ -123,4 +127,33 @@ export function buildSystemPromptAppendix(
     );
   }
   return parts.join("\n");
+}
+
+/** Cache the rendered appendix until its session context or model set changes. */
+export class PromptAppendixCache {
+  private key?: string;
+  private appendix?: string;
+
+  get(
+    cwd: string,
+    trusted: boolean,
+    catalog: ModelCatalog | undefined,
+    availability: () => AgentAvailability,
+  ): string {
+    const key = JSON.stringify([cwd, trusted, catalog]);
+    if (this.key === key && this.appendix !== undefined) return this.appendix;
+    this.key = key;
+    this.appendix = buildSystemPromptAppendix(
+      cwd,
+      trusted,
+      catalog,
+      availability(),
+    );
+    return this.appendix;
+  }
+
+  clear(): void {
+    this.key = undefined;
+    this.appendix = undefined;
+  }
 }

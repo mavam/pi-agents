@@ -16,14 +16,7 @@ import {
   type StartRpcData,
   type StopRpcData,
 } from "../api.js";
-import {
-  discoverWorkflows,
-  resolveWorkflowByName,
-} from "../catalog/workflows.js";
-import { effectiveScope, normalizeDisplayPath } from "../model/ast.js";
-import { validateFlow } from "../model/validate.js";
-import { isProjectTrusted } from "../run/persist.js";
-import { startTriggeredRun, type TriggerDeps } from "./start.js";
+import { launchTriggeredRun, type TriggerDeps } from "./start.js";
 
 const REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/;
 const MAX_CALLER_LENGTH = 128;
@@ -161,54 +154,29 @@ export class RpcManager {
     if (!ctx) throw new Error("No active session");
     if (!isRecord(raw)) throw new Error("'start' requires params");
 
-    const hasFlow = raw.flow !== undefined;
     const workflow = optionalString(raw.workflow, "workflow");
-    if (Number(hasFlow) + Number(workflow !== undefined) !== 1) {
-      throw new Error("pass exactly one of 'flow' or 'workflow'");
-    }
     const params = stringParams(raw.params);
-    if (hasFlow && params !== undefined) {
-      throw new Error("'params' is only valid with a saved workflow");
-    }
-    const label = optionalString(raw.label, "label");
-    const requestedDisplay = normalizeDisplayPath(raw.display);
     const cwd = resolveCwd(raw.cwd, ctx);
-    const trusted = isProjectTrusted(ctx);
-    const scope = effectiveScope(undefined, trusted);
-    const { workflows } = discoverWorkflows(cwd, scope);
-    const resolveWorkflow = (name: string) =>
-      resolveWorkflowByName(workflows, name);
-
-    let input: unknown = raw.flow;
-    let effectiveLabel = label;
-    let display = requestedDisplay;
-    if (workflow !== undefined) {
-      const definition = resolveWorkflow(workflow);
-      if (!definition) {
-        const available =
-          workflows.map((item) => item.name).join(", ") || "none";
-        throw new Error(
-          `unknown workflow '${workflow}'. Available: ${available}`,
-        );
-      }
-      input = { kind: "workflow", name: definition.name, params: params ?? {} };
-      effectiveLabel = effectiveLabel ?? definition.name;
-      display = requestedDisplay ?? definition.display;
-    }
-
-    const flow = validateFlow(input, { resolveWorkflow });
     this.deps.notifications.setContext(ctx);
-    const started = startTriggeredRun(this.deps, {
-      flow,
-      cwd,
-      scope,
-      label: effectiveLabel,
-      display,
-      source: { kind: "rpc", workflow, caller },
+    const started = launchTriggeredRun(this.deps, {
+      request: {
+        flow: raw.flow,
+        workflow,
+        params,
+        label: raw.label,
+        display: raw.display,
+        cwd,
+      },
+      source: { kind: "rpc", caller },
       ctx,
       background: true,
     });
-    return { runId: started.runId };
+    return {
+      runId: started.runId,
+      ...(started.plan.warnings.length
+        ? { warnings: started.plan.warnings }
+        : {}),
+    };
   }
 
   private stop(raw: unknown): StopRpcData {

@@ -117,7 +117,7 @@ describe("preflight with node overrides", () => {
     const manager = new RunManager({ engine });
     const flow = validateFlow({
       kind: "agent",
-      name: "elsewhere",
+      profile: "elsewhere",
       task: "t",
       cwd: otherDir,
       scope: "project",
@@ -139,10 +139,10 @@ describe("preflight with node overrides", () => {
     const flow = validateFlow({
       kind: "sequence",
       steps: [
-        { kind: "agent", name: "echo", task: "first" },
+        { kind: "agent", profile: "echo", task: "first" },
         {
           kind: "agent",
-          name: "echo",
+          profile: "echo",
           task: "second",
           cwd: otherDir,
           scope: "project",
@@ -156,7 +156,7 @@ describe("preflight with node overrides", () => {
         scope: "project",
         source: { kind: "tool" },
       }),
-    ).toThrow(/unknown agent 'echo' \(cwd: .*scope: project\)/);
+    ).toThrow(/unknown profile 'echo' \(cwd: .*scope: project\)/);
     expect(specs).toHaveLength(0);
   });
 });
@@ -168,7 +168,7 @@ describe("preflight over models", () => {
     const flow = validateFlow({
       kind: "sequence",
       steps: [
-        { kind: "agent", name: "echo", task: "first" },
+        { kind: "agent", profile: "echo", task: "first" },
         { kind: "agent", task: "second", model: "missing" },
       ],
     });
@@ -219,7 +219,7 @@ describe("preflight over skills", () => {
     const flow = validateFlow({
       kind: "sequence",
       steps: [
-        { kind: "agent", name: "echo", task: "first" },
+        { kind: "agent", profile: "echo", task: "first" },
         { kind: "agent", task: "second", skills: ["code-reveiw"] },
       ],
     });
@@ -308,7 +308,7 @@ describe("preflight diagnostics", () => {
     );
     const { engine } = fakeEngine();
     const manager = new RunManager({ engine });
-    const flow = validateFlow({ kind: "agent", name: "broken", task: "t" });
+    const flow = validateFlow({ kind: "agent", profile: "broken", task: "t" });
     expect(() =>
       manager.start({
         flow,
@@ -317,7 +317,7 @@ describe("preflight diagnostics", () => {
         source: { kind: "tool" },
       }),
     ).toThrow(
-      /unknown agent 'broken'.*broken\.md: Unsupported frontmatter keys: bogus/,
+      /unknown profile 'broken'.*broken\.md: Unsupported frontmatter keys: bogus/,
     );
   });
 });
@@ -326,7 +326,7 @@ describe("budgets", () => {
   test("rejects invalid count budget values", () => {
     const { engine } = fakeEngine();
     const manager = new RunManager({ engine });
-    const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
+    const flow = validateFlow({ kind: "agent", profile: "echo", task: "t" });
     expect(() =>
       manager.start({
         flow,
@@ -376,7 +376,7 @@ describe("budgets", () => {
   test("maxAgents zero rejects an agent before spawning", async () => {
     const { engine, specs } = fakeEngine();
     const manager = new RunManager({ engine });
-    const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
+    const flow = validateFlow({ kind: "agent", profile: "echo", task: "t" });
     const { done } = manager.start({
       flow,
       cwd: projectDir,
@@ -407,8 +407,8 @@ describe("budgets", () => {
     const branch = (key: string) => ({
       kind: "parallel",
       branches: {
-        [`${key}1`]: { kind: "agent", name: "echo", task: "t" },
-        [`${key}2`]: { kind: "agent", name: "echo", task: "t" },
+        [`${key}1`]: { kind: "agent", profile: "echo", task: "t" },
+        [`${key}2`]: { kind: "agent", profile: "echo", task: "t" },
       },
     });
     const flow = validateFlow({
@@ -431,7 +431,7 @@ describe("budgets", () => {
   test("children receive only the delegation depth marker via env", async () => {
     const { engine, specs } = fakeEngine();
     const manager = new RunManager({ engine });
-    const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
+    const flow = validateFlow({ kind: "agent", profile: "echo", task: "t" });
     const { done } = manager.start({
       flow,
       cwd: projectDir,
@@ -450,7 +450,7 @@ describe("session defaults", () => {
   test("agents without frontmatter inherit model and thinking", async () => {
     const { engine, specs } = fakeEngine();
     const manager = new RunManager({ engine });
-    const flow = validateFlow({ kind: "agent", name: "echo", task: "t" });
+    const flow = validateFlow({ kind: "agent", profile: "echo", task: "t" });
     const { done } = manager.start({
       flow,
       cwd: projectDir,
@@ -470,7 +470,7 @@ describe("session defaults", () => {
     );
     const { engine, specs } = fakeEngine();
     const manager = new RunManager({ engine });
-    const flow = validateFlow({ kind: "agent", name: "picky", task: "t" });
+    const flow = validateFlow({ kind: "agent", profile: "picky", task: "t" });
     const { done } = manager.start({
       flow,
       cwd: projectDir,
@@ -494,7 +494,7 @@ describe("node overrides", () => {
     const manager = new RunManager({ engine });
     const flow = validateFlow({
       kind: "agent",
-      name: "picky2",
+      profile: "picky2",
       task: "t",
       model: "node-model",
       thinking: "minimal",
@@ -569,7 +569,7 @@ describe("ad-hoc agents", () => {
     const flow = validateFlow({
       kind: "parallel",
       branches: {
-        named: { kind: "agent", name: "echo", task: "t" },
+        named: { kind: "agent", profile: "echo", task: "t" },
         anon: { kind: "agent", task: "t" },
       },
       reduce: { task: "merge {branches}" },
@@ -589,14 +589,14 @@ describe("ad-hoc agents", () => {
     ]);
   });
 
-  test("named unknown agents still fail preflight in an anonymous flow", () => {
+  test("unknown profiles still fail preflight in an anonymous flow", () => {
     const { engine, specs } = fakeEngine();
     const manager = new RunManager({ engine });
     const flow = validateFlow({
       kind: "sequence",
       steps: [
         { kind: "agent", task: "anon" },
-        { kind: "agent", name: "ghost", task: "t" },
+        { kind: "agent", profile: "ghost", task: "t" },
       ],
     });
     expect(() =>
@@ -606,7 +606,7 @@ describe("ad-hoc agents", () => {
         scope: "project",
         source: { kind: "tool" },
       }),
-    ).toThrow(/unknown agent 'ghost'/);
+    ).toThrow(/unknown profile 'ghost'/);
     expect(specs).toHaveLength(0);
   });
 });
@@ -619,7 +619,7 @@ describe("empty tools allowlist", () => {
     );
     const { engine, specs } = fakeEngine();
     const manager = new RunManager({ engine });
-    const flow = validateFlow({ kind: "agent", name: "locked", task: "t" });
+    const flow = validateFlow({ kind: "agent", profile: "locked", task: "t" });
     const { done } = manager.start({
       flow,
       cwd: projectDir,

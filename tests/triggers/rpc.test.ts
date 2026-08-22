@@ -168,7 +168,10 @@ describe("RpcManager", () => {
     bus.on("unrelated-channel", () => {
       injected = true;
     });
-    const reply = await call<{ protocol: 1; version: string }>(bus, {
+    const reply = await call<{
+      protocol: typeof PROTOCOL_VERSION;
+      version: string;
+    }>(bus, {
       protocol: PROTOCOL_VERSION,
       id: "ping-1",
       op: "ping",
@@ -291,7 +294,7 @@ describe("RpcManager", () => {
 
   test("validates protocol, operations, start shape, cwd, and trust", async () => {
     writeWorkflow("project-only-rpc");
-    const { bus } = harness({ trusted: false });
+    const { bus, manager } = harness({ trusted: false });
     const requests = [
       {
         protocol: 99,
@@ -314,15 +317,6 @@ describe("RpcManager", () => {
       },
       {
         protocol: PROTOCOL_VERSION,
-        id: "bad-display",
-        op: "start",
-        params: {
-          flow: { kind: "agent", task: "hello" },
-          display: "report title",
-        },
-      },
-      {
-        protocol: PROTOCOL_VERSION,
         id: "bad-cwd",
         op: "start",
         params: { flow: { kind: "agent", task: "hello" }, cwd: "relative" },
@@ -337,6 +331,43 @@ describe("RpcManager", () => {
     for (const request of requests) {
       const reply = await call(bus, request);
       expect(reply.success).toBe(false);
+    }
+
+    // An invalid display path is recoverable: the run starts and the reply
+    // carries a warning instead of an error.
+    const softDisplay = await call(bus, {
+      protocol: PROTOCOL_VERSION,
+      id: "bad-display",
+      op: "start",
+      params: {
+        flow: { kind: "agent", task: "hello" },
+        display: "report title",
+      },
+    });
+    expect(softDisplay.success).toBe(true);
+    if (softDisplay.success) {
+      const data = softDisplay.data as { runId: string; warnings?: string[] };
+      expect(data.warnings?.[0]).toContain("Ignored invalid 'display'");
+      expect(manager.state.runs.get(data.runId)?.header.warnings).toEqual(
+        data.warnings,
+      );
+    }
+
+    const softLabel = await call<StartRpcData>(bus, {
+      protocol: PROTOCOL_VERSION,
+      id: "bad-label",
+      op: "start",
+      params: {
+        flow: { kind: "value", value: null },
+        label: "   ",
+      },
+    });
+    expect(softLabel.success).toBe(true);
+    if (softLabel.success) {
+      expect(softLabel.data.warnings?.[0]).toContain("Ignored invalid 'label'");
+      expect(
+        manager.state.runs.get(softLabel.data.runId)?.header.label,
+      ).toBeUndefined();
     }
   });
 

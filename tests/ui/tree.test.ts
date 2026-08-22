@@ -21,17 +21,17 @@ describe("renderFlowTree", () => {
         branches: {
           bugs: {
             kind: "agent",
-            name: "reviewer",
+            profile: "reviewer",
             task: "Review {params.target} strictly for correctness bugs: logic errors, edge cases, races, resource leaks.",
           },
           clarity: {
             kind: "agent",
-            name: "reviewer",
+            profile: "reviewer",
             task: "Review {params.target} for readability, duplication, and simplification opportunities.",
           },
         },
         reduce: {
-          agent: "worker",
+          profile: "worker",
           task: "Merge these code review findings into one prioritized list:\n\n{branches}",
         },
       },
@@ -54,7 +54,7 @@ describe("renderFlowTree", () => {
       steps: [
         {
           kind: "agent",
-          name: "scout",
+          profile: "scout",
           task: "List files",
           json: {
             type: ["null", "boolean", "number", "string", "array", "object"],
@@ -65,14 +65,14 @@ describe("renderFlowTree", () => {
           kind: "map",
           over: "{files}",
           concurrency: 4,
-          body: { kind: "agent", name: "reviewer", task: "Review {item}" },
-          reduce: { agent: "syn", task: "Merge {items}" },
+          body: { kind: "agent", profile: "reviewer", task: "Review {item}" },
+          reduce: { profile: "syn", task: "Merge {items}" },
         },
         {
           kind: "loop",
           max: 3,
           until: { eq: ["done", true] },
-          body: { kind: "agent", name: "fixer", task: "Fix {last}" },
+          body: { kind: "agent", profile: "fixer", task: "Fix {last}" },
         },
       ],
     });
@@ -93,7 +93,7 @@ describe("renderFlowTree", () => {
       steps: [
         {
           kind: "agent",
-          name: "scout",
+          profile: "scout",
           task: "List files",
           json: {
             type: ["null", "boolean", "number", "string", "array", "object"],
@@ -103,7 +103,7 @@ describe("renderFlowTree", () => {
         {
           kind: "map",
           over: "{files}",
-          body: { kind: "agent", name: "reviewer", task: "Review {item}" },
+          body: { kind: "agent", profile: "reviewer", task: "Review {item}" },
         },
       ],
     });
@@ -123,7 +123,7 @@ describe("renderFlowTree", () => {
       steps: [
         {
           kind: "agent",
-          name: "reviewer",
+          profile: "reviewer",
           task: "Review",
           json: {
             type: ["null", "boolean", "number", "string", "array", "object"],
@@ -137,7 +137,7 @@ describe("renderFlowTree", () => {
           max: 3,
           body: {
             kind: "agent",
-            name: "fixer",
+            profile: "fixer",
             task: "Fix round {iteration} from {current}",
             json: {
               type: ["null", "boolean", "number", "string", "array", "object"],
@@ -166,7 +166,7 @@ describe("renderFlowTree", () => {
       kind: "parallel",
       branches: {
         a: { kind: "agent", task: "Review A" },
-        b: { kind: "agent", name: "reviewer", task: "Review B" },
+        b: { kind: "agent", profile: "reviewer", task: "Review B" },
       },
       reduce: { task: "Merge {branches}" },
     });
@@ -182,7 +182,7 @@ describe("renderFlowTree", () => {
       steps: [
         {
           kind: "agent",
-          name: "gate",
+          profile: "gate",
           task: "inspect",
           json: {
             type: ["null", "boolean", "number", "string", "array", "object"],
@@ -195,15 +195,15 @@ describe("renderFlowTree", () => {
           cases: [
             {
               when: { eq: ["status", "approved"] },
-              then: { kind: "agent", name: "shipper", task: "ship it" },
+              then: { kind: "agent", profile: "shipper", task: "ship it" },
             },
             {
               when: { exists: "findings" },
               then: {
                 kind: "sequence",
                 steps: [
-                  { kind: "agent", name: "fixer", task: "fix" },
-                  { kind: "agent", name: "checker", task: "recheck" },
+                  { kind: "agent", profile: "fixer", task: "fix" },
+                  { kind: "agent", profile: "checker", task: "recheck" },
                 ],
               },
             },
@@ -235,17 +235,17 @@ describe("renderFlowTree", () => {
     const def: WorkflowLike = {
       name: "inner",
       params: [{ name: "x" }],
-      flow: { kind: "agent", name: "a", task: "use {params.x}" },
+      flow: { kind: "agent", profile: "a", task: "use {params.x}" },
     };
     const flow = validateFlow(
       {
         kind: "parallel",
         branches: {
-          quick: { kind: "agent", name: "a", task: "t" },
+          quick: { kind: "agent", profile: "a", task: "t" },
           slow: {
             kind: "sequence",
             steps: [
-              { kind: "agent", name: "prep", task: "prepare" },
+              { kind: "agent", profile: "prep", task: "prepare" },
               { kind: "workflow", name: "inner", params: { x: "42" } },
             ],
           },
@@ -270,7 +270,7 @@ describe("renderFlowTree coloring", () => {
       steps: [
         {
           kind: "agent",
-          name: "scout",
+          profile: "scout",
           task: "List files",
           json: {
             type: ["null", "boolean", "number", "string", "array", "object"],
@@ -280,7 +280,7 @@ describe("renderFlowTree coloring", () => {
         {
           kind: "map",
           over: "{files}",
-          body: { kind: "agent", name: "reviewer", task: "Review {item}" },
+          body: { kind: "agent", profile: "reviewer", task: "Review {item}" },
         },
       ],
     });
@@ -308,7 +308,7 @@ describe("renderRunTree", () => {
       steps: [
         {
           kind: "agent",
-          name: "scout",
+          profile: "scout",
           task: "list",
           json: {
             type: ["null", "boolean", "number", "string", "array", "object"],
@@ -318,7 +318,7 @@ describe("renderRunTree", () => {
         {
           kind: "map",
           over: "{files}",
-          body: { kind: "agent", name: "reviewer", task: "review {item}" },
+          body: { kind: "agent", profile: "reviewer", task: "review {item}" },
         },
       ],
     });
@@ -327,7 +327,7 @@ describe("renderRunTree", () => {
       runId: "r1",
       flow,
       runAgent: async (call) =>
-        call.agent === "scout" ? { value: ["a", "b", "c"] } : { value: "ok" },
+        call.profile === "scout" ? { value: ["a", "b", "c"] } : { value: "ok" },
       emit: (event) => events.push(event),
     });
     const run = rebuildRunState(events).runs.get("r1");
@@ -347,8 +347,8 @@ describe("renderRunTree", () => {
       flow: {
         kind: "sequence",
         steps: [
-          { kind: "agent", name: "a", task: "one" },
-          { kind: "agent", name: "b", task: "two" },
+          { kind: "agent", profile: "a", task: "one" },
+          { kind: "agent", profile: "b", task: "two" },
         ],
       },
     };
@@ -377,7 +377,7 @@ describe("renderRunTree", () => {
       until: { eq: ["done", true] },
       body: {
         kind: "agent",
-        name: "worker",
+        profile: "worker",
         task: "round {iteration}",
         json: {
           type: ["null", "boolean", "number", "string", "array", "object"],
@@ -409,7 +409,7 @@ describe("renderRunTree", () => {
           on: "{state}",
           condition: { eq: ["continue", true] },
           max: 4,
-          body: { kind: "agent", name: "worker", task: "work" },
+          body: { kind: "agent", profile: "worker", task: "work" },
         },
       ],
     });
@@ -478,7 +478,7 @@ describe("renderRunTree", () => {
       steps: [
         {
           kind: "agent",
-          name: "gate",
+          profile: "gate",
           task: "inspect",
           json: {
             type: ["null", "boolean", "number", "string", "array", "object"],
@@ -491,20 +491,20 @@ describe("renderRunTree", () => {
           cases: [
             {
               when: { eq: ["status", "approved"] },
-              then: { kind: "agent", name: "shipper", task: "ship" },
+              then: { kind: "agent", profile: "shipper", task: "ship" },
             },
             {
               when: { eq: ["status", "rejected"] },
               then: {
                 kind: "sequence",
                 steps: [
-                  { kind: "agent", name: "auditor", task: "audit" },
-                  { kind: "agent", name: "notifier", task: "notify" },
+                  { kind: "agent", profile: "auditor", task: "audit" },
+                  { kind: "agent", profile: "notifier", task: "notify" },
                 ],
               },
             },
           ],
-          else: { kind: "agent", name: "reporter", task: "report" },
+          else: { kind: "agent", profile: "reporter", task: "report" },
         },
       ],
     });
@@ -513,7 +513,7 @@ describe("renderRunTree", () => {
       runId: "r5",
       flow,
       runAgent: async (call) =>
-        call.agent === "gate"
+        call.profile === "gate"
           ? { value: { status: "rejected" } }
           : { value: "done" },
       emit: (event) => events.push(event),
@@ -562,10 +562,10 @@ describe("renderRunTree", () => {
             cases: [
               {
                 when: { eq: ["", "approved"] },
-                then: { kind: "agent", name: "shipper", task: "ship" },
+                then: { kind: "agent", profile: "shipper", task: "ship" },
               },
             ],
-            else: { kind: "agent", name: "reporter", task: "report" },
+            else: { kind: "agent", profile: "reporter", task: "report" },
           },
         },
       ],
@@ -599,7 +599,7 @@ describe("renderRunTree", () => {
       kind: "sequence",
       steps: [
         { kind: "agent", task: "scout", as: "map" },
-        { kind: "agent", name: "worker", task: "use {map}" },
+        { kind: "agent", profile: "worker", task: "use {map}" },
       ],
     });
     const events: RunEvent[] = [];
@@ -621,16 +621,16 @@ describe("renderRunTree", () => {
     const nodes = [...run.nodes.values()].filter(
       (node) => node.kind === "agent",
     );
-    expect(nodes.some((node) => node.agent === undefined)).toBe(true);
-    expect(nodes.some((node) => node.agent === "worker")).toBe(true);
+    expect(nodes.some((node) => node.profile === undefined)).toBe(true);
+    expect(nodes.some((node) => node.profile === "worker")).toBe(true);
   });
 
   test("status icons are colored by outcome", async () => {
     const flow = validateFlow({
       kind: "parallel",
       branches: {
-        good: { kind: "agent", name: "a", task: "ok" },
-        bad: { kind: "agent", name: "b", task: "boom" },
+        good: { kind: "agent", profile: "a", task: "ok" },
+        bad: { kind: "agent", profile: "b", task: "boom" },
       },
     });
     const events: RunEvent[] = [];
@@ -638,7 +638,7 @@ describe("renderRunTree", () => {
       runId: "r4",
       flow,
       runAgent: async (call) => {
-        if (call.agent === "b") throw new Error("kaput");
+        if (call.profile === "b") throw new Error("kaput");
         return { value: "ok" };
       },
       emit: (event) => events.push(event),
@@ -660,7 +660,7 @@ describe("renderRunTree", () => {
   });
 
   test("failures surface inline with ✗", async () => {
-    const flow = validateFlow({ kind: "agent", name: "a", task: "boom" });
+    const flow = validateFlow({ kind: "agent", profile: "a", task: "boom" });
     const events: RunEvent[] = [];
     await executeFlow({
       runId: "r2",

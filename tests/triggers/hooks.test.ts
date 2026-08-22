@@ -82,7 +82,7 @@ function harness(options: HarnessOptions = {}) {
 
   writeFile(
     ".pi/workflows/on-turn.yaml",
-    `name: on-turn\ndescription: reacts to turn end\non: [turn_end]\n${debounceMs !== undefined ? `debounce: ${debounceMs}\n` : ""}flow: { kind: agent, name: echo, task: "react to {params.event}" }\n`,
+    `name: on-turn\ndescription: reacts to turn end\non: [turn_end]\n${debounceMs !== undefined ? `debounce: ${debounceMs}\n` : ""}flow: { kind: agent, profile: echo, task: "react to {params.event}" }\n`,
   );
   hooks.refresh(projectDir, trusted);
 
@@ -199,7 +199,7 @@ describe("event hooks", () => {
     const { specs, emit, hooks } = harness();
     writeFile(
       ".pi/workflows/on-start.yaml",
-      'name: on-start\ndescription: d\non: [session_start]\nflow: { kind: agent, name: echo, task: "startup {params.event}" }\n',
+      'name: on-start\ndescription: d\non: [session_start]\nflow: { kind: agent, profile: echo, task: "startup {params.event}" }\n',
     );
     // Simulate a fresh factory: no refresh has happened yet.
     hooks.refresh("/nonexistent");
@@ -223,7 +223,7 @@ describe("event hooks", () => {
   test("catalog rejects unknown event names in on:", () => {
     writeFile(
       ".pi/workflows/bad-hook.yaml",
-      "name: bad-hook\ndescription: d\non: [not_an_event]\nflow: { kind: agent, name: echo, task: t }\n",
+      "name: bad-hook\ndescription: d\non: [not_an_event]\nflow: { kind: agent, profile: echo, task: t }\n",
     );
     const { hooks } = harness();
     void hooks;

@@ -18,8 +18,8 @@ import {
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
 import type { Scope, WorkflowDef } from "../model/ast.js";
-import { validateFlow } from "../model/validate.js";
 import { valueText } from "../model/value.js";
+import { selectDisplayValue } from "../presentation/result.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { type NodeView, type RunView, workNodes } from "../run/state.js";
 import { canAttachNode, openAgentSession } from "../ui/console.js";
@@ -38,7 +38,6 @@ import {
   formatWorkflowCallPreview,
   nodeDisplayName,
   renderResultValue,
-  selectDisplayValue,
   sendInfo,
   shortId,
 } from "../ui/render.js";
@@ -50,7 +49,11 @@ import {
   renderWorkflowTree,
 } from "../ui/tree.js";
 import { type Colorize, formatElapsed } from "../ui/widget.js";
-import { startTriggeredRun, type TriggerDeps } from "./start.js";
+import {
+  launchTriggeredRun,
+  rerunTriggeredRun,
+  type TriggerDeps,
+} from "./start.js";
 
 /** Command names that saved workflows may not claim. */
 export const RESERVED_COMMAND_NAMES = new Set([
@@ -115,7 +118,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       const lines = ["## Agents", ""];
       if (discovery.agents.length === 0) {
         lines.push(
-          "No agent profiles found. Workflows can still delegate with anonymous ad-hoc agents (omit the agent name). To define a reusable persona, create `.pi/agents/<name>.md` or `~/.pi/agent/agents/<name>.md`.",
+          "No agent profiles found. Workflows can still delegate with anonymous ad-hoc agents (omit `profile`). To define a reusable persona, create `.pi/agents/<name>.md` or `~/.pi/agent/agents/<name>.md`.",
         );
       }
       for (const agent of discovery.agents) {
@@ -243,7 +246,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         .map((node) => ({
           value: [done[0], node.instance].join(" "),
           label: nodeDisplayName(node),
-          description: node.agent ?? "ad-hoc",
+          description: node.profile ?? "ad-hoc",
         }))
         .filter((completion) => completion.label.startsWith(partial));
     },
@@ -474,7 +477,7 @@ function nodeRow(node: NodeView, color: Colorize): string {
   const usage = formatUsage(
     node.usage ?? (node.status === "running" ? node.progressUsage : undefined),
   );
-  return `${icon} ${nodeDisplayName(node).padEnd(12)}  ${(node.agent ?? "ad-hoc").padEnd(10)}  ${node.status.padEnd(9)}${usage ? `  ${color("dim", usage)}` : ""}`;
+  return `${icon} ${nodeDisplayName(node).padEnd(12)}  ${(node.profile ?? "ad-hoc").padEnd(10)}  ${node.status.padEnd(9)}${usage ? `  ${color("dim", usage)}` : ""}`;
 }
 
 function runRow(run: RunView, color: Colorize, deps: CommandDeps): string {
@@ -494,7 +497,7 @@ function nodeHeaderLine(run: RunView, node: NodeView, color: Colorize): string {
   const parts = [
     shortId(run.header.id),
     nodeDisplayName(node),
-    node.agent ?? "ad-hoc",
+    node.profile ?? "ad-hoc",
     formatElapsed((node.endedAt ?? Date.now()) - node.startedAt),
     formatUsage(node.usage) || undefined,
     node.status === "running" ? node.progressTool : undefined,
@@ -686,14 +689,8 @@ function runAction(
   if (key === "r") {
     deps.notifications.setContext(ctx);
     try {
-      const started = startTriggeredRun(deps, {
-        flow: run.header.flow,
-        cwd: run.header.cwd ?? ctx.cwd,
-        scope: run.header.scope,
-        label: run.header.label,
-        display: run.header.display,
-        budgets: run.header.budgets,
-        source: run.header.source,
+      const started = rerunTriggeredRun(deps, {
+        header: run.header,
         ctx,
         background: true,
       });
@@ -1004,7 +1001,7 @@ function buildAgentsSpec(
   return {
     title: "Agents",
     emptyText:
-      "No agent profiles found. Workflows can still delegate with anonymous ad-hoc agents (omit the agent name). For a reusable persona, create .pi/agents/<name>.md or ~/.pi/agent/agents/<name>.md.",
+      "No agent profiles found. Workflows can still delegate with anonymous ad-hoc agents (omit `profile`). For a reusable persona, create .pi/agents/<name>.md or ~/.pi/agent/agents/<name>.md.",
     footer: "↑↓ move · ⏎ inspect · n new · esc close",
     items: () => discoverAgents(ctx.cwd, scopeFor(ctx)).agents,
     keyOf: (agent) => `${agent.source}:${agent.name}`,
@@ -1222,14 +1219,14 @@ export type NodeLookup =
   | { kind: "ambiguous"; matches: NodeView[] }
   | { kind: "missing" };
 
-/** Resolve a node reference: exact instance path, display name, or agent name. */
+/** Resolve a node reference by instance path, display name, or profile. */
 export function findNodeInRun(run: RunView, ref: string): NodeLookup {
   const nodes = workNodes(run);
   const byInstance = nodes.find((node) => node.instance === ref);
   if (byInstance) return { kind: "found", node: byInstance };
   for (const match of [
     nodes.filter((node) => nodeDisplayName(node) === ref),
-    nodes.filter((node) => node.agent === ref),
+    nodes.filter((node) => node.profile === ref),
   ]) {
     if (match.length === 1)
       return { kind: "found", node: match[0] as NodeView };
@@ -1250,8 +1247,8 @@ export function formatRunNodesList(run: RunView): string {
   const nameWidth = Math.max(
     ...nodes.map((node) => nodeDisplayName(node).length),
   );
-  const agentWidth = Math.max(
-    ...nodes.map((node) => (node.agent ?? "ad-hoc").length),
+  const profileWidth = Math.max(
+    ...nodes.map((node) => (node.profile ?? "ad-hoc").length),
   );
   const rows: string[] = [];
   for (const node of nodes) {
@@ -1263,7 +1260,7 @@ export function formatRunNodesList(run: RunView): string {
     rows.push(
       [
         `${icon} ${nodeDisplayName(node).padEnd(nameWidth)}`,
-        (node.agent ?? "ad-hoc").padEnd(agentWidth),
+        (node.profile ?? "ad-hoc").padEnd(profileWidth),
         node.status.padEnd(9),
         [usage, elapsed].filter(Boolean).join("  "),
       ]
@@ -1281,7 +1278,7 @@ export function formatRunNodesList(run: RunView): string {
 /** The complete output of one work node, mirroring formatRunResultFull. */
 export function formatNodeResultFull(run: RunView, node: NodeView): string {
   const lines = [
-    `## Run ${shortId(run.header.id)} — ${nodeDisplayName(node)} (${node.agent ?? "ad-hoc"})`,
+    `## Run ${shortId(run.header.id)} — ${nodeDisplayName(node)} (${node.profile ?? "ad-hoc"})`,
     "",
     `- status: ${node.status}${node.cancelReason ? ` (${node.cancelReason})` : ""}`,
   ];
@@ -1346,7 +1343,7 @@ export function completeRunArgs(
     return complete(
       workNodes(run).map((node) => ({
         token: nodeDisplayName(node),
-        description: node.agent ?? "ad-hoc",
+        description: node.profile ?? "ad-hoc",
       })),
     );
   }
@@ -1362,6 +1359,9 @@ export function formatRunDetails(run: RunView, fullValue = false): string {
     `- started: ${new Date(run.createdAt).toLocaleString()}`,
   ];
   if (run.header.display) lines.push(`- display: \`${run.header.display}\``);
+  for (const warning of run.header.warnings ?? []) {
+    lines.push(`- warning: ${warning}`);
+  }
   if (run.usage)
     lines.push(
       `- usage: ${formatUsage(run.usage)}${run.agents ? `, ${run.agents} agent(s)` : ""}`,
@@ -1483,26 +1483,20 @@ async function runWorkflowCommand(
   );
   deps.notifications.setContext(ctx);
   try {
-    const flow = validateFlow(
-      { kind: "workflow", name: wf.name, params: escaped },
-      {
-        resolveWorkflow: (candidate) =>
-          resolveWorkflowByName(workflows, candidate),
-      },
-    );
     // Command runs always go to the background; the result arrives as an
     // idle notification.
-    startTriggeredRun(deps, {
-      flow,
-      cwd: ctx.cwd,
-      scope: "both",
-      label: wf.name,
-      display: wf.display,
-      source: { kind: "command", workflow: wf.name },
+    const started = launchTriggeredRun(deps, {
+      request: {
+        workflow: wf.name,
+        params: escaped,
+        label: wf.name,
+        cwd: ctx.cwd,
+      },
+      source: { kind: "command" },
       ctx,
       background: true,
     });
-    const savedFlowTree = renderFlowTree(flow);
+    const savedFlowTree = renderFlowTree(started.plan.flow);
     sendInfo(
       pi,
       formatWorkflowCallPreview(

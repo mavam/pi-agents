@@ -9,12 +9,17 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { buildModelCatalog, createModelRefresher } from "./catalog/models.js";
-import { buildSystemPromptAppendix } from "./catalog/prompt.js";
+import {
+  buildModelCatalog,
+  createModelRefresher,
+  resolveModelReference,
+} from "./catalog/models.js";
 import {
   createSubprocessSpawnEngine,
   DEPTH_ENV_VAR,
 } from "./engine/subprocess.js";
+import { PromptAppendixCache } from "./presentation/prompt.js";
+import { CatalogCache, createProfileAvailability } from "./run/invocation.js";
 import {
   getSessionFile,
   isProjectTrusted,
@@ -98,6 +103,7 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
     attach: (ctx, runId, instance) => focus.attach(ctx, runId, instance),
   };
   const refreshModels = createModelRefresher();
+  const promptAppendices = new PromptAppendixCache();
 
   registerRenderers(pi);
   pi.registerTool(createWorkflowCreateTool(deps));
@@ -133,12 +139,23 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
     notifications.setContext(ctx);
     refreshModels(ctx.modelRegistry);
     const modelCatalog = buildModelCatalog(ctx.modelRegistry);
+    const trusted = isProjectTrusted(ctx);
+    const appendix = promptAppendices.get(ctx.cwd, trusted, modelCatalog, () =>
+      createProfileAvailability({
+        cwd: ctx.cwd,
+        scope: trusted ? "both" : "user",
+        trusted,
+        catalogs: new CatalogCache(),
+        resolveModel: (ref) => resolveModelReference(ref, modelCatalog),
+      }),
+    );
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPromptAppendix(ctx.cwd, isProjectTrusted(ctx), modelCatalog)}`,
+      systemPrompt: `${event.systemPrompt}\n\n${appendix}`,
     };
   });
 
   pi.on("session_start", (_event, ctx) => {
+    promptAppendices.clear();
     refreshModels(ctx.modelRegistry);
     rpc.setContext(ctx);
     focus.install(ctx);

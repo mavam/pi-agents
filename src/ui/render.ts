@@ -11,9 +11,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { SpawnUsage } from "../engine/types.js";
-import { resolvePath } from "../model/interpolate.js";
 import { parseFlowNode } from "../model/validate.js";
 import { valueText } from "../model/value.js";
+import { PROTOCOL_VERSION } from "../protocol.js";
 import type { RunSource, RunStatus } from "../run/events.js";
 import type { NodeView, RunView } from "../run/state.js";
 import { STATUS_STYLES } from "./status.js";
@@ -25,17 +25,16 @@ export const NOTIFICATION_TYPE = "pi-agents:notification";
 
 interface RunNotificationBase {
   kind: "run_final";
-  version: 2;
+  protocol: typeof PROTOCOL_VERSION;
   runId: string;
   label?: string;
   usage?: string;
   agents: number;
-  /** Earlier version-2 notifications omit this and are treated as not copyable. */
-  copyable?: boolean;
+  copyable: boolean;
   at: number;
 }
 
-/** Versioned display data for final-run notifications. Message content remains
+/** Protocol-tagged data for final-run notifications. Message content remains
  * the model-facing source of truth; these fields drive only the TUI card. */
 export type RunNotificationDetails = RunNotificationBase &
   (
@@ -59,12 +58,12 @@ function isRunNotificationDetails(
   const details = value as Record<string, unknown>;
   if (
     details.kind !== "run_final" ||
-    details.version !== 2 ||
+    details.protocol !== PROTOCOL_VERSION ||
     typeof details.runId !== "string" ||
     (details.label !== undefined && typeof details.label !== "string") ||
     (details.usage !== undefined && typeof details.usage !== "string") ||
     typeof details.agents !== "number" ||
-    (details.copyable !== undefined && typeof details.copyable !== "boolean") ||
+    typeof details.copyable !== "boolean" ||
     typeof details.at !== "number"
   ) {
     return false;
@@ -310,39 +309,6 @@ export function formatValuePreview(value: unknown, maxChars = 400): string {
   return `${text.slice(0, maxChars)}…`;
 }
 
-export interface SelectedDisplayValue {
-  /** The declared Markdown string, or the original value as a fallback. */
-  value: unknown;
-  /** Whether the declared path resolved to a string. */
-  selected: boolean;
-  /** Why a declared path fell back to the raw value. */
-  warning?: string;
-}
-
-/** Select a run's declared human-facing Markdown result. */
-export function selectDisplayValue(
-  value: unknown,
-  display: string | undefined,
-): SelectedDisplayValue {
-  if (!display) return { value, selected: false };
-  const resolved = resolvePath(value, display.split("."));
-  if (!resolved.found) {
-    return {
-      value,
-      selected: false,
-      warning: `Display path \`${display}\` was not found; showing the raw result.`,
-    };
-  }
-  if (typeof resolved.value !== "string") {
-    return {
-      value,
-      selected: false,
-      warning: `Display path \`${display}\` resolved to a non-string value; showing the raw result.`,
-    };
-  }
-  return { value: resolved.value, selected: true };
-}
-
 /** Wrap text in a code fence long enough to contain embedded backticks. */
 export function fenced(text: string, language?: string): string {
   const runs = text.match(/`+/g) ?? [];
@@ -360,10 +326,10 @@ export function renderResultValue(value: unknown, text: string): string {
  * Short human name for a node instance path: `$.branches.bugs` → `bugs`,
  * `$.reduce` → `reduce`, `$.body@2` → `@2`, `$.steps[1].body#3` → `2#3`,
  * `$.cases[0].then` → `case 1`, `$.else` → `else`.
- * A bare-agent root (`$`) falls back to the label, agent name, or kind.
+ * A bare-agent root (`$`) falls back to its label, profile, or kind.
  */
 export function nodeDisplayName(
-  node: Pick<NodeView, "instance" | "label" | "agent" | "kind">,
+  node: Pick<NodeView, "instance" | "label" | "profile" | "kind">,
 ): string {
   const name = node.instance
     .replace(/^\$/, "")
@@ -375,7 +341,7 @@ export function nodeDisplayName(
     )
     .replaceAll(".body", "")
     .replace(/^\./, "");
-  return name || (node.label ?? node.agent ?? node.kind);
+  return name || (node.label ?? node.profile ?? node.kind);
 }
 
 export function formatRunOverviewLine(run: RunView): string {

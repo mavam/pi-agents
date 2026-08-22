@@ -5,8 +5,8 @@ import { emptyUsage } from "../src/engine/types.js";
 import type { WorkflowDef } from "../src/model/ast.js";
 import { resultValueError } from "../src/model/json-schema.js";
 import {
-  collectAgentNames,
   collectInvocations,
+  collectProfileNames,
   validateFlow,
 } from "../src/model/validate.js";
 import type { AgentCall } from "../src/run/interpreter.js";
@@ -95,7 +95,7 @@ describe("project review workflows", () => {
     expect(workflows.get("review-fix")?.display).toBe("report");
     for (const name of workflows.keys()) {
       const flow = expandedWorkflow(name);
-      expect([...collectAgentNames(flow)]).toEqual([]);
+      expect([...collectProfileNames(flow)]).toEqual([]);
       for (const invocation of collectInvocations(flow)) {
         expect(invocation.skills).toEqual([]);
       }
@@ -116,7 +116,7 @@ describe("project review workflows", () => {
     expect(outcome.value).not.toHaveProperty("review");
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      agent: undefined,
+      profile: undefined,
       thinking: "high",
     });
     expect(calls[0]?.resultSchema).toMatchObject({ type: "object" });

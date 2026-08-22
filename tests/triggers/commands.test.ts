@@ -31,15 +31,15 @@ import { formatRunSource, nodeDisplayName } from "../../src/ui/render.js";
 const REVIEW_FLOW = {
   kind: "parallel",
   branches: {
-    bugs: { kind: "agent", name: "reviewer", task: "bugs" },
-    clarity: { kind: "agent", name: "reviewer", task: "clarity" },
+    bugs: { kind: "agent", profile: "reviewer", task: "bugs" },
+    clarity: { kind: "agent", profile: "reviewer", task: "clarity" },
   },
-  reduce: { agent: "worker", task: "merge {branches}" },
+  reduce: { profile: "worker", task: "merge {branches}" },
 };
 
 async function recordedRun(
   raw: unknown,
-  handler: (agent: string | undefined, task: string) => unknown,
+  handler: (profile: string | undefined, task: string) => unknown,
   keep: (event: RunEvent) => boolean = () => true,
 ): Promise<RunView> {
   const flow = validateFlow(raw);
@@ -48,7 +48,7 @@ async function recordedRun(
     runId: "run-1234-abcd",
     flow,
     label: "review",
-    runAgent: async (call) => ({ value: handler(call.agent, call.task) }),
+    runAgent: async (call) => ({ value: handler(call.profile, call.task) }),
     emit: (event) => events.push(event),
   });
   const run = rebuildRunState(events.filter(keep)).runs.get("run-1234-abcd");
@@ -210,9 +210,11 @@ describe("nodeDisplayName", () => {
     expect(nodeDisplayName(node(instance))).toBe(expected);
   });
 
-  test("bare-agent root falls back to label, agent, then kind", () => {
+  test("bare-agent root falls back to label, profile, then kind", () => {
     expect(nodeDisplayName(node("$", { label: "scout" }))).toBe("scout");
-    expect(nodeDisplayName(node("$", { agent: "reviewer" }))).toBe("reviewer");
+    expect(nodeDisplayName(node("$", { profile: "reviewer" }))).toBe(
+      "reviewer",
+    );
     expect(nodeDisplayName(node("$"))).toBe("agent");
   });
 });
@@ -253,7 +255,7 @@ describe("workNodes", () => {
 });
 
 describe("findNodeInRun", () => {
-  test("matches by instance path, display name, and agent name", async () => {
+  test("matches by instance path, display name, and profile", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
     const byInstance = findNodeInRun(run, "$.branches.bugs");
     expect(byInstance.kind).toBe("found");
@@ -265,7 +267,7 @@ describe("findNodeInRun", () => {
     expect(byAgent.kind === "found" && byAgent.node.kind).toBe("reduce");
   });
 
-  test("ambiguous agent names list candidates", async () => {
+  test("ambiguous profiles list candidates", async () => {
     const run = await recordedRun(REVIEW_FLOW, () => "ok");
     const lookup = findNodeInRun(run, "reviewer");
     expect(lookup.kind).toBe("ambiguous");

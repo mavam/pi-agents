@@ -33,7 +33,7 @@ export function toMermaid(flow: FlowNode): string {
       case "agent": {
         const id = nextId();
         lines.push(
-          `  ${id}["${escapeLabel(node.label ?? node.name ?? ADHOC_LABEL)}"]`,
+          `  ${id}["${escapeLabel(node.label ?? node.profile ?? ADHOC_LABEL)}"]`,
         );
         return { entry: id, exit: id };
       }
@@ -63,7 +63,7 @@ export function toMermaid(flow: FlowNode): string {
         if (node.reduce) {
           const reduce = nextId();
           lines.push(
-            `  ${reduce}["reduce: ${escapeLabel(node.reduce.agent ?? ADHOC_LABEL)}"]`,
+            `  ${reduce}["reduce: ${escapeLabel(node.reduce.profile ?? ADHOC_LABEL)}"]`,
           );
           lines.push(`  ${join} --> ${reduce}`);
           exit = reduce;
@@ -82,7 +82,7 @@ export function toMermaid(flow: FlowNode): string {
         if (node.reduce) {
           const reduce = nextId();
           lines.push(
-            `  ${reduce}["reduce: ${escapeLabel(node.reduce.agent ?? ADHOC_LABEL)}"]`,
+            `  ${reduce}["reduce: ${escapeLabel(node.reduce.profile ?? ADHOC_LABEL)}"]`,
           );
           lines.push(`  ${join} --> ${reduce}`);
           exit = reduce;

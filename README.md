@@ -56,8 +56,8 @@ The model can create an inline workflow without any agent or workflow files:
 }
 ```
 
-An agent without a `name` is an anonymous, ad-hoc agent. It inherits the
-current model and thinking level unless the node overrides them.
+An agent without a `profile` is anonymous and ad hoc. It inherits the current
+model and thinking level unless the node overrides them.
 
 ## 📖 Core concepts
 
@@ -146,7 +146,7 @@ Reference it from a workflow:
 
 ```yaml
 kind: agent
-name: planner
+profile: planner
 task: Plan the requested change
 ```
 
@@ -233,16 +233,26 @@ text argument; use `workflow_create` when you need several named parameters.
 
 ### Human-facing results
 
-A workflow can return structured data while presenting one Markdown field to
-the user. Set `display` to that field's dot path:
+A run can return structured data while presenting one Markdown string to the
+user. The default is the `report` convention: when a structured result
+contains a top-level `report` string, completion cards and
+`/workflow <id> result` render it as Markdown. Without `report`, the UI shows
+the complete structured result. Parent workflows always receive the complete
+value. `workflow_result` returns the complete value by default and applies the
+human-facing selection only with `view: "presented"`; use `/workflow <id> raw`
+to inspect it in the UI.
+
+Saved workflows may instead pin an explicit dot path with `display`, which
+overrides the convention:
 
 ```yaml
 display: report
 ```
 
-Completion cards and `/workflow <id> result` show the selected field. Parent
-workflows and `workflow_result` still receive the complete value. Use
-`/workflow <id> raw` to inspect it.
+Request-time presentation settings are best effort. An invalid `display` or
+`label`, or a `display` path that is missing from the completed value, produces
+a run warning and falls back without failing execution. Saved workflow files
+validate `display` strictly and report malformed definitions in the catalog.
 
 ### Agent results
 
@@ -572,9 +582,10 @@ await agents.stop(runId);
 stopListening();
 ```
 
-The client supports `start`, `stop`, `list`, and `onRunEvent`. Runs started by
-extensions obey the current session's budgets, resource scope, and project
-trust settings.
+The client supports `start`, `stop`, `list`, and `onRunEvent`. A successful
+`start` response may include `warnings` for recoverable request problems. Runs
+started by extensions obey the current session's budgets, resource scope, and
+project trust settings.
 
 ## 🧰 Requirements
 

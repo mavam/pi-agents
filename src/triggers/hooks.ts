@@ -20,10 +20,9 @@ import {
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
 import type { WorkflowDef } from "../model/ast.js";
-import { validateFlow } from "../model/validate.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { sendInfo } from "../ui/render.js";
-import { startTriggeredRun, type TriggerDeps } from "./start.js";
+import { launchTriggeredRun, type TriggerDeps } from "./start.js";
 
 const MAX_EVENT_JSON_CHARS = 4000;
 const DROPPED_EVENT_KEYS = new Set([
@@ -144,39 +143,29 @@ export class HookManager {
     try {
       // Re-resolve so file edits between trigger and fire apply; trust may
       // also have changed between debounce scheduling and firing.
+      const trusted = isProjectTrusted(ctx);
       const { workflows } = discoverWorkflows(
         ctx.cwd,
-        isProjectTrusted(ctx) ? "both" : "user",
+        trusted ? "both" : "user",
       );
       const wf = resolveWorkflowByName(workflows, name);
       if (!wf?.on?.includes(eventName)) return;
-      const flow = validateFlow(
-        {
-          kind: "workflow",
-          name: wf.name,
+      this.deps.notifications.setContext(ctx);
+      launchTriggeredRun(this.deps, {
+        request: {
+          workflow: wf.name,
           params: {
             event: escapeBraces(
               compactEventJson({ type: eventName, ...(event as object) }),
             ),
           },
+          label: `${wf.name} (on ${eventName})`,
+          cwd: ctx.cwd,
         },
-        {
-          resolveWorkflow: (candidate) =>
-            resolveWorkflowByName(workflows, candidate),
-        },
-      );
-      this.deps.notifications.setContext(ctx);
-      const started = startTriggeredRun(this.deps, {
-        flow,
-        cwd: ctx.cwd,
-        scope: "both",
-        label: `${wf.name} (on ${eventName})`,
-        display: wf.display,
-        source: { kind: "hook", workflow: wf.name, event: eventName },
+        source: { kind: "hook", event: eventName },
         ctx,
         background: true,
       });
-      void started;
     } catch (error) {
       sendInfo(
         this.pi,

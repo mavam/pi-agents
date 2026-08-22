@@ -12,7 +12,7 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import {
   discoverWorkflows,
@@ -341,6 +341,8 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
               error: live.error ?? result.details.error,
             }
           : result.details;
+      // A live run needs no status line; the workflow widget shows progress.
+      if (details.status === "running") return new Container();
       return new Text(
         formatResultPreview({ details, text }, options.expanded, color),
         1,

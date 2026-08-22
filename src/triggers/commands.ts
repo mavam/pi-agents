@@ -35,7 +35,7 @@ import {
   formatRunSource,
   formatUsage,
   formatValuePreview,
-  formatWorkflowStartPreview,
+  formatWorkflowCallPreview,
   nodeDisplayName,
   renderResultValue,
   selectDisplayValue,
@@ -1492,7 +1492,7 @@ async function runWorkflowCommand(
     );
     // Command runs always go to the background; the result arrives as an
     // idle notification.
-    const started = startTriggeredRun(deps, {
+    startTriggeredRun(deps, {
       flow,
       cwd: ctx.cwd,
       scope: "both",
@@ -1505,11 +1505,11 @@ async function runWorkflowCommand(
     const savedFlowTree = renderFlowTree(flow);
     sendInfo(
       pi,
-      formatWorkflowStartPreview(
+      formatWorkflowCallPreview(
         { name: wf.name, params: values },
-        started.runId,
+        undefined,
         savedFlowTree,
-      ),
+      ) || "workflow",
     );
   } catch (error) {
     sendInfo(pi, `⚠ ${error instanceof Error ? error.message : String(error)}`);

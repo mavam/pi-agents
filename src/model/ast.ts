@@ -17,18 +17,6 @@ export type WorkflowSource = Source | "bundled";
 
 export type Scope = Source | "both";
 
-/** Dot path to a human-facing Markdown string in a workflow's final value. */
-const DISPLAY_PATH_RE = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
-
-/** Validate and normalize optional run-level presentation metadata. */
-export function normalizeDisplayPath(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string" || !DISPLAY_PATH_RE.test(value.trim())) {
-    throw new Error("Invalid 'display' (must be a non-empty dot path)");
-  }
-  return value.trim();
-}
-
 /**
  * Clamp a discovery scope by project trust: untrusted projects contribute no
  * agents or workflows, so everything degrades to user scope.

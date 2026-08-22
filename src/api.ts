@@ -77,6 +77,8 @@ export interface PingRpcData {
 
 export interface StartRpcData {
   runId: string;
+  /** Recoverable request problems; the run started despite them. */
+  warnings?: string[];
 }
 
 export interface StopRpcData {

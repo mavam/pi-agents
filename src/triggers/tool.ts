@@ -14,20 +14,15 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
-import {
-  discoverWorkflows,
-  resolveWorkflowByName,
-} from "../catalog/workflows.js";
-import {
-  type Budgets,
-  effectiveScope,
-  normalizeDisplayPath,
-  type Scope,
-} from "../model/ast.js";
-import { validateFlow } from "../model/validate.js";
+import type { Budgets, Scope } from "../model/ast.js";
 import { truncateModelResult, valueText } from "../model/value.js";
 import type { RunStatus } from "../run/events.js";
 import type { RunOutcome } from "../run/interpreter.js";
+import {
+  coerceInlineFlow,
+  expandSavedFlow,
+  prepareLaunch,
+} from "../run/launch.js";
 import { isProjectTrusted } from "../run/persist.js";
 import {
   formatUsage,
@@ -75,23 +70,7 @@ Data flows ONLY through explicit references: "as":"x" names a step's value; late
 export const FLOW_PARAM_DESCRIPTION =
   'Inline flow expression to run (instead of "name"). Node grammar: see the tool description.';
 
-/**
- * Some tool-calling harnesses serialize loosely-typed parameters as JSON
- * text instead of structured objects. Accept a stringified flow by parsing
- * it back into a value before validation.
- */
-export function coerceInlineFlow(flow: unknown): unknown {
-  if (typeof flow !== "string") return flow;
-  const trimmed = flow.trim();
-  if (!trimmed.startsWith("{")) return flow;
-  try {
-    return JSON.parse(trimmed);
-  } catch (err) {
-    throw new Error(
-      `invalid flow: "flow" arrived as a string that is not valid JSON (${err instanceof Error ? err.message : String(err)})`,
-    );
-  }
-}
+export { coerceInlineFlow };
 
 const WorkflowCreateParams = Type.Object({
   name: Type.Optional(
@@ -116,7 +95,7 @@ const WorkflowCreateParams = Type.Object({
   display: Type.Optional(
     Type.String({
       description:
-        "Dot path to a Markdown string in the final value for human-facing rendering. Numeric segments index arrays. Overrides a saved workflow's display path. The complete value remains available to machine consumers and workflow_result with view raw.",
+        'Deprecated: prefer a top-level "report" string in the final result. Dot path to a Markdown string in the final value for human-facing rendering; overrides a saved workflow\'s display path. Invalid paths degrade to a warning.',
     }),
   ),
   budgets: Type.Optional(
@@ -228,20 +207,9 @@ export function resolveSavedFlowTree(
   cwd: string,
   color?: ToolColorize,
 ): string | undefined {
-  try {
-    const { workflows } = discoverWorkflows(cwd, "both");
-    const def = resolveWorkflowByName(workflows, name);
-    if (!def) return undefined;
-    const expanded = validateFlow(structuredClone(def.flow) as unknown, {
-      resolveWorkflow: (candidate) =>
-        resolveWorkflowByName(workflows, candidate),
-      selfName: def.name,
-      params: def.params,
-    });
-    return renderWorkflowTree(def.name, expanded, color);
-  } catch {
-    return undefined;
-  }
+  const expanded = expandSavedFlow(name, cwd);
+  if (!expanded) return undefined;
+  return renderWorkflowTree(expanded.name, expanded.flow, color);
 }
 
 export function formatRunResult(
@@ -283,7 +251,7 @@ export function createWorkflowCreateTool(
 
 ${USE_GATE}
 
-Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flow" for an inline expression. A top-level "display":"path.to.markdown" selects a string from the final value for human-facing Markdown rendering while preserving the complete value for the calling model, parent workflows, and raw inspection. ${FLOW_REFERENCE}`,
+Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flow" for an inline expression. For a human-facing Markdown summary of a structured result, have the final agent include a top-level "report" string in its "json" schema; the UI renders it while the complete value stays available to machine consumers. ${FLOW_REFERENCE}`,
     promptSnippet:
       "Create a workflow run of delegated agents — only when the user explicitly asks for delegation",
     promptGuidelines: [
@@ -296,7 +264,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
       "Request a skill by name on the node that needs it. An unknown skill fails the run before anything spawns, so do not guess names; take them from <available_skills>.",
       "An unknown model fails the run before anything spawns; take identifiers from <models>.",
       'In flows, thread data explicitly: bind sequence steps with "as" and reference {name}/{previous} in later tasks; declare a concrete "json" schema when downstream steps need structured access.',
-      "When workflow_create returns structured data with a human-readable Markdown field, set its top-level display to that field's dot path; display changes presentation only and preserves the complete result.",
+      'For a human-facing Markdown result, give the final agent a "json" schema with a top-level "report" string; the UI renders it while the complete structured value is preserved for machine consumers.',
     ],
     parameters: WorkflowCreateParams,
     renderCall(args, theme, context) {
@@ -356,47 +324,21 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
       _onUpdate,
       ctx: ExtensionContext,
     ) {
-      const provided = [
-        params.name !== undefined,
-        params.flow !== undefined,
-      ].filter(Boolean).length;
-      if (provided !== 1) {
-        throw new Error(
-          'pass exactly one of "name" (saved workflow) or "flow" (inline expression)',
-        );
-      }
-      const cwd = params.cwd ?? ctx.cwd;
-      const trusted = isProjectTrusted(ctx);
-      if (!trusted && params.scope === "project") {
-        throw new Error(
-          "scope 'project' is unavailable: this project is not trusted, so project-local agents and workflows cannot run",
-        );
-      }
-      const scope = effectiveScope(params.scope as Scope | undefined, trusted);
-      const { workflows } = discoverWorkflows(cwd, scope);
-      const resolveWorkflow = (name: string) =>
-        resolveWorkflowByName(workflows, name);
-
-      let raw: unknown;
-      let label = params.label;
-      const requestedDisplay = normalizeDisplayPath(params.display);
-      let display = requestedDisplay;
-      if (params.name !== undefined) {
-        const def = resolveWorkflow(params.name);
-        if (!def) {
-          const available = workflows.map((wf) => wf.name).join(", ") || "none";
-          throw new Error(
-            `unknown workflow '${params.name}'. Available: ${available}`,
-          );
-        }
-        raw = { kind: "workflow", name: def.name, params: params.params ?? {} };
-        label = label ?? def.name;
-        display = requestedDisplay ?? def.display;
-      } else {
-        raw = coerceInlineFlow(params.flow);
-      }
-
-      const flow = validateFlow(raw, { resolveWorkflow });
+      const plan = prepareLaunch({
+        flow: params.flow,
+        workflow: params.name,
+        params: params.params,
+        label: params.label,
+        display: params.display,
+        cwd: params.cwd ?? ctx.cwd,
+        scope: params.scope as Scope | undefined,
+        trusted: isProjectTrusted(ctx),
+        budgets: params.budgets as Budgets | undefined,
+      });
+      const label = plan.label;
+      const warningsText = plan.warnings.length
+        ? `\n${plan.warnings.map((warning) => `Warning: ${warning}`).join("\n")}`
+        : "";
       // Interactive sessions background immediately: the tool returns right
       // away, progress shows in the widget, and the result arrives as an
       // idle notification. Headless modes stay foreground.
@@ -405,13 +347,13 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
       // background runs; print/JSON/RPC modes must await nested workflows.
       const background = ctx.mode === "tui";
       const { runId, done } = startTriggeredRun(deps, {
-        flow,
-        cwd,
-        scope,
+        flow: plan.flow,
+        cwd: plan.cwd,
+        scope: plan.scope,
         label,
-        display,
-        budgets: params.budgets as Budgets | undefined,
-        source: { kind: "tool", workflow: params.name },
+        display: plan.display,
+        budgets: plan.budgets,
+        source: { kind: "tool", workflow: plan.workflowName },
         ctx,
         background,
       });
@@ -422,7 +364,7 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
           content: [
             {
               type: "text",
-              text: `Started workflow run ${id}${label ? ` (${label})` : ""} in the background. End your turn now — do not wait for it. When the run finishes you will be re-invoked with its result to continue. Use workflow_inspect or workflow_result with run ${id} if you need to query it later.`,
+              text: `Started workflow run ${id}${label ? ` (${label})` : ""} in the background. End your turn now — do not wait for it. When the run finishes you will be re-invoked with its result to continue. Use workflow_inspect or workflow_result with run ${id} if you need to query it later.${warningsText}`,
             },
           ],
           details: { runId, status: "running", label },
@@ -436,7 +378,10 @@ Once requested: pass EITHER "name" (+ "params") to run a saved workflow, OR "flo
         const outcome = await done;
         return {
           content: [
-            { type: "text", text: formatRunResult(runId, label, outcome) },
+            {
+              type: "text",
+              text: formatRunResult(runId, label, outcome) + warningsText,
+            },
           ],
           details: {
             runId,

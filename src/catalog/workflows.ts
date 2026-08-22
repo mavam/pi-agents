@@ -22,12 +22,13 @@ import type {
   WorkflowParamDef,
   WorkflowSource,
 } from "../model/ast.js";
-import { IDENTIFIER_RE, normalizeDisplayPath } from "../model/ast.js";
+import { IDENTIFIER_RE } from "../model/ast.js";
 import {
   FlowValidationError,
   parseFlowNode,
   validateFlow,
 } from "../model/validate.js";
+import { normalizeDisplayPath } from "../ui/display.js";
 import type { Diagnostic } from "./agents.js";
 import {
   applyBundledWorkflowsSetting,

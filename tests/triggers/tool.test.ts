@@ -334,24 +334,27 @@ describe("workflow_create tool", () => {
     ).toBe("summary");
   });
 
-  test("rejects an invalid display path before starting a run", async () => {
+  test("an invalid display path degrades to a warning and still starts", async () => {
     const { engine } = fakeEngine(() => "ok");
     const deps = makeDeps(engine);
     const tool = createWorkflowTool(deps);
 
-    await expect(
-      tool.execute(
-        "t-invalid-display",
-        {
-          flow: { kind: "agent", task: "review" },
-          display: "review markdown",
-        },
-        undefined,
-        undefined,
-        ctx(),
-      ),
-    ).rejects.toThrow("Invalid 'display'");
-    expect(deps.manager.state.runs.size).toBe(0);
+    const result = await tool.execute(
+      "t-invalid-display",
+      {
+        flow: { kind: "agent", task: "review" },
+        display: "review markdown",
+      },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(deps.manager.state.runs.size).toBe(1);
+    const run = deps.manager.state.runs.get(result.details.runId);
+    expect(run?.header.display).toBeUndefined();
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("Warning: Ignored invalid 'display'");
   });
 
   test("passes the agent tools allowlist to the engine", async () => {
@@ -1656,20 +1659,21 @@ describe("workflow_create tool description", () => {
     }
   });
 
-  test("the schema explains human-facing display selection", () => {
+  test("the schema teaches the report convention and deprecates display", () => {
     const tool = createWorkflowTool(makeDeps(inertEngine));
     const schema = tool.parameters as unknown as {
       properties: { display: { type: string; description?: string } };
     };
 
     expect(schema.properties.display).toMatchObject({ type: "string" });
+    expect(schema.properties.display.description).toContain("Deprecated");
     expect(schema.properties.display.description).toContain(
-      "Markdown string in the final value",
+      "degrade to a warning",
     );
-    expect(tool.description).toContain('"display":"path.to.markdown"');
+    expect(tool.description).toContain('top-level "report" string');
     expect(
       tool.promptGuidelines?.some((line) =>
-        line.includes("structured data with a human-readable Markdown field"),
+        line.includes('top-level "report" string'),
       ),
     ).toBe(true);
   });

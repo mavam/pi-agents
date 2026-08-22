@@ -20,7 +20,7 @@ import {
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
 import type { WorkflowDef } from "../model/ast.js";
-import { validateFlow } from "../model/validate.js";
+import { prepareLaunch } from "../run/launch.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { sendInfo } from "../ui/render.js";
 import { startTriggeredRun, type TriggerDeps } from "./start.js";
@@ -144,34 +144,31 @@ export class HookManager {
     try {
       // Re-resolve so file edits between trigger and fire apply; trust may
       // also have changed between debounce scheduling and firing.
+      const trusted = isProjectTrusted(ctx);
       const { workflows } = discoverWorkflows(
         ctx.cwd,
-        isProjectTrusted(ctx) ? "both" : "user",
+        trusted ? "both" : "user",
       );
       const wf = resolveWorkflowByName(workflows, name);
       if (!wf?.on?.includes(eventName)) return;
-      const flow = validateFlow(
-        {
-          kind: "workflow",
-          name: wf.name,
-          params: {
-            event: escapeBraces(
-              compactEventJson({ type: eventName, ...(event as object) }),
-            ),
-          },
+      const plan = prepareLaunch({
+        workflow: wf.name,
+        params: {
+          event: escapeBraces(
+            compactEventJson({ type: eventName, ...(event as object) }),
+          ),
         },
-        {
-          resolveWorkflow: (candidate) =>
-            resolveWorkflowByName(workflows, candidate),
-        },
-      );
+        label: `${wf.name} (on ${eventName})`,
+        cwd: ctx.cwd,
+        trusted,
+      });
       this.deps.notifications.setContext(ctx);
       const started = startTriggeredRun(this.deps, {
-        flow,
-        cwd: ctx.cwd,
-        scope: "both",
-        label: `${wf.name} (on ${eventName})`,
-        display: wf.display,
+        flow: plan.flow,
+        cwd: plan.cwd,
+        scope: plan.scope,
+        label: plan.label,
+        display: plan.display,
         source: { kind: "hook", workflow: wf.name, event: eventName },
         ctx,
         background: true,

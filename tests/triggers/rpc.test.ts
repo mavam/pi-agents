@@ -314,15 +314,6 @@ describe("RpcManager", () => {
       },
       {
         protocol: PROTOCOL_VERSION,
-        id: "bad-display",
-        op: "start",
-        params: {
-          flow: { kind: "agent", task: "hello" },
-          display: "report title",
-        },
-      },
-      {
-        protocol: PROTOCOL_VERSION,
         id: "bad-cwd",
         op: "start",
         params: { flow: { kind: "agent", task: "hello" }, cwd: "relative" },
@@ -337,6 +328,23 @@ describe("RpcManager", () => {
     for (const request of requests) {
       const reply = await call(bus, request);
       expect(reply.success).toBe(false);
+    }
+
+    // An invalid display path is recoverable: the run starts and the reply
+    // carries a warning instead of an error.
+    const softDisplay = await call(bus, {
+      protocol: PROTOCOL_VERSION,
+      id: "bad-display",
+      op: "start",
+      params: {
+        flow: { kind: "agent", task: "hello" },
+        display: "report title",
+      },
+    });
+    expect(softDisplay.success).toBe(true);
+    if (softDisplay.success) {
+      const data = softDisplay.data as { runId: string; warnings?: string[] };
+      expect(data.warnings?.[0]).toContain("Ignored invalid 'display'");
     }
   });
 

@@ -18,8 +18,8 @@ import {
   resolveWorkflowByName,
 } from "../catalog/workflows.js";
 import type { Scope, WorkflowDef } from "../model/ast.js";
-import { validateFlow } from "../model/validate.js";
 import { valueText } from "../model/value.js";
+import { prepareLaunch } from "../run/launch.js";
 import { isProjectTrusted } from "../run/persist.js";
 import { type NodeView, type RunView, workNodes } from "../run/state.js";
 import { canAttachNode, openAgentSession } from "../ui/console.js";
@@ -1483,26 +1483,26 @@ async function runWorkflowCommand(
   );
   deps.notifications.setContext(ctx);
   try {
-    const flow = validateFlow(
-      { kind: "workflow", name: wf.name, params: escaped },
-      {
-        resolveWorkflow: (candidate) =>
-          resolveWorkflowByName(workflows, candidate),
-      },
-    );
+    const plan = prepareLaunch({
+      workflow: wf.name,
+      params: escaped,
+      label: wf.name,
+      cwd: ctx.cwd,
+      trusted: scopeFor(ctx) === "both",
+    });
     // Command runs always go to the background; the result arrives as an
     // idle notification.
     startTriggeredRun(deps, {
-      flow,
-      cwd: ctx.cwd,
-      scope: "both",
-      label: wf.name,
-      display: wf.display,
+      flow: plan.flow,
+      cwd: plan.cwd,
+      scope: plan.scope,
+      label: plan.label,
+      display: plan.display,
       source: { kind: "command", workflow: wf.name },
       ctx,
       background: true,
     });
-    const savedFlowTree = renderFlowTree(flow);
+    const savedFlowTree = renderFlowTree(plan.flow);
     sendInfo(
       pi,
       formatWorkflowCallPreview(

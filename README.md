@@ -5,8 +5,9 @@ agent for a focused task, run several in parallel, or connect agents
 with sequences, maps, loops, conditions, and reducers.
 
 Every workflow node returns a value. Data moves between nodes only through
-references such as `{previous}`, `{review}`, or `{item}`. This keeps delegation
-predictable and makes workflows reusable.
+references such as `{previous}`, `{review}`, or `{item}`. Because nothing
+flows implicitly, Pi validates every reference before the run starts, and a
+broken data dependency fails before any agent spawns.
 
 ## 🚀 Installation
 
@@ -150,7 +151,7 @@ profile: planner
 task: Plan the requested change
 ```
 
-Agent profiles are discovered from:
+Pi-agents discovers agent profiles in:
 
 - User: `~/.pi/agent/agents`
 - Project: `<project>/.pi/agents`
@@ -373,7 +374,8 @@ params:
   target: "{previous}"
 ```
 
-Saved workflows are expanded into the caller's run. Cycles fail validation.
+Pi-agents expands saved workflows into the caller's run. Cycles fail
+validation.
 
 ## 🎛️ Budgets
 
@@ -405,9 +407,9 @@ Example:
 }
 ```
 
-When a limit is exceeded, the affected agent or run fails and preserves the
-latest available output. If you are attached to an agent, enforcement waits
-until you detach; usage accounting continues while you are attached.
+An agent or run that exceeds a limit fails and preserves the latest available
+output. If you are attached to an agent, enforcement waits until you detach;
+usage accounting continues while you are attached.
 
 ## 🧭 Run and inspect workflows
 
@@ -597,7 +599,7 @@ resources continue to work.
 ### Run history
 
 Run history belongs to the originating Pi session and survives reloads. After
-a Pi restart, unfinished runs are marked as stopped because delegated
+a Pi restart, pi-agents marks unfinished runs as stopped because delegated
 processes cannot resume. Completed history remains available through
 `/workflows`.
 

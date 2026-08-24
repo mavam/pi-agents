@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { validateFlow } from "../../src/model/validate.js";
 import type { RunEvent } from "../../src/run/events.js";
 import { executeFlow } from "../../src/run/interpreter.js";
 import { type RunView, rebuildRunState } from "../../src/run/state.js";
-import { RunPanel } from "../../src/ui/panel.js";
+import { formatNodeLine, RunPanel } from "../../src/ui/panel.js";
 import {
   type Colorize,
   formatRunWidget,
@@ -43,6 +43,53 @@ async function recordedRun(
   if (!run) throw new Error("missing run");
   return run;
 }
+
+describe("formatNodeLine", () => {
+  test("uses a dedicated model token beside iteration names", () => {
+    const line = formatNodeLine(
+      {
+        path: "$.body",
+        instance: "$.body@2",
+        kind: "agent",
+        profile: "w",
+        model: "google/gemini-1",
+        effectiveModel: "google/gemini-1",
+        status: "running",
+        startedAt: 0,
+      },
+      1_000,
+    );
+    expect(line).toContain("@2 · w · g1 · 0m01s");
+    expect(line).not.toContain("@g1");
+    for (const width of [20, 40, 60, 80]) {
+      const clipped = truncateToWidth(line, width, "…");
+      expect(visibleWidth(clipped)).toBeLessThanOrEqual(width);
+      if (width >= 20) expect(clipped).toContain(" · g1");
+    }
+  });
+
+  test("keeps ANSI-colored and old model-less rows well formed", () => {
+    const color = (name: string, text: string) =>
+      `\u001b[${name === "success" ? "32" : "2"}m${text}\u001b[0m`;
+    const base = {
+      path: "$",
+      instance: "$",
+      kind: "agent" as const,
+      profile: "worker",
+      status: "completed" as const,
+      startedAt: 0,
+      endedAt: 1_000,
+    };
+    const colored = formatNodeLine(
+      { ...base, effectiveModel: "anthropic/claude-opus-4-5" },
+      1_000,
+      color as never,
+    );
+    expect(colored).toContain("opus-4-5");
+    expect(visibleWidth(colored)).toBeGreaterThan(0);
+    expect(formatNodeLine(base, 1_000)).toBe("● worker · worker · 0m01s");
+  });
+});
 
 describe("formatRunWidget", () => {
   test("completed run is one line with its agent count and an all-green strip", async () => {

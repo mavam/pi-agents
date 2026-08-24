@@ -5,8 +5,9 @@ agent for a focused task, run several in parallel, or connect agents
 with sequences, maps, loops, conditions, and reducers.
 
 Every workflow node returns a value. Data moves between nodes only through
-references such as `{previous}`, `{review}`, or `{item}`. This keeps delegation
-predictable and makes workflows reusable.
+references such as `{previous}`, `{review}`, or `{item}`. Because nothing
+flows implicitly, Pi validates every reference before the run starts, and a
+broken data dependency fails before any agent spawns.
 
 ## 🚀 Installation
 
@@ -150,7 +151,7 @@ profile: planner
 task: Plan the requested change
 ```
 
-Agent profiles are discovered from:
+Pi-agents discovers agent profiles in:
 
 - User: `~/.pi/agent/agents`
 - Project: `<project>/.pi/agents`
@@ -373,7 +374,8 @@ params:
   target: "{previous}"
 ```
 
-Saved workflows are expanded into the caller's run. Cycles fail validation.
+Pi-agents expands saved workflows into the caller's run. Cycles fail
+validation.
 
 ## 🎛️ Budgets
 
@@ -405,9 +407,9 @@ Example:
 }
 ```
 
-When a limit is exceeded, the affected agent or run fails and preserves the
-latest available output. If you are attached to an agent, enforcement waits
-until you detach; usage accounting continues while you are attached.
+An agent or run that exceeds a limit fails and preserves the latest available
+output. If you are attached to an agent, enforcement waits until you detach;
+usage accounting continues while you are attached.
 
 ## 🧭 Run and inspect workflows
 
@@ -502,6 +504,51 @@ Both are disabled by default.
 
 ## ⚙️ Configuration
 
+### Model guidance
+
+The planning agent picks a model for every node, and by default it only sees
+a bare list of model IDs. So it plays it safe. Every branch of a ten-way
+fan-out runs on the session model, usually your most capable and most
+expensive one. A review that should spend a premium model on the final merge
+and cheap fast models on the mechanical branches spends premium everywhere.
+
+Two things narrow this gap.
+
+1. **Automatic price tiers.** The planning prompt marks every model with `$`,
+   `$$`, or `$$$`, derived from list prices, and tells the planner to prefer
+   `$` for mechanical subtasks and `$$$` for planning, review, and reduces.
+   Tiers describe spend, not quality. For subscription providers they
+   indicate relative quota use. This needs no configuration.
+2. **Your fit notes.** Price alone cannot say what a model is *for*. If
+   flash-class models handle your triage well, or one model writes your best
+   reviews, teach the planner once in `~/.pi/agent/workflows.json` instead
+   of repeating it in every request:
+
+```json
+{
+  "models": {
+    "google/gemini-*-flash*": "fast triage, summaries, extraction",
+    "claude-opus-*": "planning, reduces, final review"
+  }
+}
+```
+
+With these notes, "review this PR with parallel lenses" yields a plan whose
+fan-out branches run on flash-class models and whose merging reduce runs on
+Opus. You never name a model in the request.
+
+Patterns match provider-qualified model IDs. A pattern without `/` matches
+any provider, and `*` is the only wildcard. The match with the longest
+literal prefix wins; a trusted project's `.pi/workflows.json` wins a tie with
+the user configuration. Pi-agents ignores project model notes until you trust
+the project, because notes flow into the planning prompt.
+
+To check what the planner chose, read the workflow tree. Static trees attach
+`@model` where a node pins a model directly. Live run rows and trees show the
+planned or effective model for every agent. A node without `@model` in a
+static tree does not imply the session default, since an agent profile may
+pin a model.
+
 ### Bundled workflows
 
 A user or project workflow named `review` or `review-fix` overrides the bundled
@@ -552,7 +599,7 @@ resources continue to work.
 ### Run history
 
 Run history belongs to the originating Pi session and survives reloads. After
-a Pi restart, unfinished runs are marked as stopped because delegated
+a Pi restart, pi-agents marks unfinished runs as stopped because delegated
 processes cannot resume. Completed history remains available through
 `/workflows`.
 

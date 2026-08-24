@@ -24,6 +24,7 @@ import {
 import { parseTemplate } from "../model/interpolate.js";
 import { formatPredicate } from "../model/predicate.js";
 import type { NodeView, RunView } from "../run/state.js";
+import { shortModels } from "./model-label.js";
 import { STATUS_STYLES } from "./status.js";
 
 export const KIND_ICONS = {
@@ -70,6 +71,10 @@ interface DisplayNode {
   icon?: string;
   /** Rendered before the icon (e.g. a parallel branch key: "bugs → "). */
   prefixText?: string;
+  /** Text rendered after an optional model token on work-node identities. */
+  tailText?: string;
+  /** Authored model shown only in static trees. */
+  pinnedModel?: string;
   /** Static node path, for status overlay lookup. */
   path?: string;
   /** Exactly one child subtree can execute (used to derive skipped arms). */
@@ -101,13 +106,16 @@ function build(
   node: FlowNode,
   path: string,
   color: TreeColorize,
+  includePinnedModels: boolean,
 ): DisplayNode[] {
   const reduceNode = (
-    reduce: { profile?: string; task: string },
+    reduce: { profile?: string; task: string; model?: string },
     parentPath: string,
   ): DisplayNode => ({
     icon: KIND_ICONS.reduce,
-    text: `reduce${color("dim", " → ")}${reduce.profile ?? ADHOC_LABEL}${color("dim", " · ")}${colorizeRefs(preview(reduce.task), color)}`,
+    text: `reduce${color("dim", " → ")}${reduce.profile ?? ADHOC_LABEL}`,
+    tailText: `${color("dim", " · ")}${colorizeRefs(preview(reduce.task), color)}`,
+    pinnedModel: includePinnedModels ? reduce.model : undefined,
     path: reducePath(parentPath),
     children: [],
   });
@@ -116,14 +124,16 @@ function build(
       return [
         {
           icon: KIND_ICONS.agent,
-          text: `${node.profile ?? ADHOC_LABEL}${binding(node, color)}${color("dim", " · ")}${colorizeRefs(preview(node.task), color)}`,
+          text: node.profile ?? ADHOC_LABEL,
+          tailText: `${binding(node, color)}${color("dim", " · ")}${colorizeRefs(preview(node.task), color)}`,
+          pinnedModel: includePinnedModels ? node.model : undefined,
           path,
           children: [],
         },
       ];
     case "sequence": {
       return node.steps.flatMap((step, index) =>
-        build(step, stepPath(path, index), color),
+        build(step, stepPath(path, index), color, includePinnedModels),
       );
     }
     case "parallel": {
@@ -133,7 +143,12 @@ function build(
       ].filter(Boolean);
       const children: DisplayNode[] = Object.entries(node.branches).map(
         ([key, branch]) => {
-          const subs = build(branch, branchPath(path, key), color);
+          const subs = build(
+            branch,
+            branchPath(path, key),
+            color,
+            includePinnedModels,
+          );
           if (subs.length === 1) {
             const only = subs[0] as DisplayNode;
             return { ...only, prefixText: `${key}${color("dim", " → ")}` };
@@ -152,7 +167,12 @@ function build(
       ];
     }
     case "map": {
-      const children = build(node.body, bodyPath(path), color);
+      const children = build(
+        node.body,
+        bodyPath(path),
+        color,
+        includePinnedModels,
+      );
       if (node.reduce) children.push(reduceNode(node.reduce, path));
       return [
         {
@@ -170,7 +190,12 @@ function build(
           icon: KIND_ICONS.loop,
           text: `loop ≤${node.max}${until}${binding(node, color)}`,
           path,
-          children: build(node.body, bodyPath(path), color),
+          children: build(
+            node.body,
+            bodyPath(path),
+            color,
+            includePinnedModels,
+          ),
         },
       ];
     }
@@ -180,7 +205,12 @@ function build(
           icon: KIND_ICONS.while,
           text: `while ${formatPredicate(node.condition)} on ${color("accent", node.on)} ≤${node.max}${binding(node, color)}`,
           path,
-          children: build(node.body, bodyPath(path), color),
+          children: build(
+            node.body,
+            bodyPath(path),
+            color,
+            includePinnedModels,
+          ),
         },
       ];
     case "switch": {
@@ -189,7 +219,7 @@ function build(
         sub: FlowNode,
         subPath: string,
       ): DisplayNode => {
-        const subs = build(sub, subPath, color);
+        const subs = build(sub, subPath, color, includePinnedModels);
         if (subs.length === 1) {
           const only = subs[0] as DisplayNode;
           return { ...only, prefixText: `${key}${color("dim", " → ")}` };
@@ -228,7 +258,9 @@ function build(
           icon: KIND_ICONS.workflow,
           text: `${node.name}${params ? ` (${params})` : ""}${binding(node, color)}`,
           path,
-          children: node.body ? build(node.body, bodyPath(path), color) : [],
+          children: node.body
+            ? build(node.body, bodyPath(path), color, includePinnedModels)
+            : [],
         },
       ];
     }
@@ -245,6 +277,8 @@ export interface PathStatus {
   total: number;
   /** True when no unseen dynamic instance can choose a different switch arm. */
   dynamicInstancesFinal?: boolean;
+  /** One effective/planned model across known instances, or `mixed`. */
+  model?: string;
   /** e.g. "3/5" for map items or "#2/4" for iterative progress. */
   detail?: string;
   error?: string;
@@ -314,6 +348,18 @@ export function aggregateStatuses(run: RunView): Map<string, PathStatus> {
     const detail =
       nodes.length > 1 ? `${counts.completed}/${nodes.length}` : undefined;
     const error = nodes.find((node) => node.error)?.error;
+    const models = new Set(
+      nodes.flatMap((node) => {
+        const model = node.effectiveModel ?? node.model;
+        return model ? [model] : [];
+      }),
+    );
+    const model =
+      models.size === 0
+        ? undefined
+        : models.size === 1
+          ? ([...models][0] as string)
+          : "mixed";
     result.set(path, {
       icon: STATUS_STYLES[status].icon,
       status,
@@ -323,6 +369,7 @@ export function aggregateStatuses(run: RunView): Map<string, PathStatus> {
       dynamicInstancesFinal:
         run.status === "completed" ||
         nodes.every((node) => node.instance === node.path),
+      model,
       detail,
       error,
     });
@@ -372,6 +419,7 @@ function renderLines(
   prefix: string,
   top: boolean,
   color: TreeColorize,
+  modelLabels: Map<string, string>,
   forceSkipped = false,
   skipUnobserved = false,
 ): string[] {
@@ -408,9 +456,16 @@ function renderLines(
     const detail = !skipped && status?.detail ? ` [${status.detail}]` : "";
     const error =
       !skipped && status?.error ? ` — ${preview(status.error)}` : "";
+    const model = statuses ? status?.model : node.pinnedModel;
+    const modelToken = model
+      ? color(
+          "dim",
+          `@${model === "mixed" ? "mixed" : (modelLabels.get(model) ?? model)}`,
+        )
+      : "";
     const skeleton = `${prefix}${connector}`;
     lines.push(
-      `${skeleton ? color("dim", skeleton) : ""}${node.prefixText ?? ""}${icon ? `${icon} ` : ""}${node.text}${detail}${error}`,
+      `${skeleton ? color("dim", skeleton) : ""}${node.prefixText ?? ""}${icon ? `${icon} ` : ""}${node.text}${modelToken}${node.tailText ?? ""}${detail}${error}`,
     );
     const exclusiveResolved =
       statuses !== undefined &&
@@ -424,6 +479,7 @@ function renderLines(
         childPrefix,
         false,
         color,
+        modelLabels,
         skipped,
         exclusiveResolved,
       ),
@@ -432,14 +488,27 @@ function renderLines(
   return lines;
 }
 
+function displayModels(nodes: DisplayNode[]): string[] {
+  return nodes.flatMap((node) => [
+    ...(node.pinnedModel ? [node.pinnedModel] : []),
+    ...displayModels(node.children),
+  ]);
+}
+
 /** Static flow tree with kind icons (definitions, tool-call previews). */
 export function renderFlowTree(
   flow: FlowNode,
   color: TreeColorize = plainTree,
 ): string {
-  return renderLines(build(flow, "$", color), undefined, "", true, color).join(
-    "\n",
-  );
+  const nodes = build(flow, "$", color, true);
+  return renderLines(
+    nodes,
+    undefined,
+    "",
+    true,
+    color,
+    shortModels(displayModels(nodes)),
+  ).join("\n");
 }
 
 /**
@@ -464,11 +533,15 @@ export function renderRunTree(
   color: TreeColorize = plainTree,
 ): string {
   const statuses = aggregateStatuses(run);
+  const models = [...statuses.values()].flatMap((status) =>
+    status.model && status.model !== "mixed" ? [status.model] : [],
+  );
   return renderLines(
-    build(run.header.flow, "$", color),
+    build(run.header.flow, "$", color, false),
     statuses,
     "",
     true,
     color,
+    shortModels(models),
   ).join("\n");
 }

@@ -6,6 +6,7 @@ import {
   type RunNotificationDetails,
   renderResultValue,
   renderRunNotification,
+  shortModels,
 } from "../../src/ui/render.js";
 
 beforeAll(() => initTheme(undefined, false));
@@ -78,6 +79,51 @@ function render(
   if (!component) throw new Error("notification renderer returned nothing");
   return component.render(300).join("\n");
 }
+
+describe("shortModels", () => {
+  test("shortens provider-qualified families and dated snapshots", () => {
+    const models = [
+      "anthropic/claude-opus-4-5-20251101",
+      "openai-codex/gpt-5.6-terra",
+      "google/gemini-3.5-flash",
+    ];
+    const labels = shortModels(models);
+    expect(labels.get(models[0] as string)).toBe("opus-4-5");
+    expect(labels.get(models[1] as string)).toBe("gpt-5.6-terra");
+    expect(labels.get(models[2] as string)).toBe("g3.5-flash");
+  });
+
+  test("keeps provider and snapshot distinctions collision-free", () => {
+    const models = [
+      "anthropic/gpt-x",
+      "xai/gpt-x",
+      "anthropic/claude-opus-4-5",
+      "anthropic/claude-opus-4-5-20251101",
+    ];
+    const labels = shortModels(models);
+    expect(labels.get(models[0] as string)).not.toBe(
+      labels.get(models[1] as string),
+    );
+    expect(labels.get(models[0] as string)).toContain("anthropic");
+    expect(labels.get(models[1] as string)).toContain("xai");
+    expect(labels.get(models[2] as string)).toBe("opus-4-5");
+    expect(labels.get(models[3] as string)).not.toBe("opus-4-5");
+    expect(new Set(labels.values()).size).toBe(models.length);
+    expect([...labels.values()].every((label) => label.length <= 14)).toBe(
+      true,
+    );
+  });
+
+  test("caps long family collisions without silently merging labels", () => {
+    const models = [
+      "anthropic/claude-abcdefghijklmnop-one",
+      "anthropic/abcdefghijklmnop-two",
+    ];
+    const labels = [...shortModels(models).values()];
+    expect(new Set(labels).size).toBe(2);
+    expect(labels.every((label) => label.length <= 14)).toBe(true);
+  });
+});
 
 describe("structured result rendering", () => {
   test("labels adaptive fences as JSON", () => {

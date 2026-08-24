@@ -1,11 +1,21 @@
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
+export interface ModelCatalogEntry {
+  id: string;
+  /** Input price per million tokens. */
+  costIn?: number;
+  /** Output price per million tokens. */
+  costOut?: number;
+  /** Context-window size in tokens. */
+  ctx?: number;
+}
+
 /** Models available to delegated agents, grouped by authenticated provider. */
 export interface ModelCatalog {
   providers: Array<{
     id: string;
     subscription: boolean;
-    modelIds: string[];
+    models: ModelCatalogEntry[];
   }>;
 }
 
@@ -44,7 +54,7 @@ export function createModelRefresher(): (
 export function buildModelCatalog(registry: ModelRegistry): ModelCatalog {
   const grouped = new Map<
     string,
-    { subscription: boolean; modelIds: Set<string> }
+    { subscription: boolean; models: Map<string, ModelCatalogEntry> }
   >();
 
   for (const model of registry.getAvailable()) {
@@ -52,11 +62,16 @@ export function buildModelCatalog(registry: ModelRegistry): ModelCatalog {
     if (!provider) {
       provider = {
         subscription: registry.isUsingOAuth(model),
-        modelIds: new Set(),
+        models: new Map(),
       };
       grouped.set(model.provider, provider);
     }
-    provider.modelIds.add(model.id);
+    provider.models.set(model.id, {
+      id: model.id,
+      costIn: model.cost.input,
+      costOut: model.cost.output,
+      ctx: model.contextWindow,
+    });
   }
 
   return {
@@ -64,8 +79,8 @@ export function buildModelCatalog(registry: ModelRegistry): ModelCatalog {
       .map(([id, provider]) => ({
         id,
         subscription: provider.subscription,
-        modelIds: [...provider.modelIds].sort((left, right) =>
-          left.localeCompare(right),
+        models: [...provider.models.values()].sort((left, right) =>
+          left.id.localeCompare(right.id),
         ),
       }))
       .sort(
@@ -82,7 +97,7 @@ export type ModelReferenceResolution =
 
 function availableModels(catalog: ModelCatalog): string[] {
   return catalog.providers.flatMap((provider) =>
-    provider.modelIds.map((id) => `${provider.id}/${id}`),
+    provider.models.map((model) => `${provider.id}/${model.id}`),
   );
 }
 
@@ -150,7 +165,7 @@ export function resolveModelReference(
     const providerId = ref.slice(0, slash);
     const modelId = ref.slice(slash + 1);
     const provider = catalog.providers.find(({ id }) => id === providerId);
-    if (provider?.modelIds.includes(modelId)) {
+    if (provider?.models.some((model) => model.id === modelId)) {
       return { ok: true, model: `${providerId}/${modelId}` };
     }
     return {
@@ -160,7 +175,7 @@ export function resolveModelReference(
   }
 
   for (const provider of catalog.providers) {
-    if (provider.modelIds.includes(ref)) {
+    if (provider.models.some((model) => model.id === ref)) {
       return { ok: true, model: `${provider.id}/${ref}` };
     }
   }

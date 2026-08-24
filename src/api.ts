@@ -18,6 +18,7 @@ export const RPC_REPLY_PREFIX = "pi-agents:rpc:reply:";
 
 export interface RunEventEnvelope {
   protocol: typeof PROTOCOL_VERSION;
+  /** Includes planned identity on `node_started` and effective-model updates as `node_model`. */
   event: RunEvent;
 }
 

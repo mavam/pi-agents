@@ -191,14 +191,34 @@ describe("preflight over models", () => {
     const { engine, specs } = fakeEngine();
     const manager = new RunManager({ engine });
     const flow = validateFlow({ kind: "agent", task: "t", model: "terra" });
-    await manager.start({
+    const events: import("../../src/run/events.js").RunEvent[] = [];
+    const started = manager.start({
       flow,
       cwd: projectDir,
       scope: "project",
       source: { kind: "tool" },
+      defaults: { thinking: "high" },
       resolveModel: () => ({ ok: true, model: "openai-codex/terra" }),
-    }).done;
+      onEvent: (event) => events.push(event),
+    });
+    await started.done;
     expect(specs[0]?.model).toBe("openai-codex/terra");
+    expect(
+      events.find(
+        (event) => event.type === "node_started" && event.kind === "agent",
+      ),
+    ).toMatchObject({
+      model: "openai-codex/terra",
+      requestedModel: "terra",
+      thinking: "high",
+    });
+    expect(manager.state.runs.get(started.runId)?.nodes.get("$")).toMatchObject(
+      {
+        model: "openai-codex/terra",
+        requestedModel: "terra",
+        thinking: "high",
+      },
+    );
   });
 });
 

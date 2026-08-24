@@ -58,6 +58,21 @@ export type RunEvent =
       kind: NodeKind | "reduce";
       profile?: string;
       label?: string;
+      /** Canonical model planned for this invocation. */
+      model?: string;
+      /** Authored model reference, present only when it differs from `model`. */
+      requestedModel?: string;
+      /** Planned thinking level. */
+      thinking?: string;
+    }
+  | {
+      /** Latest effective model observed from the delegated agent. */
+      type: "node_model";
+      at: number;
+      runId: string;
+      path: string;
+      instance: string;
+      model: string;
     }
   | {
       type: "node_completed";

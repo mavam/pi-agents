@@ -81,6 +81,29 @@ describe("run event publisher", () => {
     expect(original.run.label).toBe("original");
   });
 
+  test("publishes effective-model events unchanged", () => {
+    const emissions: unknown[] = [];
+    const pi = {
+      events: {
+        on: () => () => {},
+        emit: (_channel: string, data: unknown) => emissions.push(data),
+      },
+    } as unknown as Pick<ExtensionAPI, "events">;
+    const event: RunEvent = {
+      type: "node_model",
+      at: 1,
+      runId: "run-1",
+      path: "$",
+      instance: "$",
+      model: "openai/gpt-5",
+    };
+    createRunEventPublisher(pi)(event);
+    expect(emissions[0]).toMatchObject({
+      protocol: PROTOCOL_VERSION,
+      event,
+    });
+  });
+
   test("swallows cloning and bus failures", () => {
     const pi = {
       events: {

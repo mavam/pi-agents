@@ -76,7 +76,17 @@ function isRunEvent(value: unknown): value is RunEvent {
         typeof value.kind === "string" &&
         NODE_KINDS.has(value.kind) &&
         (value.profile === undefined || typeof value.profile === "string") &&
-        (value.label === undefined || typeof value.label === "string")
+        (value.label === undefined || typeof value.label === "string") &&
+        (value.model === undefined || typeof value.model === "string") &&
+        (value.requestedModel === undefined ||
+          typeof value.requestedModel === "string") &&
+        (value.thinking === undefined || typeof value.thinking === "string")
+      );
+    case "node_model":
+      return (
+        typeof value.path === "string" &&
+        typeof value.instance === "string" &&
+        typeof value.model === "string"
       );
     case "node_completed":
       return typeof value.instance === "string";

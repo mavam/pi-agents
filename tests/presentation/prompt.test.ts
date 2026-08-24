@@ -3,10 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { discoverAgents } from "../../src/catalog/agents.js";
+import type { ModelNoteRule } from "../../src/catalog/config.js";
 import type { ModelCatalog } from "../../src/catalog/models.js";
 import {
   buildModelsPrompt,
   buildSystemPromptAppendix,
+  MODELS_PROMPT_BUDGET,
   PromptAppendixCache,
 } from "../../src/presentation/prompt.js";
 import {
@@ -15,6 +17,20 @@ import {
   resolveInvocation,
 } from "../../src/run/invocation.js";
 
+function modelNote(
+  pattern: string,
+  note: string,
+  scope: "user" | "project" = "user",
+): ModelNoteRule {
+  return {
+    pattern,
+    note,
+    scope,
+    specificity: pattern.split("*")[0]?.length ?? pattern.length,
+    order: 0,
+  };
+}
+
 describe("buildModelsPrompt", () => {
   test("renders providers, authentication, and models", () => {
     const catalog: ModelCatalog = {
@@ -22,12 +38,15 @@ describe("buildModelsPrompt", () => {
         {
           id: "openai-codex",
           subscription: true,
-          modelIds: ["gpt-5.3-codex-spark", "gpt-5.6-terra"],
+          models: [
+            { id: "gpt-5.3-codex-spark", costOut: 1 },
+            { id: "gpt-5.6-terra", costOut: 5 },
+          ],
         },
         {
           id: "anthropic",
           subscription: false,
-          modelIds: ["claude-opus-4-6"],
+          models: [{ id: "claude-opus-4-6", costOut: 12 }],
         },
       ],
     };
@@ -35,11 +54,69 @@ describe("buildModelsPrompt", () => {
     const prompt = buildModelsPrompt(catalog);
     expect(prompt).toContain("<models note=");
     expect(prompt).toContain(
-      '<provider id="openai-codex" auth="subscription">gpt-5.3-codex-spark, gpt-5.6-terra</provider>',
+      '<provider id="openai-codex" auth="subscription">gpt-5.3-codex-spark ($), gpt-5.6-terra ($$)</provider>',
     );
     expect(prompt).toContain(
-      '<provider id="anthropic" auth="api-key">claude-opus-4-6</provider>',
+      '<provider id="anthropic" auth="api-key">claude-opus-4-6 ($$$)</provider>',
     );
+  });
+
+  test("adds fit notes and only annotates context deviations", () => {
+    const catalog: ModelCatalog = {
+      providers: [
+        {
+          id: "anthropic",
+          subscription: true,
+          models: [
+            {
+              id: "claude-sonnet-a",
+              costOut: 3,
+              ctx: 128_000,
+            },
+            {
+              id: "claude-sonnet-b",
+              costOut: 3,
+              ctx: 128_000,
+            },
+            {
+              id: "claude-small",
+              costOut: 1,
+              ctx: 32_000,
+            },
+          ],
+        },
+      ],
+    };
+    const prompt = buildModelsPrompt(catalog, [
+      modelNote("anthropic/claude-small", "fast extraction"),
+    ]);
+    expect(prompt).toContain("claude-sonnet-a ($$)");
+    expect(prompt).not.toContain("claude-sonnet-a ($$, 128k ctx");
+    expect(prompt).toContain("claude-small ($, 32k ctx — fast extraction)");
+    expect(prompt).toContain("price tiers (cheap..premium), not quality");
+    expect(prompt).toContain("subscription tiers indicate quota burn");
+  });
+
+  test("keeps the full id list within budget by degrading annotations in order", () => {
+    const models = Array.from({ length: 50 }, (_, index) => ({
+      id: `model-${String(index).padStart(2, "0")}`,
+      costOut: index % 3 === 0 ? 1 : index % 3 === 1 ? 5 : 12,
+      ctx: index === 49 ? 32_000 : 128_000,
+    }));
+    const catalog: ModelCatalog = {
+      providers: [{ id: "provider", subscription: false, models }],
+    };
+    const notes = models.map((model) =>
+      modelNote(
+        `provider/${model.id}`,
+        `fit-${model.id}-${"guidance".repeat(30)}`,
+      ),
+    );
+    const prompt = buildModelsPrompt(catalog, notes);
+    expect(prompt.length).toBeLessThanOrEqual(MODELS_PROMPT_BUDGET);
+    for (const model of models) expect(prompt).toContain(model.id);
+    expect(prompt).not.toContain("fit-model");
+    expect(prompt).toContain("model-49 ($$, 32k ctx)");
   });
 
   test("escapes provider attributes and model text", () => {
@@ -48,7 +125,7 @@ describe("buildModelsPrompt", () => {
         {
           id: "provider<&\"'",
           subscription: false,
-          modelIds: ["model<&>"],
+          models: [{ id: "model<&>" }],
         },
       ],
     });
@@ -70,7 +147,7 @@ describe("buildSystemPromptAppendix", () => {
         {
           id: "openai-codex",
           subscription: true,
-          modelIds: ["gpt-5.6-terra"],
+          models: [{ id: "gpt-5.6-terra" }],
         },
       ],
     });
@@ -104,7 +181,7 @@ describe("buildSystemPromptAppendix", () => {
           {
             id: "openai-codex",
             subscription: true,
-            modelIds: ["gpt-5.6-terra"],
+            models: [{ id: "gpt-5.6-terra" }],
           },
         ],
       };
@@ -160,14 +237,39 @@ describe("PromptAppendixCache", () => {
     cache.get(process.cwd(), true, catalog, availability);
     expect(availabilityBuilds).toBe(2);
 
+    const priced: ModelCatalog = {
+      providers: [
+        {
+          id: "test",
+          subscription: false,
+          models: [{ id: "model", costOut: 1 }],
+        },
+      ],
+    };
+    cache.get(process.cwd(), true, priced, availability);
+    expect(availabilityBuilds).toBe(3);
+
     cache.get(
       process.cwd(),
       true,
       {
-        providers: [{ id: "test", subscription: false, modelIds: ["model"] }],
+        providers: [
+          {
+            id: "test",
+            subscription: false,
+            models: [{ id: "model", costOut: 12 }],
+          },
+        ],
       },
       availability,
     );
-    expect(availabilityBuilds).toBe(3);
+    expect(availabilityBuilds).toBe(4);
+
+    const notes = [modelNote("test/model", "mechanical work")];
+    const noted = cache.get(process.cwd(), true, priced, availability, notes);
+    expect(noted).toContain("mechanical work");
+    expect(availabilityBuilds).toBe(5);
+    cache.get(process.cwd(), true, priced, availability, notes);
+    expect(availabilityBuilds).toBe(5);
   });
 });

@@ -75,6 +75,54 @@ describe("run state reducer", () => {
     }
   });
 
+  test("replays optional planned identity and latest effective model", () => {
+    const state = rebuildRunState([
+      {
+        type: "run_created",
+        at: 1,
+        run: {
+          id: "models",
+          source: { kind: "tool" },
+          flow: { kind: "agent", task: "work" },
+          depth: 0,
+        },
+      },
+      {
+        type: "node_started",
+        at: 2,
+        runId: "models",
+        path: "$",
+        instance: "$",
+        kind: "agent",
+        model: "openai/gpt-5",
+        requestedModel: "gpt-5",
+        thinking: "high",
+      },
+      {
+        type: "node_model",
+        at: 3,
+        runId: "models",
+        path: "$",
+        instance: "$",
+        model: "openai/gpt-5-fallback",
+      },
+      {
+        type: "node_model",
+        at: 4,
+        runId: "models",
+        path: "$",
+        instance: "$",
+        model: "openai/gpt-5",
+      },
+    ]);
+    expect(state.runs.get("models")?.nodes.get("$")).toMatchObject({
+      model: "openai/gpt-5",
+      requestedModel: "gpt-5",
+      thinking: "high",
+      effectiveModel: "openai/gpt-5",
+    });
+  });
+
   test("events for unknown runs are ignored", () => {
     const state = rebuildRunState([
       {

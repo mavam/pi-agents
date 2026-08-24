@@ -22,7 +22,7 @@ import {
 import type { RunManager } from "../run/runs.js";
 import { type NodeView, type RunView, workNodes } from "../run/state.js";
 import { sanitizeLine } from "./console.js";
-import { formatUsage, nodeDisplayName } from "./render.js";
+import { formatUsage, nodeDisplayName, shortModels } from "./render.js";
 import { STATUS_STYLES } from "./status.js";
 import {
   type Colorize,
@@ -57,6 +57,7 @@ export function formatNodeLine(
   node: NodeView,
   now: number,
   color: Colorize = (_c, t) => t,
+  shortModel?: string,
 ): string {
   const presentation = STATUS_STYLES[node.status];
   const icon = color(presentation.color, presentation.icon);
@@ -70,9 +71,15 @@ export function formatNodeLine(
         (node.progressTool ? `Using ${node.progressTool}` : undefined))
       : node.error;
   const dot = color("dim", " · ");
+  const model = node.effectiveModel ?? node.model;
+  const modelLabel =
+    model === undefined
+      ? undefined
+      : (shortModel ?? shortModels([model]).get(model) ?? model);
   const parts = [
     `${icon} ${nodeDisplayName(node)}`,
     color("dim", node.profile ?? "ad-hoc"),
+    modelLabel ? color("dim", modelLabel) : undefined,
     color("dim", elapsed),
     usage ? color("dim", usage) : undefined,
     activity
@@ -368,6 +375,16 @@ export class RunPanel {
       0,
       Math.min(index - Math.floor(visible / 2), rows.length - visible),
     );
+    const visibleRows = rows.filter(
+      (_row, rowIndex) => rowIndex >= start && rowIndex < start + visible,
+    );
+    const modelLabels = shortModels(
+      visibleRows.flatMap((row) => {
+        if (row.kind !== "node") return [];
+        const model = row.node.effectiveModel ?? row.node.model;
+        return model ? [model] : [];
+      }),
+    );
     const lines: string[] = [];
     for (const [i, row] of rows.entries()) {
       if (i < start || i >= start + visible) continue;
@@ -382,7 +399,15 @@ export class RunPanel {
         );
         lines.push(`${marker}${line}`);
       } else {
-        lines.push(`${marker}  ${formatNodeLine(row.node, now, color)}`);
+        const model = row.node.effectiveModel ?? row.node.model;
+        lines.push(
+          `${marker}  ${formatNodeLine(
+            row.node,
+            now,
+            color,
+            model ? modelLabels.get(model) : undefined,
+          )}`,
+        );
       }
     }
     if (rows.length > start + visible) {

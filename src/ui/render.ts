@@ -278,6 +278,8 @@ export function shortId(runId: string): string {
   return runId.slice(0, 8);
 }
 
+export { shortModels } from "./model-label.js";
+
 export function formatRunSource(source: RunSource): string {
   if (source.kind === "hook") return `hook:${source.event ?? "?"}`;
   if (source.kind === "rpc")

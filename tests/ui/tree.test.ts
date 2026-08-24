@@ -156,6 +156,42 @@ describe("renderFlowTree", () => {
     );
   });
 
+  test("attaches only authored node models to static identities", () => {
+    const flow = validateFlow({
+      kind: "parallel",
+      branches: {
+        "a-very-long-security-branch-name": {
+          kind: "agent",
+          profile: "worker",
+          model: "anthropic/claude-opus-4-5-20251101",
+          task: "Audit the diff for injection and include detailed evidence",
+        },
+        inherited: {
+          kind: "agent",
+          profile: "profile-pins-model",
+          task: "Check naming",
+        },
+      },
+      reduce: {
+        model: "google/gemini-3.5-flash",
+        task: "Merge {branches}",
+      },
+    });
+    const tree = renderFlowTree(flow);
+    expect(tree).toContain(
+      "a-very-long-security-branch-name → ✦ worker@opus-4-5 · Audit",
+    );
+    expect(tree).toContain("⑂ reduce → ad-hoc@g3.5-flash · Merge");
+    expect(tree).toContain("profile-pins-model · Check naming");
+    expect(tree).not.toContain("profile-pins-model@");
+
+    const mark = (color: string, text: string) =>
+      `<${color}>${text}</${color}>`;
+    expect(renderFlowTree(flow, mark)).toContain(
+      "worker<dim>@opus-4-5</dim><dim> · </dim>",
+    );
+  });
+
   test("anonymous agents and reducers render as ad-hoc", () => {
     expect(
       renderFlowTree(
@@ -623,6 +659,153 @@ describe("renderRunTree", () => {
     );
     expect(nodes.some((node) => node.profile === undefined)).toBe(true);
     expect(nodes.some((node) => node.profile === "worker")).toBe(true);
+  });
+
+  test("aggregates per-path models and collapses fallback divergence to mixed", () => {
+    const flow = validateFlow(
+      {
+        kind: "map",
+        over: "{params.items}",
+        body: { kind: "agent", profile: "worker", task: "Review {item}" },
+      },
+      { params: [{ name: "items" }] },
+    );
+    const events: RunEvent[] = [
+      {
+        type: "run_created",
+        at: 1,
+        run: {
+          id: "mixed-models",
+          source: { kind: "tool" },
+          flow,
+          params: { items: ["a", "b"] },
+          depth: 0,
+        },
+      },
+      {
+        type: "node_started",
+        at: 2,
+        runId: "mixed-models",
+        path: "$",
+        instance: "$",
+        kind: "map",
+      },
+      {
+        type: "node_started",
+        at: 3,
+        runId: "mixed-models",
+        path: "$.body",
+        instance: "$.body@0",
+        kind: "agent",
+        profile: "worker",
+        model: "openai/gpt-5",
+      },
+      {
+        type: "node_completed",
+        at: 4,
+        runId: "mixed-models",
+        instance: "$.body@0",
+        value: "ok",
+      },
+      {
+        type: "node_started",
+        at: 5,
+        runId: "mixed-models",
+        path: "$.body",
+        instance: "$.body@1",
+        kind: "agent",
+        profile: "worker",
+      },
+      {
+        type: "node_model",
+        at: 6,
+        runId: "mixed-models",
+        path: "$.body",
+        instance: "$.body@1",
+        model: "openai/gpt-5-fallback",
+      },
+      {
+        type: "node_failed",
+        at: 7,
+        runId: "mixed-models",
+        path: "$.body",
+        instance: "$.body@1",
+        error: "provider fallback failed after a detailed diagnostic",
+      },
+      {
+        type: "run_completed",
+        at: 8,
+        runId: "mixed-models",
+        status: "failed",
+        error: "map failed",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          contextTokens: 0,
+          turns: 0,
+        },
+        agents: 2,
+      },
+    ];
+    const run = rebuildRunState(events).runs.get("mixed-models");
+    if (!run) throw new Error("missing run");
+    const tree = renderRunTree(run);
+    const modelLine = tree
+      .split("\n")
+      .find((line) => line.includes("worker@mixed"));
+    expect(modelLine).toContain("[1/2]");
+    expect(modelLine).toContain("— provider fallback failed");
+    expect(modelLine?.indexOf("@mixed")).toBeLessThan(
+      modelLine?.indexOf("[1/2]") ?? 0,
+    );
+  });
+
+  test("ignores model-less instances when one known model exists", () => {
+    const flow = validateFlow(
+      {
+        kind: "map",
+        over: "{params.items}",
+        body: { kind: "agent", profile: "worker", task: "Review {item}" },
+      },
+      { params: [{ name: "items" }] },
+    );
+    const run = rebuildRunState([
+      {
+        type: "run_created",
+        at: 1,
+        run: {
+          id: "one-known",
+          source: { kind: "tool" },
+          flow,
+          depth: 0,
+        },
+      },
+      {
+        type: "node_started",
+        at: 2,
+        runId: "one-known",
+        path: "$.body",
+        instance: "$.body@0",
+        kind: "agent",
+        profile: "worker",
+        model: "anthropic/claude-opus-4-5",
+      },
+      {
+        type: "node_started",
+        at: 3,
+        runId: "one-known",
+        path: "$.body",
+        instance: "$.body@1",
+        kind: "agent",
+        profile: "worker",
+      },
+    ]).runs.get("one-known");
+    if (!run) throw new Error("missing run");
+    expect(renderRunTree(run)).toContain("worker@opus-4-5");
+    expect(renderRunTree(run)).not.toContain("@mixed");
   });
 
   test("status icons are colored by outcome", async () => {

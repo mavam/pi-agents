@@ -76,6 +76,14 @@ export interface AgentCall {
 export interface AgentResult {
   value: unknown;
   usage?: SpawnUsage;
+  /** Effective model reported by the engine, provider-qualified when possible. */
+  model?: string;
+}
+
+export interface PlannedNodeModel {
+  model?: string;
+  requestedModel?: string;
+  thinking?: string;
 }
 
 export type AgentRunner = (call: AgentCall) => Promise<AgentResult>;
@@ -234,6 +242,8 @@ export interface ExecuteOptions {
   cwd?: string;
   scope?: Scope;
   originSessionFile?: string;
+  /** Resolve the planned identity of an agent or reduce before it starts. */
+  resolvePlannedModel?: (call: AgentCall) => PlannedNodeModel | undefined;
   /** True while a user is attached to any agent in this run. Run-level
    * budget cancellation waits for the attachment to close. */
   isHeld?: () => boolean;
@@ -298,6 +308,8 @@ class Interpreter {
     string,
     { tokens: number; cost: number }
   >();
+  /** Latest effective model emitted per agent instance. */
+  private readonly effectiveModels = new Map<string, string>();
   /** A run-level budget breach waits here while an attached user holds any
    * child. Only the first breach determines the eventual failure. */
   private pendingBudgetMessage: string | undefined;
@@ -447,6 +459,23 @@ class Interpreter {
         ? signal.reason
         : new CancelledError("stopped");
     }
+    const planned =
+      node.kind === "agent"
+        ? this.options.resolvePlannedModel?.({
+            profile: node.profile,
+            task: node.task,
+            resultSchema: node.json,
+            model: node.model,
+            thinking: node.thinking,
+            skills: node.skills,
+            tools: node.tools,
+            cwd: node.cwd ?? this.options.cwd,
+            scope: node.scope ?? this.options.scope,
+            path,
+            instance,
+            signal,
+          })
+        : undefined;
     this.emit({
       type: "node_started",
       at: Date.now(),
@@ -456,6 +485,9 @@ class Interpreter {
       kind: node.kind,
       profile: node.kind === "agent" ? node.profile : undefined,
       label: node.label,
+      model: planned?.model,
+      requestedModel: planned?.requestedModel,
+      thinking: planned?.thinking,
     });
     try {
       const result = await this.evaluateInner(
@@ -575,9 +607,27 @@ class Interpreter {
     }
   }
 
+  private recordEffectiveModel(
+    path: string,
+    instance: string,
+    model: string | undefined,
+  ): void {
+    if (model === undefined || this.effectiveModels.get(instance) === model)
+      return;
+    this.effectiveModels.set(instance, model);
+    this.emit({
+      type: "node_model",
+      at: Date.now(),
+      runId: this.options.runId,
+      path,
+      instance,
+      model,
+    });
+  }
+
   private async callAgent(
     call: Omit<AgentCall, "signal"> & { signal: AbortSignal },
-  ): Promise<{ value: unknown; usage?: SpawnUsage }> {
+  ): Promise<{ value: unknown; usage?: SpawnUsage; model?: string }> {
     await this.budgets.acquireAgent(this.depth);
     const release = await this.parallelism.acquire();
     try {
@@ -591,12 +641,14 @@ class Interpreter {
         onProgress: (progress) => {
           this.checkPendingBudgetAbort();
           void this.recordUsageSnapshot(call.instance, progress.usage);
+          this.recordEffectiveModel(call.path, call.instance, progress.model);
           call.onProgress?.(progress);
         },
       });
       // A held agent can settle immediately after detach, before the polling
       // timer runs. A pending breach must still win over that result.
       this.checkPendingBudgetAbort();
+      this.recordEffectiveModel(call.path, call.instance, result.model);
       if (result.usage) {
         addUsage(this.usage, result.usage);
         // Reconcile against the final numbers: engines without progress
@@ -608,7 +660,11 @@ class Interpreter {
           ? call.signal.reason
           : new CancelledError("stopped");
       }
-      return { value: result.value, usage: result.usage };
+      return {
+        value: result.value,
+        usage: result.usage,
+        model: result.model,
+      };
     } finally {
       release();
     }
@@ -679,6 +735,20 @@ class Interpreter {
   ): Promise<unknown> {
     const path = reducePath(parentPath);
     const instance = reducePath(parentInstance);
+    const planned = this.options.resolvePlannedModel?.({
+      profile: reduce.profile,
+      task: reduce.task,
+      resultSchema: reduce.json,
+      model: reduce.model,
+      thinking: reduce.thinking,
+      skills: reduce.skills,
+      tools: reduce.tools,
+      cwd: reduce.cwd ?? this.options.cwd,
+      scope: reduce.scope ?? this.options.scope,
+      path,
+      instance,
+      signal,
+    });
     this.emit({
       type: "node_started",
       at: Date.now(),
@@ -687,6 +757,9 @@ class Interpreter {
       instance,
       kind: "reduce",
       profile: reduce.profile,
+      model: planned?.model,
+      requestedModel: planned?.requestedModel,
+      thinking: planned?.thinking,
     });
     try {
       const task = renderTemplate(reduce.task, envResolver(env, reduceRoot));

@@ -8,7 +8,8 @@ import {
   type AgentAvailability,
   buildAgentsPrompt,
 } from "../catalog/agents.js";
-import type { ModelCatalog } from "../catalog/models.js";
+import { type ModelNoteRule, resolveModelNote } from "../catalog/config.js";
+import type { ModelCatalog, ModelCatalogEntry } from "../catalog/models.js";
 import { discoverWorkflows } from "../catalog/workflows.js";
 import type { Scope } from "../model/ast.js";
 
@@ -25,22 +26,123 @@ function escapeXmlAttribute(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
-export function buildModelsPrompt(catalog: ModelCatalog): string {
-  const note =
-    "valid values for agent-node 'model' (omit to inherit the session model); when an id exists under several providers, prefer the earlier provider";
+export const MODELS_PROMPT_BUDGET = 4_096;
+
+function modeOf<T>(values: T[]): T | undefined {
+  const counts = new Map<T, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  let best: T | undefined;
+  let bestCount = 0;
+  for (const [value, count] of counts) {
+    if (count > bestCount) {
+      best = value;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+function costTier(costOut: number | undefined): string | undefined {
+  if (costOut === undefined) return undefined;
+  if (costOut < 2) return "$";
+  if (costOut < 10) return "$$";
+  return "$$$";
+}
+
+function contextLabel(ctx: number): string {
+  if (ctx >= 1_000_000) return `${Number((ctx / 1_000_000).toFixed(1))}m ctx`;
+  return `${Math.round(ctx / 1_000)}k ctx`;
+}
+
+function renderModel(
+  providerId: string,
+  model: ModelCatalogEntry,
+  modes: { ctx?: number },
+  notes: readonly ModelNoteRule[],
+  options: { notes: boolean; deviations: boolean; tiers: boolean },
+): string {
+  const annotations: string[] = [];
+  if (options.tiers) {
+    const tier = costTier(model.costOut);
+    if (tier) annotations.push(tier);
+  }
+  if (options.deviations) {
+    if (
+      model.ctx !== undefined &&
+      modes.ctx !== undefined &&
+      model.ctx !== modes.ctx
+    )
+      annotations.push(contextLabel(model.ctx));
+  }
+  const note = options.notes
+    ? resolveModelNote(notes, `${providerId}/${model.id}`)
+    : undefined;
+  if (annotations.length === 0 && !note) return model.id;
+  const metadata = note
+    ? `${annotations.join(", ")}${annotations.length > 0 ? " — " : ""}${note}`
+    : annotations.join(", ");
+  return `${model.id} (${metadata})`;
+}
+
+function renderModelsPrompt(
+  catalog: ModelCatalog,
+  notes: readonly ModelNoteRule[],
+  options: { notes: boolean; deviations: boolean; tiers: boolean },
+): string {
+  const note = [
+    "valid values for agent-node 'model' (omit to inherit the session model); when an id exists under several providers, prefer the earlier provider",
+    options.tiers
+      ? "$..$$$ are price tiers (cheap..premium), not quality; subscription tiers indicate quota burn; prefer $ for mechanical subtasks and $$$ for planning, review, and reduce"
+      : undefined,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join("; ");
   const lines = [`<models note="${escapeXmlAttribute(note)}">`];
   if (catalog.providers.length === 0) {
     lines.push("  <none>No available models were discovered.</none>");
   } else {
     for (const provider of catalog.providers) {
       const auth = provider.subscription ? "subscription" : "api-key";
+      const modes = {
+        ctx: modeOf(
+          provider.models.flatMap((model) =>
+            model.ctx === undefined ? [] : [model.ctx],
+          ),
+        ),
+      };
+      const models = provider.models.map((model) =>
+        renderModel(provider.id, model, modes, notes, options),
+      );
       lines.push(
-        `  <provider id="${escapeXmlAttribute(provider.id)}" auth="${auth}">${escapeXmlText(provider.modelIds.join(", "))}</provider>`,
+        `  <provider id="${escapeXmlAttribute(provider.id)}" auth="${auth}">${escapeXmlText(models.join(", "))}</provider>`,
       );
     }
   }
   lines.push("</models>");
   return lines.join("\n");
+}
+
+export function buildModelsPrompt(
+  catalog: ModelCatalog,
+  notes: readonly ModelNoteRule[] = [],
+): string {
+  const attempts = [
+    { notes: true, deviations: true, tiers: true },
+    { notes: false, deviations: true, tiers: true },
+    { notes: false, deviations: false, tiers: true },
+    { notes: false, deviations: false, tiers: false },
+  ];
+  for (const options of attempts) {
+    const prompt = renderModelsPrompt(catalog, notes, options);
+    if (prompt.length <= MODELS_PROMPT_BUDGET) return prompt;
+  }
+  // The id list is the contract and is never truncated, even if a future
+  // registry grows beyond the annotation budget by itself.
+  return renderModelsPrompt(
+    catalog,
+    [],
+    attempts.at(-1) as (typeof attempts)[number],
+  );
 }
 
 export function buildWorkflowsPrompt(
@@ -102,6 +204,7 @@ export function buildSystemPromptAppendix(
   trusted = true,
   catalog?: ModelCatalog,
   availability?: AgentAvailability,
+  modelNotes: readonly ModelNoteRule[] = [],
 ): string {
   const scope: Scope = trusted ? "both" : "user";
   const agents = buildAgentsPrompt(cwd, scope, availability);
@@ -117,7 +220,7 @@ export function buildSystemPromptAppendix(
     parts.push(
       "",
       "The following models are available to delegated agents:",
-      buildModelsPrompt(catalog),
+      buildModelsPrompt(catalog, modelNotes),
     );
   }
   if (!trusted) {
@@ -139,8 +242,9 @@ export class PromptAppendixCache {
     trusted: boolean,
     catalog: ModelCatalog | undefined,
     availability: () => AgentAvailability,
+    modelNotes: readonly ModelNoteRule[] = [],
   ): string {
-    const key = JSON.stringify([cwd, trusted, catalog]);
+    const key = JSON.stringify([cwd, trusted, catalog, modelNotes]);
     if (this.key === key && this.appendix !== undefined) return this.appendix;
     this.key = key;
     this.appendix = buildSystemPromptAppendix(
@@ -148,6 +252,7 @@ export class PromptAppendixCache {
       trusted,
       catalog,
       availability(),
+      modelNotes,
     );
     return this.appendix;
   }

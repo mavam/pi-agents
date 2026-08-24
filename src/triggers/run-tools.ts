@@ -307,6 +307,10 @@ interface WorkflowInspectDetails {
     instance: string;
     name: string;
     profile?: string;
+    /** Effective model when observed, otherwise the planned model. */
+    model?: string;
+    /** Authored model reference when it differs from the planned model. */
+    requestedModel?: string;
     kind: string;
     status: string;
     startedAt: string;
@@ -439,6 +443,8 @@ export function createWorkflowInspectTool(
           instance: node.instance,
           name: nodeDisplayName(node),
           profile: node.profile,
+          model: node.effectiveModel ?? node.model,
+          requestedModel: node.requestedModel,
           kind: node.kind,
           status: node.status,
           startedAt: new Date(node.startedAt).toISOString(),

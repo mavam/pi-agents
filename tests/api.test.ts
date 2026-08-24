@@ -138,10 +138,17 @@ describe("public pi-agents client", () => {
     bus.emit(RUN_EVENT_CHANNEL, { protocol: 99, event: { type: "bad" } });
     bus.emit(RUN_EVENT_CHANNEL, {
       protocol: PROTOCOL_VERSION,
-      event: { type: "run_backgrounded", at: 1, runId: "r" },
+      event: {
+        type: "node_model",
+        at: 1,
+        runId: "r",
+        path: "$",
+        instance: "$",
+        model: "openai/gpt-5",
+      },
     });
     bus.emit(READY_CHANNEL, { protocol: PROTOCOL_VERSION, version: "1.0.0" });
-    expect(types).toEqual(["run_backgrounded"]);
+    expect(types).toEqual(["node_model"]);
     expect(ready).toEqual(["1.0.0"]);
     offEvent();
     offReady();

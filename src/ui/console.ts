@@ -97,6 +97,7 @@ export function itemSignature(item: TranscriptItem): string {
 const NOTICE_ICONS = {
   interrupted: "⊘",
   "submission-deferred": "○",
+  "submission-requested": "◌",
   "result-submitted": "●",
   detached: "←",
 } as const satisfies Record<TranscriptNoticeKind, string>;

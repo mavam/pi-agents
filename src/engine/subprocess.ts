@@ -40,6 +40,7 @@ import {
   type SpawnSpec,
   type SpawnUsage,
   type TranscriptItem,
+  UnsubmittedResult,
 } from "./types.js";
 
 export type SpawnProcess = typeof spawn;
@@ -534,6 +535,7 @@ export function createSubprocessSpawnEngine(options?: {
       let wasAborted = false;
       let terminalFailure: Error | undefined;
       let submissionAccepted = false;
+      let submitNudgeSent = false;
       let settleHolds = 0;
       let resultValue: unknown;
       let agentErrorReason: string | undefined;
@@ -722,6 +724,37 @@ export function createSubprocessSpawnEngine(options?: {
             reject(error instanceof Error ? error : new Error(String(error)));
           }
         });
+      };
+
+      /** One bounded in-band recovery: a settled agent that produced work
+       * but never called the result tool gets told to submit what it already
+       * has, instead of being reaped into an unsubmitted-result failure.
+       * Returns true when the nudge was sent. */
+      const requestSubmission = (): boolean => {
+        if (submitNudgeSent || wasAborted || settled || stdinEnded)
+          return false;
+        // Nothing to package, or the turn itself failed: reap normally.
+        if (!latestText) return false;
+        if (stopReason === "error" || stopReason === "aborted") return false;
+        submitNudgeSent = true;
+        transcriptStore.upsert({
+          key: `notice:${++activitySequence}`,
+          kind: "notice",
+          notice: "submission-requested",
+          text: "No result submitted: requesting submission",
+          at: Date.now(),
+        });
+        pushUpdate();
+        void sendCommand({
+          type: "prompt",
+          message:
+            "You finished without submitting a result. Call the result " +
+            "submission tool now with your complete result. Do not redo the " +
+            "assignment; package the work you already produced.",
+        }).catch(() => {
+          if (!stdinEnded && !settled) endStdin();
+        });
+        return true;
       };
 
       const pushUpdate = () => {
@@ -1188,7 +1221,13 @@ export function createSubprocessSpawnEngine(options?: {
             // result keeps the child alive for follow-up prompts. A settle
             // after result submission always ends the spawn: the node's work
             // is done and the workflow must not wait on the attachment.
-            if (settleHolds === 0 || submissionAccepted) endStdin();
+            if (submissionAccepted) {
+              endStdin();
+            } else if (settleHolds === 0 && !requestSubmission()) {
+              // No recovery available (or already attempted); the close
+              // path preserves the final response as the raw result.
+              endStdin();
+            }
           }
         } catch (error) {
           failProtocol(
@@ -1284,12 +1323,7 @@ export function createSubprocessSpawnEngine(options?: {
             status = "failed";
             cleanup();
             rejectWait(
-              new SpawnFailure(
-                `Agent ${spec.agent} finished without submitting a result.`,
-                spec.agent,
-                exitCode,
-                stderr,
-              ),
+              new UnsubmittedResult(spec.agent, latestText, exitCode, stderr),
             );
             return;
           }
@@ -1540,6 +1574,7 @@ export function createSubprocessSpawnEngine(options?: {
             // The gate may have blocked the agent's submission attempts; a
             // settled, resultless agent gets one nudge to finish instead of
             // being reaped into a "finished without a result" failure.
+            submitNudgeSent = true;
             transcriptStore.upsert({
               key: `notice:${++activitySequence}`,
               kind: "notice",

@@ -31,9 +31,13 @@ export interface NodeView {
   status: NodeStatus;
   value?: unknown;
   error?: string;
+  /** "result-contract" when the agent finished its work but its output never
+   * satisfied the declared result contract (persisted via events). */
+  failureKind?: "result-contract";
   cancelReason?: CancelReason;
   usage?: SpawnUsage;
-  /** Preserved partial output of a budget-cut agent (persisted via events). */
+  /** Preserved agent output that survived a failure: a budget-cut agent's
+   * streamed text or an unsubmitted final response (persisted via events). */
   partialText?: string;
   /** The delegated agent's own pi session file (persisted via events); set
    * for engines with native sessions, enabling first-class attach. */
@@ -135,6 +139,7 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
       if (!node) return;
       node.status = "failed";
       node.error = event.error;
+      node.failureKind = event.failureKind;
       node.partialText = event.partialText;
       node.endedAt = event.at;
       return;

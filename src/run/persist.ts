@@ -94,7 +94,11 @@ function isRunEvent(value: unknown): value is RunEvent {
       return (
         typeof value.path === "string" &&
         typeof value.instance === "string" &&
-        typeof value.error === "string"
+        typeof value.error === "string" &&
+        (value.failureKind === undefined ||
+          value.failureKind === "result-contract") &&
+        (value.partialText === undefined ||
+          typeof value.partialText === "string")
       );
     case "node_cancelled":
       return (

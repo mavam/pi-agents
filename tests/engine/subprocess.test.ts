@@ -17,6 +17,7 @@ import {
   AgentErrorResult,
   SpawnAborted,
   SpawnFailure,
+  UnsubmittedResult,
 } from "../../src/engine/types.js";
 
 class FakeStdin extends EventEmitter {
@@ -375,7 +376,7 @@ describe("subprocess spawn engine", () => {
     expect(outcome.usage.turns).toBe(2);
   });
 
-  test("assistant prose without a submitted result fails", async () => {
+  test("assistant prose without a submitted result gets one nudge", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({
       agent: "w",
@@ -383,12 +384,91 @@ describe("subprocess spawn engine", () => {
       cwd: "/tmp",
     });
     const proc = procs[0]?.proc as FakeProc;
+    await ready(proc);
     proc.emitAssistant("This is not a submitted result.");
     proc.settle();
+    // The settle triggers an in-band recovery prompt instead of reaping.
+    expect(proc.stdin.ended).toBe(false);
+    const prompts = proc.stdin.records.filter((r) => r.type === "prompt");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]?.message).toContain("without submitting a result");
+    expect(
+      handle
+        .transcript?.()
+        .some(
+          (item) =>
+            item.kind === "notice" && item.notice === "submission-requested",
+        ),
+    ).toBe(true);
+    // The nudged agent packages what it already produced.
+    await Promise.resolve();
+    await Promise.resolve();
+    submitResult(proc, "packaged");
+    proc.settle();
+    expect(proc.stdin.ended).toBe(true);
     proc.close(0);
-    await expect(handle.wait()).rejects.toThrow(
-      "Agent w finished without submitting a result.",
+    await expect(handle.wait()).resolves.toMatchObject({
+      value: "packaged",
+    });
+  });
+
+  test("an unsubmitted result after the nudge preserves the raw response", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+    });
+    const proc = procs[0]?.proc as FakeProc;
+    await ready(proc);
+    proc.emitAssistant("First draft.");
+    proc.settle();
+    // Recovery prompt sent; the agent replies with prose again.
+    await Promise.resolve();
+    await Promise.resolve();
+    proc.emitAssistant("Final review: everything looks good.");
+    proc.settle();
+    // A second resultless settle is reaped: the nudge is bounded.
+    expect(proc.stdin.ended).toBe(true);
+    proc.close(0);
+    const error = await handle.wait().then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (e: unknown) => e,
     );
+    expect(error).toBeInstanceOf(UnsubmittedResult);
+    const unsubmitted = error as UnsubmittedResult;
+    expect(unsubmitted.message).toContain(
+      "finished without submitting a result",
+    );
+    expect(unsubmitted.message).toContain("preserved");
+    expect(unsubmitted.raw).toBe("Final review: everything looks good.");
+  });
+
+  test("settling without any output is reaped without a nudge", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+    });
+    const proc = procs[0]?.proc as FakeProc;
+    await ready(proc);
+    proc.settle();
+    expect(proc.stdin.ended).toBe(true);
+    expect(proc.stdin.records.filter((r) => r.type === "prompt")).toHaveLength(
+      1,
+    );
+    proc.close(0);
+    const error = await handle.wait().then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(UnsubmittedResult);
+    expect((error as UnsubmittedResult).raw).toBe("");
   });
 
   test("a rejected submission can be corrected", async () => {

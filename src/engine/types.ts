@@ -102,6 +102,31 @@ export class SpawnFailure extends Error {
 }
 
 /** Thrown by wait() when the agent explicitly submits an error result. */
+/**
+ * The delegated process ended cleanly after the agent settled, but no result
+ * was ever submitted through the result tool. This is a result-contract
+ * failure, not a task failure: the agent may have completed the work and
+ * only failed to package it. `raw` preserves the agent's final response so
+ * callers can still retrieve the unsubmitted output.
+ */
+export class UnsubmittedResult extends SpawnFailure {
+  readonly raw: string;
+
+  constructor(agent: string, raw: string, exitCode: number, stderr = "") {
+    super(
+      `Agent ${agent} finished without submitting a result through the result tool` +
+        (raw
+          ? "; its final response is preserved as the node's partial result."
+          : "."),
+      agent,
+      exitCode,
+      stderr,
+    );
+    this.name = "UnsubmittedResult";
+    this.raw = raw;
+  }
+}
+
 export class AgentErrorResult extends Error {
   readonly agent: string;
   readonly reason: string;
@@ -125,6 +150,7 @@ export class SpawnAborted extends Error {
 export type TranscriptNoticeKind =
   | "interrupted"
   | "submission-deferred"
+  | "submission-requested"
   | "result-submitted"
   | "detached";
 

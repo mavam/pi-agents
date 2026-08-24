@@ -453,6 +453,7 @@ export function createWorkflowInspectTool(
               ? undefined
               : new Date(node.endedAt).toISOString(),
           error: node.error,
+          failureKind: node.failureKind,
           cancelReason: node.cancelReason,
           progressSummary: compactText(node.progressSummary, 500),
           progressTool: node.progressTool,

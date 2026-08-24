@@ -90,8 +90,12 @@ export type RunEvent =
       path: string;
       instance: string;
       error: string;
-      /** Last streamed output of a budget-cut agent, preserved as the
-       * partial result. */
+      /** "result-contract" when the agent completed its work but its output
+       * never satisfied the declared result contract; absent for task
+       * failures. */
+      failureKind?: "result-contract";
+      /** Last agent output preserved across the failure (a budget-cut
+       * agent's streamed text, or an unsubmitted final response). */
       partialText?: string;
     }
   | {

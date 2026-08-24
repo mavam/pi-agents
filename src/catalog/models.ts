@@ -8,8 +8,6 @@ export interface ModelCatalogEntry {
   costOut?: number;
   /** Context-window size in tokens. */
   ctx?: number;
-  /** Whether the model supports reasoning. */
-  reasoning?: boolean;
 }
 
 /** Models available to delegated agents, grouped by authenticated provider. */
@@ -73,7 +71,6 @@ export function buildModelCatalog(registry: ModelRegistry): ModelCatalog {
       costIn: model.cost.input,
       costOut: model.cost.output,
       ctx: model.contextWindow,
-      reasoning: model.reasoning,
     });
   }
 

@@ -504,7 +504,25 @@ Both are disabled by default.
 
 ### Model guidance
 
-Add optional planning notes to `~/.pi/agent/workflows.json`:
+When the planning agent composes a workflow, it picks a model for every node
+— and by default it only sees a bare list of model IDs. The usual result:
+every branch of a ten-way fan-out runs on the session model, which is
+typically your most capable and most expensive one. A review workflow that
+should spend a premium model on the final merge and cheap fast models on the
+mechanical branches instead spends premium everywhere.
+
+Pi-agents narrows this gap in two steps:
+
+1. **Automatic price tiers.** The planning prompt marks every model with `$`,
+   `$$`, or `$$$`, derived from list prices, and tells the planner to prefer
+   `$` for mechanical subtasks and `$$$` for planning, review, and reduces.
+   Tiers describe spend, not quality; for subscription providers they
+   indicate relative quota use. You get this without any configuration.
+2. **Your fit notes.** Price alone cannot express what a model is *for*. If
+   you know that flash-class models handle your triage and extraction well,
+   or that one specific model writes your best reviews, teach the planner
+   once in `~/.pi/agent/workflows.json` instead of repeating it in every
+   request:
 
 ```json
 {
@@ -515,19 +533,21 @@ Add optional planning notes to `~/.pi/agent/workflows.json`:
 }
 ```
 
-Patterns match provider-qualified model IDs. A pattern without `/` matches any
-provider, and `*` is the only wildcard. The match with the longest literal
-prefix wins; a trusted project's `.pi/workflows.json` wins a tie with the user
-configuration. Pi-agents ignores project model notes until you trust the
-project.
+With these notes, a request like “review this PR with parallel lenses” yields
+a plan whose fan-out branches run on flash-class models and whose merging
+reduce runs on Opus — without you naming a single model in the request.
 
-The planning prompt marks models with `$`, `$$`, or `$$$` price tiers. These
-marks describe spend, not model quality. For subscription providers, they
-indicate relative quota use.
+Matching rules: patterns match provider-qualified model IDs; a pattern
+without `/` matches any provider; `*` is the only wildcard. The match with
+the longest literal prefix wins, and a trusted project's `.pi/workflows.json`
+wins a tie with the user configuration. Pi-agents ignores project model notes
+until you trust the project, because notes flow into the planning prompt.
 
-Static workflow trees attach `@model` only when the node sets `model` directly.
-No `@model` does not imply the session default because an agent profile may pin
-a model. Live run rows and trees show the planned or effective model instead.
+To verify what the planner chose, read the workflow tree: static trees attach
+`@model` where a node pins a model directly, and live run rows and trees show
+the planned or effective model for every agent. A node without `@model` in a
+static tree does not imply the session default — an agent profile may pin a
+model.
 
 ### Bundled workflows
 

@@ -61,7 +61,7 @@ describe("buildModelsPrompt", () => {
     );
   });
 
-  test("adds fit notes and only annotates context and reasoning deviations", () => {
+  test("adds fit notes and only annotates context deviations", () => {
     const catalog: ModelCatalog = {
       providers: [
         {
@@ -72,19 +72,16 @@ describe("buildModelsPrompt", () => {
               id: "claude-sonnet-a",
               costOut: 3,
               ctx: 128_000,
-              reasoning: true,
             },
             {
               id: "claude-sonnet-b",
               costOut: 3,
               ctx: 128_000,
-              reasoning: true,
             },
             {
               id: "claude-small",
               costOut: 1,
               ctx: 32_000,
-              reasoning: false,
             },
           ],
         },
@@ -95,9 +92,7 @@ describe("buildModelsPrompt", () => {
     ]);
     expect(prompt).toContain("claude-sonnet-a ($$)");
     expect(prompt).not.toContain("claude-sonnet-a ($$, 128k ctx");
-    expect(prompt).toContain(
-      "claude-small ($, 32k ctx, no reasoning — fast extraction)",
-    );
+    expect(prompt).toContain("claude-small ($, 32k ctx — fast extraction)");
     expect(prompt).toContain("price tiers (cheap..premium), not quality");
     expect(prompt).toContain("subscription tiers indicate quota burn");
   });
@@ -107,7 +102,6 @@ describe("buildModelsPrompt", () => {
       id: `model-${String(index).padStart(2, "0")}`,
       costOut: index % 3 === 0 ? 1 : index % 3 === 1 ? 5 : 12,
       ctx: index === 49 ? 32_000 : 128_000,
-      reasoning: true,
     }));
     const catalog: ModelCatalog = {
       providers: [{ id: "provider", subscription: false, models }],

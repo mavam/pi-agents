@@ -57,7 +57,7 @@ function contextLabel(ctx: number): string {
 function renderModel(
   providerId: string,
   model: ModelCatalogEntry,
-  modes: { ctx?: number; reasoning?: boolean },
+  modes: { ctx?: number },
   notes: readonly ModelNoteRule[],
   options: { notes: boolean; deviations: boolean; tiers: boolean },
 ): string {
@@ -73,13 +73,6 @@ function renderModel(
       model.ctx !== modes.ctx
     )
       annotations.push(contextLabel(model.ctx));
-    if (
-      model.reasoning !== undefined &&
-      modes.reasoning !== undefined &&
-      model.reasoning !== modes.reasoning
-    ) {
-      annotations.push(model.reasoning ? "reasoning" : "no reasoning");
-    }
   }
   const note = options.notes
     ? resolveModelNote(notes, `${providerId}/${model.id}`)
@@ -114,11 +107,6 @@ function renderModelsPrompt(
         ctx: modeOf(
           provider.models.flatMap((model) =>
             model.ctx === undefined ? [] : [model.ctx],
-          ),
-        ),
-        reasoning: modeOf(
-          provider.models.flatMap((model) =>
-            model.reasoning === undefined ? [] : [model.reasoning],
           ),
         ),
       };

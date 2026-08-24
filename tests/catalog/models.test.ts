@@ -143,14 +143,12 @@ describe("buildModelCatalog", () => {
               costIn: 1,
               costOut: 2,
               ctx: 128_000,
-              reasoning: true,
             },
             {
               id: "gpt-5.6-terra",
               costIn: 1,
               costOut: 2,
               ctx: 128_000,
-              reasoning: true,
             },
           ],
         },
@@ -163,7 +161,6 @@ describe("buildModelCatalog", () => {
               costIn: 1,
               costOut: 2,
               ctx: 128_000,
-              reasoning: true,
             },
           ],
         },
@@ -176,14 +173,12 @@ describe("buildModelCatalog", () => {
               costIn: 1,
               costOut: 2,
               ctx: 128_000,
-              reasoning: true,
             },
             {
               id: "zeta",
               costIn: 1,
               costOut: 2,
               ctx: 128_000,
-              reasoning: true,
             },
           ],
         },
@@ -220,7 +215,6 @@ describe("buildModelCatalog", () => {
       costIn: 3.5,
       costOut: 12,
       ctx: 32_000,
-      reasoning: false,
     });
   });
 

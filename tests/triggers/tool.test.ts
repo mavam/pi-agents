@@ -1640,6 +1640,12 @@ describe("workflow_create tool description", () => {
     expect(tool.description).toContain(
       '"model":"provider/id from <models> (bare id resolves to the earliest listed provider)"',
     );
+    expect(tool.description).toContain(
+      "Models in <models> carry price tiers; pick cheap tiers for mechanical subtasks and premium tiers for planning, review, and reduce nodes.",
+    );
+    expect(tool.description).toContain(
+      "Static tree previews show @model only for a node-level model",
+    );
     expect(
       tool.promptGuidelines?.some((line) =>
         line.includes("An unknown model fails the run before anything spawns"),

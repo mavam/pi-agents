@@ -502,6 +502,33 @@ Both are disabled by default.
 
 ## ⚙️ Configuration
 
+### Model guidance
+
+Add optional planning notes to `~/.pi/agent/workflows.json`:
+
+```json
+{
+  "models": {
+    "google/gemini-*-flash*": "fast triage, summaries, extraction",
+    "claude-opus-*": "planning, reduces, final review"
+  }
+}
+```
+
+Patterns match provider-qualified model IDs. A pattern without `/` matches any
+provider, and `*` is the only wildcard. The match with the longest literal
+prefix wins; a trusted project's `.pi/workflows.json` wins a tie with the user
+configuration. Pi-agents ignores project model notes until you trust the
+project.
+
+The planning prompt marks models with `$`, `$$`, or `$$$` price tiers. These
+marks describe spend, not model quality. For subscription providers, they
+indicate relative quota use.
+
+Static workflow trees attach `@model` only when the node sets `model` directly.
+No `@model` does not imply the session default because an agent profile may pin
+a model. Live run rows and trees show the planned or effective model instead.
+
 ### Bundled workflows
 
 A user or project workflow named `review` or `review-fix` overrides the bundled

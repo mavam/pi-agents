@@ -9,11 +9,39 @@ import {
 } from "../../src/catalog/models.js";
 
 function fakeRegistry(
-  models: Array<{ provider: string; id: string }>,
+  models: Array<{
+    provider: string;
+    id: string;
+    cost?: {
+      input: number;
+      output: number;
+      tiers?: Array<{
+        inputTokensAbove: number;
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+      }>;
+    };
+    contextWindow?: number;
+    reasoning?: boolean;
+  }>,
   oauthProviders: string[] = [],
 ): ModelRegistry {
+  const available = models.map((model) => ({
+    ...model,
+    cost: {
+      input: model.cost?.input ?? 1,
+      output: model.cost?.output ?? 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tiers: model.cost?.tiers,
+    },
+    contextWindow: model.contextWindow ?? 128_000,
+    reasoning: model.reasoning ?? true,
+  })) as Model<Api>[];
   return {
-    getAvailable: () => models as Model<Api>[],
+    getAvailable: () => available,
     getAll: () => {
       throw new Error("buildModelCatalog must not read unavailable models");
     },
@@ -109,19 +137,90 @@ describe("buildModelCatalog", () => {
         {
           id: "openai-codex",
           subscription: true,
-          modelIds: ["gpt-5.3-codex-spark", "gpt-5.6-terra"],
+          models: [
+            {
+              id: "gpt-5.3-codex-spark",
+              costIn: 1,
+              costOut: 2,
+              ctx: 128_000,
+              reasoning: true,
+            },
+            {
+              id: "gpt-5.6-terra",
+              costIn: 1,
+              costOut: 2,
+              ctx: 128_000,
+              reasoning: true,
+            },
+          ],
         },
         {
           id: "anthropic",
           subscription: false,
-          modelIds: ["claude-opus-4-6"],
+          models: [
+            {
+              id: "claude-opus-4-6",
+              costIn: 1,
+              costOut: 2,
+              ctx: 128_000,
+              reasoning: true,
+            },
+          ],
         },
         {
           id: "openai",
           subscription: false,
-          modelIds: ["alpha", "zeta"],
+          models: [
+            {
+              id: "alpha",
+              costIn: 1,
+              costOut: 2,
+              ctx: 128_000,
+              reasoning: true,
+            },
+            {
+              id: "zeta",
+              costIn: 1,
+              costOut: 2,
+              ctx: 128_000,
+              reasoning: true,
+            },
+          ],
         },
       ],
+    });
+  });
+
+  test("carries base-tier cost and fit metadata", () => {
+    const catalog = buildModelCatalog(
+      fakeRegistry([
+        {
+          provider: "test",
+          id: "priced",
+          cost: {
+            input: 3.5,
+            output: 12,
+            tiers: [
+              {
+                inputTokensAbove: 200_000,
+                input: 7,
+                output: 24,
+                cacheRead: 0,
+                cacheWrite: 0,
+              },
+            ],
+          },
+          contextWindow: 32_000,
+          reasoning: false,
+        },
+      ]),
+    );
+    expect(catalog.providers[0]?.models[0]).toEqual({
+      id: "priced",
+      costIn: 3.5,
+      costOut: 12,
+      ctx: 32_000,
+      reasoning: false,
     });
   });
 
@@ -136,12 +235,12 @@ describe("resolveModelReference", () => {
       {
         id: "openai-codex",
         subscription: true,
-        modelIds: ["gpt-shared", "gpt-terra"],
+        models: [{ id: "gpt-shared" }, { id: "gpt-terra" }],
       },
       {
         id: "openai",
         subscription: false,
-        modelIds: ["gpt-shared", "gpt-api"],
+        models: [{ id: "gpt-shared" }, { id: "gpt-api" }],
       },
     ],
   };

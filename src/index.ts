@@ -9,6 +9,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { loadModelNotes } from "./catalog/config.js";
 import {
   buildModelCatalog,
   createModelRefresher,
@@ -140,14 +141,20 @@ export function registerAgentExtension(pi: ExtensionAPI, depth: number): void {
     refreshModels(ctx.modelRegistry);
     const modelCatalog = buildModelCatalog(ctx.modelRegistry);
     const trusted = isProjectTrusted(ctx);
-    const appendix = promptAppendices.get(ctx.cwd, trusted, modelCatalog, () =>
-      createProfileAvailability({
-        cwd: ctx.cwd,
-        scope: trusted ? "both" : "user",
-        trusted,
-        catalogs: new CatalogCache(),
-        resolveModel: (ref) => resolveModelReference(ref, modelCatalog),
-      }),
+    const modelNotes = loadModelNotes(ctx.cwd, trusted);
+    const appendix = promptAppendices.get(
+      ctx.cwd,
+      trusted,
+      modelCatalog,
+      () =>
+        createProfileAvailability({
+          cwd: ctx.cwd,
+          scope: trusted ? "both" : "user",
+          trusted,
+          catalogs: new CatalogCache(),
+          resolveModel: (ref) => resolveModelReference(ref, modelCatalog),
+        }),
+      modelNotes,
     );
     return {
       systemPrompt: `${event.systemPrompt}\n\n${appendix}`,

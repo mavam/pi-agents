@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { AgentErrorResult, emptyUsage } from "../../src/engine/types.js";
+import {
+  AgentErrorResult,
+  emptyUsage,
+  UnsubmittedResult,
+} from "../../src/engine/types.js";
 import type { FlowNode, WorkflowLike } from "../../src/model/ast.js";
 import { validateFlow } from "../../src/model/validate.js";
 import { BudgetExceededError } from "../../src/run/budgets.js";
@@ -1595,6 +1599,32 @@ describe("run-level execution budgets", () => {
       partialText?: string;
     };
     expect(failed.partialText).toBe("partial work");
+  });
+
+  test("an unsubmitted result preserves the raw response in node_failed", async () => {
+    const { outcome, events } = await run(agent("a", "t"), () => {
+      throw new UnsubmittedResult("a", "complete review, wrong shape", 0);
+    });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("without submitting a result");
+    const failed = events.find((e) => e.type === "node_failed") as {
+      failureKind?: string;
+      partialText?: string;
+    };
+    expect(failed.failureKind).toBe("result-contract");
+    expect(failed.partialText).toBe("complete review, wrong shape");
+  });
+
+  test("an unsubmitted empty response carries no partial text", async () => {
+    const { events } = await run(agent("a", "t"), () => {
+      throw new UnsubmittedResult("a", "", 0);
+    });
+    const failed = events.find((e) => e.type === "node_failed") as {
+      failureKind?: string;
+      partialText?: string;
+    };
+    expect(failed.failureKind).toBe("result-contract");
+    expect(failed.partialText).toBeUndefined();
   });
 
   test("collect mode keeps sibling results when one agent hits its budget", async () => {

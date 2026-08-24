@@ -12,6 +12,7 @@ import {
   emptyUsage,
   type SpawnProgress,
   type SpawnUsage,
+  UnsubmittedResult,
 } from "../engine/types.js";
 import {
   type AgentNode,
@@ -280,6 +281,20 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Last agent output preserved by errors that carry it, so completed work
+ * survives a failure as the node's partial result. */
+function preservedPartialText(error: unknown): string | undefined {
+  if (error instanceof BudgetExceededError) return error.partialText;
+  if (error instanceof UnsubmittedResult) return error.raw || undefined;
+  return undefined;
+}
+
+/** Distinguishes a result-contract failure (the agent finished its work but
+ * never packaged it through the result tool) from a task failure. */
+function failureKindOf(error: unknown): "result-contract" | undefined {
+  return error instanceof UnsubmittedResult ? "result-contract" : undefined;
+}
+
 /** The budget message carried by a "budget" cancellation, when present. */
 function cancelMessageOf(
   error: unknown,
@@ -529,8 +544,8 @@ class Interpreter {
         path,
         instance,
         error: errorMessage(error),
-        partialText:
-          error instanceof BudgetExceededError ? error.partialText : undefined,
+        failureKind: failureKindOf(error),
+        partialText: preservedPartialText(error),
       });
       throw error;
     }
@@ -811,8 +826,8 @@ class Interpreter {
         path,
         instance,
         error: errorMessage(error),
-        partialText:
-          error instanceof BudgetExceededError ? error.partialText : undefined,
+        failureKind: failureKindOf(error),
+        partialText: preservedPartialText(error),
       });
       throw error;
     }

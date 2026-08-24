@@ -1,0 +1,9 @@
+created: 2026-08-24
+title: Model-aware workflow planning and inspection
+intro: >-
+  This release makes model selection visible throughout workflow planning and run
+  inspection. It adds per-node model details to live trees and events while helping
+  planners choose models with cost and context-window guidance.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.18.0

@@ -40,6 +40,7 @@ import {
   renderResultValue,
   sendInfo,
   shortId,
+  shortModels,
 } from "../ui/render.js";
 import { STATUS_STYLES } from "../ui/status.js";
 import {
@@ -471,13 +472,24 @@ export type WorkflowsItem =
 // Run- and node-tier rendering and actions, shared between the unified
 // overlay's drill levels.
 
-function nodeRow(node: NodeView, color: Colorize): string {
+function nodeModel(node: NodeView): string | undefined {
+  return node.effectiveModel ?? node.model;
+}
+
+function nodeRow(node: NodeView, color: Colorize, shortModel?: string): string {
   const presentation = STATUS_STYLES[node.status];
   const icon = color(presentation.color, presentation.icon);
   const usage = formatUsage(
     node.usage ?? (node.status === "running" ? node.progressUsage : undefined),
   );
-  return `${icon} ${nodeDisplayName(node).padEnd(12)}  ${(node.profile ?? "ad-hoc").padEnd(10)}  ${node.status.padEnd(9)}${usage ? `  ${color("dim", usage)}` : ""}`;
+  const parts = [
+    `${icon} ${nodeDisplayName(node)}`,
+    color("dim", node.profile ?? "ad-hoc"),
+    shortModel ? color("dim", shortModel) : undefined,
+    node.status,
+    usage ? color("dim", usage) : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.join(color("dim", " · "));
 }
 
 function runRow(run: RunView, color: Colorize, deps: CommandDeps): string {
@@ -523,27 +535,44 @@ function runHeaderLine(run: RunView, color: Colorize): string {
 }
 
 function nodeDetail(node: NodeView, color: Colorize): string[] {
-  if (node.error) return [color("error", `✗ ${node.error}`)];
-  if (node.status === "cancelled")
-    return [
+  const meta = (key: string, value: string) =>
+    `${color("dim", `${key}:`)} ${value}`;
+  const lines: string[] = [];
+  const model = nodeModel(node);
+  if (model) lines.push(meta("model", model));
+  if (node.requestedModel) lines.push(meta("requested", node.requestedModel));
+  if (node.thinking) lines.push(meta("thinking", node.thinking));
+  if (lines.length > 0) lines.push("");
+
+  if (node.error) {
+    lines.push(color("error", `✗ ${node.error}`));
+    return lines;
+  }
+  if (node.status === "cancelled") {
+    lines.push(
       color(
         "dim",
         `cancelled${node.cancelReason ? ` (${node.cancelReason})` : ""}`,
       ),
-    ];
+    );
+    return lines;
+  }
   if (node.status === "running") {
     const tail = (node.progressText ?? "")
       .split("\n")
       .filter((line) => line.trim() !== "")
       .slice(-3);
-    return tail.length > 0
-      ? tail.map((line) => color("dim", line))
-      : [color("dim", "running…")];
+    lines.push(
+      ...(tail.length > 0
+        ? tail.map((line) => color("dim", line))
+        : [color("dim", "running…")]),
+    );
+    return lines;
   }
   const output = valueText(node.value);
-  const lines = output
-    ? output.split("\n")
-    : [color("dim", "(no output value)")];
+  lines.push(
+    ...(output ? output.split("\n") : [color("dim", "(no output value)")]),
+  );
   lines.push("", color("dim", "o post full output"));
   return lines;
 }
@@ -811,7 +840,16 @@ export function buildWorkflowsSpec(
       return item.kind;
     },
     row: (item, color) => {
-      if (item.kind === "node") return nodeRow(item.node, color);
+      if (item.kind === "node") {
+        const model = nodeModel(item.node);
+        const labels = shortModels(
+          workNodes(item.run).flatMap((node) => {
+            const value = nodeModel(node);
+            return value ? [value] : [];
+          }),
+        );
+        return nodeRow(item.node, color, model ? labels.get(model) : undefined);
+      }
       if (item.kind === "run") return runRow(item.run, color, deps);
       if (item.kind === "workflow") {
         const { wf } = item;

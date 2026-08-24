@@ -717,6 +717,11 @@ describe("directed workflow run tools", () => {
     await waitFor(
       () => deps.manager.liveHandle(started.runId, "$") !== undefined,
     );
+    const liveNode = deps.manager.state.runs.get(started.runId)?.nodes.get("$");
+    if (!liveNode) throw new Error("missing live node");
+    liveNode.model = "openai/gpt-5";
+    liveNode.requestedModel = "gpt-5";
+    liveNode.effectiveModel = "openai/gpt-5-fallback";
 
     const inspected = await createWorkflowInspectTool(deps).execute(
       "inspect-1",
@@ -734,6 +739,8 @@ describe("directed workflow run tools", () => {
     expect(inspected.details.nodes[0]).toMatchObject({
       instance: "$",
       profile: "echo",
+      model: "openai/gpt-5-fallback",
+      requestedModel: "gpt-5",
       status: "running",
     });
     expect(inspected.details.nodes[0]).not.toHaveProperty("agent");

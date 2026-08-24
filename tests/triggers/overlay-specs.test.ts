@@ -371,6 +371,37 @@ describe("buildWorkflowsSpec", () => {
     expect(spec.detail(nodeItem, color).join("\n")).toContain(nodeResult);
   });
 
+  test("node rows and details show effective, requested, and thinking models", async () => {
+    const { spec, done } = await fixture();
+    const node = workNodes(done)[0];
+    if (!node) throw new Error("expected node");
+    node.model = "anthropic/claude-opus-4-5-20251101";
+    node.requestedModel = "claude-opus-4-5";
+    node.thinking = "high";
+    node.effectiveModel = "anthropic/claude-opus-4-5-20251102";
+
+    const workflow = spec
+      .items()
+      .find((item) => item.kind === "workflow" && item.wf.name === "triage");
+    if (!workflow) throw new Error("expected workflow row");
+    spec.onAction("enter", workflow);
+    const runItem = spec
+      .items()
+      .find((item) => item.kind === "run" && item.run === done);
+    if (runItem?.kind !== "run") throw new Error("expected run row");
+    spec.onAction("a", runItem);
+    const nodeItem = spec.items()[0];
+    if (nodeItem?.kind !== "node") throw new Error("expected node row");
+
+    const row = spec.row(nodeItem, color);
+    expect(row).toContain(" · opus-4-5 · ");
+    expect(row).not.toContain("@opus");
+    const detail = spec.detail(nodeItem, color).join("\n");
+    expect(detail).toContain("model: anthropic/claude-opus-4-5-20251102");
+    expect(detail).toContain("requested: claude-opus-4-5");
+    expect(detail).toContain("thinking: high");
+  });
+
   test("a on a run drills into its agents; esc pops one tier at a time", async () => {
     const { spec, live } = await fixture();
     const wf = spec.items().find((item) => item.kind === "workflow");

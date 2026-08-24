@@ -897,19 +897,27 @@ describe("subprocess spawn engine", () => {
       task: "t",
       cwd: "/tmp",
     });
-    const seen: string[] = [];
+    const seen: Array<{ text: string; model?: string }> = [];
     const reader = (async () => {
-      for await (const update of handle.updates) seen.push(update.text);
+      for await (const update of handle.updates)
+        seen.push({ text: update.text, model: update.model });
     })();
     const proc = procs[0]?.proc as FakeProc;
     proc.emitAssistant("first");
-    proc.emitAssistant("second");
+    proc.emitAssistant("second", {
+      provider: "anthropic",
+      model: "fallback-model",
+    });
     submitResult(proc, "result");
     proc.settle();
     proc.close(0);
-    await handle.wait();
+    const outcome = await handle.wait();
     await reader;
-    expect(seen.slice(0, 2)).toEqual(["first", "second"]);
+    expect(seen.slice(0, 2)).toEqual([
+      { text: "first", model: "test-model" },
+      { text: "second", model: "anthropic/fallback-model" },
+    ]);
+    expect(outcome.model).toBe("anthropic/fallback-model");
   });
 
   test("keeps a bounded chronological transcript of assistant and tool activity", async () => {

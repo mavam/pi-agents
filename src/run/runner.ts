@@ -25,6 +25,7 @@ import { BudgetExceededError } from "./budgets.js";
 import type { AgentCall, AgentRunner } from "./interpreter.js";
 import {
   CatalogCache,
+  type InvocationContext,
   type ResolveModel,
   resolveInvocationOrThrow,
   type SpawnDefaults,
@@ -49,6 +50,8 @@ export interface RunnerOptions {
   resolveModel?: ResolveModel;
   /** Effective budget limits enforced by the per-agent watchdog. */
   budgetLimits?: EffectiveBudgets;
+  /** Complete per-run resolution context shared with preflight and planning. */
+  invocationContext?: InvocationContext;
   /** Discovery caches shared with preflight, so resolution happens once. */
   catalogs?: CatalogCache;
   /** Directory for delegated agents' own session files (one per run). */
@@ -76,17 +79,16 @@ export function delegationPreamble(): string {
 }
 
 export function createAgentRunner(options: RunnerOptions): AgentRunner {
-  const trusted = options.trusted ?? true;
-  const catalogs = options.catalogs ?? new CatalogCache();
+  const context: InvocationContext = options.invocationContext ?? {
+    cwd: options.cwd,
+    scope: options.scope ?? "both",
+    trusted: options.trusted ?? true,
+    defaults: options.defaults,
+    resolveModel: options.resolveModel,
+    catalogs: options.catalogs ?? new CatalogCache(),
+  };
   return async (call: AgentCall) => {
-    const resolved = resolveInvocationOrThrow(call, {
-      cwd: options.cwd,
-      scope: options.scope ?? "both",
-      trusted,
-      defaults: options.defaults,
-      resolveModel: options.resolveModel,
-      catalogs,
-    });
+    const resolved = resolveInvocationOrThrow(call, context);
     const { cwd, profile } = resolved;
     const agentName = profile?.name ?? ADHOC_LABEL;
 
@@ -185,7 +187,11 @@ export function createAgentRunner(options: RunnerOptions): AgentRunner {
           `Spawn engine for agent ${agentName} returned a result that violates the declared result schema: ${validationError}.`,
         );
       }
-      return { value: outcome.value, usage: outcome.usage };
+      return {
+        value: outcome.value,
+        usage: outcome.usage,
+        model: outcome.model,
+      };
     } catch (error) {
       if (breach && error instanceof SpawnAborted) throw breach;
       throw error;

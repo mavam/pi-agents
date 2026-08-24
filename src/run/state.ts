@@ -20,6 +20,14 @@ export interface NodeView {
   kind: NodeKind | "reduce";
   profile?: string;
   label?: string;
+  /** Canonical model planned when the node started. */
+  model?: string;
+  /** Authored model reference when canonicalization changed it. */
+  requestedModel?: string;
+  /** Planned thinking level. */
+  thinking?: string;
+  /** Latest model observed from the delegated agent. */
+  effectiveModel?: string;
   status: NodeStatus;
   value?: unknown;
   error?: string;
@@ -98,10 +106,19 @@ export function applyRunEvent(state: RunState, event: RunEvent): void {
         kind: event.kind,
         profile: event.profile,
         label: event.label,
+        model: event.model,
+        requestedModel: event.requestedModel,
+        thinking: event.thinking,
         status: "running",
         startedAt: event.at,
       });
       run.order.push(event.instance);
+      return;
+    }
+    case "node_model": {
+      const node = run.nodes.get(event.instance);
+      if (!node) return;
+      node.effectiveModel = event.model;
       return;
     }
     case "node_completed": {

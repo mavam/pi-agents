@@ -67,6 +67,8 @@ export interface SpawnProgress {
   text: string;
   /** Latest provider-supplied reasoning summary headline, when Pi exposes one. */
   summary?: string;
+  /** Model observed on the latest assistant message, provider-qualified when possible. */
+  model?: string;
   usage: SpawnUsage;
   /** Tool currently executing, when the engine reports tool activity. */
   currentTool?: string;

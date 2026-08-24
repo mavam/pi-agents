@@ -137,6 +137,53 @@ describe("sidecar persistence", () => {
     expect(readRunEvents(sessionFile)).toHaveLength(2);
   });
 
+  test("replays old-v2 and mixed model-aware streams and skips malformed model fields", () => {
+    const oldStarted = {
+      type: "node_started",
+      at: 1,
+      runId: "r",
+      path: "$",
+      instance: "$",
+      kind: "agent",
+    } satisfies RunEvent;
+    const newStarted = {
+      ...oldStarted,
+      at: 2,
+      instance: "$.new",
+      model: "openai/gpt-5",
+      requestedModel: "gpt-5",
+      thinking: "high",
+    } satisfies RunEvent;
+    const effective = {
+      type: "node_model",
+      at: 3,
+      runId: "r",
+      path: "$",
+      instance: "$.new",
+      model: "openai/gpt-5-fallback",
+    } satisfies RunEvent;
+    const record = (value: unknown) =>
+      JSON.stringify({ protocol: PROTOCOL_VERSION, event: value });
+    fs.writeFileSync(
+      sidecarPath(sessionFile),
+      [
+        record(oldStarted),
+        record(newStarted),
+        record(effective),
+        record({ ...newStarted, instance: "bad-model", model: 7 }),
+        record({ ...newStarted, instance: "bad-request", requestedModel: {} }),
+        record({ ...newStarted, instance: "bad-thinking", thinking: false }),
+        record({ ...effective, instance: "bad-effective", model: null }),
+      ].join("\n"),
+    );
+
+    expect(readRunEvents(sessionFile)).toEqual([
+      oldStarted,
+      newStarted,
+      effective,
+    ]);
+  });
+
   test("createPersister never throws", () => {
     const persist = createPersister({ sessionFile: "/nonexistent/dir/x" });
     expect(() => persist(event(0))).not.toThrow();

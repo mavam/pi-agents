@@ -85,6 +85,80 @@ function eventTypes(events: RunEvent[], type: RunEvent["type"]): RunEvent[] {
   return events.filter((event) => event.type === type);
 }
 
+describe("model identity events", () => {
+  test("emits planned identity for agents and reduces and deduplicates effective changes", async () => {
+    const { events } = await run(
+      {
+        kind: "parallel",
+        branches: {
+          one: {
+            kind: "agent",
+            task: "work",
+            model: "gpt-5",
+            thinking: "high",
+          },
+        },
+        reduce: { task: "merge {branches}", model: "opus" },
+      },
+      (call) => {
+        call.onProgress?.({
+          text: "first",
+          usage: emptyUsage(),
+          model: "openai/gpt-5",
+        });
+        call.onProgress?.({
+          text: "same",
+          usage: emptyUsage(),
+          model: "openai/gpt-5",
+        });
+        call.onProgress?.({
+          text: "fallback",
+          usage: emptyUsage(),
+          model: "openai/gpt-5-fallback",
+        });
+        return "ok";
+      },
+      {
+        resolvePlannedModel: (call) => ({
+          model:
+            call.model === "opus" ? "anthropic/claude-opus" : "openai/gpt-5",
+          requestedModel: call.model,
+          thinking: call.thinking,
+        }),
+      },
+    );
+
+    const started = eventTypes(events, "node_started");
+    expect(
+      started.find(
+        (event) => event.type === "node_started" && event.kind === "agent",
+      ),
+    ).toMatchObject({
+      model: "openai/gpt-5",
+      requestedModel: "gpt-5",
+      thinking: "high",
+    });
+    expect(
+      started.find(
+        (event) => event.type === "node_started" && event.kind === "reduce",
+      ),
+    ).toMatchObject({
+      model: "anthropic/claude-opus",
+      requestedModel: "opus",
+    });
+    const observed = eventTypes(events, "node_model").filter(
+      (event) =>
+        event.type === "node_model" &&
+        event.instance.endsWith(".reduce") === false,
+    );
+    expect(
+      observed.map((event) =>
+        event.type === "node_model" ? event.model : undefined,
+      ),
+    ).toEqual(["openai/gpt-5", "openai/gpt-5-fallback"]);
+  });
+});
+
 describe("seq and bindings", () => {
   test("threads {previous} and named bindings into tasks", async () => {
     const { outcome, calls } = await run(

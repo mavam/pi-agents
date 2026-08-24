@@ -125,6 +125,7 @@ interface AssistantMessage {
     cost?: { total?: number };
   };
   model?: string;
+  provider?: string;
   stopReason?: string;
   errorMessage?: string;
 }
@@ -558,7 +559,11 @@ export function createSubprocessSpawnEngine(options?: {
       let lastStreamPushAt = 0;
       let stopReason: string | undefined;
       let errorMessage: string | undefined;
+      let observedModel: string | undefined;
       let resolvedModel = spec.model;
+      const plannedProvider = spec.model?.includes("/")
+        ? spec.model.slice(0, spec.model.indexOf("/"))
+        : undefined;
       let stderr = "";
       let buffered = "";
       const decoder = new StringDecoder("utf8");
@@ -728,6 +733,7 @@ export function createSubprocessSpawnEngine(options?: {
         updates.push({
           text: latestText,
           summary: latestSummary,
+          model: observedModel,
           usage: { ...usage },
           currentTool,
           turnsStarted,
@@ -894,7 +900,16 @@ export function createSubprocessSpawnEngine(options?: {
               message.usage.totalTokens || 0,
             );
           }
-          if (message.model) resolvedModel = message.model;
+          if (message.model) {
+            observedModel = message.model.includes("/")
+              ? message.model
+              : message.provider
+                ? `${message.provider}/${message.model}`
+                : plannedProvider
+                  ? `${plannedProvider}/${message.model}`
+                  : message.model;
+            resolvedModel = observedModel;
+          }
           if (message.stopReason) stopReason = message.stopReason;
           if (message.errorMessage) errorMessage = message.errorMessage;
           const text = messageText(message);

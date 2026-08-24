@@ -24,8 +24,10 @@ import {
 } from "./interpreter.js";
 import {
   CatalogCache,
+  type InvocationContext,
   type ResolveModel,
   resolveInvocation,
+  resolvePlannedModel,
 } from "./invocation.js";
 import { createAgentRunner, type SpawnDefaults } from "./runner.js";
 import {
@@ -126,16 +128,18 @@ export class RunManager {
     trusted = true,
     catalogs: CatalogCache = new CatalogCache(),
     resolveModel?: ResolveModel,
+    sharedContext?: InvocationContext,
   ): void {
+    const context: InvocationContext = sharedContext ?? {
+      cwd,
+      scope,
+      trusted,
+      resolveModel,
+      catalogs,
+    };
     const problems: string[] = [];
     for (const requirement of collectInvocations(flow)) {
-      const resolution = resolveInvocation(requirement, {
-        cwd,
-        scope,
-        trusted,
-        resolveModel,
-        catalogs,
-      });
+      const resolution = resolveInvocation(requirement, context);
       if (resolution.ok) continue;
       for (const problem of resolution.problems)
         problems.push(`at ${requirement.path}, ${problem}`);
@@ -152,6 +156,14 @@ export class RunManager {
     // One cache for the whole run: preflight's profile and skill reads serve
     // every later spawn, so nothing is discovered or read twice.
     const catalogs = new CatalogCache();
+    const invocationContext: InvocationContext = {
+      cwd: opts.cwd,
+      scope,
+      trusted,
+      defaults: opts.defaults,
+      resolveModel: opts.resolveModel,
+      catalogs,
+    };
     this.preflight(
       opts.flow,
       opts.cwd,
@@ -159,6 +171,7 @@ export class RunManager {
       trusted,
       catalogs,
       opts.resolveModel,
+      invocationContext,
     );
     const budgets: Budgets = { ...opts.budgets };
     const budgetLimits: EffectiveBudgets = { ...DEFAULT_BUDGETS, ...budgets };
@@ -179,6 +192,7 @@ export class RunManager {
       resolveModel: opts.resolveModel,
       budgetLimits,
       catalogs,
+      invocationContext,
       sessionDir: agentSessionDir(runId),
       onHandle: (call, handle) => {
         let handles = this.liveHandles.get(runId);
@@ -247,6 +261,22 @@ export class RunManager {
       cwd: opts.cwd,
       scope,
       originSessionFile: opts.originSessionFile,
+      resolvePlannedModel: (call) => {
+        try {
+          const planned = resolvePlannedModel(call, invocationContext);
+          if (!planned) {
+            console.warn(
+              `pi-agents: planned model resolution unexpectedly failed at ${call.path}`,
+            );
+          }
+          return planned;
+        } catch (error) {
+          console.warn(
+            `pi-agents: planned model resolution unexpectedly failed at ${call.path}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return undefined;
+        }
+      },
       isHeld: () => {
         const handles = this.liveHandles.get(runId);
         if (!handles) return false;

@@ -207,6 +207,34 @@ describe("createAgentRunner", () => {
     expect(specs[2]?.tools).toBeUndefined();
   });
 
+  test("threads progress and outcome models through the runner", async () => {
+    const seen: Array<string | undefined> = [];
+    const runner = createAgentRunner({
+      cwd: process.cwd(),
+      engine: {
+        spawn: () => ({
+          status: "completed",
+          updates: (async function* () {
+            yield { text: "working", usage: emptyUsage(), model: "prov/first" };
+            yield { text: "done", usage: emptyUsage(), model: "prov/second" };
+          })(),
+          wait: async () => ({
+            value: "ok",
+            exitCode: 0,
+            usage: emptyUsage(),
+            model: "prov/final",
+          }),
+          abort: () => {},
+        }),
+      },
+    });
+    const result = await runner(
+      call({ onProgress: (update) => seen.push(update.model) }),
+    );
+    expect(seen).toEqual(["prov/first", "prov/second"]);
+    expect(result.model).toBe("prov/final");
+  });
+
   test("model and thinking overrides win over session defaults", async () => {
     const specs: SpawnSpec[] = [];
     const runner = createAgentRunner({

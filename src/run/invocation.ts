@@ -67,6 +67,15 @@ export interface InvocationContext {
 }
 
 /** Everything needed to spawn: no further lookups, no further I/O. */
+export interface PlannedInvocation {
+  /** Canonical model that the child spawn will request. */
+  model?: string;
+  /** Authored model reference, only when it differs from the canonical model. */
+  requestedModel?: string;
+  /** Effective thinking level that the child spawn will request. */
+  thinking?: string;
+}
+
 export interface ResolvedInvocation {
   /** The named profile, when the call selected one. */
   profile?: Agent;
@@ -174,6 +183,46 @@ function resolveProfile(
       };
     }
   }
+}
+
+/** Resolve the identity fields known before an invocation starts. */
+export function resolvePlannedModel(
+  call: InvocationCall,
+  context: InvocationContext,
+): PlannedInvocation | undefined {
+  const cwd = call.cwd ?? context.cwd;
+  const scope = effectiveScope(call.scope, context.trusted, context.scope);
+  let profile: Agent | undefined;
+  if (call.profile !== undefined) {
+    const resolution = resolveProfile(
+      call.profile,
+      cwd,
+      scope,
+      context.catalogs,
+    );
+    if (!("profile" in resolution)) return undefined;
+    profile = resolution.profile;
+  }
+
+  const requestedModel = call.model ?? profile?.model;
+  let model = requestedModel ?? context.defaults?.model;
+  if (
+    model !== undefined &&
+    requestedModel !== undefined &&
+    context.resolveModel
+  ) {
+    const resolution = context.resolveModel(model);
+    if (!resolution.ok) return undefined;
+    model = resolution.model;
+  }
+  return {
+    model,
+    requestedModel:
+      requestedModel !== undefined && requestedModel !== model
+        ? requestedModel
+        : undefined,
+    thinking: call.thinking ?? profile?.thinking ?? context.defaults?.thinking,
+  };
 }
 
 /**

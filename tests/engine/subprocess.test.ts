@@ -446,6 +446,121 @@ describe("subprocess spawn engine", () => {
     expect(unsubmitted.raw).toBe("Final review: everything looks good.");
   });
 
+  test("an abort racing the shutdown keeps the unsubmitted result", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+    });
+    const proc = procs[0]?.proc as FakeProc;
+    await ready(proc);
+    proc.emitAssistant("Completed review.");
+    proc.settle();
+    await Promise.resolve();
+    await Promise.resolve();
+    proc.emitAssistant("Still prose.");
+    proc.settle();
+    // The resultless settle is latched; stdin is closed for shutdown.
+    expect(proc.stdin.ended).toBe(true);
+    // A stop arrives before the process actually exits. It must not
+    // overwrite the finished-but-unsubmitted outcome with SpawnAborted.
+    handle.abort();
+    proc.close(0);
+    const error = await handle.wait().then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(UnsubmittedResult);
+    expect((error as UnsubmittedResult).raw).toBe("Still prose.");
+  });
+
+  test("a failed recovery turn keeps the pre-nudge response", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({
+      agent: "w",
+      task: "t",
+      cwd: "/tmp",
+    });
+    const proc = procs[0]?.proc as FakeProc;
+    await ready(proc);
+    proc.emitAssistant("The complete original answer.");
+    proc.settle();
+    // Recovery prompt sent; the recovery turn dies with a provider error
+    // and no new text.
+    await Promise.resolve();
+    await Promise.resolve();
+    proc.emitRecord({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "provider exploded",
+      },
+    });
+    proc.settle();
+    expect(proc.stdin.ended).toBe(true);
+    proc.close(0);
+    const error = await handle.wait().then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(UnsubmittedResult);
+    const unsubmitted = error as UnsubmittedResult;
+    expect(unsubmitted.raw).toBe("The complete original answer.");
+    expect(unsubmitted.recoveryFailure).toContain("provider exploded");
+    expect(unsubmitted.message).toContain("provider exploded");
+  });
+
+  test("idle and detach nudges interleave boundedly", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await ready(proc);
+    proc.emitAssistant("Draft answer.");
+    proc.settle();
+    // Idle-settle nudge (prompt 2 after the task prompt).
+    expect(proc.stdin.records.filter((r) => r.type === "prompt")).toHaveLength(
+      2,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    // A user attaches while the recovery turn runs, then the agent settles
+    // resultless under the hold (its submission may have been gated).
+    const release = handle.hold?.();
+    proc.settle();
+    await Bun.sleep(0);
+    expect(proc.stdin.ended).toBe(false);
+    // Detach: the gate-specific nudge is still allowed (prompt 3).
+    release?.();
+    await Bun.sleep(0);
+    expect(proc.stdin.records.filter((r) => r.type === "prompt")).toHaveLength(
+      3,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    // A further resultless settle is reaped: no fourth prompt.
+    proc.settle();
+    expect(proc.stdin.records.filter((r) => r.type === "prompt")).toHaveLength(
+      3,
+    );
+    expect(proc.stdin.ended).toBe(true);
+    proc.close(0);
+    const error = await handle.wait().then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(UnsubmittedResult);
+    expect((error as UnsubmittedResult).raw).toBe("Draft answer.");
+  });
+
   test("settling without any output is reaped without a nudge", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({

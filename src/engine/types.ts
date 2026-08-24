@@ -111,19 +111,30 @@ export class SpawnFailure extends Error {
  */
 export class UnsubmittedResult extends SpawnFailure {
   readonly raw: string;
+  /** Why the in-band recovery attempt failed, when one was made and the
+   * recovery turn itself errored instead of submitting. */
+  readonly recoveryFailure?: string;
 
-  constructor(agent: string, raw: string, exitCode: number, stderr = "") {
+  constructor(
+    agent: string,
+    raw: string,
+    exitCode: number,
+    stderr = "",
+    recoveryFailure?: string,
+  ) {
     super(
       `Agent ${agent} finished without submitting a result through the result tool` +
         (raw
           ? "; its final response is preserved as the node's partial result."
-          : "."),
+          : ".") +
+        (recoveryFailure ? ` Recovery attempt failed: ${recoveryFailure}` : ""),
       agent,
       exitCode,
       stderr,
     );
     this.name = "UnsubmittedResult";
     this.raw = raw;
+    this.recoveryFailure = recoveryFailure;
   }
 }
 

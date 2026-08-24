@@ -994,6 +994,7 @@ describe("directed workflow run tools", () => {
         path: "$",
         instance: "$",
         error: "budget exceeded",
+        failureKind: "result-contract",
         partialText: "preserved partial answer",
       },
       {
@@ -1019,6 +1020,33 @@ describe("directed workflow run tools", () => {
     expect((result.content[0] as { text: string }).text).toContain(
       "preserved partial answer",
     );
+
+    // The advertised run-level call resolves to the single node holding
+    // partial output, without an inspect round-trip.
+    const runLevel = await createWorkflowResultTool(deps).execute(
+      "result-partial-run-level",
+      { run: runId },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(runLevel.details.partial).toBe(true);
+    expect(runLevel.details.instance).toBe("$");
+    expect((runLevel.content[0] as { text: string }).text).toContain(
+      "preserved partial answer",
+    );
+
+    // The failure kind survives persistence and replay into inspection.
+    const inspected = await createWorkflowInspectTool(deps).execute(
+      "inspect-partial",
+      { run: runId },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    const inspectedNode = inspected.details.nodes[0];
+    expect(inspectedNode?.failureKind).toBe("result-contract");
+    expect(inspectedNode?.hasPartialResult).toBe(true);
   });
 
   test("stops live runs and treats completion races as settled", async () => {

@@ -316,6 +316,9 @@ interface WorkflowInspectDetails {
     startedAt: string;
     endedAt?: string;
     error?: string;
+    /** "result-contract" when the agent finished but its output never
+     * satisfied the declared result contract. */
+    failureKind?: "result-contract";
     cancelReason?: string;
     progressSummary?: string;
     progressTool?: string;
@@ -618,11 +621,36 @@ export function createWorkflowResultTool(
       const status = node?.status ?? run.status;
       let value = node ? node.value : run.value;
       let partial = false;
+      let partialInstance: string | undefined;
       if (node && value === undefined && node.status === "failed") {
         const preserved = node.partialText ?? node.progressText;
         if (preserved !== undefined) {
           value = preserved;
           partial = true;
+          partialInstance = node.instance;
+        }
+      }
+      // A failed run addressed without an instance still resolves to its
+      // single node holding preserved output, so the advertised
+      // workflow_result({run}) retrieval works after a result-contract
+      // failure without an inspect round-trip.
+      if (!node && value === undefined && run.status === "failed") {
+        const candidates = [...run.nodes.values()].filter(
+          (n) =>
+            n.status === "failed" &&
+            (n.partialText ?? n.progressText) !== undefined,
+        );
+        const only = candidates.length === 1 ? candidates[0] : undefined;
+        if (only) {
+          value = only.partialText ?? only.progressText;
+          partial = true;
+          partialInstance = only.instance;
+        } else if (candidates.length > 1) {
+          throw new Error(
+            `Run ${shortId(run.header.id)} failed with ${candidates.length} nodes holding partial output. Pass one instance: ${candidates
+              .map((n) => `'${n.instance}'`)
+              .join(", ")}.`,
+          );
         }
       }
       if (status === "running" && value === undefined) {
@@ -650,7 +678,7 @@ export function createWorkflowResultTool(
 
       const view = params.view ?? "raw";
       let warning: string | undefined;
-      if (!node && !path && view === "presented") {
+      if (!node && !path && !partial && view === "presented") {
         const display = selectDisplayValue(value, run.header.display);
         value = display.value;
         warning = display.warning;
@@ -672,7 +700,7 @@ export function createWorkflowResultTool(
       const details: WorkflowResultDetails = {
         runId: run.header.id,
         id: shortId(run.header.id),
-        instance: node?.instance,
+        instance: node?.instance ?? partialInstance,
         status,
         view,
         path,
@@ -685,7 +713,9 @@ export function createWorkflowResultTool(
       };
       const attributes = [
         `run="${shortId(run.header.id)}"`,
-        node ? `instance="${node.instance}"` : undefined,
+        (node?.instance ?? partialInstance)
+          ? `instance="${node?.instance ?? partialInstance}"`
+          : undefined,
         `status="${status}"`,
         `view="${view}"`,
         path ? `path="${path}"` : undefined,
@@ -702,7 +732,7 @@ export function createWorkflowResultTool(
       if (nextCursor !== undefined) {
         const continuation = {
           run: run.header.id,
-          instance: node?.instance,
+          instance: node?.instance ?? partialInstance,
           view,
           path,
           cursor: nextCursor,

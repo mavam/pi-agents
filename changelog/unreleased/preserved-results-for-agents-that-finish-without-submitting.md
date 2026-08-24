@@ -16,7 +16,9 @@ Workflow runs now recover and preserve that work:
   in-band nudge to package what it already has, without redoing the
   assignment.
 - If the agent still ends without submitting, its final response is preserved
-  as the node's partial result and stays retrievable via `workflow_result`.
+  as the node's partial result and stays retrievable via `workflow_result` —
+  including through the run-level call when a single node holds the output,
+  and even when the recovery turn itself fails or a stop races the shutdown.
 - The node failure now carries a `result-contract` failure kind, so
   `workflow_inspect` distinguishes an output-packaging failure from a task
   failure.

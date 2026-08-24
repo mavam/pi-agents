@@ -536,6 +536,13 @@ export function createSubprocessSpawnEngine(options?: {
       let terminalFailure: Error | undefined;
       let submissionAccepted = false;
       let submitNudgeSent = false;
+      /** Latched when a resultless agent settles terminally: from then on the
+       * outcome is the preserved unsubmitted response, and a racing abort
+       * during process shutdown must not overwrite it. */
+      let unsubmittedSettled = false;
+      /** The candidate raw response snapshotted before a recovery nudge, so
+       * a failing recovery turn cannot destroy the original output. */
+      let nudgeSnapshot: string | undefined;
       let settleHolds = 0;
       let resultValue: unknown;
       let agentErrorReason: string | undefined;
@@ -737,6 +744,7 @@ export function createSubprocessSpawnEngine(options?: {
         if (!latestText) return false;
         if (stopReason === "error" || stopReason === "aborted") return false;
         submitNudgeSent = true;
+        nudgeSnapshot = latestText;
         transcriptStore.upsert({
           key: `notice:${++activitySequence}`,
           kind: "notice",
@@ -1225,7 +1233,12 @@ export function createSubprocessSpawnEngine(options?: {
               endStdin();
             } else if (settleHolds === 0 && !requestSubmission()) {
               // No recovery available (or already attempted); the close
-              // path preserves the final response as the raw result.
+              // path preserves the final response as the raw result. Latch
+              // the outcome now: an abort racing the process shutdown must
+              // not overwrite finished-but-unsubmitted work. A settle that
+              // only arrives after an abort is that abort winding down and
+              // does not latch.
+              if (!wasAborted) unsubmittedSettled = true;
               endStdin();
             }
           }
@@ -1304,7 +1317,10 @@ export function createSubprocessSpawnEngine(options?: {
           );
           rejectPending(closedError);
 
-          if (wasAborted) {
+          // A latched resultless settle is the spawn's true outcome: the
+          // agent finished its work before any abort arrived, and the
+          // preserved response must survive the shutdown race.
+          if (wasAborted && !unsubmittedSettled) {
             status = "aborted";
             cleanup();
             rejectWait(new SpawnAborted(spec.agent));
@@ -1312,18 +1328,35 @@ export function createSubprocessSpawnEngine(options?: {
           }
 
           const exitCode = signalCode ? 1 : (code ?? 0);
+          // A failed recovery turn (provider or runtime error after the
+          // nudge) must not destroy the original completed response; fall
+          // back to the snapshot taken before the nudge was sent.
+          const finalTurnFailed =
+            stopReason === "error" || stopReason === "aborted";
+          const preservedRaw = finalTurnFailed ? nudgeSnapshot : latestText;
           if (
             terminalFailure === undefined &&
             agentSettled &&
-            stopReason !== "error" &&
-            stopReason !== "aborted" &&
             (exitCode === 0 || sentTerminationSignal) &&
-            !submissionAccepted
+            !submissionAccepted &&
+            (!finalTurnFailed ||
+              (preservedRaw !== undefined && preservedRaw !== ""))
           ) {
             status = "failed";
             cleanup();
             rejectWait(
-              new UnsubmittedResult(spec.agent, latestText, exitCode, stderr),
+              new UnsubmittedResult(
+                spec.agent,
+                preservedRaw ?? "",
+                exitCode,
+                stderr,
+                finalTurnFailed
+                  ? formatFailureReason(
+                      errorMessage || `stop reason '${stopReason}'`,
+                      resolvedModel,
+                    )
+                  : undefined,
+              ),
             );
             return;
           }
@@ -1573,8 +1606,12 @@ export function createSubprocessSpawnEngine(options?: {
             }
             // The gate may have blocked the agent's submission attempts; a
             // settled, resultless agent gets one nudge to finish instead of
-            // being reaped into a "finished without a result" failure.
+            // being reaped into a "finished without a result" failure. This
+            // detach nudge is allowed even after an idle-settle nudge (its
+            // cause is the gate, not idleness), but it suppresses any later
+            // idle-settle nudge and snapshots the response like one.
             submitNudgeSent = true;
+            if (latestText) nudgeSnapshot = latestText;
             transcriptStore.upsert({
               key: `notice:${++activitySequence}`,
               kind: "notice",

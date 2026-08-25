@@ -235,8 +235,10 @@ export interface SpawnHandle {
    * the agent is mid-turn); unavailable on engines without live input. */
   prompt?(message: string): Promise<void>;
   /** Interrupt the agent's current turn (like Esc in an interactive pi
-   * session) without ending the spawn; the agent stays promptable. */
-  interrupt?(): Promise<void>;
+   * session) without ending the spawn; the agent stays promptable. Returns
+   * queued user messages removed from the engine so the caller can restore
+   * them to its editor. */
+  interrupt?(): Promise<string[]>;
   /** Keep the spawn alive across idle settles (an attached human may still
    * prompt it). Returns a release; on release an idle, resultless agent
    * settles normally. */

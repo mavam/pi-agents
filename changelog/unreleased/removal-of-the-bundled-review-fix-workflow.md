@@ -3,6 +3,8 @@ title: Removal of the bundled review-fix workflow
 type: change
 authors:
   - mavam
+prs:
+  - 65
 created: 2026-08-26T04:52:15.409726Z
 ---
 

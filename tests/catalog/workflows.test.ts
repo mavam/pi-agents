@@ -430,10 +430,7 @@ flow:
   test("discovers the package workflows in user scope", () => {
     const { workflows, diagnostics } = discoverWorkflows(projectDir, "user");
     expect(diagnostics).toEqual([]);
-    expect(workflows.map((workflow) => workflow.name).sort()).toEqual([
-      "review",
-      "review-fix",
-    ]);
+    expect(workflows.map((workflow) => workflow.name)).toEqual(["review"]);
     expect(workflows.every((workflow) => workflow.source === "bundled")).toBe(
       true,
     );
@@ -458,9 +455,6 @@ flow:
       description: "Project review",
       source: "project",
     });
-    expect(
-      workflows.find((workflow) => workflow.name === "review-fix")?.source,
-    ).toBe("bundled");
   });
 
   test("disables bundled workflows through project configuration", () => {
@@ -471,53 +465,6 @@ flow:
     const { workflows, diagnostics } = discoverWorkflows(projectDir, "both");
     expect(workflows).toEqual([]);
     expect(diagnostics).toEqual([]);
-  });
-
-  test("disables individual bundled workflows", () => {
-    fs.writeFileSync(
-      path.join(projectDir, ".pi", "workflows.json"),
-      JSON.stringify({ bundledWorkflows: { "review-fix": false } }),
-    );
-    const { workflows, diagnostics } = discoverWorkflows(projectDir, "both");
-    expect(diagnostics).toEqual([]);
-    expect(workflows.map((workflow) => workflow.name)).toEqual(["review"]);
-  });
-
-  test("disables bundled dependents with a configuration diagnostic", () => {
-    const configPath = path.join(projectDir, ".pi", "workflows.json");
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ bundledWorkflows: { review: false } }),
-    );
-    const { workflows, diagnostics } = discoverWorkflows(projectDir, "both");
-    expect(workflows).toEqual([]);
-    expect(diagnostics).toEqual([
-      {
-        source: "project",
-        filePath: configPath,
-        message:
-          "Disabling bundled workflow 'review' also disables dependent bundled workflow 'review-fix'.",
-      },
-    ]);
-  });
-
-  test("keeps bundled dependents when a project overrides the dependency", () => {
-    writeWorkflow(
-      "review.yaml",
-      "name: review\ndescription: Project review\nparams: [{ name: target, required: true }, focus, context]\ntask: Review {params.target}\n",
-    );
-    fs.writeFileSync(
-      path.join(projectDir, ".pi", "workflows.json"),
-      JSON.stringify({ bundledWorkflows: { review: false } }),
-    );
-    const { workflows, diagnostics } = discoverWorkflows(projectDir, "both");
-    expect(diagnostics).toEqual([]);
-    expect(
-      workflows.map((workflow) => [workflow.name, workflow.source]),
-    ).toEqual([
-      ["review-fix", "bundled"],
-      ["review", "project"],
-    ]);
   });
 
   test("lets a project re-enable one globally disabled workflow", () => {
@@ -546,10 +493,7 @@ flow:
     const configPath = path.join(projectDir, ".pi", "workflows.json");
     fs.writeFileSync(configPath, '{"bundledWorkflows":"no"}');
     const { workflows, diagnostics } = discoverWorkflows(projectDir, "both");
-    expect(workflows.map((workflow) => workflow.name).sort()).toEqual([
-      "review",
-      "review-fix",
-    ]);
+    expect(workflows.map((workflow) => workflow.name)).toEqual(["review"]);
     expect(diagnostics).toContainEqual({
       source: "project",
       filePath: configPath,
@@ -564,16 +508,12 @@ flow:
       JSON.stringify({ bundledWorkflows: { "review-fxi": false } }),
     );
     const { workflows, diagnostics } = discoverWorkflows(projectDir, "both");
-    expect(workflows.map((workflow) => workflow.name).sort()).toEqual([
-      "review",
-      "review-fix",
-    ]);
+    expect(workflows.map((workflow) => workflow.name)).toEqual(["review"]);
     expect(diagnostics).toEqual([
       {
         source: "project",
         filePath: configPath,
-        message:
-          "Unknown bundled workflow 'review-fxi'. Available: review, review-fix.",
+        message: "Unknown bundled workflow 'review-fxi'. Available: review.",
       },
     ]);
   });

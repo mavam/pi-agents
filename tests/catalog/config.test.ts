@@ -26,10 +26,10 @@ describe("workflow configuration", () => {
 
       fs.writeFileSync(
         filePath,
-        '{"bundledWorkflows":{"review":true,"review-fix":false}}',
+        '{"bundledWorkflows":{"review":true,"other":false}}',
       );
       expect(readWorkflowConfig(filePath)).toEqual({
-        bundledWorkflows: { review: true, "review-fix": false },
+        bundledWorkflows: { review: true, other: false },
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -87,7 +87,7 @@ describe("workflow configuration", () => {
     });
 
     expect(bundledWorkflowEnabled(projectOverride, "review")).toBe(true);
-    expect(bundledWorkflowEnabled(projectOverride, "review-fix")).toBe(false);
+    expect(bundledWorkflowEnabled(projectOverride, "other")).toBe(false);
   });
 
   test("loads trusted project notes, clamps untrusted projects, and honors glob precedence", () => {
@@ -151,6 +151,6 @@ describe("workflow configuration", () => {
     const projectPolicy = applyBundledWorkflowsSetting(userPolicy, true);
 
     expect(bundledWorkflowEnabled(projectPolicy, "review")).toBe(true);
-    expect(bundledWorkflowEnabled(projectPolicy, "review-fix")).toBe(true);
+    expect(bundledWorkflowEnabled(projectPolicy, "other")).toBe(true);
   });
 });

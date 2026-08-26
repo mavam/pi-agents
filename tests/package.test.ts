@@ -28,7 +28,7 @@ describe("npm package contents", () => {
     ) as { files?: string[] };
     expect(packageJson.files).toContain(".pi/workflows");
 
-    for (const name of ["review.yaml", "review-fix.yaml"]) {
+    for (const name of ["review.yaml"]) {
       const filePath = path.join(BUNDLED_WORKFLOWS_DIR, name);
       expect(fs.existsSync(filePath)).toBe(true);
       expect(typeof parseWorkflowFile(filePath, "bundled")).not.toBe("string");

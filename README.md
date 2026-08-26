@@ -15,11 +15,8 @@ broken data dependency fails before any agent spawns.
 pi install npm:pi-agents
 ```
 
-The package works without configuration. It includes two workflows:
-
-- `/review` performs a read-only code review.
-- `/review-fix` reviews, implements fixes, and reviews again until the change
-  passes or the workflow cannot continue.
+The package works without configuration. It includes `/review`, a read-only
+code review workflow.
 
 ## ✨ Quick start
 
@@ -31,10 +28,6 @@ Delegate a review of src/run to an agent.
 
 ```text
 Review src/run and src/ui in parallel, then merge the findings.
-```
-
-```text
-Run the review-fix workflow on my current changes.
 ```
 
 Pi starts workflows only when you ask for delegation, parallel agents, or a
@@ -551,8 +544,7 @@ pin a model.
 
 ### Bundled workflows
 
-A user or project workflow named `review` or `review-fix` overrides the bundled
-workflow with the same name.
+A user or project workflow named `review` overrides the bundled workflow.
 
 Disable all bundled workflows in `~/.pi/agent/workflows.json`:
 
@@ -567,15 +559,13 @@ Control them individually:
 ```json
 {
   "bundledWorkflows": {
-    "review": true,
-    "review-fix": false
+    "review": false
   }
 }
 ```
 
 A trusted project can use `.pi/workflows.json`. Project settings override user
-settings. The bundled `review-fix` workflow depends on `review`; disabling
-`review` also disables `review-fix` unless another workflow provides it.
+settings.
 
 ### Event-triggered workflows
 

@@ -5,8 +5,7 @@ display: report
 doc: >-
   Runs one self-contained anonymous high-thinking reviewer. Returns
   machine-readable review state together with the complete Markdown report
-  and never modifies the target. Use `review-fix` only when you explicitly
-  want a workflow that mutates the current working tree.
+  and never modifies the target.
 params:
   - name: target
     description: What to review (a pull request, local change, path, or description)

@@ -10,10 +10,9 @@
  * The child writes a real pi session (attachable after the agent settles);
  * its path is discovered via `get_state` and exposed as `nativeSession`.
  * The result payload schema and attach-hold file travel over the RPC channel
- * itself: after a `get_commands` probe confirms the child runs the shipped
- * result-tool extension, one configure prompt invokes its internal command
- * before the task prompt. Configuration failures surface as `extension_error`
- * events, which fail the spawn.
+ * itself: one configure prompt invokes the shipped result-tool extension's
+ * internal command before the task prompt. Configuration failures surface as
+ * `extension_error` events, which fail the spawn.
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
@@ -27,7 +26,6 @@ import {
   validateJsonSchema,
 } from "../model/json-schema.js";
 import {
-  CONFIGURE_RESULT_COMMAND,
   encodeConfigureResultPrompt,
   RESULT_TOOL_NAME,
 } from "./result-protocol.js";
@@ -1450,26 +1448,6 @@ export function createSubprocessSpawnEngine(options?: {
                 error instanceof Error ? error.message : String(error);
               throw new Error(
                 `Pi RPC initialization failed while configuring steering mode. pi-agents requires the latest Pi release; run "pi update pi" and retry. Cause: ${cause}`,
-              );
-            }
-            // The configure command must exist before its invocation ever
-            // reaches the child: an unknown slash command becomes ordinary
-            // user input and would start a model turn on the payload.
-            const commandsResponse = await sendCommand({
-              type: "get_commands",
-            });
-            const commandsData = commandsResponse.data;
-            const hasConfigureCommand =
-              isRecord(commandsData) &&
-              Array.isArray(commandsData.commands) &&
-              commandsData.commands.some(
-                (command) =>
-                  isRecord(command) &&
-                  command.name === CONFIGURE_RESULT_COMMAND,
-              );
-            if (!hasConfigureCommand) {
-              throw new Error(
-                `Delegated pi does not expose the ${CONFIGURE_RESULT_COMMAND} command. pi-agents requires the latest Pi release; run "pi update pi" and retry.`,
               );
             }
             await sendCommand({ type: "prompt", message: configurePrompt });

@@ -45,7 +45,6 @@ interface FakeProcOptions {
     | Array<Record<string, unknown>>
     | ((record: Record<string, unknown>) => Array<Record<string, unknown>>);
   manualGetState?: boolean;
-  omitConfigureCommand?: boolean;
 }
 
 function isConfigurePrompt(record: Record<string, unknown>): boolean {
@@ -100,15 +99,6 @@ class FakeProc extends EventEmitter {
                 data: {
                   isStreaming: this.streaming,
                   pendingMessageCount: 0,
-                },
-              }
-            : {}),
-          ...(record.type === "get_commands"
-            ? {
-                data: {
-                  commands: this.options.omitConfigureCommand
-                    ? []
-                    : [{ name: CONFIGURE_RESULT_COMMAND }],
                 },
               }
             : {}),
@@ -298,12 +288,11 @@ describe("subprocess spawn engine", () => {
     await ready(spawned.proc);
     expect(spawned.proc.stdin.records.map((record) => record.type)).toEqual([
       "set_steering_mode",
-      "get_commands",
       "prompt",
       "prompt",
     ]);
     expect(spawned.proc.stdin.records[0]?.mode).toBe("one-at-a-time");
-    const configure = spawned.proc.stdin.records[2] as Record<string, unknown>;
+    const configure = spawned.proc.stdin.records[1] as Record<string, unknown>;
     expect(isConfigurePrompt(configure)).toBe(true);
     const configureArgs = (configure.message as string).slice(
       (configure.message as string).indexOf(" ") + 1,
@@ -315,7 +304,7 @@ describe("subprocess spawn engine", () => {
     const holdFile = (JSON.parse(configureArgs) as { holdFile: string })
       .holdFile;
     expect(holdFile.endsWith("attach-hold")).toBe(true);
-    expect(spawned.proc.stdin.records[3]?.message).toBe("find things");
+    expect(spawned.proc.stdin.records[2]?.message).toBe("find things");
 
     finish(spawned.proc, "hello");
     const outcome = await handle.wait();
@@ -843,24 +832,6 @@ describe("subprocess spawn engine", () => {
     await expect(handle.wait()).rejects.toThrow(
       "unsupported set_steering_mode",
     );
-  });
-
-  test("a child without the configure command fails before any prompt", async () => {
-    const { engine, procs } = makeEngine(undefined, undefined, {
-      omitConfigureCommand: true,
-    });
-    const handle = engine.spawn({ agent: "worker", task: "t", cwd: "/tmp" });
-    const proc = procs[0]?.proc as FakeProc;
-    for (let i = 0; i < 20 && !proc.stdin.ended; i++) {
-      await Promise.resolve();
-    }
-    // The configure payload (and the task) must never reach a model turn.
-    expect(
-      proc.stdin.records.filter((record) => record.type === "prompt"),
-    ).toHaveLength(0);
-    proc.close(0);
-    await expect(handle.wait()).rejects.toThrow(CONFIGURE_RESULT_COMMAND);
-    await expect(handle.wait()).rejects.toThrow('run "pi update pi"');
   });
 
   test("an extension_error event fails the spawn", async () => {

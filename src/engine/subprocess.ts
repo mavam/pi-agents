@@ -9,8 +9,11 @@
  *
  * The child writes a real pi session (attachable after the agent settles);
  * its path is discovered via `get_state` and exposed as `nativeSession`.
- * The result payload schema travels through a private per-spawn file named by
- * PI_AGENTS_RESULT_SCHEMA_FILE.
+ * The result payload schema and attach-hold file travel over the RPC channel
+ * itself: after a `get_commands` probe confirms the child runs the shipped
+ * result-tool extension, one configure prompt invokes its internal command
+ * before the task prompt. Configuration failures surface as `extension_error`
+ * events, which fail the spawn.
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
@@ -24,10 +27,10 @@ import {
   validateJsonSchema,
 } from "../model/json-schema.js";
 import {
-  RESULT_HOLD_FILE_ENV_VAR,
-  RESULT_SCHEMA_FILE_ENV_VAR,
+  CONFIGURE_RESULT_COMMAND,
+  encodeConfigureResultPrompt,
   RESULT_TOOL_NAME,
-} from "./result-tool.js";
+} from "./result-protocol.js";
 import {
   AgentErrorResult,
   emptyUsage,
@@ -439,17 +442,11 @@ function messageReasoningSummary(
 
 function writeSpawnFiles(
   agentName: string,
-  schema: unknown,
   prompt?: string,
-): { dir: string; schemaFilePath: string; promptFilePath?: string } {
+): { dir: string; promptFilePath?: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agents-"));
   const safeName = agentName.replace(/[^\w.-]+/g, "_") || "agent";
   try {
-    const schemaFilePath = path.join(dir, `result-schema-${safeName}.json`);
-    fs.writeFileSync(schemaFilePath, JSON.stringify(schema), {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
     let promptFilePath: string | undefined;
     if (prompt) {
       promptFilePath = path.join(dir, `append-system-${safeName}.md`);
@@ -458,7 +455,7 @@ function writeSpawnFiles(
         mode: 0o600,
       });
     }
-    return { dir, schemaFilePath, promptFilePath };
+    return { dir, promptFilePath };
   } catch (error) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw error;
@@ -611,11 +608,15 @@ export function createSubprocessSpawnEngine(options?: {
       );
       const spawnFiles = writeSpawnFiles(
         spec.agent,
-        schema,
         spec.systemPrompt?.trim() || undefined,
       );
       tempDir = spawnFiles.dir;
       const holdFilePath = path.join(spawnFiles.dir, "attach-hold");
+      const configurePrompt = encodeConfigureResultPrompt({
+        version: 1,
+        resultSchema: schema,
+        holdFile: holdFilePath,
+      });
       if (spawnFiles.promptFilePath) {
         args.push("--append-system-prompt", spawnFiles.promptFilePath);
       }
@@ -1029,6 +1030,15 @@ export function createSubprocessSpawnEngine(options?: {
             handleExtensionUiRequest(record);
             return;
           }
+          // A throwing extension (e.g. the configure command rejecting its
+          // payload) is a fatal engine bug, never an agent-visible state.
+          if (record.type === "extension_error") {
+            const reason =
+              typeof record.error === "string"
+                ? record.error
+                : (JSON.stringify(record.error) ?? "unknown error");
+            throw new Error(`Delegated pi extension failed: ${reason}`);
+          }
           const message = assistantMessage(record);
           if (message) recordAssistantMessage(message);
           // Turn and tool activity keep the caller's liveness view fresh
@@ -1257,8 +1267,6 @@ export function createSubprocessSpawnEngine(options?: {
           env: {
             ...process.env,
             ...(spec.env ?? {}),
-            [RESULT_SCHEMA_FILE_ENV_VAR]: spawnFiles.schemaFilePath,
-            [RESULT_HOLD_FILE_ENV_VAR]: holdFilePath,
           },
           shell: false,
           stdio: ["pipe", "pipe", "pipe"],
@@ -1444,6 +1452,27 @@ export function createSubprocessSpawnEngine(options?: {
                 `Pi RPC initialization failed while configuring steering mode. pi-agents requires the latest Pi release; run "pi update pi" and retry. Cause: ${cause}`,
               );
             }
+            // The configure command must exist before its invocation ever
+            // reaches the child: an unknown slash command becomes ordinary
+            // user input and would start a model turn on the payload.
+            const commandsResponse = await sendCommand({
+              type: "get_commands",
+            });
+            const commandsData = commandsResponse.data;
+            const hasConfigureCommand =
+              isRecord(commandsData) &&
+              Array.isArray(commandsData.commands) &&
+              commandsData.commands.some(
+                (command) =>
+                  isRecord(command) &&
+                  command.name === CONFIGURE_RESULT_COMMAND,
+              );
+            if (!hasConfigureCommand) {
+              throw new Error(
+                `Delegated pi does not expose the ${CONFIGURE_RESULT_COMMAND} command. pi-agents requires the latest Pi release; run "pi update pi" and retry.`,
+              );
+            }
+            await sendCommand({ type: "prompt", message: configurePrompt });
             if (wasAborted) throw new SpawnAborted(spec.agent);
             await sendCommand({ type: "prompt", message: spec.task });
             promptAccepted = true;

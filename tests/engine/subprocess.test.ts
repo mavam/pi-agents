@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import {
-  RESULT_SCHEMA_FILE_ENV_VAR,
+  CONFIGURE_RESULT_COMMAND,
   RESULT_TOOL_NAME,
-} from "../../src/engine/result-tool.js";
+} from "../../src/engine/result-protocol.js";
 import {
   attachedSupervisorPrompt,
   createSubprocessSpawnEngine,
@@ -45,6 +45,22 @@ interface FakeProcOptions {
     | Array<Record<string, unknown>>
     | ((record: Record<string, unknown>) => Array<Record<string, unknown>>);
   manualGetState?: boolean;
+  omitConfigureCommand?: boolean;
+}
+
+function isConfigurePrompt(record: Record<string, unknown>): boolean {
+  return (
+    record.type === "prompt" &&
+    typeof record.message === "string" &&
+    record.message.startsWith(`/${CONFIGURE_RESULT_COMMAND} `)
+  );
+}
+
+/** Prompts sent to the child minus the engine's configure invocation. */
+function taskPrompts(proc: FakeProc): Array<Record<string, unknown>> {
+  return proc.stdin.records.filter(
+    (record) => record.type === "prompt" && !isConfigurePrompt(record),
+  );
 }
 
 class FakeProc extends EventEmitter {
@@ -66,7 +82,7 @@ class FakeProc extends EventEmitter {
         return;
       if (record.type === "get_state" && this.options.manualGetState) return;
       queueMicrotask(() => {
-        if (record.type === "prompt") {
+        if (record.type === "prompt" && !isConfigurePrompt(record)) {
           const prelude =
             typeof this.options.promptPrelude === "function"
               ? this.options.promptPrelude(record)
@@ -87,6 +103,15 @@ class FakeProc extends EventEmitter {
                 },
               }
             : {}),
+          ...(record.type === "get_commands"
+            ? {
+                data: {
+                  commands: this.options.omitConfigureCommand
+                    ? []
+                    : [{ name: CONFIGURE_RESULT_COMMAND }],
+                },
+              }
+            : {}),
           ...(record.type === failCommand
             ? { error: `unsupported ${record.type}` }
             : {}),
@@ -94,6 +119,7 @@ class FakeProc extends EventEmitter {
         if (
           commandSucceeded &&
           record.type === "prompt" &&
+          !isConfigurePrompt(record) &&
           this.options.promptStartsAgent !== false
         ) {
           this.emitRecord({ type: "agent_start" });
@@ -175,11 +201,11 @@ function makeEngine(
 }
 
 async function ready(proc: FakeProc): Promise<void> {
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 20; i++) {
     await Promise.resolve();
-    if (proc.stdin.records.some((record) => record.type === "prompt")) return;
+    if (taskPrompts(proc).length > 0) return;
   }
-  throw new Error("fake RPC process never received prompt");
+  throw new Error("fake RPC process never received the task prompt");
 }
 
 let resultCallSequence = 0;
@@ -251,7 +277,6 @@ describe("subprocess spawn engine", () => {
       model: "some-model",
       thinking: "low",
       tools: ["read", "grep"],
-      env: { [RESULT_SCHEMA_FILE_ENV_VAR]: "/caller/cannot-override.json" },
     });
     const spawned = procs[0] as (typeof procs)[number];
     expect(spawned.command).toBe("pi");
@@ -263,25 +288,39 @@ describe("subprocess spawn engine", () => {
     expect(spawned.args).toContain("--extension");
     expect(spawned.args).toContain("--tools");
     expect(spawned.args).toContain(`read,grep,${RESULT_TOOL_NAME}`);
+    // Result configuration travels over RPC, never the environment.
     const env = spawned.options.env as Record<string, string>;
-    const schemaFile = env[RESULT_SCHEMA_FILE_ENV_VAR] as string;
-    expect(schemaFile).not.toBe("/caller/cannot-override.json");
-    expect(JSON.parse(fs.readFileSync(schemaFile, "utf8"))).toEqual({
-      type: "string",
-    });
+    expect(
+      Object.keys(env).filter((key) => key.startsWith("PI_AGENTS_RESULT")),
+    ).toEqual([]);
+    expect(env.PI_AGENTS_ATTACH_HOLD_FILE).toBeUndefined();
 
     await ready(spawned.proc);
     expect(spawned.proc.stdin.records.map((record) => record.type)).toEqual([
       "set_steering_mode",
+      "get_commands",
+      "prompt",
       "prompt",
     ]);
     expect(spawned.proc.stdin.records[0]?.mode).toBe("one-at-a-time");
-    expect(spawned.proc.stdin.records[1]?.message).toBe("find things");
+    const configure = spawned.proc.stdin.records[2] as Record<string, unknown>;
+    expect(isConfigurePrompt(configure)).toBe(true);
+    const configureArgs = (configure.message as string).slice(
+      (configure.message as string).indexOf(" ") + 1,
+    );
+    expect(JSON.parse(configureArgs)).toMatchObject({
+      version: 1,
+      resultSchema: { type: "string" },
+    });
+    const holdFile = (JSON.parse(configureArgs) as { holdFile: string })
+      .holdFile;
+    expect(holdFile.endsWith("attach-hold")).toBe(true);
+    expect(spawned.proc.stdin.records[3]?.message).toBe("find things");
 
     finish(spawned.proc, "hello");
     const outcome = await handle.wait();
     expect(outcome.value).toBe("hello");
-    expect(fs.existsSync(schemaFile)).toBe(false);
+    expect(fs.existsSync(holdFile)).toBe(false);
     expect(outcome.usage.turns).toBe(1);
     expect(outcome.usage.input).toBe(10);
     expect(outcome.usage.cost).toBeCloseTo(0.03);
@@ -389,7 +428,7 @@ describe("subprocess spawn engine", () => {
     proc.settle();
     // The settle triggers an in-band recovery prompt instead of reaping.
     expect(proc.stdin.ended).toBe(false);
-    const prompts = proc.stdin.records.filter((r) => r.type === "prompt");
+    const prompts = taskPrompts(proc);
     expect(prompts).toHaveLength(2);
     expect(prompts[1]?.message).toContain("without submitting a result");
     expect(
@@ -525,9 +564,7 @@ describe("subprocess spawn engine", () => {
     proc.emitAssistant("Draft answer.");
     proc.settle();
     // Idle-settle nudge (prompt 2 after the task prompt).
-    expect(proc.stdin.records.filter((r) => r.type === "prompt")).toHaveLength(
-      2,
-    );
+    expect(taskPrompts(proc)).toHaveLength(2);
     await Promise.resolve();
     await Promise.resolve();
     // A user attaches while the recovery turn runs, then the agent settles
@@ -539,16 +576,12 @@ describe("subprocess spawn engine", () => {
     // Detach: the gate-specific nudge is still allowed (prompt 3).
     release?.();
     await Bun.sleep(0);
-    expect(proc.stdin.records.filter((r) => r.type === "prompt")).toHaveLength(
-      3,
-    );
+    expect(taskPrompts(proc)).toHaveLength(3);
     await Promise.resolve();
     await Promise.resolve();
     // A further resultless settle is reaped: no fourth prompt.
     proc.settle();
-    expect(proc.stdin.records.filter((r) => r.type === "prompt")).toHaveLength(
-      3,
-    );
+    expect(taskPrompts(proc)).toHaveLength(3);
     expect(proc.stdin.ended).toBe(true);
     proc.close(0);
     const error = await handle.wait().then(
@@ -572,9 +605,7 @@ describe("subprocess spawn engine", () => {
     await ready(proc);
     proc.settle();
     expect(proc.stdin.ended).toBe(true);
-    expect(proc.stdin.records.filter((r) => r.type === "prompt")).toHaveLength(
-      1,
-    );
+    expect(taskPrompts(proc)).toHaveLength(1);
     proc.close(0);
     const error = await handle.wait().then(
       () => {
@@ -610,13 +641,13 @@ describe("subprocess spawn engine", () => {
       result: { content: [{ type: "text", text: "Validation failed" }] },
       isError: true,
     });
-    const env = procs[0]?.options.env as Record<string, string>;
-    expect(
-      JSON.parse(
-        fs.readFileSync(env[RESULT_SCHEMA_FILE_ENV_VAR] as string, "utf8"),
-      ),
-    ).toEqual({
-      type: ["null", "boolean", "number", "string", "array", "object"],
+    await ready(proc);
+    const configure = proc.stdin.records.find(isConfigurePrompt);
+    const message = configure?.message as string;
+    expect(JSON.parse(message.slice(message.indexOf(" ") + 1))).toMatchObject({
+      resultSchema: {
+        type: ["null", "boolean", "number", "string", "array", "object"],
+      },
     });
     submitResult(proc, { ok: true });
     proc.settle();
@@ -707,7 +738,7 @@ describe("subprocess spawn engine", () => {
       cwd: "/tmp",
     });
     const proc = procs[0]?.proc as FakeProc;
-    for (let i = 0; i < 10 && !proc.stdin.ended; i++) {
+    for (let i = 0; i < 40 && !proc.stdin.ended; i++) {
       await Promise.resolve();
     }
     expect(
@@ -730,7 +761,7 @@ describe("subprocess spawn engine", () => {
       cwd: "/tmp",
     });
     const proc = procs[0]?.proc as FakeProc;
-    for (let i = 0; i < 10 && !proc.stdin.ended; i++) {
+    for (let i = 0; i < 40 && !proc.stdin.ended; i++) {
       await Promise.resolve();
     }
     expect(proc.stdin.ended).toBe(true);
@@ -811,6 +842,42 @@ describe("subprocess spawn engine", () => {
     await expect(handle.wait()).rejects.toThrow('run "pi update pi"');
     await expect(handle.wait()).rejects.toThrow(
       "unsupported set_steering_mode",
+    );
+  });
+
+  test("a child without the configure command fails before any prompt", async () => {
+    const { engine, procs } = makeEngine(undefined, undefined, {
+      omitConfigureCommand: true,
+    });
+    const handle = engine.spawn({ agent: "worker", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    for (let i = 0; i < 20 && !proc.stdin.ended; i++) {
+      await Promise.resolve();
+    }
+    // The configure payload (and the task) must never reach a model turn.
+    expect(
+      proc.stdin.records.filter((record) => record.type === "prompt"),
+    ).toHaveLength(0);
+    proc.close(0);
+    await expect(handle.wait()).rejects.toThrow(CONFIGURE_RESULT_COMMAND);
+    await expect(handle.wait()).rejects.toThrow('run "pi update pi"');
+  });
+
+  test("an extension_error event fails the spawn", async () => {
+    const { engine, procs } = makeEngine();
+    const handle = engine.spawn({ agent: "worker", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await ready(proc);
+    proc.emitRecord({
+      type: "extension_error",
+      extensionPath: "/ext/result-tool.ts",
+      event: "command",
+      error: "The agent result tool is already configured",
+    });
+    expect(proc.stdin.ended).toBe(true);
+    proc.close(0);
+    await expect(handle.wait()).rejects.toThrow(
+      "Delegated pi extension failed: The agent result tool is already configured",
     );
   });
 

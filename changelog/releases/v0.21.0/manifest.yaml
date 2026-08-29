@@ -1,0 +1,9 @@
+created: 2026-08-29
+title: Reliable delegated-agent workflows
+intro: "Delegated agents now receive result-tool configuration through Pi\u2019s RPC\
+  \ channel, removing temporary environment-based setup. Extension failures inside\
+  \ child agents now fail workflow nodes immediately, making delegated workflows more\
+  \ reliable."
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.20.0

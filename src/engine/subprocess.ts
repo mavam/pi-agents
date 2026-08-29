@@ -140,6 +140,11 @@ interface RpcResponse {
   data?: unknown;
 }
 
+interface ClearedRpcQueue {
+  steering: string[];
+  followUp: string[];
+}
+
 interface PendingCommand {
   command: string;
   resolve: (response: RpcResponse) => void;
@@ -380,6 +385,22 @@ function idleRpcState(value: unknown): boolean {
   return !value.isStreaming && value.pendingMessageCount === 0;
 }
 
+function clearedRpcQueue(value: unknown): ClearedRpcQueue {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.steering) ||
+    !value.steering.every((message) => typeof message === "string") ||
+    !Array.isArray(value.followUp) ||
+    !value.followUp.every((message) => typeof message === "string")
+  ) {
+    throw new Error("Invalid clear_queue response from delegated pi");
+  }
+  return {
+    steering: value.steering as string[],
+    followUp: value.followUp as string[],
+  };
+}
+
 function userMessageText(message: Record<string, unknown>): string {
   if (!Array.isArray(message.content)) return "";
   return message.content
@@ -536,6 +557,7 @@ export function createSubprocessSpawnEngine(options?: {
       let terminalFailure: Error | undefined;
       let submissionAccepted = false;
       let submitNudgeSent = false;
+      let interruptInFlight = false;
       /** Latched when a resultless agent settles terminally: from then on the
        * outcome is the preserved unsubmitted response, and a racing abort
        * during process shutdown must not overwrite it. */
@@ -554,8 +576,11 @@ export function createSubprocessSpawnEngine(options?: {
       const transcriptStore = new TranscriptStore();
       /** Injected prompts display their original text in the live transcript,
        * while the child receives a supervisor wrapper. Match delivery events
-       * back to the original transcript item through this map. */
-      const queuedPromptDeliveries = new Map<string, string>();
+       * and queue restoration back to the original text through this map. */
+      const queuedPromptDeliveries = new Map<
+        string,
+        { wireText: string; originalText: string }
+      >();
       const toolTranscriptKeys = new Map<string, string>();
       const streamedTextBlocks = new Map<number, string>();
       const streamedThinkingBlocks = new Map<number, string>();
@@ -779,6 +804,28 @@ export function createSubprocessSpawnEngine(options?: {
           currentTool,
           turnsStarted,
         });
+      };
+
+      /** Remove queue entries confirmed by Pi and recover their original
+       * user-facing text instead of the supervisor wrapper sent on the wire. */
+      const restoreClearedQueue = (queue: ClearedRpcQueue): string[] => {
+        const restored: string[] = [];
+        for (const wireText of [...queue.steering, ...queue.followUp]) {
+          const injected = [...queuedPromptDeliveries].find(
+            ([, queued]) => queued.wireText === wireText,
+          );
+          if (!injected) {
+            restored.push(wireText);
+            continue;
+          }
+          queuedPromptDeliveries.delete(injected[0]);
+          restored.push(injected[1].originalText);
+          const item = transcriptStore.get(injected[0]);
+          if (item?.kind === "user" && item.queued === true) {
+            transcriptStore.delete(item.key);
+          }
+        }
+        return restored;
       };
 
       const flushPendingSummary = () => {
@@ -1063,7 +1110,7 @@ export function createSubprocessSpawnEngine(options?: {
           ) {
             const delivered = userMessageText(record.message);
             const injected = [...queuedPromptDeliveries].find(
-              ([, wireText]) => wireText === delivered,
+              ([, queued]) => queued.wireText === delivered,
             );
             const match = injected
               ? transcriptStore.get(injected[0])
@@ -1511,7 +1558,10 @@ export function createSubprocessSpawnEngine(options?: {
             queued: true,
             at: Date.now(),
           });
-          queuedPromptDeliveries.set(transcriptKey, wireMessage);
+          queuedPromptDeliveries.set(transcriptKey, {
+            wireText: wireMessage,
+            originalText: message,
+          });
           pushUpdate();
           try {
             await Promise.race([
@@ -1539,43 +1589,82 @@ export function createSubprocessSpawnEngine(options?: {
         },
         interrupt: async () => {
           await startupPromise;
-          if (wasAborted || settled || status !== "running") return;
-          // Mirror the interactive session's Esc feedback at press time —
-          // before the abort round-trip, so an in-flight reply cannot slot
-          // in ahead of the marker: mark still-running tool calls as cut
-          // off and leave the interrupt marker immediately.
-          for (const key of toolTranscriptKeys.values()) {
-            const item = transcriptStore.get(key);
-            if (item?.kind === "tool" && item.status === "running") {
-              transcriptStore.upsert({ ...item, status: "error" });
+          if (
+            wasAborted ||
+            settled ||
+            status !== "running" ||
+            interruptInFlight
+          )
+            return [];
+          interruptInFlight = true;
+          try {
+            // Mirror the interactive session's Esc feedback at press time,
+            // before the RPC round-trips, so an in-flight reply cannot slot
+            // in ahead of the marker. Mark still-running tool calls as cut
+            // off and leave one interrupt marker for repeated keypresses.
+            for (const key of toolTranscriptKeys.values()) {
+              const item = transcriptStore.get(key);
+              if (item?.kind === "tool" && item.status === "running") {
+                transcriptStore.upsert({ ...item, status: "error" });
+              }
             }
-          }
-          toolTranscriptKeys.clear();
-          // Repeated Esc presses coalesce onto one marker instead of
-          // stacking a line per keypress. An interrupt strands queued
-          // steering (nothing runs to deliver it until the next turn);
-          // say so instead of letting messages silently disappear.
-          const stranded = transcriptStore
-            .snapshot()
-            .filter(
-              (item) => item.kind === "user" && item.queued === true,
-            ).length;
-          const last = transcriptStore.snapshot().at(-1);
-          transcriptStore.upsert({
-            key:
+            toolTranscriptKeys.clear();
+            const last = transcriptStore.snapshot().at(-1);
+            const noticeKey =
               last?.kind === "notice"
                 ? last.key
-                : `notice:${++activitySequence}`,
-            kind: "notice",
-            notice: "interrupted",
-            text:
-              stranded > 0
-                ? `Interrupted: ${stranded} ${stranded === 1 ? "message remains" : "messages remain"} queued`
-                : "Interrupted: send a message to continue",
-            at: Date.now(),
-          });
-          pushUpdate();
-          await sendCommand({ type: "abort" });
+                : `notice:${++activitySequence}`;
+            transcriptStore.upsert({
+              key: noticeKey,
+              kind: "notice",
+              notice: "interrupted",
+              text: "Interrupted: send a message to continue",
+              at: Date.now(),
+            });
+            pushUpdate();
+
+            // Pi's abort continues queued steering. Clear it first, matching
+            // interactive Esc, then return the original text to the attached
+            // editor instead of leaving it stranded until another prompt.
+            let restored: string[];
+            try {
+              const response = await sendCommand({ type: "clear_queue" });
+              restored = restoreClearedQueue(clearedRpcQueue(response.data));
+            } catch (error) {
+              const stranded = queuedPromptDeliveries.size;
+              if (stranded > 0) {
+                transcriptStore.upsert({
+                  key: noticeKey,
+                  kind: "notice",
+                  notice: "interrupted",
+                  text: `Interrupted: ${stranded} ${stranded === 1 ? "message remains" : "messages remain"} queued`,
+                  at: Date.now(),
+                });
+                pushUpdate();
+              }
+              await sendCommand({ type: "abort" });
+              if (stranded === 0) return [];
+              const cause =
+                error instanceof Error ? error.message : String(error);
+              throw new Error(
+                `Pi could not restore queued messages before interrupting. Update Pi and retry. Cause: ${cause}`,
+              );
+            }
+            if (restored.length > 0) {
+              transcriptStore.upsert({
+                key: noticeKey,
+                kind: "notice",
+                notice: "interrupted",
+                text: `Interrupted: restored ${restored.length} queued ${restored.length === 1 ? "message" : "messages"} to editor`,
+                at: Date.now(),
+              });
+              pushUpdate();
+            }
+            await sendCommand({ type: "abort" });
+            return restored;
+          } finally {
+            interruptInFlight = false;
+          }
         },
         held: () => settleHolds > 0,
         hold: () => {

@@ -3,6 +3,7 @@ import {
   AgentPane,
   AgentTranscriptView,
   formatPendingPromptLines,
+  restoredEditorText,
   sanitizeLine,
   toolResultPayload,
 } from "../../src/ui/console.js";
@@ -74,7 +75,7 @@ describe("AgentTranscriptView", () => {
             key: "notice:1",
             kind: "notice",
             notice: "interrupted",
-            text: "Interrupted: 1 message remains queued",
+            text: "Interrupted: restored 1 queued message to editor",
             at: now,
           },
           {
@@ -103,7 +104,7 @@ describe("AgentTranscriptView", () => {
         4,
       );
       expect(lines.map((line) => line.trimEnd())).toEqual([
-        "⊘ Interrupted: 1 message remains queued",
+        "⊘ Interrupted: restored 1 queued message to editor",
         "○ Submission deferred: detach to finish",
         "● Result submitted: Finished.",
         "← Detached: finishing assignment",
@@ -115,7 +116,82 @@ describe("AgentTranscriptView", () => {
   });
 });
 
+describe("restoredEditorText", () => {
+  test("prepends queued messages to the current draft", () => {
+    expect(restoredEditorText(["first", "second\nline"], "draft")).toBe(
+      "first\n\nsecond\nline\n\ndraft",
+    );
+    expect(restoredEditorText(["first"], "   ")).toBe("first");
+    expect(restoredEditorText([], "draft")).toBe("draft");
+  });
+});
+
 describe("AgentPane", () => {
+  test("restores queued prompts after an interrupt", async () => {
+    const instance = "$.alpha";
+    const node = {
+      instance,
+      kind: "agent",
+      status: "running",
+      startedAt: Date.now(),
+    };
+    let interrupts = 0;
+    const handle = {
+      transcript: () => [],
+      hold: () => () => {},
+      interrupt: async () => {
+        interrupts += 1;
+        return ["first queued", "second queued"];
+      },
+    };
+    const manager = {
+      state: {
+        runs: new Map([
+          [
+            "run-id",
+            {
+              header: { cwd: process.cwd(), flow: { kind: "agent" } },
+              nodes: new Map([[instance, node]]),
+            },
+          ],
+        ]),
+      },
+      liveHandle: () => handle,
+    };
+    const tui = { terminal: { rows: 24 }, requestRender() {} };
+    const theme = {
+      fg: (_name: string, text: string) => text,
+      bg: (_name: string, text: string) => text,
+    };
+    const pane = new AgentPane(
+      tui as never,
+      theme as never,
+      { matches: () => false } as never,
+      {
+        manager: manager as never,
+        runId: "run-id",
+        instance,
+        done() {},
+      },
+    );
+    try {
+      const internals = pane as unknown as {
+        editor: { getText(): string; setText(text: string): void };
+        interrupt(): void;
+      };
+      internals.editor.setText("current draft");
+      internals.interrupt();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(internals.editor.getText()).toBe(
+        "first queued\n\nsecond queued\n\ncurrent draft",
+      );
+      expect(interrupts).toBe(1);
+    } finally {
+      pane.dispose();
+    }
+  });
+
   test("omits the parent workflow overview above the editor", () => {
     const instance = "$.alpha";
     const label = "Dummy alpha-beta-gamma sleep workflow";

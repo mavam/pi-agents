@@ -55,6 +55,8 @@ class FakeProc extends EventEmitter {
   signalCode: string | null = null;
   killed: string[] = [];
   streaming = false;
+  private steeringQueue: string[] = [];
+  private followUpQueue: string[] = [];
 
   constructor(
     failCommand?: string,
@@ -65,6 +67,17 @@ class FakeProc extends EventEmitter {
       if (typeof record.id !== "string" || typeof record.type !== "string")
         return;
       if (record.type === "get_state" && this.options.manualGetState) return;
+      if (
+        record.type === "prompt" &&
+        this.streaming &&
+        typeof record.message === "string"
+      ) {
+        if (record.streamingBehavior === "steer") {
+          this.steeringQueue.push(record.message);
+        } else if (record.streamingBehavior === "followUp") {
+          this.followUpQueue.push(record.message);
+        }
+      }
       queueMicrotask(() => {
         if (record.type === "prompt") {
           const prelude =
@@ -87,6 +100,7 @@ class FakeProc extends EventEmitter {
                 },
               }
             : {}),
+          ...(record.type === "clear_queue" ? { data: this.clearQueue() } : {}),
           ...(record.type === failCommand
             ? { error: `unsupported ${record.type}` }
             : {}),
@@ -100,6 +114,16 @@ class FakeProc extends EventEmitter {
         }
       });
     };
+  }
+
+  private clearQueue(): { steering: string[]; followUp: string[] } {
+    const queue = {
+      steering: this.steeringQueue,
+      followUp: this.followUpQueue,
+    };
+    this.steeringQueue = [];
+    this.followUpQueue = [];
+    return queue;
   }
 
   kill(signal?: string) {
@@ -973,16 +997,57 @@ describe("subprocess spawn engine", () => {
     release?.();
   });
 
-  test("the interrupt notice reports stranded queued messages", async () => {
+  test("interrupt restores queued prompts before aborting", async () => {
     const { engine, procs } = makeEngine();
     const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
     const proc = procs[0]?.proc as FakeProc;
     await handle.prompt?.("later instruction");
-    await handle.interrupt?.();
+    const restored = await handle.interrupt?.();
+    expect(restored).toEqual(["later instruction"]);
+    expect(
+      proc.stdin.records
+        .filter((record) =>
+          ["clear_queue", "abort"].includes(record.type as string),
+        )
+        .map((record) => record.type),
+    ).toEqual(["clear_queue", "abort"]);
+    expect(
+      handle
+        .transcript?.()
+        .some(
+          (item) => item.kind === "user" && item.text === "later instruction",
+        ),
+    ).toBe(false);
     const notice = handle.transcript?.().at(-1);
     expect(notice?.kind).toBe("notice");
     if (notice?.kind === "notice") {
-      expect(notice.text).toBe("Interrupted: 2 messages remain queued");
+      expect(notice.text).toBe(
+        "Interrupted: restored 1 queued message to editor",
+      );
+    }
+    finish(proc);
+    await handle.wait();
+  });
+
+  test("interrupt still aborts when queue restoration is unsupported", async () => {
+    const { engine, procs } = makeEngine("clear_queue");
+    const handle = engine.spawn({ agent: "w", task: "t", cwd: "/tmp" });
+    const proc = procs[0]?.proc as FakeProc;
+    await handle.prompt?.("later instruction");
+    await expect(handle.interrupt?.()).rejects.toThrow(
+      "Pi could not restore queued messages before interrupting",
+    );
+    expect(
+      proc.stdin.records
+        .filter((record) =>
+          ["clear_queue", "abort"].includes(record.type as string),
+        )
+        .map((record) => record.type),
+    ).toEqual(["clear_queue", "abort"]);
+    const notice = handle.transcript?.().at(-1);
+    expect(notice?.kind).toBe("notice");
+    if (notice?.kind === "notice") {
+      expect(notice.text).toBe("Interrupted: 1 message remains queued");
     }
     finish(proc);
     await handle.wait();
@@ -1025,9 +1090,13 @@ describe("subprocess spawn engine", () => {
       args: { command: "sleep 600" },
     });
     await handle.interrupt?.();
-    expect(proc.stdin.records.some((record) => record.type === "abort")).toBe(
-      true,
-    );
+    expect(
+      proc.stdin.records
+        .filter((record) =>
+          ["clear_queue", "abort"].includes(record.type as string),
+        )
+        .map((record) => record.type),
+    ).toEqual(["clear_queue", "abort"]);
     expect(handle.status).toBe("running");
     const items = handle.transcript?.() ?? [];
     const tool = items.find((item) => item.kind === "tool");

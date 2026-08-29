@@ -471,13 +471,14 @@ finishes.
 While attached:
 
 - Press `Enter` to send a message.
-- Press `Esc` to interrupt the current turn.
+- Press `Esc` to interrupt the current turn and restore queued messages to the
+  attached editor.
 - Press `←` from an empty editor to return to the parent session.
 - Press `Shift+↑` or `Shift+↓` to scroll the transcript.
 
 An interrupted built-in shell command is cancelled immediately. Other tools
 must support cancellation. The delegated session remains alive after an
-interrupt, so you can send another instruction.
+interrupt, so you can edit the restored messages or send another instruction.
 
 Result submission is deferred while you are attached. When you leave, an idle
 agent finishes its assignment and submits its workflow result. Conversation

@@ -397,6 +397,16 @@ const PANE_REFRESH_MS = 250;
 /** How long an inline flash message stays visible. */
 const FLASH_MS = 5_000;
 
+/** Match Pi's interactive queue restoration: steering first, follow-ups next,
+ * then any draft already in the editor, with message boundaries preserved. */
+export function restoredEditorText(
+  queued: readonly string[],
+  currentText: string,
+): string {
+  const queuedText = queued.join("\n\n");
+  return [queuedText, currentText].filter((text) => text.trim()).join("\n\n");
+}
+
 type UserTranscriptItem = Extract<TranscriptItem, { kind: "user" }>;
 
 /** Fit queued prompts into a fixed row budget while keeping FIFO order. */
@@ -433,8 +443,9 @@ export interface AgentPaneOptions {
  * (extension widgets in the dock are for small status lines).
  *
  * Keys: type + ⏎ talks to the agent (delivered as steering mid-turn), esc
- * interrupts its current turn, ← from an empty editor detaches, shift+↑↓
- * scroll the transcript. Errors flash inline, in sequence with the view.
+ * interrupts its current turn and restores queued prompts to the editor, ←
+ * from an empty editor detaches, shift+↑↓ scroll the transcript. Errors flash
+ * inline, in sequence with the view.
  */
 export class AgentPane implements Component {
   private readonly tui: TUI;
@@ -446,6 +457,7 @@ export class AgentPane implements Component {
   private timer: ReturnType<typeof setInterval> | undefined;
   private items: readonly TranscriptItem[] = [];
   private flash: { text: string; at: number } | undefined;
+  private interrupting = false;
   private disposed = false;
 
   constructor(
@@ -524,10 +536,26 @@ export class AgentPane implements Component {
 
   private interrupt(): void {
     const handle = this.handle();
-    if (this.node()?.status !== "running" || !handle?.interrupt) return;
-    void handle.interrupt().catch((error) => {
-      this.showFlash(error instanceof Error ? error.message : String(error));
-    });
+    if (
+      this.interrupting ||
+      this.node()?.status !== "running" ||
+      !handle?.interrupt
+    )
+      return;
+    this.interrupting = true;
+    void handle
+      .interrupt()
+      .then((queued) => {
+        if (queued.length === 0 || this.disposed) return;
+        this.editor.setText(restoredEditorText(queued, this.editor.getText()));
+        this.tui.requestRender();
+      })
+      .catch((error) => {
+        this.showFlash(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        this.interrupting = false;
+      });
   }
 
   private close(): void {

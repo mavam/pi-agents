@@ -1,0 +1,9 @@
+created: 2026-08-29
+title: More reliable delegated-agent workflows
+intro: >-
+  Delegated-agent workflows now preserve completed results and restore queued messages
+  when an attached agent is interrupted. The package also removes the bundled review-fix
+  workflow in favor of the read-only review workflow or custom project workflows.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.19.0

@@ -1,16 +1,27 @@
+/**
+ * Static extension loaded into every delegated `pi --mode rpc` child. At load
+ * time it only registers the internal configuration command; the parent
+ * invokes that command over the RPC prompt channel before the first task
+ * prompt, which registers and activates the concrete result-submission tool.
+ */
+
 import * as fs from "node:fs";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   type AgentResultEnvelope,
   buildAgentResultEnvelopeSchema,
-  validateJsonSchema,
 } from "../model/json-schema.js";
+import {
+  CONFIGURE_RESULT_COMMAND,
+  decodeResultToolConfiguration,
+  RESULT_TOOL_NAME,
+  type ResultToolConfiguration,
+} from "./result-protocol.js";
 
-export const RESULT_TOOL_NAME = "pi_agents_submit_result";
-export const RESULT_SCHEMA_FILE_ENV_VAR = "PI_AGENTS_RESULT_SCHEMA_FILE";
-/** Names a file whose existence defers result submission: while a
- * supervising user is attached, the agent may not terminate. */
-export const RESULT_HOLD_FILE_ENV_VAR = "PI_AGENTS_ATTACH_HOLD_FILE";
+export {
+  CONFIGURE_RESULT_COMMAND,
+  RESULT_TOOL_NAME,
+} from "./result-protocol.js";
 
 function resultEnvelope(rawParams: unknown): AgentResultEnvelope {
   if (typeof rawParams !== "object" || rawParams === null) {
@@ -24,42 +35,10 @@ function resultEnvelope(rawParams: unknown): AgentResultEnvelope {
   return rawParams as AgentResultEnvelope;
 }
 
-function resultSchema() {
-  const filePath = process.env[RESULT_SCHEMA_FILE_ENV_VAR];
-  if (!filePath) {
-    throw new Error(`${RESULT_SCHEMA_FILE_ENV_VAR} must name a schema file`);
-  }
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, "utf8");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Could not read ${RESULT_SCHEMA_FILE_ENV_VAR} file '${filePath}': ${message}`,
-    );
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Could not parse ${RESULT_SCHEMA_FILE_ENV_VAR} file '${filePath}': ${message}`,
-    );
-  }
-  try {
-    return validateJsonSchema(parsed);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Invalid result schema in ${RESULT_SCHEMA_FILE_ENV_VAR} file '${filePath}': ${message}`,
-    );
-  }
-}
-
-export default function resultToolExtension(pi: ExtensionAPI): void {
-  const parameters = buildAgentResultEnvelopeSchema(resultSchema());
-
+function registerResultTool(
+  pi: ExtensionAPI,
+  config: ResultToolConfiguration,
+): void {
   pi.registerTool(
     defineTool({
       name: RESULT_TOOL_NAME,
@@ -76,14 +55,13 @@ export default function resultToolExtension(pi: ExtensionAPI): void {
         "Assistant messages are progress only and are not returned as the result.",
         "If a submission is rejected, correct it and submit again.",
       ],
-      parameters,
+      parameters: buildAgentResultEnvelopeSchema(config.resultSchema),
 
       async execute(_toolCallId, rawParams) {
         // While a supervising user is attached, the agent may not terminate:
         // the engine materializes a hold file for the attachment's lifetime,
         // and the thrown tool error sends the model back to the conversation.
-        const holdFile = process.env[RESULT_HOLD_FILE_ENV_VAR];
-        if (holdFile && fs.existsSync(holdFile)) {
+        if (fs.existsSync(config.holdFile)) {
           throw new Error(
             "Submission deferred: a supervising user is attached to this " +
               "session. This tool call is not visible as an assistant reply. " +
@@ -113,4 +91,27 @@ export default function resultToolExtension(pi: ExtensionAPI): void {
       },
     }),
   );
+}
+
+export default function resultToolExtension(pi: ExtensionAPI): void {
+  let configured = false;
+
+  pi.registerCommand(CONFIGURE_RESULT_COMMAND, {
+    description: "Internal pi-agents result-tool configuration",
+    handler: async (args) => {
+      // Failures throw: Pi reports them as `extension_error` events on the
+      // RPC stream, which the parent treats as a fatal protocol failure.
+      if (configured) {
+        throw new Error("The agent result tool is already configured");
+      }
+      const config = decodeResultToolConfiguration(args);
+      registerResultTool(pi, config);
+      // `--tools` allowlists auto-activate the freshly registered tool; an
+      // open toolset needs the explicit union.
+      pi.setActiveTools([
+        ...new Set([...pi.getActiveTools(), RESULT_TOOL_NAME]),
+      ]);
+      configured = true;
+    },
+  });
 }

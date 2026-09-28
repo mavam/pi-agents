@@ -11,6 +11,7 @@ import {
   formatFailureReason,
   isChildProcessRunning,
   MAX_TRANSCRIPT_CHARS,
+  resolvePiLaunch,
   type SpawnProcess,
 } from "../../src/engine/subprocess.js";
 import {
@@ -293,15 +294,17 @@ describe("subprocess spawn engine", () => {
       tools: ["read", "grep"],
     });
     const spawned = procs[0] as (typeof procs)[number];
-    expect(spawned.command).toBe("pi");
-    expect(spawned.args.slice(0, 2)).toEqual(["--mode", "rpc"]);
-    expect(spawned.args).toContain("--no-session");
-    expect(spawned.args).not.toContain("-p");
-    expect(spawned.args).toContain("some-model");
-    expect(spawned.args).toContain("--thinking");
-    expect(spawned.args).toContain("--extension");
-    expect(spawned.args).toContain("--tools");
-    expect(spawned.args).toContain(`read,grep,${RESULT_TOOL_NAME}`);
+    const { command: piCommand, prefixArgs: piPrefixArgs } = resolvePiLaunch();
+    expect(spawned.command).toBe(piCommand);
+    const piArgs = spawned.args.slice(piPrefixArgs.length);
+    expect(piArgs.slice(0, 2)).toEqual(["--mode", "rpc"]);
+    expect(piArgs).toContain("--no-session");
+    expect(piArgs).not.toContain("-p");
+    expect(piArgs).toContain("some-model");
+    expect(piArgs).toContain("--thinking");
+    expect(piArgs).toContain("--extension");
+    expect(piArgs).toContain("--tools");
+    expect(piArgs).toContain(`read,grep,${RESULT_TOOL_NAME}`);
     // Result configuration travels over RPC, never the environment.
     const env = spawned.options.env as Record<string, string>;
     expect(

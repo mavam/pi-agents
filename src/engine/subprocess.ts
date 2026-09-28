@@ -153,6 +153,30 @@ interface PendingCommand {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * Resolve how to launch a delegated `pi` CLI process portably.
+ *
+ * On Windows the npm-installed `pi` bin is a `.cmd` shim, which
+ * child_process.spawn cannot resolve with `shell: false` (libuv never
+ * consults PATHEXT), so a bare spawn("pi", ...) dies with ENOENT. Reuse
+ * the interpreter and CLI entry of the pi process that is running right
+ * now: `process.execPath` is the absolute node executable and
+ * `process.argv[1]` is the CLI entry script — both independent of
+ * PATH/PATHEXT. Fall back to the bare `pi` command when the entry cannot
+ * be identified (e.g. a single-executable build), preserving the previous
+ * behaviour.
+ */
+export function resolvePiLaunch(argv: string[] = process.argv): {
+  command: string;
+  prefixArgs: string[];
+} {
+  const entry = argv[1];
+  if (entry && /\.(?:[cm]?js)$/i.test(entry)) {
+    return { command: process.execPath, prefixArgs: [entry] };
+  }
+  return { command: "pi", prefixArgs: [] };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1307,15 +1331,20 @@ export function createSubprocessSpawnEngine(options?: {
       };
 
       try {
-        proc = spawnProcess("pi", args, {
-          cwd: spec.cwd,
-          env: {
-            ...process.env,
-            ...(spec.env ?? {}),
+        const piLaunch = resolvePiLaunch();
+        proc = spawnProcess(
+          piLaunch.command,
+          [...piLaunch.prefixArgs, ...args],
+          {
+            cwd: spec.cwd,
+            env: {
+              ...process.env,
+              ...(spec.env ?? {}),
+            },
+            shell: false,
+            stdio: ["pipe", "pipe", "pipe"],
           },
-          shell: false,
-          stdio: ["pipe", "pipe", "pipe"],
-        });
+        );
       } catch (error) {
         const errorText =
           error instanceof Error ? error.message : String(error);

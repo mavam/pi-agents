@@ -35,7 +35,14 @@ Agent states are derived, never stored:
 - `failed`: the last answer ended with an error.
 - `idle`: otherwise.
 
-`close` sets a flag. Closed agents disappear from the UI and stay in storage.
+`closed` is a flag that hides an idle agent from the panel; storage keeps it.
+An agent closes on its own once an answer to a parent request is delivered or
+consumed by a wait and no parent request remains. Failed and stopped agents
+stay open. A parent message to a closed agent opens it again. A closed agent
+that works again, for example because the user talks to it, shows in the
+panel until it is idle. Names are unique among
+visible agents; a name resolves to the visible agent first, then to the newest
+closed one.
 
 ## Lifecycle
 
@@ -108,13 +115,14 @@ The system prompt lists profiles, available models, and delegation guidance.
 
 - Panel above the editor: one line per open agent, working first, idle agents
   always shown. Left arrow from an empty editor or Ctrl+Q focuses it; ↑↓
-  select, ⏎ attaches, `s` stops, `x` closes, Esc returns.
+  select, ⏎ attaches, `s` stops, `x` closes, Esc returns. The glyph carries
+  the state; the line shows the time in that state.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's
   durable conversation view with Pi's message and tool components. ⏎ prompts
   or steers, Alt+⏎ queues a follow-up, Esc interrupts, ← detaches, Shift+↑↓
   scrolls.
-- `/agents`: a table with details, attach, stop, close, and closed agents on
-  demand. `/agent <name>` attaches.
+- `/agents`: a table of all agents, closed ones dimmed, with details, attach,
+  stop, and close. `/agent <name>` attaches.
 - Result messages render the agent, its state, and the result as Markdown.
 - The fancy-footer integration reports working and idle counts.
 

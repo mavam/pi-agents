@@ -292,7 +292,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       name: "agent_send",
       label: "send",
       description:
-        "Send a message to an agent. A working agent receives it as steering. Its answer arrives as a message unless you wait for it.",
+        "Send a message to an agent, also one that already answered. A working agent receives it as steering. Its answer arrives as a message unless you wait for it.",
       parameters: sendParams,
       call: (args, color) =>
         `${args.name}${color("dim", `\n  ${oneLine(args.message ?? "", 160)}`)}`,

@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createModels } from "@earendil-works/pi-ai/models";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+} from "@earendil-works/pi-ai/providers/faux";
 import type { AgentService } from "../../src/agents/service.js";
 import {
   createFaux,
@@ -44,6 +49,9 @@ describe("AgentService", () => {
 
     if (delivery) await service.acknowledge(delivery);
     expect(service.pendingDeliveries()).toEqual([]);
+    // A delivered answer closes the agent; it stays reachable by name.
+    expect(service.list()).toEqual([]);
+    expect(service.get("reviewer")?.closed).toBe(true);
   });
 
   test("wait consumes results instead of delivering them", async () => {
@@ -57,6 +65,36 @@ describe("AgentService", () => {
       "done: b",
     ]);
     expect(service.pendingDeliveries()).toEqual([]);
+    expect(service.list()).toEqual([]);
+  });
+
+  test("messaging a closed agent reopens it until it answers", async () => {
+    const service = await open();
+    await service.spawn({ task: "first", name: "w", cwd: ".", model: MODEL });
+    await service.wait(["w"]);
+    expect(service.get("w")?.closed).toBe(true);
+    await service.send("w", "second", "auto");
+    expect(service.get("w")?.closed).toBe(false);
+    await until(() => service.pendingDeliveries().length === 1);
+    const [delivery] = service.pendingDeliveries();
+    if (delivery) await service.acknowledge(delivery);
+    expect(service.get("w")?.closed).toBe(true);
+  });
+
+  test("failed agents stay open after delivery", async () => {
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    faux.setResponses([
+      fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom" }),
+    ]);
+    const service = await open({ models });
+    await service.spawn({ task: "x", name: "w", cwd: ".", model: MODEL });
+    await until(() => service.pendingDeliveries().length === 1);
+    const [delivery] = service.pendingDeliveries();
+    if (delivery) await service.acknowledge(delivery);
+    expect(service.get("w")?.state).toBe("failed");
+    expect(service.list().map((agent) => agent.name)).toEqual(["w"]);
   });
 
   test("send starts a new turn on an idle agent", async () => {
@@ -115,16 +153,20 @@ describe("AgentService", () => {
     ).rejects.toThrow("Invalid agent name");
   });
 
-  test("close hides an agent and frees its name", async () => {
-    const service = await open();
+  test("close stops and hides an agent and frees its name", async () => {
+    const { models } = createFaux((prompt) => `${prompt} `.repeat(400), {
+      tokensPerSecond: 20,
+    });
+    const service = await open({ models });
     await service.spawn({ task: "x", name: "w", cwd: ".", model: MODEL });
-    await service.wait(["w"]);
+    await until(() => service.get("w")?.state === "working");
     await service.closeAgent("w");
     expect(service.list().map((agent) => agent.name)).toEqual([]);
     expect(service.list({ includeClosed: true })).toHaveLength(1);
     expect(service.pendingDeliveries()).toEqual([]);
     await service.spawn({ task: "y", name: "w", cwd: ".", model: MODEL });
     expect(service.list()).toHaveLength(1);
+    expect(service.get("w")?.task).toBe("y");
   });
 
   test("tool allowlists reject unknown tools", async () => {

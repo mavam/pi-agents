@@ -42,7 +42,7 @@ messages in your conversation.
 | Result | The agent's final message after a task or message. |
 | Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
 | Attach | Open an agent's conversation to watch it and talk to it. |
-| Close | Remove an agent you no longer need. |
+| Close | Hide an agent from the panel. Agents close on their own once their answer reaches Pi. Messaging a closed agent opens it again. |
 
 An agent is in one of these states:
 
@@ -59,12 +59,16 @@ can't use MCP servers, tools from other extensions, or other agents.
 
 ### Watch and talk to agents
 
-A panel above the editor shows one line per open agent:
+A panel above the editor shows one line per open agent. The glyph shows the
+state, followed by the time in that state:
 
 ```text
-◉ reviewer · explorer · terra · working 1m32s · 15.5k · Using grep
-● docs · sol · idle 3m · 8.0k · $0.02
+◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep
+✗ docs · sol · 3m · 8.0k · $0.02 · rate limit exceeded
 ```
+
+An agent leaves the panel once its answer reaches Pi. Failed and stopped
+agents stay until you or Pi close them.
 
 Press ← in an empty editor or Ctrl+Q to focus the panel. Then:
 
@@ -94,7 +98,7 @@ results don't post into the parent conversation.
 
 | Command | Action |
 | --- | --- |
-| `/agents` | Browse agents with their task and latest result. Attach, stop, or close them, and press `a` to show closed agents. |
+| `/agents` | Browse all agents, including closed ones, with their task and latest result. Attach, stop, or close them. |
 | `/agent <name>` | Attach to an agent. |
 
 ### Tools

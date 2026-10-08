@@ -41,7 +41,7 @@ describe("formatting", () => {
       92_000,
     );
     expect(line).toBe(
-      "◉ reviewer · explorer · terra · working 1m32s · 15.5k · $0.040 · Using grep",
+      "◉ reviewer · explorer · terra · 1m32s · 15.5k · $0.040 · Using grep",
     );
   });
 

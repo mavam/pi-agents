@@ -7,6 +7,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { isVisible } from "../agents/service.js";
 import type { AgentInfo } from "../agents/types.js";
 import {
   confirmAndClose,
@@ -17,6 +18,7 @@ import {
   type Colorize,
   formatElapsed,
   formatUsage,
+  STATE_STYLES,
   shortModel,
   stateIcon,
 } from "../ui/format.js";
@@ -46,9 +48,9 @@ export function agentRow(
   color: Colorize,
 ): string {
   const usage = formatUsage(agent.usage);
+  const name = pad(agent.name, nameWidth);
   return [
-    `${stateIcon(agent.state, color)} ${pad(agent.name, nameWidth)}`,
-    pad(agent.closed ? "closed" : agent.state, 8),
+    `${stateIcon(agent.state, color)} ${isVisible(agent) ? name : color("dim", name)}`,
     color("dim", pad(agent.profile ?? "ad-hoc", 10)),
     color("dim", pad(shortModel(agent), 14)),
     color("dim", pad(formatElapsed(now - agent.stateSince), 7)),
@@ -90,23 +92,20 @@ async function openAgentsOverlay(
   deps: CommandDeps,
 ): Promise<void> {
   const service = await deps.host.ensure(ctx);
-  let showClosed = false;
   let after: (() => void) | undefined;
+  // Open agents first, then closed ones, newest first.
   const items = () =>
     service
-      .list({ includeClosed: showClosed })
+      .list({ includeClosed: true })
       .sort(
         (left, right) =>
-          Number(left.closed) - Number(right.closed) ||
+          Number(isVisible(right)) - Number(isVisible(left)) ||
           right.createdAt - left.createdAt,
       );
   const spec: OverlaySpec<AgentInfo> = {
-    title: () => (showClosed ? "Agents (with closed)" : "Agents"),
-    emptyText: () =>
-      showClosed
-        ? "No agents yet."
-        : "No open agents. Ask Pi to delegate, or press a to show closed agents.",
-    footer: "↑↓ move · ⏎ attach · s stop · x close · a closed · esc",
+    title: "Agents",
+    emptyText: "No agents yet. Ask Pi to delegate.",
+    footer: "↑↓ move · ⏎ attach · s stop · x close · esc",
     items,
     keyOf: (agent) => agent.id,
     row: (agent, color) => {
@@ -121,7 +120,6 @@ async function openAgentsOverlay(
     detail: (agent, color) => agentDetail(agent, color),
     onAction: (key, agent) => {
       if (key === "enter") {
-        if (agent.closed) return undefined;
         after = () => deps.focus.attach(ctx, agent.id);
         return "close";
       }
@@ -133,13 +131,9 @@ async function openAgentsOverlay(
         return undefined;
       }
       if (key === "x") {
-        if (agent.closed) return undefined;
+        if (!isVisible(agent)) return undefined;
         after = () => void confirmAndClose(ctx, deps.host, agent);
         return "close";
-      }
-      if (key === "a") {
-        showClosed = !showClosed;
-        return undefined;
       }
       return undefined;
     },
@@ -164,14 +158,21 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   pi.registerCommand("agent", {
     description: "Attach to an agent",
     getArgumentCompletions: (prefix) => {
-      const agents = deps.host.current()?.list() ?? [];
-      const matches = agents.filter((agent) => agent.name.startsWith(prefix));
+      const service = deps.host.current();
+      const names = new Set(
+        (service?.list({ includeClosed: true }) ?? []).map(
+          (agent) => agent.name,
+        ),
+      );
+      const matches = [...names]
+        .filter((name) => name.startsWith(prefix))
+        .flatMap((name) => service?.get(name) ?? []);
       return matches.length === 0
         ? null
         : matches.map((agent) => ({
             value: agent.name,
             label: agent.name,
-            description: `${agent.state} · ${agent.task.replace(/\s+/g, " ").slice(0, 60)}`,
+            description: `${STATE_STYLES[agent.state].icon} ${agent.task.replace(/\s+/g, " ").slice(0, 60)}`,
           }));
     },
     handler: async (args, ctx) => {
@@ -183,8 +184,8 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         return;
       }
       const agent = deps.host.current()?.get(name);
-      if (!agent || agent.closed) {
-        ctx.ui.notify(`No open agent named ${name}.`, "warning");
+      if (!agent) {
+        ctx.ui.notify(`No agent named ${name}.`, "warning");
         return;
       }
       deps.focus.attach(ctx, agent.id);

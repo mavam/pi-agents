@@ -86,6 +86,11 @@ function conversationId(agentId: string): ConversationId {
   return Number(agentId) as ConversationId;
 }
 
+/** Open agents, and closed ones that work again. */
+export function isVisible(info: AgentInfo): boolean {
+  return !info.closed || info.state === "working";
+}
+
 function contextFor(signal: AbortSignal | undefined): Context {
   return signal ? withAbortSignal(signal, CONTEXT) : CONTEXT;
 }
@@ -155,7 +160,6 @@ export class AgentService {
     this.records = await this.loadRecords();
     for (const [id, record] of Object.entries(this.records)) {
       await this.loadLastAssistant(id);
-      if (record.closed) continue;
       // Outbox: a request recorded before a crash may lack its submission.
       for (const [rid, request] of Object.entries(record.requests)) {
         const existing = await this.harness.commit(
@@ -192,27 +196,27 @@ export class AgentService {
     for (const listener of this.listeners) listener();
   }
 
-  /** Open agents first by default; closed agents only on request. */
+  /**
+   * Visible agents, oldest first: open ones and closed ones that work again.
+   * `includeClosed` adds every closed agent.
+   */
   list(options: { includeClosed?: boolean } = {}): AgentInfo[] {
     return [...this.infos.values()]
-      .filter((info) => options.includeClosed || !info.closed)
+      .filter((info) => options.includeClosed || isVisible(info))
       .sort((left, right) => left.createdAt - right.createdAt);
   }
 
+  /** A visible agent by name, else the newest closed one, else by ID. */
   get(nameOrId: string): AgentInfo | undefined {
-    const open = this.list().find((info) => info.name === nameOrId);
-    return open ?? this.infos.get(nameOrId);
+    const named = this.list({ includeClosed: true }).filter(
+      (info) => info.name === nameOrId,
+    );
+    return named.find(isVisible) ?? named.at(-1) ?? this.infos.get(nameOrId);
   }
 
   private require(nameOrId: string): AgentInfo {
     const info = this.get(nameOrId);
     if (!info) throw new AgentError(`No agent named ${nameOrId}`);
-    return info;
-  }
-
-  private requireOpen(nameOrId: string): AgentInfo {
-    const info = this.require(nameOrId);
-    if (info.closed) throw new AgentError(`Agent ${info.name} is closed`);
     return info;
   }
 
@@ -287,7 +291,7 @@ export class AgentService {
 
   /** Message an agent on behalf of the parent model. */
   async send(nameOrId: string, message: string, mode: SendMode): Promise<void> {
-    const info = this.requireOpen(nameOrId);
+    const info = this.require(nameOrId);
     const text = message.trim();
     if (!text) throw new AgentError("The message must not be empty");
     const request: ParentRequest = {
@@ -298,6 +302,7 @@ export class AgentService {
       const state = await tx.doc(AgentsDoc);
       const record = state.agents[info.id];
       if (!record) throw new AgentError(`Agent ${info.name} is missing`);
+      record.closed = false;
       const next = requestId(record.nextRequest);
       record.nextRequest += 1;
       record.requests[next] = request;
@@ -309,7 +314,7 @@ export class AgentService {
 
   /** Message an agent on behalf of the user; results stay in the agent. */
   async prompt(nameOrId: string, text: string, mode: SendMode): Promise<void> {
-    const info = this.requireOpen(nameOrId);
+    const info = this.require(nameOrId);
     const conversation = await this.harness.conversation(
       conversationId(info.id),
       CONTEXT,
@@ -338,7 +343,7 @@ export class AgentService {
 
   /** Stop the agent and hide it. Storage keeps its conversation. */
   async closeAgent(nameOrId: string): Promise<void> {
-    const info = this.requireOpen(nameOrId);
+    const info = this.require(nameOrId);
     await this.stop(info.id);
     await this.harness.commit(async (tx) => {
       const state = await tx.doc(AgentsDoc);
@@ -359,7 +364,7 @@ export class AgentService {
     names: string[],
     options: { signal?: AbortSignal; timeoutMs?: number } = {},
   ): Promise<WaitOutcome> {
-    const infos = names.map((name) => this.requireOpen(name));
+    const infos = names.map((name) => this.require(name));
     const ids = [...new Set(infos.map((info) => info.id))];
     const signals = [
       options.signal,
@@ -410,7 +415,7 @@ export class AgentService {
     for (const [agentId, outcomes] of this.settled) {
       if (this.isAwaited(agentId)) continue;
       const record = this.records[agentId];
-      if (!record || record.closed) continue;
+      if (!record) continue;
       const answers = new Map<number, PendingDelivery>();
       for (const [rid, outcome] of outcomes) {
         if (outcome.kind === "aborted") continue;
@@ -438,13 +443,17 @@ export class AgentService {
     return deliveries;
   }
 
-  /** Mark settled requests delivered. */
+  /** Mark settled requests delivered. An answered agent closes. */
   async acknowledge(delivery: PendingDelivery): Promise<void> {
     const entryId =
       delivery.outcome.kind === "answered"
         ? delivery.outcome.result.entryId
         : undefined;
-    await this.removeRequests(delivery.agentId, delivery.requestIds, entryId);
+    await this.removeRequests(
+      delivery.agentId,
+      delivery.requestIds,
+      entryId === undefined ? [] : [entryId],
+    );
   }
 
   // --- Internals ---
@@ -506,13 +515,17 @@ export class AgentService {
     const entryIds = [...outcomes.values()].flatMap((outcome) =>
       outcome.kind === "answered" ? [outcome.result.entryId] : [],
     );
-    await this.removeRequests(agentId, [...outcomes.keys()], ...entryIds);
+    await this.removeRequests(agentId, [...outcomes.keys()], entryIds);
   }
 
+  /**
+   * Drop delivered requests. Delivering an answer closes the agent once no
+   * parent request remains: it is done. Messaging it later reopens it.
+   */
   private async removeRequests(
     agentId: string,
     requestIds: string[],
-    ...entryIds: Array<number | undefined>
+    entryIds: number[],
   ): Promise<void> {
     await this.harness.commit(async (tx) => {
       const state = await tx.doc(AgentsDoc);
@@ -520,10 +533,11 @@ export class AgentService {
       if (!record) return;
       for (const rid of requestIds) delete record.requests[rid];
       for (const entryId of entryIds) {
-        if (entryId === undefined || record.delivered.includes(entryId))
-          continue;
+        if (record.delivered.includes(entryId)) continue;
         record.delivered.push(entryId);
       }
+      if (entryIds.length > 0 && Object.keys(record.requests).length === 0)
+        record.closed = true;
       if (record.delivered.length > DELIVERED_MEMORY)
         record.delivered.splice(0, record.delivered.length - DELIVERED_MEMORY);
     }, CONTEXT);

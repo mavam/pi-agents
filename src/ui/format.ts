@@ -95,14 +95,9 @@ export function activityText(info: AgentInfo, now: number): string | undefined {
   return activity.summary;
 }
 
-/** `working 1m32s`, `idle 3m`, `failed 10s`. */
-export function stateText(info: AgentInfo, now: number): string {
-  return `${info.state} ${formatElapsed(now - info.stateSince)}`;
-}
-
 /**
- * One agent line for the panel:
- * `◉ reviewer · explorer · terra · working 1m32s · 15.5k · Using grep`.
+ * One agent line for the panel; the glyph carries the state:
+ * `◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep`.
  */
 export function formatAgentLine(
   info: AgentInfo,
@@ -119,7 +114,7 @@ export function formatAgentLine(
     `${stateIcon(info.state, color)} ${info.name}`,
     info.profile ? color("dim", info.profile) : undefined,
     color("dim", modelLabel ?? shortModel(info)),
-    color("dim", stateText(info, now)),
+    color("dim", formatElapsed(now - info.stateSince)),
     usage ? color("dim", usage) : undefined,
     activity
       ? color(info.state === "failed" ? "error" : "dim", oneLine(activity, 120))

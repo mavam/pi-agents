@@ -9,8 +9,8 @@
  * view types.
  *
  * Keys: ⏎ prompts an idle agent and steers a working one, Alt+⏎ queues a
- * follow-up, Esc interrupts a working agent (and detaches from an idle one),
- * ← on an empty editor detaches, Shift+↑↓ and Shift+PgUp/PgDn scroll.
+ * follow-up, Esc interrupts a working agent, ← on an empty editor detaches,
+ * and Shift+↑↓ and Shift+PgUp/PgDn scroll.
  */
 
 import type { AttachedReplicatedState } from "@earendil-works/chord";
@@ -341,8 +341,8 @@ export function statusText(live: LiveState): string {
       ? `Retrying ${compaction.reason} compaction (attempt ${compaction.attempt + 1})...`
       : `Compacting (${compaction.reason})...`;
   if (runningTool !== undefined)
-    return `Running ${runningTool.name}... (esc to interrupt)`;
-  if (live.run !== undefined) return "Working... (esc to interrupt)";
+    return `Running ${runningTool.name}... (esc to interrupt, ← back)`;
+  if (live.run !== undefined) return "Working... (esc to interrupt, ← back)";
   return "";
 }
 
@@ -462,11 +462,7 @@ export class AgentPane implements Component {
   }
 
   private escape(): void {
-    if (this.info()?.state !== "working") {
-      this.close();
-      return;
-    }
-    if (this.interrupting) return;
+    if (this.info()?.state !== "working" || this.interrupting) return;
     this.interrupting = true;
     const queued = queuedTexts(inboxOf(this.view));
     void this.options.service
@@ -510,7 +506,6 @@ export class AgentPane implements Component {
       info.profile,
       shortModel(info),
       info.thinking,
-      info.state,
       formatUsage(info.usage),
     ].filter(Boolean);
     return ` ${parts.join(" · ")} `;
@@ -559,7 +554,9 @@ export class AgentPane implements Component {
         width,
       );
     }
-    const statusLines = this.loader ? this.loader.render(width) : [];
+    const statusLines = this.loader
+      ? this.loader.render(width)
+      : ["", ` ${color("dim", "← back")}`];
     const failure =
       info?.state === "failed" && info.result?.errorMessage
         ? [color("error", `✗ ${info.result.errorMessage}`)]

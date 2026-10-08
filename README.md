@@ -32,6 +32,45 @@ Pi starts agents only when you ask for delegation. An agent's result is its
 final message. Results of agents that Pi doesn't wait for arrive later as
 messages in your conversation.
 
+### Architecture
+
+Agents run inside your Pi process. Pi-agents keeps one pi-durable harness per
+Pi session; each agent is a conversation in that harness:
+
+```text
+╭─ Pi process ─────────────────────────────────────────────────────╮
+│                                                                  │
+│  ╭──────────────────╮                    ╭────────────────────╮  │
+│  │  ◆ Pi session    │                    │  ▤ panel           │  │
+│  ╰───┬──────────▲───╯                    │  ⇄ attach view     │  │
+│      │ agent_*  │ results                │  ≡ /agents         │  │
+│      ▼          │                        ╰─────────▲──────────╯  │
+│  ╭──────────────┴───╮                              │             │
+│  │  ✦ pi-agents     ├──────────────────────────────╯             │
+│  ╰───┬──────────▲───╯                                            │
+│      │ start    │ state                                          │
+│      │ message  │ results                                        │
+│      ▼ stop     │                                                │
+│  ╭──────────────┴─────────────────────────────────────────────╮  │
+│  │  pi-durable harness                                        │  │
+│  │                                                            │  │
+│  │   ╭─────────────╮   ╭─────────────╮   ╭─────────────╮      │  │
+│  │   │ ◉ agent     │   │ ◉ agent     │   │ ● agent     │  …   │  │
+│  │   ╰─────────────╯   ╰─────────────╯   ╰─────────────╯      │  │
+│  │   one conversation per agent                               │  │
+│  ╰─────────────────────────────┬──────────────────────────────╯  │
+╰────────────────────────────────┼─────────────────────────────────╯
+                                 │ checkpoint every step
+                                 ▼
+                   ╭───────────────────────────╮
+                   │  ▤ JSONL, one per session │
+                   ╰───────────────────────────╯
+```
+
+Because pi-durable checkpoints every step, a resumed session continues where
+its agents stopped. Agents use your Pi logins and models, so they need no
+separate setup.
+
 ### Glossary
 
 | Term | Meaning |
@@ -134,45 +173,6 @@ the agent instead.
 
 Agents of sessions started with `--no-session` live in memory and end with
 the session.
-
-### Architecture
-
-Agents run inside your Pi process. Pi-agents keeps one pi-durable harness per
-Pi session; each agent is a conversation in that harness:
-
-```text
-╭─ Pi process ─────────────────────────────────────────────────────╮
-│                                                                  │
-│  ╭──────────────────╮                    ╭────────────────────╮  │
-│  │  ◆ Pi session    │                    │  ▤ panel           │  │
-│  ╰───┬──────────▲───╯                    │  ⇄ attach view     │  │
-│      │ agent_*  │ results                │  ≡ /agents         │  │
-│      ▼          │                        ╰─────────▲──────────╯  │
-│  ╭──────────────┴───╮                              │             │
-│  │  ✦ pi-agents     ├──────────────────────────────╯             │
-│  ╰───┬──────────▲───╯                                            │
-│      │ start    │ state                                          │
-│      │ message  │ results                                        │
-│      ▼ stop     │                                                │
-│  ╭──────────────┴─────────────────────────────────────────────╮  │
-│  │  pi-durable harness                                        │  │
-│  │                                                            │  │
-│  │   ╭─────────────╮   ╭─────────────╮   ╭─────────────╮      │  │
-│  │   │ ◉ agent     │   │ ◉ agent     │   │ ● agent     │  …   │  │
-│  │   ╰─────────────╯   ╰─────────────╯   ╰─────────────╯      │  │
-│  │   one conversation per agent                               │  │
-│  ╰─────────────────────────────┬──────────────────────────────╯  │
-╰────────────────────────────────┼─────────────────────────────────╯
-                                 │ checkpoint every step
-                                 ▼
-                   ╭───────────────────────────╮
-                   │  ▤ JSONL, one per session │
-                   ╰───────────────────────────╯
-```
-
-Because pi-durable checkpoints every step, a resumed session continues where
-its agents stopped. Agents use your Pi logins and models, so they need no
-separate setup.
 
 ## 🧑‍💻 Agent profiles
 

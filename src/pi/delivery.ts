@@ -74,7 +74,7 @@ export class DeliveryManager {
         this.pi.sendMessage(
           {
             customType: RESULT_MESSAGE,
-            content: resultContent(details, wake),
+            content: resultContent(details),
             display: true,
             details,
           },

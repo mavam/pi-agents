@@ -89,5 +89,6 @@ describe("profiles", () => {
     expect(findProfile(both, "SHARED")?.description).toBe("project");
     const user = discoverProfiles(project, "user").profiles;
     expect(findProfile(user, "shared")?.description).toBe("user");
+    fs.rmSync(path.join(getAgentDir(), "agents"), { recursive: true });
   });
 });

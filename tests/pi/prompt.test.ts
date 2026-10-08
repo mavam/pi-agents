@@ -27,15 +27,19 @@ describe("system prompt appendix", () => {
         },
       ],
     });
-    expect(appendix).toContain("agent_spawn");
-    expect(appendix).toContain(
-      '<profile name="scout" source="project" thinking="low">Finds code</profile>',
+    expect(appendix).toBe(
+      [
+        "Delegate work to agents with the agent_* tools, but only when the user asks for it.",
+        "<agent_profiles>",
+        "- scout: Finds code (thinking low)",
+        "</agent_profiles>",
+        '<agent_models note="$ to $$$: price tier">',
+        "openai: gpt ($)",
+        "</agent_models>",
+      ].join("\n"),
     );
-    expect(appendix).toContain(
-      '<provider id="openai" auth="subscription">gpt ($)</provider>',
-    );
-    expect(buildSystemPromptAppendix(project, "user", undefined)).toContain(
-      "not trusted",
+    expect(buildSystemPromptAppendix(project, "user", undefined)).toBe(
+      "Delegate work to agents with the agent_* tools, but only when the user asks for it.",
     );
   });
 
@@ -56,12 +60,10 @@ describe("result messages", () => {
   test("answered and failed results read clearly", () => {
     const base = { version: 1 as const, agentId: "1", name: "reviewer" };
     expect(
-      resultContent({ ...base, kind: "answered", body: "All good." }, true),
-    ).toBe(
-      'Agent "reviewer" finished. Its final message:\n\nAll good.\n\nContinue your task using this result.',
-    );
+      resultContent({ ...base, kind: "answered", body: "All good." }),
+    ).toBe("Agent reviewer answered:\n\nAll good.");
     expect(
-      resultContent({ ...base, kind: "failed", body: "rate limited" }, false),
-    ).toBe('Agent "reviewer" failed: rate limited');
+      resultContent({ ...base, kind: "failed", body: "rate limited" }),
+    ).toBe("Agent reviewer failed: rate limited");
   });
 });

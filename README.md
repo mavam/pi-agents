@@ -32,24 +32,30 @@ Pi starts agents only when you ask for delegation. An agent's result is its
 final message. Results of agents that Pi doesn't wait for arrive later as
 messages in your conversation.
 
-### Agents
+### Glossary
 
-An agent is a separate Pi agent with its own context window. It has a name,
-a model, a working directory, and a conversation that persists after it
-answers, so you or Pi can follow up later.
+| Term | Meaning |
+| --- | --- |
+| Agent | A separate Pi agent with its own name, model, working directory, and conversation. It keeps its conversation after it answers. |
+| Task | The first message an agent gets. It must stand on its own, because the agent doesn't see your conversation. |
+| Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done. |
+| Result | The agent's final message after a task or message. |
+| Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
+| Attach | Open an agent's conversation to watch it and talk to it. |
+| Close | Remove an agent you no longer need. |
 
-Every agent is in one of these states:
+An agent is in one of these states:
 
 | State | Meaning |
 | --- | --- |
 | ◉ `working` | The agent works on a task or message. |
 | ● `idle` | The agent answered and waits for messages. |
-| ✗ `failed` | The last turn ended with an error. |
-| ⊘ `stopped` | The last turn was stopped before it finished. |
+| ✗ `failed` | The last answer ended with an error. |
+| ⊘ `stopped` | The last answer was stopped before it finished. |
 
 Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, and
-`ls`, along with your context files such as `AGENTS.md` and your skills.
-Agents can't use MCP servers, tools from other extensions, or other agents.
+`ls`, along with your context files such as `AGENTS.md` and your skills. They
+can't use MCP servers, tools from other extensions, or other agents.
 
 ### Watch and talk to agents
 

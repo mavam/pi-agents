@@ -74,17 +74,10 @@ export function resultDetails(
 }
 
 /** What the parent model reads. */
-export function resultContent(details: ResultDetails, wake: boolean): string {
-  const lines =
-    details.kind === "answered"
-      ? [
-          `Agent "${details.name}" finished. Its final message:`,
-          "",
-          details.body || "(empty)",
-        ]
-      : [`Agent "${details.name}" failed: ${details.body}`];
-  if (wake) lines.push("", "Continue your task using this result.");
-  return lines.join("\n");
+export function resultContent(details: ResultDetails): string {
+  return details.kind === "answered"
+    ? `Agent ${details.name} answered:\n\n${details.body || "(empty)"}`
+    : `Agent ${details.name} failed: ${details.body}`;
 }
 
 export function resultHeader(
@@ -96,7 +89,7 @@ export function resultHeader(
   const meta = [details.profile, details.model, details.usage]
     .filter(Boolean)
     .join(" · ");
-  return `${color(style.color, style.icon)} ${details.name} ${details.kind === "answered" ? "finished" : "failed"}${meta ? color("dim", ` · ${meta}`) : ""}`;
+  return `${color(style.color, style.icon)} ${details.name} ${details.kind === "answered" ? "answered" : "failed"}${meta ? color("dim", ` · ${meta}`) : ""}`;
 }
 
 function collapse(body: string, expanded: boolean): string {

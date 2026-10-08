@@ -17,7 +17,6 @@ import type { AgentService } from "../agents/service.js";
 import {
   AgentError,
   type AgentInfo,
-  formatModelRef,
   THINKING_LEVELS,
 } from "../agents/types.js";
 import { AGENT_TOOL_NAMES } from "../host/tools.js";
@@ -25,7 +24,6 @@ import {
   AGENT_ICON,
   type Colorize,
   formatAgentLine,
-  formatUsage,
   oneLine,
 } from "../ui/format.js";
 import type { SessionHost } from "./session.js";
@@ -51,37 +49,23 @@ function truncateResult(body: string): string {
   return `${body.slice(0, MAX_RESULT_CHARS)}\n\n[Result truncated: ${body.length - MAX_RESULT_CHARS} more characters. Attach to the agent to read all of it.]`;
 }
 
-/** The model-facing summary of one agent. */
+/** The model-facing summary of one agent: its state and result. */
 export function describeAgent(info: AgentInfo): string {
-  const meta = [
-    info.profile,
-    formatModelRef(info.model),
-    info.thinking,
-    formatUsage(info.usage),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const head = `## ${info.name} (${info.state}) · ${meta}`;
-  if (info.state === "working")
-    return `${head}\nStill working${info.activity.tool ? ` (using ${info.activity.tool})` : ""}. Its result arrives as a message when it finishes.`;
+  const head = `## ${info.name} (${info.state})`;
   const result = info.result;
+  if (info.state === "working") return head;
   if (info.state === "failed")
-    return `${head}\nError: ${result?.errorMessage ?? (result?.text || "the last turn failed")}`;
+    return `${head}\nError: ${result?.errorMessage ?? (result?.text || "unknown")}`;
   if (info.state === "stopped")
-    return `${head}\nStopped before finishing.${result?.text ? ` Partial answer:\n${truncateResult(result.text)}` : ""}`;
-  return `${head}\n${result ? truncateResult(result.text || "(empty answer)") : "(no answer yet)"}`;
+    return result?.text ? `${head}\n${truncateResult(result.text)}` : head;
+  return `${head}\n${truncateResult(result?.text || "(empty)")}`;
 }
 
 function statusLine(info: AgentInfo): string {
-  const parts = [
-    `${info.name}: ${info.state}`,
-    info.profile,
-    formatModelRef(info.model),
-    formatUsage(info.usage),
-    info.activity.tool ? `using ${info.activity.tool}` : undefined,
-    `task: ${oneLine(info.task, 120)}`,
-  ];
-  return parts.filter(Boolean).join(" · ");
+  const state = info.activity.tool
+    ? `${info.state}, using ${info.activity.tool}`
+    : info.state;
+  return `${info.name} (${state}): ${oneLine(info.task, 120)}`;
 }
 
 function errorMessage(error: unknown): string {
@@ -100,7 +84,6 @@ interface AgentToolSpec<T extends TSchema> {
   name: string;
   label: string;
   description: string;
-  promptSnippet: string;
   parameters: T;
   call: (args: Static<T>, color: Colorize) => string;
   execute: Execute<T>;
@@ -134,7 +117,6 @@ function defineAgentTool<T extends TSchema>(
     name: spec.name,
     label: spec.label,
     description: spec.description,
-    promptSnippet: spec.promptSnippet,
     parameters: spec.parameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       let service: AgentService;
@@ -204,7 +186,7 @@ async function waitWithProgress(
     return {
       content:
         outcome.timedOut.length > 0
-          ? `${content}\n\nTimed out while ${outcome.timedOut.join(", ")} kept working.`
+          ? `${content}\n\nTimed out; still working: ${outcome.timedOut.join(", ")}.`
           : content,
       details: {
         at: Date.now(),
@@ -216,7 +198,7 @@ async function waitWithProgress(
     if (signal?.aborted) {
       const agents = names.flatMap((name) => service.get(name) ?? []);
       return {
-        content: `Stopped waiting. ${agents.map((agent) => `${agent.name} is ${agent.state}`).join("; ")}. Results arrive as messages.`,
+        content: "Stopped waiting. The agents keep working.",
         details: { at: Date.now(), agents, message: "Stopped waiting" },
       };
     }
@@ -228,7 +210,7 @@ async function waitWithProgress(
 
 const timeoutParam = Type.Optional(
   Type.Number({
-    description: "Seconds to wait before returning while agents still work",
+    description: "Seconds to wait at most",
     minimum: 1,
   }),
 );
@@ -237,20 +219,17 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   const spawnParams = Type.Object({
     task: Type.String({
       description:
-        "Self-contained task. The agent does not see this conversation.",
+        "Self-contained task; the agent does not see this conversation",
     }),
     name: Type.Optional(
       Type.String({
-        description:
-          "Short role name, unique among open agents (letters, digits, . _ -)",
+        description: "Unique short name, such as a role",
       }),
     ),
-    profile: Type.Optional(
-      Type.String({ description: "Agent profile to apply" }),
-    ),
+    profile: Type.Optional(Type.String({ description: "Profile name" })),
     model: Type.Optional(
       Type.String({
-        description: "Model as provider/id or id; defaults to this session's",
+        description: "Model as provider/id or id",
       }),
     ),
     thinking: Type.Optional(
@@ -258,15 +237,13 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     ),
     tools: Type.Optional(
       Type.Array(Type.String(), {
-        description: `Tool allowlist from: ${AGENT_TOOL_NAMES.join(", ")}. Default: read, bash, edit, write.`,
+        description: `Tool allowlist from: ${AGENT_TOOL_NAMES.join(", ")}`,
       }),
     ),
-    cwd: Type.Optional(
-      Type.String({ description: "Working directory; defaults to this one" }),
-    ),
+    cwd: Type.Optional(Type.String({ description: "Working directory" })),
     wait: Type.Optional(
       Type.Boolean({
-        description: "Block until the agent finishes and return its result",
+        description: "Wait for the result",
       }),
     ),
     timeout: timeoutParam,
@@ -276,8 +253,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       name: "agent_spawn",
       label: "spawn",
       description:
-        "Start a durable agent on a task. It works in the background; its result arrives as a message when it finishes unless you wait for it.",
-      promptSnippet: "Start a background agent on a self-contained task",
+        "Start an agent on a task. Its final message is its result, which arrives as a message unless you wait for it.",
       parameters: spawnParams,
       call: (args, color) =>
         `${args.name ?? args.profile ?? "agent"}${args.profile && args.name ? color("dim", ` · ${args.profile}`) : ""}${args.task ? color("dim", `\n  ${oneLine(args.task, 160)}`) : ""}`,
@@ -292,11 +268,8 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
             signal,
             onUpdate,
           );
-        const meta = [info.profile, formatModelRef(info.model), info.thinking]
-          .filter(Boolean)
-          .join(" · ");
         return {
-          content: `Started agent "${info.name}" (${meta}). It works in the background; its result arrives as a message when it finishes. Use agent_wait to block on it.`,
+          content: `Started ${info.name}.`,
           details: { at: Date.now(), agents: [info] },
         };
       },
@@ -305,16 +278,13 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
 
   const sendParams = Type.Object({
     name: Type.String({ description: "Agent name" }),
-    message: Type.String({ description: "Message for the agent" }),
+    message: Type.String({ description: "Message" }),
     followUp: Type.Optional(
       Type.Boolean({
-        description:
-          "Queue after the current answer instead of steering a working agent",
+        description: "Queue after the current answer instead of steering",
       }),
     ),
-    wait: Type.Optional(
-      Type.Boolean({ description: "Block until the agent finishes" }),
-    ),
+    wait: Type.Optional(Type.Boolean({ description: "Wait for the result" })),
     timeout: timeoutParam,
   });
   pi.registerTool(
@@ -322,8 +292,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       name: "agent_send",
       label: "send",
       description:
-        "Message an agent. An idle agent starts a new turn; a working agent receives it as steering, or after its current answer with followUp.",
-      promptSnippet: "Message an agent to steer it or follow up",
+        "Send a message to an agent. A working agent receives it as steering. Its answer arrives as a message unless you wait for it.",
       parameters: sendParams,
       call: (args, color) =>
         `${args.name}${color("dim", `\n  ${oneLine(args.message ?? "", 160)}`)}`,
@@ -346,11 +315,11 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         const verb =
           before?.state === "working"
             ? params.followUp
-              ? "Queued a follow-up for"
+              ? "Queued for"
               : "Steered"
-            : "Prompted";
+            : "Sent to";
         return {
-          content: `${verb} ${info.name}. Its result arrives as a message when it finishes.`,
+          content: `${verb} ${info.name}.`,
           details: { at: Date.now(), agents: [info] },
         };
       },
@@ -368,9 +337,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_wait",
       label: "wait",
-      description:
-        "Block until the named agents are idle and return their results. Cancelling the wait leaves the agents working.",
-      promptSnippet: "Wait for agents and return their results",
+      description: "Wait for agents to finish and return their results.",
       parameters: waitParams,
       call: (args) => (args.names ?? []).join(", "),
       execute: (service, params, _ctx, signal, onUpdate) =>
@@ -386,16 +353,14 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
 
   const statusParams = Type.Object({
     name: Type.Optional(
-      Type.String({ description: "Agent name; omit for all open agents" }),
+      Type.String({ description: "Agent name; omit for all" }),
     ),
   });
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_status",
       label: "status",
-      description:
-        "Show the state of agents. Results arrive as messages on their own, so do not poll.",
-      promptSnippet: "Show agent states",
+      description: "List agents with their state and task.",
       parameters: statusParams,
       call: (args) => args.name ?? "all",
       async execute(service, params) {
@@ -409,7 +374,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         return {
           content:
             agents.length === 0
-              ? "No open agents."
+              ? "No agents."
               : agents.map(statusLine).join("\n"),
           details: { at: Date.now(), agents },
         };
@@ -424,16 +389,14 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_stop",
       label: "stop",
-      description:
-        "Abort an agent's current work and drop its queued messages. The agent stays open for further messages.",
-      promptSnippet: "Abort an agent's current work",
+      description: "Stop an agent's current work. The agent stays available.",
       parameters: nameParams,
       call: (args) => args.name,
       async execute(service, params) {
         await service.stop(params.name);
         const info = service.get(params.name) as AgentInfo;
         return {
-          content: `Stopped ${info.name}. It stays open; message it with agent_send or close it with agent_close.`,
+          content: `Stopped ${info.name}.`,
           details: { at: Date.now(), agents: [info] },
         };
       },
@@ -443,9 +406,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_close",
       label: "close",
-      description:
-        "Stop an agent and close it. Use this once you no longer need the agent.",
-      promptSnippet: "Close an agent you no longer need",
+      description: "Close an agent you no longer need.",
       parameters: nameParams,
       call: (args) => args.name,
       async execute(service, params) {

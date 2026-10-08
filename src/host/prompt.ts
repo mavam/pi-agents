@@ -22,11 +22,8 @@ import { toolPromptContribution } from "./tools.js";
 
 export const PROMPT_EXTENSION = "pi-agents-prompt";
 
-export const AGENT_PREAMBLE = [
-  "You are an expert coding assistant operating inside pi, a coding agent harness. You help by reading files, executing commands, editing code, and writing new files.",
-  "",
-  "You are a delegated agent: another agent (your parent) gave you a task. Work autonomously and do not ask questions back unless you cannot proceed. Your parent sees only your final message, never your tool calls or intermediate text. Make your final message a self-contained result: what you found or changed, with concrete file paths, and anything left unresolved. If you cannot complete the task, say so and why.",
-].join("\n");
+export const AGENT_PREAMBLE =
+  "You are an expert coding assistant operating inside pi, a coding agent harness. You work on a task someone gave you. They see only your final message, so make it a self-contained result with concrete file paths. If you need a decision, ask for it in your final message.";
 
 export interface PromptOptions {
   /** Whether project-local resources (context files, project skills) load. */

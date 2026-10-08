@@ -230,9 +230,8 @@ name.
 
 An agent runs on your session's model unless Pi or a profile picks another.
 Models resolve like `pi --model`: `sonnet` picks the newest Sonnet you have
-credentials for, an exact ID such as `claude-sonnet-4-6` picks that version,
-and a suffix such as `sonnet:high` sets the thinking level. Run
-`pi --list-models` to see what's available.
+credentials for, and an exact ID such as `claude-sonnet-4-6` picks that
+version. Run `pi --list-models` to see what's available.
 
 ### Footer counters
 

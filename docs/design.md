@@ -113,8 +113,7 @@ never lose one. On session resume, unacknowledged settled requests deliver.
 The system prompt adds one line of guidance plus the usable profiles; it lists
 no models. The `model` argument and profile models resolve like `pi --model`
 patterns among models with credentials: exact `provider/id` or `id` first,
-then the newest alias that partially matches, with an optional `:<thinking>`
-suffix. Choosing models per task is left to a future model router. Profiles
+then the newest alias that partially matches. Choosing models per task is left to a future model router. Profiles
 with an unavailable model or unresolvable skills stay
 out of the prompt, and the UI reports them once per session. Each tool call
 renders its explicit arguments as a dim `key=value` line.

@@ -2,14 +2,13 @@
  * Model patterns, resolved the way `pi --model` resolves them but only among
  * models with configured credentials: an exact `provider/id` or `id` first,
  * otherwise a partial match on ID or name, preferring the newest alias over
- * dated snapshots. A `:<thinking>` suffix selects a thinking level.
+ * dated snapshots.
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { isThinkingLevel, type ThinkingLevel } from "../agents/types.js";
 
 export type ModelResolution =
-  | { ok: true; provider: string; modelId: string; thinking?: ThinkingLevel }
+  | { ok: true; provider: string; modelId: string }
   | { ok: false; message: string };
 
 const SNAPSHOT = /-\d{8}$/;
@@ -37,32 +36,17 @@ function partial(pattern: string, models: readonly Model<Api>[]) {
 }
 
 /** Resolve a model pattern such as `sonnet`, `gpt-6.1-sol`, or
- * `anthropic/claude-sonnet-5-5:high` against the available models. */
+ * `anthropic/claude-sonnet-5-5` against the available models. */
 export function resolveModelPattern(
   pattern: string,
   models: readonly Model<Api>[],
 ): ModelResolution {
   const trimmed = pattern.trim();
-  let model = exact(trimmed, models) ?? partial(trimmed, models);
-  let thinking: ThinkingLevel | undefined;
-  const colon = trimmed.lastIndexOf(":");
-  if (!model && colon > 0) {
-    const suffix = trimmed.slice(colon + 1);
-    const prefix = trimmed.slice(0, colon);
-    if (isThinkingLevel(suffix)) {
-      model = exact(prefix, models) ?? partial(prefix, models);
-      thinking = suffix;
-    }
-  }
+  const model = exact(trimmed, models) ?? partial(trimmed, models);
   if (!model)
     return {
       ok: false,
       message: `No available model matches "${trimmed}". Run pi --list-models to see available models.`,
     };
-  return {
-    ok: true,
-    provider: model.provider,
-    modelId: model.id,
-    ...(thinking ? { thinking } : {}),
-  };
+  return { ok: true, provider: model.provider, modelId: model.id };
 }

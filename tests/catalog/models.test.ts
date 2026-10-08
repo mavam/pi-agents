@@ -35,13 +35,6 @@ describe("resolveModelPattern", () => {
     });
   });
 
-  test("a thinking suffix sets the thinking level", () => {
-    expect(resolveModelPattern("sonnet:high", models)).toMatchObject({
-      modelId: "claude-sonnet-5-5",
-      thinking: "high",
-    });
-  });
-
   test("unknown patterns point to pi --list-models", () => {
     const resolution = resolveModelPattern("llama", models);
     expect(resolution.ok).toBe(false);

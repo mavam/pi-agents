@@ -43,22 +43,17 @@ export function scopeOf(ctx: ExtensionContext): Scope {
 function resolveModel(
   pattern: string | undefined,
   ctx: ExtensionContext,
-): { model?: ModelRef; thinking?: ThinkingLevel } {
+): ModelRef | undefined {
   if (pattern === undefined) {
     const model = ctx.model;
-    return model
-      ? { model: { provider: model.provider, modelId: model.id } }
-      : {};
+    return model ? { provider: model.provider, modelId: model.id } : undefined;
   }
   const resolved = resolveModelPattern(
     pattern,
     ctx.modelRegistry.getAvailable(),
   );
   if (!resolved.ok) throw new AgentError(resolved.message);
-  return {
-    model: { provider: resolved.provider, modelId: resolved.modelId },
-    ...(resolved.thinking ? { thinking: resolved.thinking } : {}),
-  };
+  return { provider: resolved.provider, modelId: resolved.modelId };
 }
 
 function resolveCwd(base: string, requested: string | undefined): string {
@@ -140,13 +135,8 @@ export function resolveSpawn(
   const scope = scopeOf(ctx);
   const cwd = resolveCwd(ctx.cwd, request.cwd);
   const profile = resolveProfile(request.profile, cwd, scope);
-  const resolved = resolveModel(request.model ?? profile?.model, ctx);
-  const model = resolved.model;
-  const thinking =
-    request.thinking ??
-    resolved.thinking ??
-    profile?.thinking ??
-    parentThinking;
+  const model = resolveModel(request.model ?? profile?.model, ctx);
+  const thinking = request.thinking ?? profile?.thinking ?? parentThinking;
   if (thinking !== undefined && !isThinkingLevel(thinking))
     throw new AgentError(`Invalid thinking level: ${thinking}`);
   const tools = request.tools ?? profile?.tools;

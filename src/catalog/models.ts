@@ -1,186 +1,52 @@
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-
-export interface ModelCatalogEntry {
-  id: string;
-  /** Input price per million tokens. */
-  costIn?: number;
-  /** Output price per million tokens. */
-  costOut?: number;
-  /** Context-window size in tokens. */
-  ctx?: number;
-}
-
-/** Models available to delegated agents, grouped by authenticated provider. */
-export interface ModelCatalog {
-  providers: Array<{
-    id: string;
-    subscription: boolean;
-    models: ModelCatalogEntry[];
-  }>;
-}
-
-interface ModelRefreshResult {
-  readonly aborted: boolean;
-  readonly errors: { readonly size: number };
-}
-
-/** Start one model refresh, allowing a later event to retry after failure. */
-export function createModelRefresher(): (
-  registry: Pick<ModelRegistry, "refresh">,
-) => void {
-  let started = false;
-  return (registry) => {
-    if (started) return;
-    started = true;
-    const pending = registry.refresh() as Promise<
-      ModelRefreshResult | undefined
-    >;
-    void pending.then(
-      (result) => {
-        if (result && (result.aborted || result.errors.size > 0))
-          started = false;
-      },
-      () => {
-        started = false;
-      },
-    );
-  };
-}
-
 /**
- * Build a synchronous snapshot of the models whose providers are configured.
- * The caller is responsible for starting the registry's asynchronous refresh.
+ * Model patterns, resolved the way `pi --model` resolves them but only among
+ * models with configured credentials: an exact `provider/id` or `id` first,
+ * otherwise a partial match on ID or name, preferring the newest alias over
+ * dated snapshots.
  */
-export function buildModelCatalog(registry: ModelRegistry): ModelCatalog {
-  const grouped = new Map<
-    string,
-    { subscription: boolean; models: Map<string, ModelCatalogEntry> }
-  >();
 
-  for (const model of registry.getAvailable()) {
-    let provider = grouped.get(model.provider);
-    if (!provider) {
-      provider = {
-        subscription: registry.isUsingOAuth(model),
-        models: new Map(),
-      };
-      grouped.set(model.provider, provider);
-    }
-    provider.models.set(model.id, {
-      id: model.id,
-      costIn: model.cost.input,
-      costOut: model.cost.output,
-      ctx: model.contextWindow,
-    });
-  }
+import type { Api, Model } from "@earendil-works/pi-ai";
 
-  return {
-    providers: [...grouped.entries()]
-      .map(([id, provider]) => ({
-        id,
-        subscription: provider.subscription,
-        models: [...provider.models.values()].sort((left, right) =>
-          left.id.localeCompare(right.id),
-        ),
-      }))
-      .sort(
-        (left, right) =>
-          Number(right.subscription) - Number(left.subscription) ||
-          left.id.localeCompare(right.id),
-      ),
-  };
-}
-
-export type ModelReferenceResolution =
-  | { ok: true; model: string }
+export type ModelResolution =
+  | { ok: true; provider: string; modelId: string }
   | { ok: false; message: string };
 
-function availableModels(catalog: ModelCatalog): string[] {
-  return catalog.providers.flatMap((provider) =>
-    provider.models.map((model) => `${provider.id}/${model.id}`),
+const SNAPSHOT = /-\d{8}$/;
+
+function exact(pattern: string, models: readonly Model<Api>[]) {
+  const reference = pattern.toLowerCase();
+  const canonical = models.filter(
+    (model) => `${model.provider}/${model.id}`.toLowerCase() === reference,
   );
+  if (canonical.length === 1) return canonical[0];
+  const byId = models.filter((model) => model.id.toLowerCase() === reference);
+  return byId.length === 1 ? byId[0] : undefined;
 }
 
-function commonPrefixLength(left: string, right: string): number {
-  const length = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < length && left[index] === right[index]) index += 1;
-  return index;
+function partial(pattern: string, models: readonly Model<Api>[]) {
+  const needle = pattern.toLowerCase();
+  const matches = models.filter(
+    (model) =>
+      model.id.toLowerCase().includes(needle) ||
+      model.name?.toLowerCase().includes(needle),
+  );
+  const aliases = matches.filter((model) => !SNAPSHOT.test(model.id));
+  const pool = aliases.length > 0 ? aliases : matches;
+  return [...pool].sort((left, right) => right.id.localeCompare(left.id))[0];
 }
 
-/** Rank a possible model without depending on Pi's internal model resolver. */
-function suggestionScore(ref: string, candidate: string): number {
-  const query = ref.toLowerCase();
-  const canonical = candidate.toLowerCase();
-  const modelId = canonical.slice(canonical.indexOf("/") + 1);
-  if (canonical.startsWith(query)) return 100;
-  if (modelId.startsWith(query)) return 90;
-  if (canonical.includes(query)) return 80;
-  if (modelId.includes(query)) return 70;
-
-  const slash = query.indexOf("/");
-  if (slash >= 0) {
-    const provider = query.slice(0, slash);
-    const candidateProvider = canonical.slice(0, canonical.indexOf("/"));
-    if (provider === candidateProvider) {
-      const requestedId = query.slice(slash + 1);
-      return 50 + commonPrefixLength(requestedId, modelId);
-    }
-  }
-
-  const prefix = commonPrefixLength(query, modelId);
-  return prefix >= 3 ? prefix : 0;
-}
-
-function suggestions(ref: string, available: string[]): string[] {
-  return available
-    .map((model, index) => ({
-      model,
-      index,
-      score: suggestionScore(ref, model),
-    }))
-    .filter(({ score }) => score > 0)
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .slice(0, 3)
-    .map(({ model }) => model);
-}
-
-function unknownModelMessage(ref: string, available: string[]): string {
-  const fullList = available.join(", ") || "none";
-  const nearby = suggestions(ref, available);
-  if (nearby.length > 0) {
-    return `unknown model '${ref}' — suggestions: ${nearby.join(", ")}; available: ${fullList}`;
-  }
-  return `unknown model '${ref}' — available: ${fullList}`;
-}
-
-/** Resolve a bare or provider-qualified model reference against the catalog. */
-export function resolveModelReference(
-  ref: string,
-  catalog: ModelCatalog,
-): ModelReferenceResolution {
-  const available = availableModels(catalog);
-  const slash = ref.indexOf("/");
-  if (slash >= 0) {
-    const providerId = ref.slice(0, slash);
-    const modelId = ref.slice(slash + 1);
-    const provider = catalog.providers.find(({ id }) => id === providerId);
-    if (provider?.models.some((model) => model.id === modelId)) {
-      return { ok: true, model: `${providerId}/${modelId}` };
-    }
+/** Resolve a model pattern such as `sonnet`, `gpt-6.1-sol`, or
+ * `anthropic/claude-sonnet-5-5` against the available models. */
+export function resolveModelPattern(
+  pattern: string,
+  models: readonly Model<Api>[],
+): ModelResolution {
+  const trimmed = pattern.trim();
+  const model = exact(trimmed, models) ?? partial(trimmed, models);
+  if (!model)
     return {
       ok: false,
-      message: unknownModelMessage(ref, available),
+      message: `No available model matches "${trimmed}". Run pi --list-models to see available models.`,
     };
-  }
-
-  for (const provider of catalog.providers) {
-    if (provider.models.some((model) => model.id === ref)) {
-      return { ok: true, model: `${provider.id}/${ref}` };
-    }
-  }
-  return {
-    ok: false,
-    message: unknownModelMessage(ref, available),
-  };
+  return { ok: true, provider: model.provider, modelId: model.id };
 }

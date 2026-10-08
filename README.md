@@ -1,13 +1,13 @@
 # 🤖 pi-agents
 
-Run explicit, composable multi-agent workflows in [Pi](https://pi.dev). Use one
-agent for a focused task, run several in parallel, or connect agents
-with sequences, maps, loops, conditions, and reducers.
+Give [Pi](https://pi.dev) durable, named agents. Delegate a task, keep working
+while the agent runs, and get its result back as a message. Watch any agent
+live, talk to it, or stop it. Agents survive crashes and restarts.
 
-Every workflow node returns a value. Data moves between nodes only through
-references such as `{previous}`, `{review}`, or `{item}`. Because nothing
-flows implicitly, Pi validates every reference before the run starts, and a
-broken data dependency fails before any agent spawns.
+Agents run inside your Pi process on
+[pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable), which
+checkpoints every step. When you resume a session, interrupted agents continue
+where they stopped.
 
 ## 🚀 Installation
 
@@ -15,636 +15,230 @@ broken data dependency fails before any agent spawns.
 pi install npm:pi-agents
 ```
 
-The package works without configuration. It includes `/review`, a read-only
-code review workflow.
+## ✨ Usage
 
-## ✨ Quick start
-
-Ask Pi explicitly to delegate work:
+Ask Pi to delegate:
 
 ```text
-Delegate a review of src/run to an agent.
+Have an agent review src/run for error handling while we keep going.
 ```
 
 ```text
-Review src/run and src/ui in parallel, then merge the findings.
+Spawn two agents in parallel: one maps the API surface, one checks the tests.
+Wait for both and merge their findings.
 ```
 
-Pi starts workflows only when you ask for delegation, parallel agents, or a
-saved workflow. Mentioning a workflow or asking how one works does not start
-it.
+Pi starts agents only when you ask for delegation. An agent's result is its
+final message. Results of agents that Pi doesn't wait for arrive later as
+messages in your conversation.
 
-The model can create an inline workflow without any agent or workflow files:
+Every agent keeps its conversation. Open `/agents`, pick any agent, even one
+that finished hours ago, and keep talking to it like a regular Pi session.
 
-```json
-{
-  "flow": {
-    "kind": "parallel",
-    "branches": {
-      "bugs": { "kind": "agent", "task": "Review src/run for bugs" },
-      "clarity": { "kind": "agent", "task": "Review src/run for clarity" }
-    },
-    "reduce": { "task": "Merge and prioritize these reviews:\n{branches}" }
-  },
-  "label": "review src/run"
-}
+### Architecture
+
+Agents run inside your Pi process. Pi-agents keeps one pi-durable harness per
+Pi session; each agent is a conversation in that harness:
+
+```text
+╭─ Pi process ─────────────────────────────────────────────────────╮
+│                                                                  │
+│  ╭──────────────────╮                    ╭────────────────────╮  │
+│  │  ◆ Pi session    │                    │  ▤ panel           │  │
+│  ╰───┬──────────▲───╯                    │  ⇄ attach view     │  │
+│      │ agent_*  │ results                │  ≡ /agents         │  │
+│      ▼          │                        ╰─────────▲──────────╯  │
+│  ╭──────────────┴───╮                              │             │
+│  │  ✦ pi-agents     ├──────────────────────────────╯             │
+│  ╰───┬──────────▲───╯                                            │
+│      │ start    │ state                                          │
+│      │ message  │ results                                        │
+│      ▼ stop     │                                                │
+│  ╭──────────────┴─────────────────────────────────────────────╮  │
+│  │  pi-durable harness                                        │  │
+│  │                                                            │  │
+│  │   ╭─────────────╮   ╭─────────────╮   ╭─────────────╮      │  │
+│  │   │ ◉ agent     │   │ ◉ agent     │   │ ● agent     │  …   │  │
+│  │   ╰─────────────╯   ╰─────────────╯   ╰─────────────╯      │  │
+│  │   one conversation per agent                               │  │
+│  ╰─────────────────────────────┬──────────────────────────────╯  │
+╰────────────────────────────────┼─────────────────────────────────╯
+                                 │ checkpoint every step
+                                 ▼
+                   ╭───────────────────────────╮
+                   │  ▤ JSONL, one per session │
+                   ╰───────────────────────────╯
 ```
 
-An agent without a `profile` is anonymous and ad hoc. It inherits the current
-model and thinking level unless the node overrides them.
+Because pi-durable checkpoints every step, a resumed session continues where
+its agents stopped. Agents use your Pi logins and models, so they need no
+separate setup.
 
-## 📖 Core concepts
+### Glossary
 
-| Concept | Meaning |
+| Term | Meaning |
 | --- | --- |
-| **Agent** | One delegated Pi session working on a task. It can be anonymous or use a saved profile. |
-| **Workflow** | A saved or inline composition of agents and control-flow nodes. |
-| **Run** | One persisted execution of a workflow. |
+| Agent | A separate Pi agent with its own name, model, working directory, and conversation. It keeps its conversation after it answers. |
+| Task | The first message an agent gets. It must stand on its own, because the agent doesn't see your conversation. |
+| Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done. |
+| Result | The agent's final message after a task or message. |
+| Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
+| Attach | Open an agent's conversation to watch it and talk to it. |
+| Stop | End an agent and remove it from the panel. Agents end on their own once their answer reaches Pi. Messaging an agent that ended starts it again. |
 
-### Workflow nodes
+An agent is in one of these states:
 
-| Node | Purpose | Result |
-| --- | --- | --- |
-| `agent` | Run one delegated agent. | The agent's submitted result. |
-| `sequence` | Run steps in order. | The last step's result. |
-| `parallel` | Run named branches concurrently. | An object of branch results, or a reducer result. |
-| `map` | Run a body for each item in an array. | An array of results, or a reducer result. |
-| `loop` | Run a body at least once, then test a condition. | The last result. |
-| `while` | Carry a value through a body while a condition holds. | The final carried value. |
-| `switch` | Select the first matching branch. | The selected branch's result. |
-| `value` | Return interpolated JSON without starting an agent. | The interpolated value. |
-| `workflow` | Invoke a saved workflow. | The saved workflow's result. |
+| State | Meaning |
+| --- | --- |
+| ◉ `working` | The agent works on a task or message. |
+| ● `idle` | The agent answered and waits for messages. |
+| ✗ `failed` | The last answer ended with an error. |
+| ⊘ `interrupted` | The last answer was interrupted before it finished. |
 
-### Data flow
+Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, and
+`ls`, along with your context files such as `AGENTS.md` and your skills. They
+can't use MCP servers, tools from other extensions, or other agents.
 
-Name a sequence step with `as`, then reference its result later:
+### Watch and talk to agents
 
-```yaml
-kind: sequence
-steps:
-  - kind: agent
-    task: Find files that need review
-    as: discovery
-    json:
-      type: object
-      required: [files]
-      properties:
-        files:
-          type: array
-          items: { type: string }
-  - kind: map
-    over: "{discovery.files}"
-    body:
-      kind: agent
-      task: "Review {item}"
+A panel above the editor shows one line per open agent. The glyph shows the
+state, and working agents show how long they have worked:
+
+```text
+◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep
+✗ docs · sol · 8.0k · $0.02 · rate limit exceeded
 ```
 
-Available references depend on the node:
+An agent leaves the panel once its answer reaches Pi. Failed and interrupted
+agents stay until you or Pi stop them.
 
-- Sequence steps can use named earlier results and `{previous}`.
-- Map bodies receive `{item}` and `{index}`.
-- Loop bodies receive `{iteration}` and `{last}`.
-- While bodies receive `{iteration}` and `{current}`.
-- Parallel reducers receive `{branches}`.
-- Map reducers receive `{items}`.
-- Saved workflows receive their declared `{params.*}` values.
+Press ← in an empty editor or Ctrl+Q to focus the panel. Then:
 
-A string containing only one reference preserves the referenced JSON type.
-References mixed with other text produce a string. Escape literal braces as
-`{{` and `}}`.
+| Key | Action |
+| --- | --- |
+| ↑ ↓ | Select an agent. |
+| ⏎ | Attach to the agent. |
+| `s` | Stop the agent. Pi asks first when it still works. |
+| Esc | Return to the editor. |
 
-Pi validates references before starting the run. Add a `json` schema to an
-agent when later nodes need fields from its result.
+Attaching shows the agent's conversation with Pi's own message and tool
+rendering. The editor then talks to the agent:
 
-## 🧑‍💻 Create an agent profile
+| Key | Action |
+| --- | --- |
+| ⏎ | Prompt an idle agent or steer a working one. |
+| Alt+⏎ | Queue a follow-up after the current answer. |
+| Esc | Interrupt a working agent. Queued messages return to the editor. |
+| ← | Detach when the editor is empty. |
+| Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. |
 
-Profiles are optional. Use one when you want to reuse a persona or a common
-set of model, skill, and tool settings.
+Messages you send while attached stay between you and the agent. Their
+results don't post into the parent conversation.
 
-Create `.pi/agents/planner.md`:
+You can attach to any agent, not only the ones in the panel. Agents that
+finished or were stopped keep their whole conversation: open `/agents`, select
+one, and continue where it left off. This also works after you resume a
+session.
+
+### Commands
+
+| Command | Action |
+| --- | --- |
+| `/agents` | Browse all agents, including ended ones, with their task and latest result. Attach to or stop them. |
+| `/agent <name>` | Attach to an agent. |
+
+### Tools
+
+Pi uses these tools to work with agents:
+
+| Tool | Purpose |
+| --- | --- |
+| `agent_spawn` | Start an agent on a task, optionally waiting for its result. |
+| `agent_send` | Message an agent: prompt, steer, or queue a follow-up. |
+| `agent_wait` | Block until agents answer and return their results. |
+| `agent_status` | Show agent states. |
+| `agent_stop` | Stop an agent. |
+
+`agent_spawn` and `agent_send` can also block for the result: their `wait`
+argument sets the most seconds to wait. A result that a wait returns doesn't
+post again as a message. Cancelling a wait leaves the agents working.
+
+Each tool call shows the arguments Pi chose on a dim line below it:
+
+```text
+✦ spawn lister
+  profile=explorer thinking=low tools=[read,ls] wait=120s
+  List the files in src and summarize them.
+```
+
+### Durability
+
+Agents belong to the Pi session that started them. When you quit Pi or it
+crashes, agents pause. When you resume the session, for example with `pi -c`,
+interrupted work continues and results that haven't arrived yet post into the
+conversation. A tool call that can't safely repeat reports the interruption to
+the agent instead.
+
+Agents of sessions started with `--no-session` live in memory and end with
+the session.
+
+## 🧑‍💻 Agent profiles
+
+A profile bundles reusable settings for agents. Create `.pi/agents/planner.md`:
 
 ```md
 ---
 name: planner
 description: Maps a codebase and proposes implementation plans
-thinking: medium
-skills: []
-tools: [read, grep, find]
+model: claude-opus-4-5
+thinking: high
+tools: [read, grep, find, ls]
+skills: [architecture]
 ---
 
 Map the relevant code and return a concrete implementation plan with file
 paths. Do not edit files.
 ```
 
-Reference it from a workflow:
+Then ask for it:
 
-```yaml
-kind: agent
-profile: planner
-task: Plan the requested change
+```text
+Have a planner agent plan the caching layer.
 ```
 
-Pi-agents discovers agent profiles in:
+Profile fields:
 
-- User: `~/.pi/agent/agents`
-- Project: `<project>/.pi/agents`
-
-The nearest ancestor containing `.pi` is the project resource root. Project
-profiles take precedence over user profiles with the same name.
-
-Agent-node settings override profile settings, which override the active Pi
-session. Lists replace rather than merge:
-
-- Omit `skills` to retain ambient skill discovery for an ad-hoc agent.
-- Set `skills: []` to disable skill discovery.
-- Set `tools: []` to give the agent no working tools.
-- Use `scope: user`, `scope: project`, or `scope: both` to control profile and
-  skill discovery.
-
-Named skills resolve from `<project>/.pi/skills`, `.agents/skills` up to the
-Git root, `~/.pi/agent/skills`, and `~/.agents/skills` according to `scope`.
-Unknown profile and skill names fail validation before the run starts.
-
-## 🧩 Create a saved workflow
-
-Save workflows as YAML or JSON in one of these directories:
-
-- User: `~/.pi/agent/workflows`
-- Project: `<project>/.pi/workflows`
-
-A flat workflow describes one agent. For example, `.pi/workflows/review.yaml`:
-
-```yaml
-name: review
-description: Review a target with structured findings
-trigger: when the user asks for a read-only code review
-display: report
-params:
-  - { name: target, required: true }
-  - { name: focus, default: "Apply normal risk-based lens selection." }
-task: |-
-  Review {params.target}.
-  Focus: {params.focus}
-json:
-  type: object
-  required: [outcome, report]
-  properties:
-    outcome: { enum: [approved, changes_required, cannot_proceed] }
-    report: { type: string, minLength: 1 }
-  additionalProperties: false
-thinking: high
-tools: [read, bash]
-```
-
-A composed workflow uses `flow`:
-
-```yaml
-name: inspect-and-fix
-description: Inspect two areas, merge findings, then fix them
-params:
-  - { name: target, required: true }
-flow:
-  kind: sequence
-  steps:
-    - kind: parallel
-      as: reviews
-      branches:
-        behavior:
-          kind: agent
-          task: "Review {params.target} for correctness"
-        tests:
-          kind: agent
-          task: "Review {params.target} for missing tests"
-      reduce:
-        task: "Merge and prioritize:\n{branches}"
-    - kind: agent
-      task: "Fix these findings:\n{reviews}"
-```
-
-Each saved workflow registers a slash command. `/review src/run` passes
-`src/run` to the first declared parameter. Slash commands accept one free-form
-text argument; use `workflow_create` when you need several named parameters.
-
-### Human-facing results
-
-A run can return structured data while presenting one Markdown string to the
-user. The default is the `report` convention: when a structured result
-contains a top-level `report` string, completion cards and
-`/workflow <id> result` render it as Markdown. Without `report`, the UI shows
-the complete structured result. Parent workflows always receive the complete
-value. `workflow_result` returns the complete value by default and applies the
-human-facing selection only with `view: "presented"`; use `/workflow <id> raw`
-to inspect it in the UI.
-
-Saved workflows may instead pin an explicit dot path with `display`, which
-overrides the convention:
-
-```yaml
-display: report
-```
-
-Request-time presentation settings are best effort. An invalid `display` or
-`label`, or a `display` path that is missing from the completed value, produces
-a run warning and falls back without failing execution. Saved workflow files
-validate `display` strictly and report malformed definitions in the catalog.
-
-### Agent results
-
-A delegated agent must submit one final result that matches its `json` schema.
-Without `json`, the result must be a string. Assistant messages, thinking,
-tool calls, and tool output are progress; the last visible assistant message
-is not used as an implicit result.
-
-An agent that cannot complete its task can submit an error with a reason. The
-node then fails, and the surrounding workflow applies its configured error
-policy.
-
-## 🧮 Compose workflows
-
-### Sequence
-
-```yaml
-kind: sequence
-steps:
-  - { kind: agent, task: Map the code, as: map }
-  - { kind: agent, task: "Plan using {map}" }
-  - { kind: agent, task: "Implement {previous}" }
-```
-
-### Parallel
-
-```yaml
-kind: parallel
-branches:
-  a: { kind: agent, task: Review module A }
-  b: { kind: agent, task: Review module B }
-mode: all               # all | any | { quorum: 1 }
-onError: fail           # fail | collect
-concurrency: 4
-reduce:
-  task: "Merge {branches}"
-```
-
-`mode: any` returns the first successful result and cancels the remaining
-branches. `onError: collect` keeps failures as `{error: "..."}` values unless
-every branch fails.
-
-### Map
-
-```yaml
-kind: map
-over: "{discovery.files}"
-concurrency: 4
-body:
-  kind: agent
-  task: "Review {item}"
-reduce:
-  task: "Combine {items}"
-```
-
-Map results preserve input order.
-
-### Loop
-
-```yaml
-kind: loop
-max: 3
-body:
-  kind: agent
-  task: "Iteration {iteration}; previous result: {last}"
-  json:
-    type: object
-    required: [done]
-    properties: { done: { type: boolean } }
-until: { eq: [done, true] }
-```
-
-A loop runs at least once. It stops when `until` matches or when it reaches
-`max`.
-
-### While
-
-```yaml
-kind: while
-on: "{initial_state}"
-condition: { eq: [outcome, changes_required] }
-max: 3
-body:
-  kind: agent
-  task: "Round {iteration}; fix {current.actionable}"
-```
-
-A while node checks its condition before each iteration. It can run zero
-times. The body's result becomes the next `{current}` value.
-
-### Switch
-
-```yaml
-kind: switch
-on: "{review}"
-cases:
-  - when: { eq: [outcome, approved] }
-    then: { kind: value, value: approved }
-  - when: { exists: actionable }
-    then: { kind: agent, task: "Fix {review.actionable}" }
-else:
-  kind: value
-  value: cannot-proceed
-```
-
-Switch cases run in order. The first matching case wins, and `else` is
-required.
-
-Predicates support `eq`, `ne`, `gt`, `lt`, `exists`, and `empty`, plus `and`,
-`or`, and `not`.
-
-### Saved workflow
-
-```yaml
-kind: workflow
-name: review
-params:
-  target: "{previous}"
-```
-
-Pi-agents expands saved workflows into the caller's run. Cycles fail
-validation.
-
-## 🎛️ Budgets
-
-Set optional limits on a run:
-
-| Budget | Default | Meaning |
-| --- | ---: | --- |
-| `maxAgents` | `50` | Total agent and reducer executions. Set `0` for a data-only workflow. |
-| `maxParallelism` | `8` | Agents that can run simultaneously. |
-| `maxIterations` | `10` | Default cap for every loop and while node. |
-| `maxDepth` | `5` | Maximum delegated process depth. |
-| `maxTurns` | `250` | Assistant turns per delegated agent. |
-| `maxAgentDuration` | Unbounded | Seconds per delegated agent. |
-| `maxDuration` | Unbounded | Seconds for the complete run. |
-| `maxTokens` | Unbounded | Input and output tokens, excluding cache traffic. |
-| `maxCost` | Unbounded | Total cost in USD. |
-
-Example:
-
-```json
-{
-  "name": "review",
-  "params": { "target": "src" },
-  "budgets": {
-    "maxAgents": 8,
-    "maxDuration": 300,
-    "maxCost": 1.0
-  }
-}
-```
-
-An agent or run that exceeds a limit fails and preserves the latest available
-output. If you are attached to an agent, enforcement waits until you detach;
-usage accounting continues while you are attached.
-
-## 🧭 Run and inspect workflows
-
-### Commands
-
-| Command | Action |
+| Field | Meaning |
 | --- | --- |
-| `/agents` | Browse agent profiles. Add `list` for plain text. |
-| `/agent <name>` | Show one profile. |
-| `/workflows` | Browse workflows, runs, and delegated agents. |
-| `/workflow <name>` | Show a saved workflow. |
-| `/<name> [argument]` | Run a saved workflow. |
-| `/workflow <id>` | Inspect a run. Unique ID prefixes work. |
-| `/workflow <id> result` | Show the human-facing result. |
-| `/workflow <id> raw` | Show the complete result as JSON. |
-| `/workflow <id> copy` | Copy the human-facing result. |
-| `/workflow <id> agents` | Show per-agent status and output. |
-| `/workflow <id> watch` | Wait for a live run and show its final tree. |
-| `/workflow <id> mermaid` | Show the run as a Mermaid diagram. |
-| `/workflow <id> stop` | Stop a live run. |
-| `/agent-session <run-id> [node]` | Open a settled agent's Pi session. |
+| `name` | Profile name. Required. |
+| `description` | When to use the profile. Required. |
+| `model` | Model as `provider/id` or `id`. Defaults to the session's model. |
+| `thinking` | Thinking level. Defaults to the session's level. |
+| `tools` | Tool allowlist. Defaults to `read`, `bash`, `edit`, `write`. |
+| `skills` | Skills to apply. Without this field, the agent sees your skill catalog. An empty list disables skills. |
 
-### Model-facing tools
+The Markdown body extends the agent's system prompt. Arguments that Pi passes
+to `agent_spawn` override profile settings.
 
-Pi uses one tool for each run operation:
-
-| Tool | Action |
-| --- | --- |
-| `workflow_create` | Start a saved workflow or an inline flow. |
-| `workflow_list` | List runs. |
-| `workflow_inspect` | Inspect live state, usage, and errors. |
-| `workflow_result` | Retrieve a run or node result. |
-| `workflow_stop` | Stop a live run after you request cancellation. |
-
-These tools see runs from the current Pi session. Large lists and results use
-cursor-based pagination.
-
-### Interactive browser
-
-`/workflows` opens a browser with three levels: workflows, runs, and agents.
-Use these keys:
-
-| Key | Action |
-| --- | --- |
-| `↑`/`↓` or `j`/`k` | Move the selection. |
-| `Enter` | Open the selected item or attach to an agent. |
-| `Esc` | Go back or close the browser. |
-| `r` | Run or rerun the selected workflow. |
-| `c` | Compose a command, cancel a live run, or copy a completed result, depending on the current view. |
-| `a` | Open a run's agents. |
-| `o` | Post an agent's output to the parent conversation. |
-| `h` | Show or hide a run in the live panel. |
-| `n` | Draft a new workflow or agent profile. |
-| `Shift+↑`/`Shift+↓` | Scroll details or an attached transcript. |
-
-The live run panel appears above the editor. Press `←` from an empty editor,
-or `Ctrl+Q`, to focus it. Select an agent and press `Enter` to attach.
-
-### Talk to a running agent
-
-Attaching opens the agent's live transcript and a dedicated editor. Your
-messages join the existing delegated session; they do not start a new agent.
-If a tool is running, the message waits until the current tool-call batch
-finishes.
-
-While attached:
-
-- Press `Enter` to send a message.
-- Press `Esc` to interrupt the current turn and restore queued messages to the
-  attached editor.
-- Press `←` from an empty editor to return to the parent session.
-- Press `Shift+↑` or `Shift+↓` to scroll the transcript.
-
-An interrupted built-in shell command is cancelled immediately. Other tools
-must support cancellation. The delegated session remains alive after an
-interrupt, so you can edit the restored messages or send another instruction.
-
-Result submission is deferred while you are attached. When you leave, an idle
-agent finishes its assignment and submits its workflow result. Conversation
-messages are not substituted for that result unless you explicitly instruct
-the agent to use their content.
-
-Attaching to a settled agent opens its saved Pi session. Switching sessions
-stops active workflows, so Pi asks for confirmation when necessary.
-
-### Optional footer counters
-
-When
-[pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) is installed,
-pi-agents can show `❖N` for active workflows and `✦A/T` for completed and total
-agents. Enable the `workflows` and `agents` widgets through `/fancy-footer`.
-Both are disabled by default.
+Pi-agents reads profiles from `~/.pi/agent/agents` and from the nearest
+project `.pi/agents`. Project profiles win over user profiles with the same
+name.
 
 ## ⚙️ Configuration
 
-### Model guidance
+### Models
 
-The planning agent picks a model for every node, and by default it only sees
-a bare list of model IDs. So it plays it safe. Every branch of a ten-way
-fan-out runs on the session model, usually your most capable and most
-expensive one. A review that should spend a premium model on the final merge
-and cheap fast models on the mechanical branches spends premium everywhere.
+An agent runs on your session's model unless Pi or a profile picks another.
+Models resolve like `pi --model`: `sonnet` picks the newest Sonnet you have
+credentials for, and an exact ID such as `claude-sonnet-4-6` picks that
+version. Run `pi --list-models` to see what's available.
 
-Two things narrow this gap.
+Pi learns which names are models from your scoped models, the ones you pick
+with `/scoped-models` or `--models`. Scope the models you want agents to use,
+and Pi picks them by name: "spawn a Luna agent" runs on your scoped Luna.
 
-1. **Automatic price tiers.** The planning prompt marks every model with `$`,
-   `$$`, or `$$$`, derived from list prices, and tells the planner to prefer
-   `$` for mechanical subtasks and `$$$` for planning, review, and reduces.
-   Tiers describe spend, not quality. For subscription providers they
-   indicate relative quota use. This needs no configuration.
-2. **Your fit notes.** Price alone cannot say what a model is *for*. If
-   flash-class models handle your triage well, or one model writes your best
-   reviews, teach the planner once in `~/.pi/agent/workflows.json` instead
-   of repeating it in every request:
+### Footer counters
 
-```json
-{
-  "models": {
-    "google/gemini-*-flash*": "fast triage, summaries, extraction",
-    "claude-opus-*": "planning, reduces, final review"
-  }
-}
-```
-
-With these notes, "review this PR with parallel lenses" yields a plan whose
-fan-out branches run on flash-class models and whose merging reduce runs on
-Opus. You never name a model in the request.
-
-Patterns match provider-qualified model IDs. A pattern without `/` matches
-any provider, and `*` is the only wildcard. The match with the longest
-literal prefix wins; a trusted project's `.pi/workflows.json` wins a tie with
-the user configuration. Pi-agents ignores project model notes until you trust
-the project, because notes flow into the planning prompt.
-
-To check what the planner chose, read the workflow tree. Static trees attach
-`@model` where a node pins a model directly. Live run rows and trees show the
-planned or effective model for every agent. A node without `@model` in a
-static tree does not imply the session default, since an agent profile may
-pin a model.
-
-### Bundled workflows
-
-A user or project workflow named `review` overrides the bundled workflow.
-
-Disable all bundled workflows in `~/.pi/agent/workflows.json`:
-
-```json
-{
-  "bundledWorkflows": false
-}
-```
-
-Control them individually:
-
-```json
-{
-  "bundledWorkflows": {
-    "review": false
-  }
-}
-```
-
-A trusted project can use `.pi/workflows.json`. Project settings override user
-settings.
-
-### Event-triggered workflows
-
-A saved workflow can run after a Pi event:
-
-```yaml
-name: after-turn
-on: [turn_end]
-debounce: 1000
-task: "Inspect this event: {params.event}"
-```
-
-Event workflows always run in the background.
-
-### Project trust
-
-Pi-agents follows Pi's project-trust decision. Until you trust a project,
-project-local profiles, workflows, and skills remain unavailable. User-level
-resources continue to work.
-
-### Run history
-
-Run history belongs to the originating Pi session and survives reloads. After
-a Pi restart, pi-agents marks unfinished runs as stopped because delegated
-processes cannot resume. Completed history remains available through
-`/workflows`.
-
-## 🔌 Extension integration
-
-Other Pi extensions can start runs and observe lifecycle events through the
-typed `pi-agents/api` client:
-
-```ts
-import { createPiAgentsClient } from "pi-agents/api";
-
-const agents = createPiAgentsClient(pi, { caller: "my-extension" });
-
-const stopListening = agents.onRunEvent((event) => {
-  if (event.type === "run_completed") {
-    console.log(event.status);
-  }
-});
-
-const { runId } = await agents.start({
-  workflow: "review",
-  params: { target: "src" },
-  display: "report",
-});
-
-await agents.stop(runId);
-stopListening();
-```
-
-The client supports `start`, `stop`, `list`, and `onRunEvent`. A successful
-`start` response may include `warnings` for recoverable request problems. Runs
-started by extensions obey the current session's budgets, resource scope, and
-project trust settings.
-
-## 🧰 Requirements
-
-Pi-agents follows the latest Pi release. Keep Pi updated:
-
-```sh
-pi update pi
-```
-
-The `pi` executable must be available on `PATH` for delegated agents.
-
-## 🩺 Troubleshooting
-
-- Open `/workflows` to view invalid workflow diagnostics and failed runs.
-- Check profile, workflow, and skill names when validation fails before a run
-  starts.
-- Update Pi if a delegated process reports an initialization error.
-- Use `/workflow <id> agents` to identify the delegated agent that failed.
-- Open a settled agent with `/agent-session <run-id> [node]` when you need its
-  complete conversation and tool history.
-
-## 📄 License
-
-Apache-2.0
+With [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) installed,
+pi-agents can show open agents by state, such as `✦ 2◉ 1●`. Enable the
+`agents` widget through `/fancy-footer`.

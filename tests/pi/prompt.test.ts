@@ -97,7 +97,7 @@ describe("tool calls", () => {
         wait: undefined,
       }),
     ).toBe(
-      'profile=explorer model=anthropic/claude-haiku-4-5 tools=read,grep cwd="src dir"',
+      'profile=explorer model=anthropic/claude-haiku-4-5 tools=[read,grep] cwd="src dir"',
     );
   });
 

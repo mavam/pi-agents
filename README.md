@@ -120,7 +120,7 @@ Each tool call shows the arguments Pi chose on a dim line below it:
 
 ```text
 ✦ spawn lister
-  profile=explorer thinking=low tools=read,ls wait=120s
+  profile=explorer thinking=low tools=[read,ls] wait=120s
   List the files in src and summarize them.
 ```
 

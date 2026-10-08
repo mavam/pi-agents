@@ -98,7 +98,7 @@ interface AgentToolSpec<T extends TSchema> {
 
 function pairValue(value: unknown): string | undefined {
   if (value === undefined || value === null || value === "") return undefined;
-  if (Array.isArray(value)) return value.map(String).join(",");
+  if (Array.isArray(value)) return `[${value.map(String).join(",")}]`;
   if (typeof value === "string")
     return /^[\w./:@+,-]+$/.test(value) ? value : JSON.stringify(value);
   return String(value);

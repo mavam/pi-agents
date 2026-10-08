@@ -55,6 +55,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { DELEGATE_TOOL } from "../agents/delegation.js";
 import type { AgentService } from "../agents/service.js";
 import { type AgentInfo, USER_MESSAGE_PREFIX } from "../agents/types.js";
 import {
@@ -340,6 +341,9 @@ function statusText(live: LiveState): string {
     return compaction.retry
       ? `Retrying ${compaction.reason} compaction (attempt ${compaction.attempt + 1})...`
       : `Compacting (${compaction.reason})...`;
+  // The agent waits for its helpers; Pi places messages only after that.
+  if (runningTool?.name === DELEGATE_TOOL)
+    return "Waiting for helpers; messages wait until they finish (esc stops them, ← back)";
   if (runningTool !== undefined)
     return `Running ${runningTool.name}... (esc to interrupt, ← back)`;
   if (live.run !== undefined) return "Working... (esc to interrupt, ← back)";

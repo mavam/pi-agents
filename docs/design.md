@@ -46,7 +46,8 @@ parent request remains. Failed and interrupted agents stay open. A parent messag
 that works again, for example because the user talks to it, shows in the
 panel until it is idle. Names are unique among
 visible agents; a name resolves to the visible agent first, then to the newest
-closed one.
+closed one. Every creation claims its names inside its creating commit,
+against the durable records, so agents started at once can't share a name.
 
 ## Lifecycle
 
@@ -61,7 +62,8 @@ closed one.
   view's Esc interrupts.
 - `stop` interrupts, drops pending parent requests, and closes the agent. The
   UI asks for confirmation while the agent works.
-- Agents cannot spawn agents.
+- Agents start other agents only when they may delegate (see "Agents that
+  delegate"); helpers never do.
 
 ## Graphs
 
@@ -126,7 +128,10 @@ edges form no cycle. A graph starts whole or not at all. Then:
   agents' runs, then the nodes' abort handlers, then the graph's.
 - A node finishes only once its agent's work drained, and the graph only once
   its nodes did. A follow-up queued to a graph agent therefore holds back the
-  graph until the agent answered it.
+  graph until the agent answered it. pi-durable holds the decided outcome
+  (`completing`) meanwhile; the service counts a graph as working until its
+  task is terminal, and records a stop as `GraphRecord.stopped`, because a
+  held `completed` outcome can't become `aborted`.
 - A node waits until all its inputs finished, even when one already failed.
 - Interrupting or stopping one agent settles its submission as aborted. Its
   node completes as interrupted rather than failing, so `failFast` keeps the
@@ -164,17 +169,59 @@ stays blocked rather than lost; stopping its graph then settles it as
 applied on their next access. The new optional `AgentRecord.graph` field
 needed no migration.
 
-### Agents that delegate (planned)
+### Agents that delegate
 
-The next step lets a graph's agent spawn a subgraph itself, for fan-out over
-what it discovers. The subgraph runs inside a blocking tool call: the tool
-owns the subgraph and returns its result, so the agent merges it in the same
-run, Esc stops the subgraph with the agent, and no asynchronous result
-protocol is needed. Delegation is opt-in per agent, depth is capped at 2, and
-a total node limit is inherited by nested graphs. Spikes confirmed the
-ownership mechanics on pi-durable 1.1.0: an agent's idle wait covers a graph
-it owns, stopping the top graph reaches nested graphs bottom-up, and Esc on
-the delegating agent stops its subgraph.
+An agent with `delegate` splits its own task at runtime: it starts a graph of
+helpers, waits for it, and continues with its result in the same run. This
+covers map, fan-out over what the agent discovers, and nested workflows,
+without a language.
+
+The extension `pi-agents-delegation` holds one pi-durable tool,
+`delegate_graph` (`replay: "safe"`), with the shape of `agent_spawn_graph`
+minus `wait`: 1 to 12 helpers with `after` edges, and `failFast`. The call
+blocks and returns the graph's result as the tool result, the same text Pi
+gets for its graphs, within a budget below pi-durable's tool output limit.
+
+```text
+delegating agent's conversation
+└─ pi.generation → pi.tool (delegate_graph)
+   └─ graph task          owned by the tool task; not background
+      └─ node task × n
+         └─ helper conversation
+```
+
+- The tool task owns the graph task, so the graph belongs to the agent's run.
+  Esc on the agent aborts the tool and, bottom-up, the helpers; stopping a
+  graph the agent belongs to reaches them through the agent's conversation.
+  Stopping only the helpers by name ends the call with a "stopped" result,
+  and the agent goes on.
+- A restart reruns the call. It finds the graph its tool task owns, through
+  `GraphRecord.owner.tool`, before resolving anything again, and waits for
+  it. Finished helpers don't rerun, and no helper gets its task twice.
+- Capability: the registry installs the extension, but only delegating agents
+  select it and its tool; `AgentRecord.delegate` stores the choice, and the
+  tool refuses agents whose record doesn't allow it or that are helpers.
+  pi-durable copies an owner task's conversation's agent settings into the
+  conversations it owns, so every helper is configured explicitly: no
+  delegation extension, its own tools, model, thinking level, instructions,
+  and working directory. Depth is therefore 2.
+- Helpers get only tools their agent has. Profiles and models resolve like
+  Pi's spawns through a `HelperResolver` the session host provides, with the
+  agent's model, thinking level, and working directory as defaults. It takes
+  and returns plain data.
+- Names: helpers are `<agent>.<name>` and their graph `<agent>.<name or
+  helpers>`, shortening the agent's part to fit and claimed in the creating
+  commit like all names.
+- Limits, fixed: 12 helpers per call, 24 per agent over its lifetime, and 16
+  helpers working at once across the session. A call over a limit returns an
+  error result the agent can act on; the checks run in the creating commit,
+  after the rerun lookup, so a rerun never counts twice.
+- Delivery: the graph's record has `pending: false`, because the tool result
+  is its delivery; Pi's outbox isn't involved. Once the call ended, by its
+  result or an interrupt, the service closes the graph and its helpers, so
+  they leave the panel; storage and `/agents` keep them.
+- While the agent waits, Pi-style steering reaches it only after the call
+  ends. The attach view says so, and Esc stops the helpers.
 
 ## Delivery
 
@@ -226,7 +273,8 @@ never lose one. On session resume, unacknowledged settled requests deliver.
 
 - Tools: `read`, `write`, `edit`, and `bash` from pi-durable, plus `grep`,
   `find`, and `ls` adapted from Pi's tool definitions. The default set is Pi's:
-  `read`, `bash`, `edit`, `write`.
+  `read`, `bash`, `edit`, `write`. Delegating agents also get
+  `delegate_graph`.
 - System prompt: a delegation preamble, tool guidelines, context files such as
   `AGENTS.md`, skills, the working directory and date, and profile
   instructions.
@@ -239,8 +287,8 @@ never lose one. On session resume, unacknowledged settled requests deliver.
 
 | Tool | Parameters |
 | --- | --- |
-| `agent_spawn` | `task`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `cwd?`, `wait?` (seconds) |
-| `agent_spawn_graph` | `name?`, `agents` (2 to 12 of `task`, `name?`, `after?`, `profile?`, `model?`, `thinking?`, `tools?`, `cwd?`), `failFast?`, `wait?` (seconds) |
+| `agent_spawn` | `task`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `cwd?`, `delegate?`, `wait?` (seconds) |
+| `agent_spawn_graph` | `name?`, `agents` (2 to 12 of `task`, `name?`, `after?`, `profile?`, `model?`, `thinking?`, `tools?`, `cwd?`, `delegate?`), `failFast?`, `wait?` (seconds) |
 | `agent_send` | `name`, `message`, `followUp?`, `wait?` (seconds) |
 | `agent_wait` | `names` (agents or graphs), `timeout?` |
 | `agent_status` | `name?` (agent or graph) |
@@ -253,6 +301,10 @@ merging agent after the others when it wants one answer. `after` names
 agents of the same graph; agents without a name are called `<graph>-<n>`, or
 after their profile. The spawn result names the graph's shape, such as
 `{api, tests} → merge`. `agent_send` to a graph fails and lists its agents.
+
+Models sometimes pass `wait: false` or quoted numbers, so the tools drop
+seconds that aren't positive numbers and parse numeric strings before
+validation.
 
 Pi places a user's steering message only after the current tool round. A
 wait would therefore hold a steer back until the agents answer, so a steer
@@ -310,10 +362,14 @@ answers and failures, pipelines, merges with failed inputs, skipped agents,
 ownership tree through the task graph, restarts mid-graph and mid-pipeline
 that repeat no finished agent and send no task twice, and messaging a
 graph's agent after the graph finished. A tool test steers during a wait.
+Delegation tests cover a fan-out with a merging helper, that helpers and
+other agents can't delegate, progress, Esc on the agent, stopping a graph
+above it, stopping only the helpers, tool and size limits, names, and a
+restart mid-delegation that starts no second set of helpers.
 
 ## Deferred
 
-Agents that delegate (above), composition beyond graphs (result schemas,
-loops, conditions), edges to agents outside a graph, budgets, MCP, extension
+Composition beyond graphs (result schemas, loops, conditions, races), edges
+to agents outside a graph, asynchronous delegation, budgets, MCP, extension
 tools, forking agents, a daemon or CLI, agents shared across sessions, and
 model changes for running agents.

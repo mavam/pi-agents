@@ -32,6 +32,8 @@ export type AgentRecord = {
   delivered: number[];
   /** The graph this agent belongs to, by graph ID; absent when standalone. */
   graph?: string;
+  /** Whether the agent can start helpers; absent means it can't. */
+  delegate?: boolean;
 };
 
 export type AgentsState = {
@@ -66,6 +68,9 @@ export type GraphRecord = {
   pending: boolean;
   /** Stopped before it finished; absent in records written before. */
   stopped?: boolean;
+  /** A delegating agent's helpers: the agent, and the tool call that owns
+   * the graph task. Absent for graphs the parent started. */
+  owner?: { agent: string; tool: number };
 };
 
 export type GraphsState = {

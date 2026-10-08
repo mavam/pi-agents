@@ -71,12 +71,13 @@ function graphRow(
   now: number,
   nameWidth: number,
   color: Colorize,
+  indent = "",
 ): string {
   const usage = formatUsage(graph.usage);
-  const name = pad(graph.name, nameWidth);
+  const name = pad(graph.name, nameWidth - indent.length);
   return [
-    `${stateIcon(graph.state, color)} ${isGraphVisible(graph) ? name : color("dim", name)}`,
-    color("dim", pad("graph", 10)),
+    `${color("dim", indent)}${stateIcon(graph.state, color)} ${isGraphVisible(graph) ? name : color("dim", name)}`,
+    color("dim", pad(graph.owner ? "helpers" : "graph", 10)),
     color("dim", pad(`${graph.nodes.length} agents`, 14)),
     color("dim", pad(formatElapsed(now - graph.stateSince), 7)),
     usage ? color("dim", usage) : "",
@@ -132,9 +133,7 @@ function graphDetail(
 }
 
 function rowName(row: Row): string {
-  return row.kind === "graph"
-    ? row.graph.name
-    : `${connector(row)}${row.agent.name}`;
+  return `${connector(row)}${row.kind === "graph" ? row.graph.name : row.agent.name}`;
 }
 
 function agentDetail(agent: AgentInfo, color: Colorize): string[] {
@@ -196,7 +195,7 @@ async function openAgentsOverlay(
     row: (row, color) => {
       const width = Math.max(...items().map((item) => rowName(item).length), 4);
       return row.kind === "graph"
-        ? graphRow(row.graph, Date.now(), width, color)
+        ? graphRow(row.graph, Date.now(), width, color, connector(row))
         : agentRow(row.agent, Date.now(), width, color, connector(row));
     },
     headerLine: (row, color) => {

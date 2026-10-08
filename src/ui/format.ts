@@ -94,6 +94,8 @@ function activityText(info: AgentInfo, now: number): string | undefined {
     return `no activity for ${formatElapsed(silent)}`;
   const { activity } = info;
   if (activity.retry) return `retrying: ${activity.retry}`;
+  if (activity.delegation)
+    return `delegating · ${activity.delegation.graph} ${activity.delegation.done}/${activity.delegation.total}`;
   if (activity.compacting) return "compacting";
   if (activity.tool) return `Using ${activity.tool}`;
   return activity.summary;

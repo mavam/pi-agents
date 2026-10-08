@@ -17,6 +17,7 @@ import {
   type PromptInput,
   section,
 } from "@earendil-works/pi-durable";
+import { DELEGATE_TOOL } from "../agents/delegation.js";
 import { AgentsDoc } from "../agents/records.js";
 import { USER_MESSAGE_PREFIX } from "../agents/types.js";
 import { toolPromptContribution } from "./tools.js";
@@ -52,13 +53,21 @@ function buildRules(tools: readonly string[]): string {
     add("Use bash for file operations like ls, rg, find");
   for (const name of tools)
     for (const rule of toolPromptContribution(name).guidelines) add(rule);
+  if (tools.includes(DELEGATE_TOOL)) add(DELEGATE_RULE);
   add("Be concise in your responses");
   add("Show file paths clearly when working with files");
   return rules.map((rule) => `- ${rule}`).join("\n");
 }
 
+/** What the prompt says about the tool of agents that delegate. */
+const DELEGATE_SNIPPET =
+  "Start helper agents for parts of your task and wait for their results";
+const DELEGATE_RULE =
+  "Use delegate_graph when your task splits into parts that can run on their own, such as one per file or area; give each helper a self-contained task";
+
 function renderTools(tools: readonly string[]): string {
   const lines = tools.flatMap((name) => {
+    if (name === DELEGATE_TOOL) return [`- ${name}: ${DELEGATE_SNIPPET}`];
     const snippet = toolPromptContribution(name).snippet;
     return snippet ? [`- ${name}: ${snippet}`] : [];
   });

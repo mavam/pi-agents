@@ -80,9 +80,12 @@ function describeGraph(service: AgentService, graph: GraphInfo): string {
 }
 
 function statusLine(service: AgentService, info: AgentInfo): string {
-  const state = info.activity.tool
-    ? `${info.state}, using ${info.activity.tool}`
-    : info.state;
+  const delegation = info.activity.delegation;
+  const state = delegation
+    ? `${info.state}, waiting for its helpers ${delegation.graph} (${delegation.done}/${delegation.total} done)`
+    : info.activity.tool
+      ? `${info.state}, using ${info.activity.tool}`
+      : info.state;
   const graph = info.graph ? service.getGraph(info.graph) : undefined;
   return `${info.name} (${state}${graph ? `, in graph ${graph.name}` : ""}): ${oneLine(info.task, 120)}`;
 }
@@ -257,6 +260,10 @@ function renderDetails(
   return lines.join("\n");
 }
 
+/**
+ * Models sometimes write `wait: false` for "don't wait" or quote numbers.
+ * Seconds that aren't a positive number mean no wait; numeric strings count.
+ */
 /** A number of seconds, if the value is a positive number or its string. */
 function positiveSeconds(value: unknown): number | undefined {
   const seconds = typeof value === "string" ? Number(value) : value;
@@ -458,6 +465,12 @@ const agentFields = {
     }),
   ),
   cwd: Type.Optional(Type.String({ description: "Working directory" })),
+  delegate: Type.Optional(
+    Type.Boolean({
+      description:
+        "Let the agent split its task among helper agents it starts and waits for",
+    }),
+  ),
 };
 
 /** The settings an agent's call line shows. */
@@ -467,6 +480,7 @@ function agentPairs(args: {
   thinking?: string;
   tools?: string[];
   cwd?: string;
+  delegate?: boolean;
 }): Record<string, unknown> {
   return {
     profile: args.profile,
@@ -474,6 +488,7 @@ function agentPairs(args: {
     thinking: args.thinking,
     tools: args.tools,
     cwd: args.cwd,
+    delegate: args.delegate,
   };
 }
 

@@ -207,7 +207,7 @@ export class AgentPanel {
     const now = this.now();
     const line = (row: Row) =>
       row.kind === "graph"
-        ? formatGraphLine(row.graph, now, color)
+        ? `${color("dim", row.lead)}${formatGraphLine(row.graph, now, color)}`
         : `${color("dim", connector(row))}${formatAgentLine(this.heldActivity(row.agent, now), now, color, row.inputs)}`;
     if (!this.focused) {
       const rows = this.rows(true);

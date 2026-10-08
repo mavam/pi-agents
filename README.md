@@ -33,6 +33,11 @@ Start a graph: three agents review src/run, src/ui, and src/host, and a
 fourth merges their findings into one list of issues.
 ```
 
+```text
+Start an agent that may delegate: it finds every module under src, has one
+helper review each, and returns one merged review.
+```
+
 Pi starts agents only when you ask for delegation. An agent's result is its
 final message. Results of agents that Pi doesn't wait for arrive later as
 messages in your conversation. In a graph, agents pass their results to each
@@ -91,6 +96,7 @@ separate setup.
 | Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done. |
 | Result | The agent's final message after a task or message. |
 | Graph | Agents that work together: some in parallel, some after others, receiving their results. Pi gets one message at the end. |
+| Helper | An agent that another agent started for part of its task. Its result goes to that agent, not to Pi. |
 | Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
 | Attach | Open an agent's conversation to watch it and talk to it. |
 | Stop | End an agent or graph and remove it from the panel. Agents end on their own once their answer reaches Pi. Messaging an agent that ended starts it again. |
@@ -112,7 +118,8 @@ interrupted if one was interrupted or stopped, and idle otherwise.
 
 Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, and
 `ls`, along with your context files such as `AGENTS.md` and your skills. They
-can't use MCP servers, tools from other extensions, or other agents.
+can't use MCP servers or tools from other extensions, and they start other
+agents only when you let them delegate.
 
 ### Watch and talk to agents
 
@@ -204,6 +211,42 @@ smaller: edges carry final messages, and there are no references, schemas,
 loops, or conditions. For repeated rounds, such as review and fix, Pi can
 message the agents again.
 
+### Agents that delegate
+
+An agent that may delegate splits its own task while it works: it starts
+helper agents, waits for them, and continues with their results. This covers
+work whose shape only shows up on the way, such as one helper per file the
+agent finds. Ask Pi for it, or set `delegate: true` in a profile.
+
+Helpers form a graph like the ones Pi starts, with the same edges, so a
+helper can merge the others' results. Their results go to the agent that
+started them, never to Pi, and only that agent's final answer reports back.
+The panel draws the helpers below their agent, which shows their progress:
+
+```text
+◉ mapper · haiku · 17s · delegating · mapper.helpers 1/4
+└─ ◉ mapper.helpers · graph 1/4 · 10s · 13.0k
+   ├─ ● mapper.models · haiku · 3.1k
+   ├─ ◉ mapper.paths · haiku · 10s
+   ├─ ◉ mapper.skills · haiku · 10s
+   └─ ○ mapper.merge ← mapper.models, mapper.paths, mapper.skills · haiku
+```
+
+Helpers leave the panel once their agent has their results; `/agents` keeps
+them, and you can attach to them like any agent. Helper names start with
+their agent's name.
+
+- Helpers run on their agent's model, thinking level, and working directory
+  unless the agent picks others, and get only tools their agent has.
+- Helpers can't delegate themselves.
+- Esc on the agent stops its helpers too, and so does stopping a graph the
+  agent belongs to. Stopping only the helpers lets the agent go on with what
+  they finished.
+- While an agent waits for its helpers, a message you send it waits until
+  they finish. Press Esc to stop them instead.
+- One call starts at most 12 helpers, an agent at most 24 in total, and at
+  most 16 helpers work at once in a session.
+
 ### Commands
 
 | Command | Action |
@@ -217,7 +260,7 @@ Pi uses these tools to work with agents:
 
 | Tool | Purpose |
 | --- | --- |
-| `agent_spawn` | Start an agent on a task, optionally waiting for its result. |
+| `agent_spawn` | Start an agent on a task, optionally waiting for its result, and optionally letting it delegate. |
 | `agent_spawn_graph` | Start a graph of agents, optionally waiting for its result. |
 | `agent_send` | Message an agent: prompt, steer, or queue a follow-up. |
 | `agent_wait` | Block until agents or graphs answer and return their results. |
@@ -284,6 +327,7 @@ Profile fields:
 | `thinking` | Thinking level. Defaults to the session's level. |
 | `tools` | Tool allowlist. Defaults to `read`, `bash`, `edit`, `write`. |
 | `skills` | Skills to apply. Without this field, the agent sees your skill catalog. An empty list disables skills. |
+| `delegate` | Whether agents of this profile can start helper agents. Defaults to `false`. |
 
 The Markdown body extends the agent's system prompt. Arguments that Pi passes
 to `agent_spawn` override profile settings.

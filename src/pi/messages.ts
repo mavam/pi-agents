@@ -9,6 +9,14 @@ import {
   type MessageRenderer,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+  graphReport,
+  type NodeKind,
+  nodeCounts,
+  nodeNote,
+  type ReportNode,
+  truncateResult,
+} from "../agents/report.js";
 import type {
   AgentDelivery,
   AgentInfo,
@@ -31,13 +39,9 @@ export const GRAPH_RESULT_MESSAGE = "pi-agents:graph-result";
 const COLLAPSED_LINES = 12;
 /** Lines of each agent's collapsed result in a graph card. */
 const COLLAPSED_NODE_LINES = 6;
-/** Characters of one agent's result passed to the parent model. */
-const MAX_RESULT_CHARS = 40_000;
 
-export function truncateResult(body: string): string {
-  if (body.length <= MAX_RESULT_CHARS) return body;
-  return `${body.slice(0, MAX_RESULT_CHARS)}\n\n[Result truncated: ${body.length - MAX_RESULT_CHARS} more characters. Attach to the agent to read all of it.]`;
-}
+export type { NodeKind };
+export { nodeCounts, truncateResult };
 
 export interface ResultDetails {
   version: 1;
@@ -115,25 +119,8 @@ function collapse(body: string, expanded: boolean): string {
   return `${lines.slice(0, COLLAPSED_LINES).join("\n")}\n\n… ${lines.length - COLLAPSED_LINES} more lines`;
 }
 
-/** How one agent of a graph did; `working` and `waiting` only in waits
- * that timed out. */
-export type NodeKind =
-  | "answered"
-  | "failed"
-  | "interrupted"
-  | "stopped"
-  | "skipped"
-  | "working"
-  | "waiting";
-
-export interface NodeDetails {
+export interface NodeDetails extends ReportNode {
   agentId: string;
-  name: string;
-  kind: NodeKind;
-  /** The result text, or the failure reason. */
-  body: string;
-  /** Whether no other agent of the graph needs its result. */
-  end: boolean;
   /** Names of the agents whose results it received. */
   inputs: string[];
   profile?: string;
@@ -209,71 +196,14 @@ export function graphResultDetails(
   };
 }
 
-const KIND_ORDER: NodeKind[] = [
-  "answered",
-  "failed",
-  "interrupted",
-  "stopped",
-  "skipped",
-  "working",
-  "waiting",
-];
-
-/** `2 answered, 1 failed`. */
-export function nodeCounts(nodes: readonly NodeDetails[]): string {
-  return KIND_ORDER.flatMap((kind) => {
-    const count = nodes.filter((node) => node.kind === kind).length;
-    return count > 0 ? [`${count} ${kind}`] : [];
-  }).join(", ");
-}
-
-/** What a node without an answer says about itself. */
-function nodeNote(node: NodeDetails): string {
-  if (node.kind === "failed") return `failed: ${node.body}`;
-  if (node.kind === "skipped")
-    return "was skipped because none of its inputs answered";
-  return `was ${node.kind}`;
-}
-
-/** Each agent's result under a heading of the given level. */
-export function nodesContent(
-  nodes: readonly NodeDetails[],
-  level: number,
-): string {
-  const hashes = "#".repeat(level);
-  return nodes
-    .map((node) => {
-      const head = `${hashes} ${node.name} (${node.kind})`;
-      if (node.kind === "answered")
-        return `${head}\n${truncateResult(node.body || "(empty)")}`;
-      if (node.kind === "failed") return `${head}\nError: ${node.body}`;
-      return head;
-    })
-    .join("\n\n");
+/** What the parent model reads for a finished graph. */
+export function graphContent(details: GraphResultDetails): string {
+  return graphReport(details.name, details.nodes);
 }
 
 /** The agents that are not end nodes and did not answer. */
 function problems(details: GraphResultDetails): NodeDetails[] {
   return details.nodes.filter((node) => !node.end && node.kind !== "answered");
-}
-
-/**
- * What the parent model reads for a finished graph: the results of the
- * agents nothing waits for. A single one reads as that agent's answer.
- * Agents in between that didn't answer are named after it.
- */
-export function graphContent(details: GraphResultDetails): string {
-  const ends = details.nodes.filter((node) => node.end);
-  const [only] = ends;
-  const main =
-    ends.length === 1 && only
-      ? only.kind === "answered"
-        ? `Graph ${details.name}: ${only.name} answered:\n\n${truncateResult(only.body || "(empty)")}`
-        : `Graph ${details.name}: ${only.name} ${nodeNote(only)}.`
-      : `Graph ${details.name} finished: ${nodeCounts(ends)}.\n\n${nodesContent(ends, 2)}`;
-  const others = problems(details);
-  if (others.length === 0) return main;
-  return `${main}\n\nOther agents: ${others.map((node) => `${node.name} ${nodeNote(node)}`).join("; ")}.`;
 }
 
 const KIND_STATES: Record<NodeKind, AgentState> = {

@@ -222,6 +222,76 @@ describe("formatting", () => {
     ]);
   });
 
+  test("helpers draw under the agent that started them", () => {
+    const agents = [
+      agent({ id: "1", name: "lead", graph: "10", state: "working" }),
+      agent({ id: "2", name: "other", graph: "10" }),
+      agent({ id: "3", name: "lead.a", graph: "20" }),
+      agent({ id: "4", name: "lead.b", graph: "20" }),
+      agent({ id: "5", name: "solo", createdAt: 9 }),
+      agent({ id: "6", name: "solo.x", graph: "30" }),
+    ];
+    const top = graph({
+      id: "10",
+      nodes: [
+        { agentId: "1", name: "lead", inputs: [], end: true },
+        { agentId: "2", name: "other", inputs: [], end: true },
+      ],
+    });
+    const helpers = graph({
+      id: "20",
+      name: "lead.helpers",
+      owner: "1",
+      nodes: [
+        { agentId: "3", name: "lead.a", inputs: [], end: false },
+        { agentId: "4", name: "lead.b", inputs: ["3"], end: true },
+      ],
+    });
+    const solo = graph({
+      id: "30",
+      name: "solo.helpers",
+      owner: "5",
+      createdAt: 9,
+      nodes: [{ agentId: "6", name: "solo.x", inputs: [], end: true }],
+    });
+    const rows = buildRows(
+      {
+        agents,
+        graphs: [top, helpers, solo],
+        agent: (id) => agents.find((each) => each.id === id),
+      },
+      panelCompare,
+      () => true,
+    );
+    expect(rows.map((row) => `${connector(row)}${row.key}`)).toEqual([
+      "graph:10",
+      "├─ agent:1",
+      "│  └─ graph:20",
+      "│     ├─ agent:3",
+      "│     └─ agent:4",
+      "└─ agent:2",
+      "agent:5",
+      "└─ graph:30",
+      "   └─ agent:6",
+    ]);
+  });
+
+  test("an agent that waits for helpers shows their progress", () => {
+    expect(
+      formatAgentLine(
+        agent({
+          state: "working",
+          lastActivityAt: 1_000,
+          stateSince: 0,
+          activity: {
+            delegation: { graph: "lead.helpers", done: 1, total: 3 },
+          },
+        }),
+        2_000,
+      ),
+    ).toBe("◉ reviewer · terra · 2s · delegating · lead.helpers 1/3");
+  });
+
   test("footer counts states", () => {
     expect(formatFooterSummary([])).toBe("");
     expect(

@@ -152,6 +152,37 @@ describe("AgentService", () => {
     ).rejects.toThrow("Invalid agent name");
   });
 
+  test("concurrent spawns never share a name", async () => {
+    const service = await open();
+    const results = await Promise.allSettled([
+      service.spawn({ task: "x", name: "same", cwd: ".", model: MODEL }),
+      service.spawn({ task: "y", name: "same", cwd: ".", model: MODEL }),
+      service.spawnGraph({
+        name: "same",
+        agents: [
+          { task: "a", cwd: ".", model: MODEL },
+          { task: "b", cwd: ".", model: MODEL },
+        ],
+      }),
+    ]);
+    expect(results.map((result) => result.status)).toEqual([
+      "fulfilled",
+      "rejected",
+      "rejected",
+    ]);
+    for (const result of results.slice(1))
+      if (result.status === "rejected")
+        expect(String(result.reason)).toContain("named same already exists");
+    const generated = await Promise.all([
+      service.spawn({ task: "x", cwd: ".", model: MODEL }),
+      service.spawn({ task: "y", cwd: ".", model: MODEL }),
+    ]);
+    expect(generated.map((info) => info.name).sort()).toEqual([
+      "agent",
+      "agent-2",
+    ]);
+  });
+
   test("stop ends and hides an agent and frees its name", async () => {
     const { models } = createFaux((prompt) => `${prompt} `.repeat(400), {
       tokensPerSecond: 20,

@@ -490,6 +490,59 @@ describe("graph edges", () => {
   });
 });
 
+describe("graphs that hold their result", () => {
+  /** A graph whose quick agent works on a user's message after answering,
+   * so the graph holds its result once the slow agent answered. */
+  async function held(service: AgentService) {
+    await service.spawnGraph({
+      name: "g",
+      agents: [node("quick", "a"), node("other", "medium b")],
+    });
+    await until(
+      () => service.getGraph("g")?.nodes[0]?.outcome?.kind === "answered",
+    );
+    await service.prompt("quick", "slow again", "auto");
+    await until(async () =>
+      (await service.liveTasks()).some(
+        (task) =>
+          task.kind === "pi-agents.graph" && task.status === "completing",
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  test("a graph works until its agents' work drained", async () => {
+    const service = await open({ models: scripted().models });
+    await held(service);
+    // Both agents answered their tasks, but the graph still works.
+    expect(service.getGraph("g")?.state).toBe("working");
+    expect(service.get("quick")?.state).toBe("working");
+    expect(service.pendingDeliveries()).toEqual([]);
+
+    await service.interrupt("quick");
+    await until(() => service.pendingDeliveries().length > 0);
+    expect(summary(graphDelivery(service.pendingDeliveries()))).toEqual([
+      "quick: done: a",
+      expect.stringContaining("other: medium b"),
+    ]);
+    expect(service.getGraph("g")?.state).toBe("idle");
+  });
+
+  test("stopping a graph that holds its result stops it", async () => {
+    const service = await open({ models: scripted().models });
+    await held(service);
+    const stopped = await service.stop("g");
+    expect(stopped.kind).toBe("graph");
+    const graph = service.getGraph("g");
+    expect(graph?.stopped).toBe(true);
+    expect(graph?.state).toBe("interrupted");
+    expect(service.get("quick")?.state).toBe("interrupted");
+    expect(await service.liveTasks()).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(service.pendingDeliveries()).toEqual([]);
+  });
+});
+
 describe("graph durability", () => {
   test("a restart mid-graph repeats no finished node and delivers once", async () => {
     const directory = tempDir();

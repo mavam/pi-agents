@@ -62,6 +62,7 @@ import {
   type NodeResult,
   NodeTask,
 } from "./graphs.js";
+import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
 import {
   type AgentRecord,
   AgentsDoc,
@@ -96,9 +97,6 @@ import {
 
 const CONTEXT = BACKGROUND_CONTEXT;
 const REFRESH_DELAY_MS = 50;
-const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/;
-/** Longest base for generated names, leaving room for a `-<n>` suffix. */
-const NAME_BASE_LENGTH = 44;
 
 export interface AgentServiceOptions {
   storage: Storage;
@@ -150,16 +148,6 @@ function contextFor(signal: AbortSignal | undefined): Context {
   return signal ? withAbortSignal(signal, CONTEXT) : CONTEXT;
 }
 
-function isValidAgentName(name: string): boolean {
-  return NAME_PATTERN.test(name);
-}
-
-function invalidName(name: string, noun: "agent" | "graph"): AgentError {
-  return new AgentError(
-    `Invalid ${noun} name "${name}": use letters, digits, '.', '_', or '-' (at most 48 characters)`,
-  );
-}
-
 export class AgentService {
   private records: Record<string, AgentRecord> = {};
   private graphRecords: Record<string, GraphRecord> = {};
@@ -170,8 +158,12 @@ export class AgentService {
   private readonly lastAssistant = new Map<string, EntryRecord>();
   private readonly activityAt = new Map<string, number>();
   private readonly settlements = new Map<string, TurnSettlement>();
-  /** Final outcomes of graph and node tasks; they never change. */
-  private readonly outcomes = new Map<number, TaskOutcome<JsonValue>>();
+  /** Decided outcomes of graph and node tasks, which never change, and
+   * whether the task is terminal, which a held outcome is not yet. */
+  private readonly outcomes = new Map<
+    number,
+    { outcome: TaskOutcome<JsonValue>; terminal: boolean }
+  >();
   /** Answer entries of graph agents' tasks; entries never change. */
   private readonly answers = new Map<number, EntryRecord>();
   private readonly waiters = new Map<string, number>();
@@ -394,13 +386,8 @@ export class AgentService {
   // --- Operations ---
 
   async spawn(spec: SpawnSpec): Promise<AgentInfo> {
-    const taken = this.takenNames();
-    const name = this.claimName(
-      spec.name,
-      spec.profile ?? "agent",
-      taken,
-      "agent",
-    );
+    // Fail early with the service's view; the commit claims for real.
+    claimName(spec.name, spec.profile ?? "agent", this.takenNames(), "agent");
     const { task, tools } = this.prepare(spec);
     const first = requestId(1);
     const request: ParentRequest = { message: task, whenBusy: "followUp" };
@@ -417,6 +404,12 @@ export class AgentService {
         },
         init: async (tx, id) => {
           const state = await tx.doc(AgentsDoc);
+          const name = claimName(
+            spec.name,
+            spec.profile ?? "agent",
+            takenNames(state, await tx.doc(GraphsDoc), this.workingClosed()),
+            "agent",
+          );
           state.agents[String(id)] = {
             name,
             profile: spec.profile ?? null,
@@ -451,16 +444,25 @@ export class AgentService {
       throw new AgentError(
         `A graph has ${GRAPH_SIZE.min} to ${GRAPH_SIZE.max} agents, not ${count}`,
       );
-    const taken = this.takenNames();
-    const name = this.claimName(spec.name, "graph", taken, "graph");
+    // Validate with the service's view first; the commit claims for real.
+    const claim = (taken: Set<string>) => {
+      const graph = claimName(spec.name, "graph", taken, "graph");
+      return {
+        graph,
+        agents: spec.agents.map((agent, index) =>
+          claimName(
+            agent.name,
+            agent.profile ?? `${graph.slice(0, NAME_BASE_LENGTH)}-${index + 1}`,
+            taken,
+            "agent",
+          ),
+        ),
+      };
+    };
+    const planned = claim(this.takenNames());
     const nodes = spec.agents.map((agent, index) => ({
       spec: agent,
-      name: this.claimName(
-        agent.name,
-        agent.profile ?? `${name.slice(0, NAME_BASE_LENGTH)}-${index + 1}`,
-        taken,
-        "agent",
-      ),
+      name: planned.agents[index] as string,
       ...this.prepare(agent),
     }));
     const inputs = this.resolveEdges(nodes);
@@ -468,6 +470,13 @@ export class AgentService {
     const createdAt = Date.now();
     const host = await this.hostConversation();
     const created = await host.commit(async (tx) => {
+      const names = claim(
+        takenNames(
+          await tx.doc(AgentsDoc),
+          await tx.doc(GraphsDoc),
+          this.workingClosed(),
+        ),
+      );
       const graph = await tx.createTask(
         GraphTask,
         { policy },
@@ -498,7 +507,7 @@ export class AgentService {
       const state = await tx.doc(AgentsDoc);
       nodes.forEach((node, index) => {
         state.agents[agents[index] as string] = {
-          name: node.name,
+          name: names.agents[index] as string,
           profile: node.spec.profile ?? null,
           task: node.task,
           createdAt,
@@ -512,7 +521,7 @@ export class AgentService {
         };
       });
       (await tx.doc(GraphsDoc)).graphs[String(graph)] = {
-        name,
+        name: names.graph,
         policy,
         createdAt,
         nodes: nodes.map((_node, index) => ({
@@ -650,14 +659,19 @@ export class AgentService {
 
   private async stopGraph(graphId: string): Promise<void> {
     const info = this.requireGraph(graphId);
+    const finished = await this.isFinished(Number(graphId));
     await this.harness.commit(async (tx) => {
       const graph = (await tx.doc(GraphsDoc)).graphs[graphId];
       if (!graph) return;
       graph.pending = false;
       graph.closed = true;
+      // A graph that holds a decided outcome can't become aborted, so the
+      // record keeps the stop.
+      if (!finished) graph.stopped = true;
     }, CONTEXT);
     // Aborting the graph aborts its nodes, and they their agents, bottom-up.
-    if ((await this.taskOutcome(Number(graphId))) === undefined) {
+    // A held graph only marks the work below it.
+    if (!finished) {
       await this.harness.abortTask(taskId(graphId), CONTEXT);
       await this.harness.waitForTask(taskId(graphId), CONTEXT);
     }
@@ -868,7 +882,7 @@ export class AgentService {
 
   // --- Internals ---
 
-  /** Names of visible agents and graphs. */
+  /** Names of visible agents and graphs, as the service last saw them. */
   private takenNames(): Set<string> {
     return new Set([
       ...this.list().map((info) => info.name),
@@ -876,31 +890,11 @@ export class AgentService {
     ]);
   }
 
-  /** Validate and reserve a requested name, or generate one from `base`. */
-  private claimName(
-    requested: string | undefined,
-    base: string,
-    taken: Set<string>,
-    noun: "agent" | "graph",
-  ): string {
-    const wanted = requested?.trim();
-    let name: string;
-    if (wanted) {
-      if (!isValidAgentName(wanted)) throw invalidName(wanted, noun);
-      if (taken.has(wanted))
-        throw new AgentError(
-          `An ${noun === "agent" ? "agent" : "agent or graph"} named ${wanted} already exists`,
-        );
-      name = wanted;
-    } else {
-      const stem = isValidAgentName(base)
-        ? base.slice(0, NAME_BASE_LENGTH)
-        : noun;
-      name = stem;
-      for (let index = 2; taken.has(name); index++) name = `${stem}-${index}`;
-    }
-    taken.add(name);
-    return name;
+  /** Closed agents that work again: visible, so their names stay taken. */
+  private workingClosed(): string[] {
+    return this.list()
+      .filter((info) => info.closed)
+      .map((info) => info.name);
   }
 
   /** Validate a spawn's task, thinking level, and tools. */
@@ -1275,7 +1269,7 @@ export class AgentService {
     if (outcome === undefined) {
       for (const input of node.after) {
         const task = graph.nodes.find((each) => each.agent === input)?.task;
-        if (task !== undefined && (await this.taskOutcome(task)) === undefined)
+        if (task !== undefined && !(await this.isFinished(task)))
           return "waiting";
       }
       return "working";
@@ -1290,21 +1284,45 @@ export class AgentService {
     return undefined;
   }
 
-  /** The final outcome of a task once decided, read once and cached. */
-  private async taskOutcome(
+  /**
+   * A task's outcome once decided. A task can hold its outcome while work it
+   * owns still runs, such as a user's message to a graph's agent; it is
+   * `terminal` only after that work drained.
+   */
+  private async settledTask(
     id: number,
-  ): Promise<TaskOutcome<JsonValue> | undefined> {
+  ): Promise<
+    { outcome: TaskOutcome<JsonValue>; terminal: boolean } | undefined
+  > {
     const cached = this.outcomes.get(id);
-    if (cached) return cached;
+    if (cached?.terminal) return cached;
     const record = await this.harness.getTask(taskId(id), CONTEXT);
     if (!record)
-      return { status: "faulted", error: { message: "task missing" } };
+      return {
+        outcome: { status: "faulted", error: { message: "task missing" } },
+        terminal: true,
+      };
     const state = record.state;
     if (state.status !== "completing" && state.status !== "terminal")
       return undefined;
-    const outcome = state.outcome as TaskOutcome<JsonValue>;
-    this.outcomes.set(id, outcome);
-    return outcome;
+    const settled = {
+      outcome: state.outcome as TaskOutcome<JsonValue>,
+      terminal: state.status === "terminal",
+    };
+    this.outcomes.set(id, settled);
+    return settled;
+  }
+
+  /** A task's outcome once decided, even while it is held. */
+  private async taskOutcome(
+    id: number,
+  ): Promise<TaskOutcome<JsonValue> | undefined> {
+    return (await this.settledTask(id))?.outcome;
+  }
+
+  /** Whether a task finished: terminal, with nothing below it running. */
+  private async isFinished(id: number): Promise<boolean> {
+    return (await this.settledTask(id))?.terminal === true;
   }
 
   private async answer(entryId: number): Promise<EntryRecord | undefined> {
@@ -1354,7 +1372,10 @@ export class AgentService {
     const stopped: string[] = [];
     const now = Date.now();
     for (const [id, record] of Object.entries(this.graphRecords)) {
-      const ended = await this.taskOutcome(Number(id));
+      // A graph works until it is terminal, also while it holds an outcome.
+      const ended = (await this.isFinished(Number(id)))
+        ? await this.taskOutcome(Number(id))
+        : undefined;
       const topology = record.nodes.map((node) => ({
         key: node.agent,
         inputs: node.after,
@@ -1377,8 +1398,10 @@ export class AgentService {
           ...(outcome ? { outcome } : {}),
         });
       }
-      const state = deriveGraphState(ended, nodes);
-      const isStopped = ended?.status === "aborted";
+      const isStopped =
+        ended !== undefined &&
+        (record.stopped === true || ended.status === "aborted");
+      const state = isStopped ? "interrupted" : deriveGraphState(ended, nodes);
       if (isStopped && record.pending) stopped.push(id);
       const previous = this.graphInfos.get(id);
       this.graphInfos.set(id, {

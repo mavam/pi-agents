@@ -1,15 +1,16 @@
 /**
- * AgentPanel: one line per open agent or group above the editor, a group's
- * agents indented below it.
+ * AgentPanel: one line per open agent or graph above the editor, a graph's
+ * agents below it as a tree.
  *
  *   ◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep
- *   ◉ review · group 1/2 · 40s · 12.0k
- *     ● api · terra · 4.0k
- *     ◉ tests · sol · 40s · 8.0k · Using grep
+ *   ◉ review · graph 1/3 · 40s · 12.0k
+ *   ├─ ● api · terra · 4.0k
+ *   ├─ ◉ tests · sol · 40s · 8.0k · Using grep
+ *   └─ ○ merge ← api, tests · opus
  *
  * Unfocused, it shows the first few lines, working ones first, and a
- * finished group as one line. Left arrow from an empty editor or Ctrl+Q
- * focuses it (see focus.ts); then ↑↓ select, ⏎ attaches (a group: its first
+ * finished graph as one line. Left arrow from an empty editor or Ctrl+Q
+ * focuses it (see focus.ts); then ↑↓ select, ⏎ attaches (a graph: its first
  * agent), `s` stops, and Esc returns to the editor.
  */
 
@@ -24,10 +25,10 @@ import type { SessionHost } from "../pi/session.js";
 import {
   type Colorize,
   formatAgentLine,
-  formatGroupLine,
+  formatGraphLine,
   sanitizeLine,
 } from "./format.js";
-import { buildRows, type EntryOrder, type Row } from "./rows.js";
+import { buildRows, connector, type EntryOrder, type Row } from "./rows.js";
 
 const WIDGET_KEY = "pi-agents:panel";
 const MAX_UNFOCUSED = 6;
@@ -39,8 +40,10 @@ const MAX_HEIGHT_RATIO = 0.6;
 
 const STATE_ORDER = {
   working: 0,
+  waiting: 0,
   failed: 1,
   interrupted: 2,
+  skipped: 3,
   idle: 3,
 } as const;
 
@@ -90,18 +93,18 @@ export class AgentPanel {
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** Rows in panel order; `collapse` folds finished groups to one line. */
+  /** Rows in panel order; `collapse` folds finished graphs to one line. */
   rows(collapse = false): Row[] {
     const service = this.host.current();
     if (!service) return [];
     return buildRows(
       {
         agents: service.list(),
-        groups: service.groups(),
+        graphs: service.graphs(),
         agent: (id) => service.get(id),
       },
       panelCompare,
-      (group) => !collapse || group.state === "working",
+      (graph) => !collapse || graph.state === "working",
     );
   }
 
@@ -203,9 +206,9 @@ export class AgentPanel {
   private lines(budget: number, color: Colorize): string[] {
     const now = this.now();
     const line = (row: Row) =>
-      row.kind === "group"
-        ? formatGroupLine(row.group, now, color)
-        : `${row.nested ? "  " : ""}${formatAgentLine(this.heldActivity(row.agent, now), now, color)}`;
+      row.kind === "graph"
+        ? formatGraphLine(row.graph, now, color)
+        : `${color("dim", connector(row))}${formatAgentLine(this.heldActivity(row.agent, now), now, color, row.inputs)}`;
     if (!this.focused) {
       const rows = this.rows(true);
       const shown = rows.slice(0, MAX_UNFOCUSED).map(line);

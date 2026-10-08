@@ -12,10 +12,10 @@ import type {
 import type { AgentService } from "../agents/service.js";
 import type { PendingDelivery } from "../agents/types.js";
 import {
-  GROUP_RESULT_MESSAGE,
-  type GroupResultDetails,
-  groupContent,
-  groupResultDetails,
+  GRAPH_RESULT_MESSAGE,
+  type GraphResultDetails,
+  graphContent,
+  graphResultDetails,
   RESULT_MESSAGE,
   type ResultDetails,
   resultContent,
@@ -24,12 +24,12 @@ import {
 import type { SessionHost } from "./session.js";
 
 function deliveryKey(delivery: PendingDelivery): string {
-  return delivery.kind === "group"
-    ? `group:${delivery.groupId}`
+  return delivery.kind === "graph"
+    ? `graph:${delivery.graphId}`
     : `${delivery.agentId}:${delivery.requestIds.join(",")}`;
 }
 
-/** The parent message of one delivery: one per agent answer or group. */
+/** The parent message of one delivery: one per agent answer or graph. */
 function message(
   delivery: PendingDelivery,
   service: AgentService,
@@ -37,22 +37,22 @@ function message(
   customType: string;
   content: string;
   display: boolean;
-  details: GroupResultDetails | ResultDetails;
+  details: GraphResultDetails | ResultDetails;
 } {
-  if (delivery.kind === "group") {
-    const group = service.getGroup(delivery.groupId);
-    const details = groupResultDetails(
+  if (delivery.kind === "graph") {
+    const graph = service.getGraph(delivery.graphId);
+    const details = graphResultDetails(
       {
-        id: delivery.groupId,
+        id: delivery.graphId,
         name: delivery.name,
-        policy: group?.policy ?? "allSettled",
+        policy: graph?.policy ?? "allSettled",
       },
-      delivery.members,
+      delivery.nodes,
       (agentId) => service.get(agentId),
     );
     return {
-      customType: GROUP_RESULT_MESSAGE,
-      content: groupContent(details),
+      customType: GRAPH_RESULT_MESSAGE,
+      content: graphContent(details),
       display: true,
       details,
     };

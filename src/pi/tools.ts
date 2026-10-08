@@ -1,5 +1,5 @@
 /**
- * The parent model's tools: agent_spawn, agent_spawn_group, agent_send,
+ * The parent model's tools: agent_spawn, agent_spawn_graph, agent_send,
  * agent_wait, agent_status, and agent_stop.
  */
 
@@ -14,11 +14,12 @@ import type {
 import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { type Static, type TSchema, Type } from "typebox";
 import type { AgentService } from "../agents/service.js";
+import { shapeLine } from "../agents/topology.js";
 import {
   AgentError,
   type AgentInfo,
-  GROUP_SIZE,
-  type GroupInfo,
+  GRAPH_SIZE,
+  type GraphInfo,
   type Target,
   THINKING_LEVELS,
 } from "../agents/types.js";
@@ -27,13 +28,14 @@ import {
   AGENT_ICON,
   type Colorize,
   formatAgentLine,
-  formatGroupLine,
+  formatGraphLine,
+  graphShape,
   oneLine,
 } from "../ui/format.js";
 import {
-  groupResultDetails,
-  memberCounts,
-  membersContent,
+  graphContent,
+  graphResultDetails,
+  nodeCounts,
   truncateResult,
 } from "./messages.js";
 import type { SessionHost } from "./session.js";
@@ -45,7 +47,7 @@ const PROGRESS_MS = 1_000;
 interface AgentToolDetails {
   at: number;
   agents: AgentInfo[];
-  groups?: GroupInfo[];
+  graphs?: GraphInfo[];
   timedOut?: string[];
   message?: string;
 }
@@ -66,33 +68,34 @@ function describeAgent(info: AgentInfo): string {
   return `${head}\n${truncateResult(result?.text || "(empty)")}`;
 }
 
-/** The model-facing summary of a group: each agent's state and result. */
-function describeGroup(service: AgentService, group: GroupInfo): string {
-  const details = groupResultDetails(group, group.members, (id) =>
+/** The model-facing summary of a graph: its result once it finished. */
+function describeGraph(service: AgentService, graph: GraphInfo): string {
+  const details = graphResultDetails(graph, graph.nodes, (id) =>
     service.get(id),
   );
-  if (group.state !== "working" && group.stopped)
-    return `## ${group.name} (group, stopped)\n\n${membersContent(details, 3)}`;
-  return `## ${group.name} (group, ${group.state === "working" ? "working: " : ""}${memberCounts(details.members)})\n\n${membersContent(details, 3)}`;
+  if (graph.stopped) return `Graph ${graph.name} was stopped.`;
+  if (graph.state === "working")
+    return `Graph ${graph.name} is still working: ${nodeCounts(details.nodes)}.`;
+  return graphContent(details);
 }
 
 function statusLine(service: AgentService, info: AgentInfo): string {
   const state = info.activity.tool
     ? `${info.state}, using ${info.activity.tool}`
     : info.state;
-  const group = info.group ? service.getGroup(info.group) : undefined;
-  return `${info.name} (${state}${group ? `, in group ${group.name}` : ""}): ${oneLine(info.task, 120)}`;
+  const graph = info.graph ? service.getGraph(info.graph) : undefined;
+  return `${info.name} (${state}${graph ? `, in graph ${graph.name}` : ""}): ${oneLine(info.task, 120)}`;
 }
 
-function groupStatusLine(group: GroupInfo): string {
-  const done = group.members.filter((member) => member.outcome).length;
-  return `${group.name} (group, ${group.stopped ? "stopped" : group.state}, ${done}/${group.members.length} done): ${group.members.map((member) => member.name).join(", ")}`;
+function graphStatusLine(graph: GraphInfo): string {
+  const done = graph.nodes.filter((node) => node.outcome).length;
+  return `${graph.name} (graph, ${graph.stopped ? "stopped" : graph.state}, ${done}/${graph.nodes.length} done): ${graphShape(graph)}`;
 }
 
-/** Agents to show with groups: theirs, in order, without repeats. */
-function withMembers(
+/** Agents to show with graphs: theirs, in order, without repeats. */
+function withNodes(
   service: AgentService,
-  groups: readonly GroupInfo[],
+  graphs: readonly GraphInfo[],
   agents: readonly AgentInfo[],
 ): AgentInfo[] {
   const seen = new Set<string>();
@@ -102,8 +105,8 @@ function withMembers(
     seen.add(info.id);
     result.push(info);
   };
-  for (const group of groups)
-    for (const member of group.members) add(service.get(member.agentId));
+  for (const graph of graphs)
+    for (const node of graph.nodes) add(service.get(node.agentId));
   for (const agent of agents) add(agent);
   return result;
 }
@@ -214,23 +217,39 @@ function renderDetails(
   const lines: string[] = [];
   if (details.message) lines.push(color("dim", details.message));
   const byId = new Map(details.agents.map((info) => [info.id, info]));
-  const agentLines = (info: AgentInfo, indent: string) => {
-    lines.push(`${indent}${formatAgentLine(info, details.at, color)}`);
+  const agentLines = (
+    info: AgentInfo,
+    lead: string,
+    indent: string,
+    inputs: string[] = [],
+  ) => {
+    lines.push(
+      `${color("dim", lead)}${formatAgentLine(info, details.at, color, inputs)}`,
+    );
     if (expanded && info.state !== "working" && info.result?.text)
       lines.push(
-        ...info.result.text.split("\n").map((line) => `${indent}  ${line}`),
+        ...info.result.text
+          .split("\n")
+          .map((line) => `${color("dim", indent)}  ${line}`),
       );
   };
-  for (const group of details.groups ?? []) {
-    lines.push(formatGroupLine(group, details.at, color));
-    for (const member of group.members) {
-      const info = byId.get(member.agentId);
-      if (!info) continue;
-      byId.delete(member.agentId);
-      agentLines(info, "  ");
-    }
+  for (const graph of details.graphs ?? []) {
+    lines.push(formatGraphLine(graph, details.at, color));
+    const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
+    graph.nodes.forEach((node, index) => {
+      const info = byId.get(node.agentId);
+      if (!info) return;
+      byId.delete(node.agentId);
+      const last = index === graph.nodes.length - 1;
+      agentLines(
+        info,
+        last ? "└─ " : "├─ ",
+        last ? "   " : "│  ",
+        node.inputs.map((input) => names.get(input) ?? input),
+      );
+    });
   }
-  for (const info of byId.values()) agentLines(info, "");
+  for (const info of byId.values()) agentLines(info, "", "");
   if (details.timedOut && details.timedOut.length > 0)
     lines.push(
       color("warning", `Still working: ${details.timedOut.join(", ")}`),
@@ -307,23 +326,23 @@ async function waitWithProgress(
 ): Promise<{ content: string; details: AgentToolDetails }> {
   const snapshot = () => {
     const targets = names.flatMap((name) => service.find(name) ?? []);
-    const groups = targets.flatMap((target) =>
-      target.kind === "group" ? [target.info] : [],
+    const graphs = targets.flatMap((target) =>
+      target.kind === "graph" ? [target.info] : [],
     );
     const agents = targets.flatMap((target) =>
       target.kind === "agent" ? [target.info] : [],
     );
-    return { groups, agents: withMembers(service, groups, agents) };
+    return { graphs, agents: withNodes(service, graphs, agents) };
   };
   const progress = () => {
-    const { groups, agents } = snapshot();
+    const { graphs, agents } = snapshot();
     onUpdate?.(
       text(
         [
-          ...groups.map(groupStatusLine),
+          ...graphs.map(graphStatusLine),
           ...agents.map((info) => statusLine(service, info)),
         ].join("\n"),
-        { at: Date.now(), agents, groups },
+        { at: Date.now(), agents, graphs },
       ),
     );
   };
@@ -338,7 +357,7 @@ async function waitWithProgress(
         : {}),
     });
     const content = [
-      ...outcome.groups.map((group) => describeGroup(service, group)),
+      ...outcome.graphs.map((graph) => describeGraph(service, graph)),
       ...outcome.agents.map(describeAgent),
     ].join("\n\n");
     return {
@@ -348,15 +367,15 @@ async function waitWithProgress(
           : content,
       details: {
         at: Date.now(),
-        agents: withMembers(service, outcome.groups, outcome.agents),
-        ...(outcome.groups.length > 0 ? { groups: outcome.groups } : {}),
+        agents: withNodes(service, outcome.graphs, outcome.agents),
+        ...(outcome.graphs.length > 0 ? { graphs: outcome.graphs } : {}),
         ...(outcome.timedOut.length > 0 ? { timedOut: outcome.timedOut } : {}),
       },
     };
   } catch (error) {
     const steered = steer.signal.aborted && !signal?.aborted;
     if (steered || signal?.aborted) {
-      const { groups, agents } = snapshot();
+      const { graphs, agents } = snapshot();
       return {
         content: steered
           ? "Stopped waiting because the user sent a message. The agents keep working; their results arrive as messages."
@@ -364,7 +383,7 @@ async function waitWithProgress(
         details: {
           at: Date.now(),
           agents,
-          ...(groups.length > 0 ? { groups } : {}),
+          ...(graphs.length > 0 ? { graphs } : {}),
           message: steered
             ? "Stopped waiting for your message"
             : "Stopped waiting",
@@ -428,8 +447,8 @@ function agentPairs(args: {
 }
 
 function describeTarget(service: AgentService, target: Target): string {
-  return target.kind === "group"
-    ? groupStatusLine(target.info)
+  return target.kind === "graph"
+    ? graphStatusLine(target.info)
     : statusLine(service, target.info);
 }
 
@@ -474,15 +493,26 @@ export function registerAgentTools(
     }),
   );
 
-  const groupParams = Type.Object({
+  const graphParams = Type.Object({
     name: Type.Optional(
-      Type.String({ description: "Short name for the group" }),
+      Type.String({ description: "Short name for the graph" }),
     ),
-    agents: Type.Array(Type.Object(agentFields), {
-      minItems: GROUP_SIZE.min,
-      maxItems: GROUP_SIZE.max,
-      description: "One entry per agent",
-    }),
+    agents: Type.Array(
+      Type.Object({
+        ...agentFields,
+        after: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              "Names of agents in this graph whose final messages this agent needs; it starts once they finished and receives their results",
+          }),
+        ),
+      }),
+      {
+        minItems: GRAPH_SIZE.min,
+        maxItems: GRAPH_SIZE.max,
+        description: "One entry per agent",
+      },
+    ),
     failFast: Type.Optional(
       Type.Boolean({
         description: "Stop the other agents as soon as one fails",
@@ -491,22 +521,24 @@ export function registerAgentTools(
     wait: Type.Optional(
       Type.Number({
         description:
-          "Block until every agent answers, at most this many seconds, and return their results",
+          "Block until the graph finishes, at most this many seconds, and return its result",
         minimum: 1,
       }),
     ),
   });
   pi.registerTool(
     defineAgentTool(host, {
-      name: "agent_spawn_group",
-      label: "spawn group",
+      name: "agent_spawn_graph",
+      label: "spawn graph",
       description:
-        "Start several agents in parallel on related tasks. They report back together as one message with each agent's final message. Set wait to block for the results instead.",
-      parameters: groupParams,
+        "Start agents that work together on related tasks. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. Set wait to block for the result instead.",
+      parameters: graphParams,
       call: (args) => {
         const agents = args.agents ?? [];
+        const label = (agent: { name?: string }, index: number) =>
+          agent.name ?? `#${index + 1}`;
         return {
-          title: args.name ?? "group",
+          title: args.name ?? "graph",
           pairs: {
             failFast: args.failFast,
             wait: args.wait === undefined ? undefined : `${args.wait}s`,
@@ -514,38 +546,45 @@ export function registerAgentTools(
           body: agents
             .map((agent, index) => {
               const pairs = formatPairs(agentPairs(agent));
-              return `${agent.name ?? `#${index + 1}`}${pairs ? ` (${pairs})` : ""}: ${agent.task ?? ""}`;
+              const after = agent.after?.length
+                ? ` ← ${agent.after.join(", ")}`
+                : "";
+              return `${label(agent, index)}${after}${pairs ? ` (${pairs})` : ""}: ${agent.task ?? ""}`;
             })
             .join("\n"),
-          collapsed: agents
-            .map((agent, index) => agent.name ?? `#${index + 1}`)
-            .join(", "),
+          collapsed: shapeLine(
+            agents.map((agent, index) => ({
+              key: label(agent, index),
+              inputs: agent.after ?? [],
+            })),
+          ),
         };
       },
       async execute(service, params, ctx, signal, onUpdate) {
         const thinking = pi.getThinkingLevel();
-        const group = await service.spawnGroup({
+        const graph = await service.spawnGraph({
           ...(params.name ? { name: params.name } : {}),
           ...(params.failFast ? { failFast: true } : {}),
-          agents: params.agents.map((agent) =>
-            resolveSpawn(agent, ctx, thinking),
-          ),
+          agents: params.agents.map((agent) => ({
+            ...resolveSpawn(agent, ctx, thinking),
+            ...(agent.after ? { after: agent.after } : {}),
+          })),
         });
         if (params.wait !== undefined)
           return waitWithProgress(
             service,
             steering,
-            [group.name],
+            [graph.name],
             params.wait,
             signal,
             onUpdate,
           );
         return {
-          content: `Started group ${group.name}: ${group.members.map((member) => member.name).join(", ")}.`,
+          content: `Started graph ${graph.name}: ${graphShape(graph)}.`,
           details: {
             at: Date.now(),
-            groups: [group],
-            agents: withMembers(service, [group], []),
+            graphs: [graph],
+            agents: withNodes(service, [graph], []),
           },
         };
       },
@@ -611,7 +650,7 @@ export function registerAgentTools(
   const waitParams = Type.Object({
     names: Type.Array(Type.String(), {
       minItems: 1,
-      description: "Agent or group names",
+      description: "Agent or graph names",
     }),
     timeout: Type.Optional(
       Type.Number({
@@ -625,7 +664,7 @@ export function registerAgentTools(
       name: "agent_wait",
       label: "wait",
       description:
-        "Block until agents or groups answer and return their results.",
+        "Block until agents or graphs answer and return their results.",
       parameters: waitParams,
       call: (args) => ({
         title: (args.names ?? []).join(", "),
@@ -647,43 +686,43 @@ export function registerAgentTools(
 
   const statusParams = Type.Object({
     name: Type.Optional(
-      Type.String({ description: "Agent or group name; omit for all" }),
+      Type.String({ description: "Agent or graph name; omit for all" }),
     ),
   });
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_status",
       label: "status",
-      description: "List agents and groups with their state and task.",
+      description: "List agents and graphs with their state and task.",
       parameters: statusParams,
       call: (args) => ({ title: args.name ?? "all" }),
       async execute(service, params) {
         if (params.name) {
           const target = service.find(params.name);
           if (!target) throw new AgentError(`No agent named ${params.name}`);
-          const groups = target.kind === "group" ? [target.info] : [];
+          const graphs = target.kind === "graph" ? [target.info] : [];
           const agents = target.kind === "agent" ? [target.info] : [];
           return {
             content: describeTarget(service, target),
             details: {
               at: Date.now(),
-              agents: withMembers(service, groups, agents),
-              ...(groups.length > 0 ? { groups } : {}),
+              agents: withNodes(service, graphs, agents),
+              ...(graphs.length > 0 ? { graphs } : {}),
             },
           };
         }
-        const groups = service.groups();
+        const graphs = service.graphs();
         const agents = service.list();
         const lines = [
-          ...groups.map(groupStatusLine),
+          ...graphs.map(graphStatusLine),
           ...agents.map((info) => statusLine(service, info)),
         ];
         return {
           content: lines.length === 0 ? "No agents." : lines.join("\n"),
           details: {
             at: Date.now(),
-            agents: withMembers(service, groups, agents),
-            ...(groups.length > 0 ? { groups } : {}),
+            agents: withNodes(service, graphs, agents),
+            ...(graphs.length > 0 ? { graphs } : {}),
           },
         };
       },
@@ -695,20 +734,20 @@ export function registerAgentTools(
       name: "agent_stop",
       label: "stop",
       description:
-        "Stop an agent or a group: end its work and remove it. Messaging an agent later starts it again.",
+        "Stop an agent or a graph: end its work and remove it. Messaging an agent later starts it again.",
       parameters: Type.Object({
-        name: Type.String({ description: "Agent or group name" }),
+        name: Type.String({ description: "Agent or graph name" }),
       }),
       call: (args) => ({ title: args.name ?? "" }),
       async execute(service, params) {
         const target = await service.stop(params.name);
-        if (target.kind === "group")
+        if (target.kind === "graph")
           return {
-            content: `Stopped group ${target.info.name} and its agents.`,
+            content: `Stopped graph ${target.info.name} and its agents.`,
             details: {
               at: Date.now(),
-              groups: [target.info],
-              agents: withMembers(service, [target.info], []),
+              graphs: [target.info],
+              agents: withNodes(service, [target.info], []),
             },
           };
         return {

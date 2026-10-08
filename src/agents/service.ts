@@ -1,10 +1,10 @@
 /**
  * AgentService: the agent abstraction over one pi-durable Harness.
  * Standalone agents are ownerless conversations, so aborting other work
- * never reaches them. Group agents are conversations owned by the turn
- * tasks of a group (see groups.ts). The service keeps a derived `AgentInfo`
- * per agent and a `GroupInfo` per group, refreshed from commit
- * publications, and tracks parent requests and group results until they are
+ * never reaches them. A graph's agents are conversations owned by the node
+ * tasks of the graph (see graphs.ts). The service keeps a derived
+ * `AgentInfo` per agent and a `GraphInfo` per graph, refreshed from commit
+ * publications, and tracks parent requests and graph results until they are
  * delivered.
  */
 
@@ -45,7 +45,7 @@ import {
   ASSISTANT_KIND,
   activityOf,
   addPartialUsage,
-  deriveGroupState,
+  deriveGraphState,
   deriveState,
   outcomeOf,
   resultOf,
@@ -55,34 +55,36 @@ import {
   type TurnSettlement,
 } from "./derive.js";
 import {
-  createGroupsExtension,
-  GROUP_TASK,
-  GroupTask,
-  TURN_TASK,
-  type TurnResult,
-  TurnTask,
-} from "./groups.js";
+  createGraphsExtension,
+  GRAPH_TASK,
+  GraphTask,
+  NODE_TASK,
+  type NodeResult,
+  NodeTask,
+} from "./graphs.js";
 import {
   type AgentRecord,
   AgentsDoc,
   DELIVERED_MEMORY,
-  type GroupRecord,
-  GroupsDoc,
+  type GraphNodeRecord,
+  type GraphRecord,
+  GraphsDoc,
   type ParentRequest,
   requestId,
 } from "./records.js";
+import { endNodes, findCycle, stages } from "./topology.js";
 import {
   type AgentDelivery,
   AgentError,
   type AgentInfo,
   type AgentResult,
-  GROUP_SIZE,
-  type GroupInfo,
-  type GroupMember,
-  type GroupPolicy,
-  type GroupSpec,
+  GRAPH_SIZE,
+  type GraphInfo,
+  type GraphNode,
+  type GraphPolicy,
+  type GraphSpec,
   isThinkingLevel,
-  type MemberOutcome,
+  type NodeOutcome,
   type PendingDelivery,
   type RequestOutcome,
   type SendMode,
@@ -111,8 +113,8 @@ export interface AgentServiceOptions {
 
 export interface WaitOutcome {
   agents: AgentInfo[];
-  groups: GroupInfo[];
-  /** Agents and groups still working when the wait timed out. */
+  graphs: GraphInfo[];
+  /** Agents and graphs still working when the wait timed out. */
   timedOut: string[];
 }
 
@@ -129,18 +131,18 @@ export function isVisible(info: AgentInfo): boolean {
   return !info.closed || info.state === "working";
 }
 
-/** Open groups, and closed ones still working. */
-export function isGroupVisible(info: GroupInfo): boolean {
+/** Open graphs, and closed ones still working. */
+export function isGraphVisible(info: GraphInfo): boolean {
   return !info.closed || info.state === "working";
 }
 
-/** The group ended and every agent's task has an outcome. */
+/** The graph ended and every agent's task has an outcome. */
 function isSettled(
-  info: GroupInfo,
-): info is GroupInfo & { members: Array<Required<GroupMember>> } {
+  info: GraphInfo,
+): info is GraphInfo & { nodes: Array<GraphNode & { outcome: NodeOutcome }> } {
   return (
     info.state !== "working" &&
-    info.members.every((member) => member.outcome !== undefined)
+    info.nodes.every((node) => node.outcome !== undefined)
   );
 }
 
@@ -152,7 +154,7 @@ function isValidAgentName(name: string): boolean {
   return NAME_PATTERN.test(name);
 }
 
-function invalidName(name: string, noun: "agent" | "group"): AgentError {
+function invalidName(name: string, noun: "agent" | "graph"): AgentError {
   return new AgentError(
     `Invalid ${noun} name "${name}": use letters, digits, '.', '_', or '-' (at most 48 characters)`,
   );
@@ -160,22 +162,22 @@ function invalidName(name: string, noun: "agent" | "group"): AgentError {
 
 export class AgentService {
   private records: Record<string, AgentRecord> = {};
-  private groupRecords: Record<string, GroupRecord> = {};
+  private graphRecords: Record<string, GraphRecord> = {};
   private readonly infos = new Map<string, AgentInfo>();
-  private readonly groupInfos = new Map<string, GroupInfo>();
+  private readonly graphInfos = new Map<string, GraphInfo>();
   /** Settled outcomes of undelivered parent requests, per agent. */
   private readonly settled = new Map<string, Map<string, RequestOutcome>>();
   private readonly lastAssistant = new Map<string, EntryRecord>();
   private readonly activityAt = new Map<string, number>();
   private readonly settlements = new Map<string, TurnSettlement>();
-  /** Final outcomes of group and turn tasks; they never change. */
+  /** Final outcomes of graph and node tasks; they never change. */
   private readonly outcomes = new Map<number, TaskOutcome<JsonValue>>();
-  /** Answer entries of group agents' turns; entries never change. */
+  /** Answer entries of graph agents' tasks; entries never change. */
   private readonly answers = new Map<number, EntryRecord>();
   private readonly waiters = new Map<string, number>();
-  private readonly groupWaiters = new Map<string, number>();
-  /** Checks run after every refresh, for waits on groups. */
-  private readonly groupChecks = new Set<() => void>();
+  private readonly graphWaiters = new Map<string, number>();
+  /** Checks run after every refresh, for waits on graphs and nodes. */
+  private readonly checks = new Set<() => void>();
   private readonly listeners = new Set<() => void>();
   private readonly dirty = new Set<string>();
   private host: Promise<Conversation> | undefined;
@@ -193,8 +195,8 @@ export class AgentService {
   static async open(options: AgentServiceOptions): Promise<AgentService> {
     const registry = createRegistry();
     for (const extension of options.extensions) registry.install(extension);
-    // Group tasks resolve from the registry; agents never select them.
-    registry.install(createGroupsExtension());
+    // Graph tasks resolve from the registry; agents never select them.
+    registry.install(createGraphsExtension());
     const envs = new ExecutionEnvs(options.cwd);
     const harness = await Harness.open(
       options.storage,
@@ -235,7 +237,7 @@ export class AgentService {
         if (!existing) await this.submit(id, rid, request);
       }
     }
-    // Continue work that a previous process left unfinished, groups included.
+    // Continue work that a previous process left unfinished, graphs included.
     this.harness.resume();
     await this.refresh(Object.keys(this.records));
   }
@@ -246,7 +248,7 @@ export class AgentService {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.unsubscribe?.();
     this.listeners.clear();
-    for (const check of [...this.groupChecks]) check();
+    for (const check of [...this.checks]) check();
     await this.refreshChain.catch(() => {});
     await this.harness.close(CONTEXT);
     await this.envs.cleanup(CONTEXT);
@@ -273,10 +275,10 @@ export class AgentService {
       .sort((left, right) => left.createdAt - right.createdAt);
   }
 
-  /** Visible groups, oldest first; `includeClosed` adds closed ones. */
-  groups(options: { includeClosed?: boolean } = {}): GroupInfo[] {
-    return [...this.groupInfos.values()]
-      .filter((info) => options.includeClosed || isGroupVisible(info))
+  /** Visible graphs, oldest first; `includeClosed` adds closed ones. */
+  graphs(options: { includeClosed?: boolean } = {}): GraphInfo[] {
+    return [...this.graphInfos.values()]
+      .filter((info) => options.includeClosed || isGraphVisible(info))
       .sort((left, right) => left.createdAt - right.createdAt);
   }
 
@@ -288,39 +290,39 @@ export class AgentService {
     return named.find(isVisible) ?? named.at(-1) ?? this.infos.get(nameOrId);
   }
 
-  /** A visible group by name, else the newest closed one, else by ID. */
-  getGroup(nameOrId: string): GroupInfo | undefined {
-    const named = this.groups({ includeClosed: true }).filter(
+  /** A visible graph by name, else the newest closed one, else by ID. */
+  getGraph(nameOrId: string): GraphInfo | undefined {
+    const named = this.graphs({ includeClosed: true }).filter(
       (info) => info.name === nameOrId,
     );
     return (
-      named.find(isGroupVisible) ??
+      named.find(isGraphVisible) ??
       named.at(-1) ??
-      this.groupInfos.get(nameOrId)
+      this.graphInfos.get(nameOrId)
     );
   }
 
   /**
-   * An agent or a group: a visible one by name, else the newest closed one,
-   * else by ID. Names are unique among visible agents and groups.
+   * An agent or a graph: a visible one by name, else the newest closed one,
+   * else by ID. Names are unique among visible agents and graphs.
    */
   find(nameOrId: string): Target | undefined {
     const agent = this.get(nameOrId);
-    const group = this.getGroup(nameOrId);
+    const graph = this.getGraph(nameOrId);
     const named = (info: { name: string } | undefined) =>
       info?.name === nameOrId;
     if (agent && named(agent) && isVisible(agent))
       return { kind: "agent", info: agent };
-    if (group && named(group) && isGroupVisible(group))
-      return { kind: "group", info: group };
-    if (agent && group && named(agent) && named(group))
-      return agent.createdAt >= group.createdAt
+    if (graph && named(graph) && isGraphVisible(graph))
+      return { kind: "graph", info: graph };
+    if (agent && graph && named(agent) && named(graph))
+      return agent.createdAt >= graph.createdAt
         ? { kind: "agent", info: agent }
-        : { kind: "group", info: group };
+        : { kind: "graph", info: graph };
     if (agent && named(agent)) return { kind: "agent", info: agent };
-    if (group && named(group)) return { kind: "group", info: group };
+    if (graph && named(graph)) return { kind: "graph", info: graph };
     if (agent) return { kind: "agent", info: agent };
-    if (group) return { kind: "group", info: group };
+    if (graph) return { kind: "graph", info: graph };
     return undefined;
   }
 
@@ -330,9 +332,9 @@ export class AgentService {
     return info;
   }
 
-  private requireGroup(id: string): GroupInfo {
-    const info = this.groupInfos.get(id);
-    if (!info) throw new AgentError(`No group with ID ${id}`);
+  private requireGraph(id: string): GraphInfo {
+    const info = this.graphInfos.get(id);
+    if (!info) throw new AgentError(`No graph with ID ${id}`);
     return info;
   }
 
@@ -377,15 +379,15 @@ export class AgentService {
     return (this.waiters.get(agentId) ?? 0) > 0;
   }
 
-  private isGroupAwaited(groupId: string): boolean {
-    return (this.groupWaiters.get(groupId) ?? 0) > 0;
+  private isGraphAwaited(graphId: string): boolean {
+    return (this.graphWaiters.get(graphId) ?? 0) > 0;
   }
 
-  /** A group agent's own results wait while its group's result is due. */
-  private isHeldByGroup(record: AgentRecord): boolean {
+  /** A graph agent's own results wait while its graph's result is due. */
+  private isHeldByGraph(record: AgentRecord): boolean {
     return (
-      record.group !== undefined &&
-      this.groupRecords[record.group]?.pending === true
+      record.graph !== undefined &&
+      this.graphRecords[record.graph]?.pending === true
     );
   }
 
@@ -437,19 +439,21 @@ export class AgentService {
   }
 
   /**
-   * Start agents that work in parallel and report back as one result. One
-   * commit creates the group task, a turn task per agent, and each agent's
-   * conversation owned by its turn; the turns then send the tasks.
+   * Start agents that work together and report back as one result. An agent
+   * that lists others in `after` starts once they ended and receives their
+   * results. One commit creates the graph task, a node task per agent, and
+   * each agent's conversation owned by its node; the nodes then send the
+   * tasks.
    */
-  async spawnGroup(spec: GroupSpec): Promise<GroupInfo> {
+  async spawnGraph(spec: GraphSpec): Promise<GraphInfo> {
     const count = spec.agents.length;
-    if (count < GROUP_SIZE.min || count > GROUP_SIZE.max)
+    if (count < GRAPH_SIZE.min || count > GRAPH_SIZE.max)
       throw new AgentError(
-        `A group has ${GROUP_SIZE.min} to ${GROUP_SIZE.max} agents, not ${count}`,
+        `A graph has ${GRAPH_SIZE.min} to ${GRAPH_SIZE.max} agents, not ${count}`,
       );
     const taken = this.takenNames();
-    const name = this.claimName(spec.name, "group", taken, "group");
-    const members = spec.agents.map((agent, index) => ({
+    const name = this.claimName(spec.name, "graph", taken, "graph");
+    const nodes = spec.agents.map((agent, index) => ({
       spec: agent,
       name: this.claimName(
         agent.name,
@@ -459,74 +463,111 @@ export class AgentService {
       ),
       ...this.prepare(agent),
     }));
-    const policy: GroupPolicy = spec.failFast ? "failFast" : "allSettled";
+    const inputs = this.resolveEdges(nodes);
+    const policy: GraphPolicy = spec.failFast ? "failFast" : "allSettled";
     const createdAt = Date.now();
     const host = await this.hostConversation();
     const created = await host.commit(async (tx) => {
-      const group = await tx.createTask(
-        GroupTask,
+      const graph = await tx.createTask(
+        GraphTask,
         { policy },
         { ownership: { kind: "conversation" }, background: true },
       );
       const agents: string[] = [];
-      const turns: number[] = [];
-      for (const member of members) {
-        const turn = await tx.createTask(
-          TurnTask,
-          { message: member.task },
-          { ownership: { kind: "task", taskId: group } },
+      const tasks: number[] = [];
+      for (const node of nodes) {
+        const task = await tx.createTask(
+          NodeTask,
+          { message: node.task },
+          { ownership: { kind: "task", taskId: graph } },
         );
         const conversation = await tx.createConversation({
-          ownership: { kind: "task", taskId: turn },
+          ownership: { kind: "task", taskId: task },
         });
-        const { spec: agent } = member;
+        const { spec: agent } = node;
         await configure(tx, conversation.id, {
           cwd: agent.cwd,
-          tools: member.tools,
+          tools: node.tools,
           ...(agent.model ? { model: agent.model } : {}),
           ...(agent.thinking ? { thinkingLevel: agent.thinking } : {}),
           ...(agent.instructions ? { instructions: agent.instructions } : {}),
         });
         agents.push(String(conversation.id));
-        turns.push(turn);
+        tasks.push(task);
       }
       const state = await tx.doc(AgentsDoc);
-      members.forEach((member, index) => {
+      nodes.forEach((node, index) => {
         state.agents[agents[index] as string] = {
-          name: member.name,
-          profile: member.spec.profile ?? null,
-          task: member.task,
+          name: node.name,
+          profile: node.spec.profile ?? null,
+          task: node.task,
           createdAt,
           closed: false,
-          ambientSkills: member.spec.ambientSkills ?? true,
-          // The turn sends the task; parent requests are later messages.
+          ambientSkills: node.spec.ambientSkills ?? true,
+          // The node sends the task; parent requests are later messages.
           nextRequest: 1,
           requests: {},
           delivered: [],
-          group: String(group),
+          graph: String(graph),
         };
       });
-      (await tx.doc(GroupsDoc)).groups[String(group)] = {
+      (await tx.doc(GraphsDoc)).graphs[String(graph)] = {
         name,
         policy,
         createdAt,
-        agents,
-        turns,
+        nodes: nodes.map((_node, index) => ({
+          agent: agents[index] as string,
+          task: tasks[index] as number,
+          after: (inputs[index] ?? []).map((input) => agents[input] as string),
+        })),
         closed: false,
         pending: true,
       };
-      return { id: String(group), agents };
+      return { id: String(graph), agents };
     }, CONTEXT);
     await this.refresh(created.agents);
-    return this.requireGroup(created.id);
+    return this.requireGraph(created.id);
+  }
+
+  /** Each node's inputs as node indexes, validated: known, not itself, no
+   * cycles. */
+  private resolveEdges(
+    nodes: ReadonlyArray<{ name: string; spec: { after?: string[] } }>,
+  ): number[][] {
+    const index = new Map(nodes.map((node, at) => [node.name, at]));
+    const inputs = nodes.map((node, at) =>
+      [...new Set((node.spec.after ?? []).map((ref) => ref.trim()))]
+        .filter(Boolean)
+        .map((ref) => {
+          const found = index.get(ref);
+          if (found === undefined)
+            throw new AgentError(
+              `${node.name} waits for ${ref}, which is not an agent of this graph. Name the agents that others wait for.`,
+            );
+          if (found === at)
+            throw new AgentError(`${node.name} cannot wait for itself`);
+          return found;
+        }),
+    );
+    const cycle = findCycle(
+      nodes.map((node, at) => ({
+        key: node.name,
+        inputs: (inputs[at] ?? []).map((input) => nodes[input]?.name ?? ""),
+      })),
+    );
+    if (cycle)
+      throw new AgentError(
+        `The agents wait for each other in a cycle: ${cycle.join(" → ")}`,
+      );
+    return inputs;
   }
 
   /** Message an agent on behalf of the parent model. */
   async send(nameOrId: string, message: string, mode: SendMode): Promise<void> {
     const target = this.requireTarget(nameOrId);
-    if (target.kind === "group")
+    if (target.kind === "graph")
       throw new AgentError(
-        `${target.info.name} is a group. Message its agents instead: ${target.info.members.map((member) => member.name).join(", ")}`,
+        `${target.info.name} is a graph. Message its agents instead: ${target.info.nodes.map((node) => node.name).join(", ")}`,
       );
     const info = target.info;
     const text = message.trim();
@@ -579,16 +620,16 @@ export class AgentService {
   }
 
   /**
-   * End an agent or a group. An agent's work is interrupted, its pending
+   * End an agent or a graph. An agent's work is interrupted, its pending
    * parent requests dropped, and it closes; storage keeps its conversation,
-   * and messaging it later reopens it. A group is aborted with its agents,
+   * and messaging it later reopens it. A graph is aborted with its agents,
    * delivers nothing, and closes with them.
    */
   async stop(nameOrId: string): Promise<Target> {
     const target = this.requireTarget(nameOrId);
-    if (target.kind === "group") {
-      await this.stopGroup(target.info.id);
-      return { kind: "group", info: this.requireGroup(target.info.id) };
+    if (target.kind === "graph") {
+      await this.stopGraph(target.info.id);
+      return { kind: "graph", info: this.requireGraph(target.info.id) };
     }
     await this.stopAgent(target.info.id);
     return { kind: "agent", info: this.require(target.info.id) };
@@ -607,26 +648,26 @@ export class AgentService {
     await this.refresh([agentId]);
   }
 
-  private async stopGroup(groupId: string): Promise<void> {
-    const info = this.requireGroup(groupId);
+  private async stopGraph(graphId: string): Promise<void> {
+    const info = this.requireGraph(graphId);
     await this.harness.commit(async (tx) => {
-      const group = (await tx.doc(GroupsDoc)).groups[groupId];
-      if (!group) return;
-      group.pending = false;
-      group.closed = true;
+      const graph = (await tx.doc(GraphsDoc)).graphs[graphId];
+      if (!graph) return;
+      graph.pending = false;
+      graph.closed = true;
     }, CONTEXT);
-    // Aborting the group aborts its turns, and they their agents, bottom-up.
-    if ((await this.taskOutcome(Number(groupId))) === undefined) {
-      await this.harness.abortTask(taskId(groupId), CONTEXT);
-      await this.harness.waitForTask(taskId(groupId), CONTEXT);
+    // Aborting the graph aborts its nodes, and they their agents, bottom-up.
+    if ((await this.taskOutcome(Number(graphId))) === undefined) {
+      await this.harness.abortTask(taskId(graphId), CONTEXT);
+      await this.harness.waitForTask(taskId(graphId), CONTEXT);
     }
-    // Agents may work beyond their turn, for example on a user's message.
-    for (const member of info.members) await this.stopAgent(member.agentId);
+    // Agents may work beyond their task, for example on a user's message.
+    for (const node of info.nodes) await this.stopAgent(node.agentId);
     await this.refresh([]);
   }
 
   /**
-   * Wait until the agents are idle and the groups finished, and return
+   * Wait until the agents are idle and the graphs finished, and return
    * them. Their results count as delivered. Aborting `signal` ends only the
    * wait.
    */
@@ -642,10 +683,10 @@ export class AgentService {
         ),
       ),
     ];
-    const groupIds = [
+    const graphIds = [
       ...new Set(
         targets.flatMap((target) =>
-          target.kind === "group" ? [target.info.id] : [],
+          target.kind === "graph" ? [target.info.id] : [],
         ),
       ),
     ];
@@ -657,15 +698,15 @@ export class AgentService {
     ].filter((signal): signal is AbortSignal => signal !== undefined);
     const signal = signals.length > 0 ? AbortSignal.any(signals) : undefined;
     for (const id of ids) this.waiters.set(id, (this.waiters.get(id) ?? 0) + 1);
-    for (const id of groupIds)
-      this.groupWaiters.set(id, (this.groupWaiters.get(id) ?? 0) + 1);
+    for (const id of graphIds)
+      this.graphWaiters.set(id, (this.graphWaiters.get(id) ?? 0) + 1);
     const idle = new Set<string>();
     const ended = new Set<string>();
     try {
       await Promise.all([
         ...ids.map(async (id) => {
-          // A group agent's task arrives through its turn.
-          if (!(await this.untilTurnEnded(id, signal))) return;
+          // A graph agent's task arrives through its node.
+          if (!(await this.untilNodeEnded(id, signal))) return;
           const conversation = await this.harness.conversation(
             conversationId(id),
             CONTEXT,
@@ -677,7 +718,7 @@ export class AgentService {
             if (!signal?.aborted) throw error;
           }
         }),
-        ...groupIds.map(async (id) => {
+        ...graphIds.map(async (id) => {
           if (await this.untilSettled(id, signal)) ended.add(id);
         }),
       ]);
@@ -685,21 +726,21 @@ export class AgentService {
       await this.refresh(ids);
       for (const id of idle) await this.consume(id);
       for (const id of ended)
-        if (this.groupRecords[id]?.pending) await this.consumeGroup(id);
+        if (this.graphRecords[id]?.pending) await this.consumeGraph(id);
       return {
         agents: ids.map((id) => this.require(id)),
-        groups: groupIds.map((id) => this.requireGroup(id)),
+        graphs: graphIds.map((id) => this.requireGraph(id)),
         timedOut: [
           ...ids.filter((id) => !idle.has(id)).map((id) => this.require(id)),
-          ...groupIds
+          ...graphIds
             .filter((id) => !ended.has(id))
-            .map((id) => this.requireGroup(id)),
+            .map((id) => this.requireGraph(id)),
         ].map((info) => info.name),
       };
     } finally {
       for (const [counts, keys] of [
         [this.waiters, ids],
-        [this.groupWaiters, groupIds],
+        [this.graphWaiters, graphIds],
       ] as const)
         for (const id of keys) {
           const count = (counts.get(id) ?? 1) - 1;
@@ -710,29 +751,29 @@ export class AgentService {
     }
   }
 
-  /** Resolve true once the group settled, false when `signal` aborts first. */
+  /** Resolve true once the graph settled, false when `signal` aborts first. */
   private untilSettled(
-    groupId: string,
+    graphId: string,
     signal?: AbortSignal,
   ): Promise<boolean> {
     return this.until(() => {
-      const info = this.groupInfos.get(groupId);
+      const info = this.graphInfos.get(graphId);
       return info !== undefined && isSettled(info);
     }, signal);
   }
 
-  /** Resolve true once a group agent's turn ended, or at once for others. */
-  private untilTurnEnded(
+  /** Resolve true once a graph agent's node ended, or at once for others. */
+  private untilNodeEnded(
     agentId: string,
     signal?: AbortSignal,
   ): Promise<boolean> {
     return this.until(() => {
-      const group = this.infos.get(agentId)?.group;
-      if (group === undefined) return true;
-      const member = this.groupInfos
-        .get(group)
-        ?.members.find((each) => each.agentId === agentId);
-      return member === undefined || member.outcome !== undefined;
+      const graph = this.infos.get(agentId)?.graph;
+      if (graph === undefined) return true;
+      const node = this.graphInfos
+        .get(graph)
+        ?.nodes.find((each) => each.agentId === agentId);
+      return node === undefined || node.outcome !== undefined;
     }, signal);
   }
 
@@ -740,7 +781,7 @@ export class AgentService {
   private until(ready: () => boolean, signal?: AbortSignal): Promise<boolean> {
     return new Promise((resolve) => {
       const done = (value: boolean) => {
-        this.groupChecks.delete(check);
+        this.checks.delete(check);
         signal?.removeEventListener("abort", aborted);
         resolve(value);
       };
@@ -749,7 +790,7 @@ export class AgentService {
         else if (this.closed) done(false);
       };
       const aborted = () => done(false);
-      this.groupChecks.add(check);
+      this.checks.add(check);
       signal?.addEventListener("abort", aborted, { once: true });
       if (signal?.aborted) done(false);
       else check();
@@ -757,27 +798,27 @@ export class AgentService {
   }
 
   /**
-   * Results to deliver: finished groups the parent still expects, and
-   * settled parent requests. Agents and groups under a wait are excluded, and
-   * so are agents whose group's result is still due.
+   * Results to deliver: finished graphs the parent still expects, and
+   * settled parent requests. Agents and graphs under a wait are excluded, and
+   * so are agents whose graph's result is still due.
    */
   pendingDeliveries(): PendingDelivery[] {
     const deliveries: PendingDelivery[] = [];
-    for (const [groupId, record] of Object.entries(this.groupRecords)) {
-      if (!record.pending || this.isGroupAwaited(groupId)) continue;
-      const info = this.groupInfos.get(groupId);
+    for (const [graphId, record] of Object.entries(this.graphRecords)) {
+      if (!record.pending || this.isGraphAwaited(graphId)) continue;
+      const info = this.graphInfos.get(graphId);
       if (!info || !isSettled(info) || info.stopped) continue;
       deliveries.push({
-        kind: "group",
-        groupId,
+        kind: "graph",
+        graphId,
         name: info.name,
-        members: info.members,
+        nodes: info.nodes,
       });
     }
     for (const [agentId, outcomes] of this.settled) {
       if (this.isAwaited(agentId)) continue;
       const record = this.records[agentId];
-      if (!record || this.isHeldByGroup(record)) continue;
+      if (!record || this.isHeldByGraph(record)) continue;
       const answers = new Map<number, AgentDelivery>();
       for (const [rid, outcome] of outcomes) {
         if (outcome.kind === "aborted") continue;
@@ -808,10 +849,10 @@ export class AgentService {
     return deliveries;
   }
 
-  /** Mark a delivery done. An answered agent closes, and so does a group. */
+  /** Mark a delivery done. An answered agent closes, and so does a graph. */
   async acknowledge(delivery: PendingDelivery): Promise<void> {
-    if (delivery.kind === "group") {
-      await this.consumeGroup(delivery.groupId);
+    if (delivery.kind === "graph") {
+      await this.consumeGraph(delivery.graphId);
       return;
     }
     const entryId =
@@ -827,11 +868,11 @@ export class AgentService {
 
   // --- Internals ---
 
-  /** Names of visible agents and groups. */
+  /** Names of visible agents and graphs. */
   private takenNames(): Set<string> {
     return new Set([
       ...this.list().map((info) => info.name),
-      ...this.groups().map((info) => info.name),
+      ...this.graphs().map((info) => info.name),
     ]);
   }
 
@@ -840,7 +881,7 @@ export class AgentService {
     requested: string | undefined,
     base: string,
     taken: Set<string>,
-    noun: "agent" | "group",
+    noun: "agent" | "graph",
   ): string {
     const wanted = requested?.trim();
     let name: string;
@@ -848,7 +889,7 @@ export class AgentService {
       if (!isValidAgentName(wanted)) throw invalidName(wanted, noun);
       if (taken.has(wanted))
         throw new AgentError(
-          `An ${noun === "agent" ? "agent" : "agent or group"} named ${wanted} already exists`,
+          `An ${noun === "agent" ? "agent" : "agent or graph"} named ${wanted} already exists`,
         );
       name = wanted;
     } else {
@@ -875,7 +916,7 @@ export class AgentService {
     return { task, tools };
   }
 
-  /** The conversation that owns group tasks; it never runs itself. */
+  /** The conversation that owns graph tasks; it never runs itself. */
   private hostConversation(): Promise<Conversation> {
     this.host ??= this.harness.root(CONTEXT);
     return this.host;
@@ -932,22 +973,22 @@ export class AgentService {
   }
 
   /**
-   * A group's result reached the parent: the group closes, and so do its
-   * agents that answered or that the group stopped. Their answers count as
-   * delivered, so parent messages answered by the same entry deliver with
-   * the group. Failed and interrupted agents stay open.
+   * A graph's result reached the parent: the graph closes, and so do its
+   * agents that answered, never started, or that the graph stopped. Their
+   * answers count as delivered, so parent messages answered by the same
+   * entry deliver with the graph. Failed and interrupted agents stay open.
    */
-  private async consumeGroup(groupId: string): Promise<void> {
-    const info = this.requireGroup(groupId);
+  private async consumeGraph(graphId: string): Promise<void> {
+    const info = this.requireGraph(graphId);
     await this.harness.commit(async (tx) => {
-      const group = (await tx.doc(GroupsDoc)).groups[groupId];
-      if (!group) return;
-      group.pending = false;
-      group.closed = true;
+      const graph = (await tx.doc(GraphsDoc)).graphs[graphId];
+      if (!graph) return;
+      graph.pending = false;
+      graph.closed = true;
       const state = await tx.doc(AgentsDoc);
-      for (const member of info.members) {
-        const record = state.agents[member.agentId];
-        const outcome = member.outcome;
+      for (const node of info.nodes) {
+        const record = state.agents[node.agentId];
+        const outcome = node.outcome;
         if (!record || !outcome) continue;
         if (outcome.kind === "answered") {
           const entryId = outcome.result.entryId;
@@ -958,21 +999,22 @@ export class AgentService {
               0,
               record.delivered.length - DELIVERED_MEMORY,
             );
-          for (const [rid, settled] of this.settled.get(member.agentId) ?? [])
+          for (const [rid, settled] of this.settled.get(node.agentId) ?? [])
             if (
               settled.kind === "answered" &&
               settled.result.entryId === entryId
             )
               delete record.requests[rid];
         }
-        if (
-          (outcome.kind === "answered" || outcome.kind === "stopped") &&
-          Object.keys(record.requests).length === 0
-        )
+        const done =
+          outcome.kind === "answered" ||
+          outcome.kind === "stopped" ||
+          outcome.kind === "skipped";
+        if (done && Object.keys(record.requests).length === 0)
           record.closed = true;
       }
     }, CONTEXT);
-    await this.refresh(info.members.map((member) => member.agentId));
+    await this.refresh(info.nodes.map((node) => node.agentId));
   }
 
   /**
@@ -1008,9 +1050,9 @@ export class AgentService {
     return structuredClone(state?.agents ?? {}) as Record<string, AgentRecord>;
   }
 
-  private async loadGroups(): Promise<Record<string, GroupRecord>> {
-    const state = await this.harness.snapshot(GroupsDoc, CONTEXT);
-    return structuredClone(state?.groups ?? {}) as Record<string, GroupRecord>;
+  private async loadGraphs(): Promise<Record<string, GraphRecord>> {
+    const state = await this.harness.snapshot(GraphsDoc, CONTEXT);
+    return structuredClone(state?.graphs ?? {}) as Record<string, GraphRecord>;
   }
 
   private async loadLastAssistant(agentId: string): Promise<void> {
@@ -1036,12 +1078,12 @@ export class AgentService {
   private onCommit(publication: CommitPublication): void {
     const now = Date.now();
     let records = false;
-    let groups = false;
+    let graphs = false;
     for (const change of publication.changes) {
       if (change.type === "document") {
         if (change.record.kind === AgentsDoc.definition.kind) records = true;
-        else if (change.record.kind === GroupsDoc.definition.kind)
-          groups = true;
+        else if (change.record.kind === GraphsDoc.definition.kind)
+          graphs = true;
         else if (change.conversationId !== undefined)
           this.touch(String(change.conversationId), now);
       } else if (change.type === "entry") {
@@ -1055,25 +1097,24 @@ export class AgentService {
         if (settlement) this.settlements.set(id, settlement);
         this.touch(id, now);
       } else if (change.type === "task") {
-        if (change.value.kind === GROUP_TASK) groups = true;
-        else if (change.value.kind === TURN_TASK) {
-          groups = true;
-          // A turn's end ends its agent's work.
-          const agentId = this.agentOfTurn(Number(change.value.id));
-          if (agentId !== undefined) this.dirty.add(agentId);
+        if (change.value.kind === GRAPH_TASK) graphs = true;
+        else if (change.value.kind === NODE_TASK) {
+          graphs = true;
+          // A node's progress changes its agent's state and that of the
+          // agents waiting for it.
+          const graph = this.graphOfNode(Number(change.value.id));
+          for (const node of graph?.nodes ?? []) this.dirty.add(node.agent);
         }
       }
     }
     if (records) for (const id of Object.keys(this.records)) this.dirty.add(id);
-    if (records || groups || this.dirty.size > 0) this.scheduleRefresh();
+    if (records || graphs || this.dirty.size > 0) this.scheduleRefresh();
   }
 
-  private agentOfTurn(turn: number): string | undefined {
-    for (const group of Object.values(this.groupRecords)) {
-      const index = group.turns.indexOf(turn);
-      if (index >= 0) return group.agents[index];
-    }
-    return undefined;
+  private graphOfNode(task: number): GraphRecord | undefined {
+    return Object.values(this.graphRecords).find((graph) =>
+      graph.nodes.some((node) => node.task === task),
+    );
   }
 
   private touch(agentId: string, now: number): void {
@@ -1091,12 +1132,12 @@ export class AgentService {
     }, REFRESH_DELAY_MS);
   }
 
-  /** Recompute infos for the given agents and every group, serialized. */
+  /** Recompute infos for the given agents and every graph, serialized. */
   private refresh(ids: string[]): Promise<void> {
     const run = this.refreshChain.then(async () => {
       if (this.closed) return;
       this.records = await this.loadRecords();
-      this.groupRecords = await this.loadGroups();
+      this.graphRecords = await this.loadGraphs();
       const targets = new Set(ids);
       for (const id of Object.keys(this.records))
         if (!this.infos.has(id)) targets.add(id);
@@ -1106,12 +1147,12 @@ export class AgentService {
         if (!record) continue;
         drops.push([id, await this.compute(id, record)]);
       }
-      const stopped = await this.computeGroups();
+      const stopped = await this.computeGraphs();
       this.emit();
       for (const [id, rids] of drops)
         if (rids.length > 0) await this.dropRequests(id, rids);
       if (stopped.length > 0) await this.clearPending(stopped);
-      for (const check of [...this.groupChecks]) check();
+      for (const check of [...this.checks]) check();
     });
     this.refreshChain = run.catch(() => {});
     return run;
@@ -1128,13 +1169,13 @@ export class AgentService {
     for (const rid of rids) outcomes?.delete(rid);
   }
 
-  /** A stopped group delivers nothing. */
-  private async clearPending(groupIds: string[]): Promise<void> {
+  /** A stopped graph delivers nothing. */
+  private async clearPending(graphIds: string[]): Promise<void> {
     await this.harness.commit(async (tx) => {
-      const state = await tx.doc(GroupsDoc);
-      for (const id of groupIds) {
-        const group = state.groups[id];
-        if (group) group.pending = false;
+      const state = await tx.doc(GraphsDoc);
+      for (const id of graphIds) {
+        const graph = state.graphs[id];
+        if (graph) graph.pending = false;
       }
     }, CONTEXT);
   }
@@ -1175,12 +1216,10 @@ export class AgentService {
       id,
       record.name,
     );
-    // A group agent works from its spawn until its turn ended, also before
-    // the turn submitted the task.
     const state =
-      live?.run === undefined && (await this.isTurnLive(id, record))
-        ? "working"
-        : deriveState(live, result, this.settlements.get(id));
+      (live?.run === undefined
+        ? await this.nodeState(id, record, result)
+        : undefined) ?? deriveState(live, result, this.settlements.get(id));
     const previous = this.infos.get(id);
     const now = Date.now();
     const durable = (agent ?? {}) as DurableAgentState;
@@ -1212,20 +1251,43 @@ export class AgentService {
       usage: addPartialUsage(summarizeUsage(usage), live),
       activity: activityOf(live),
       ...(result ? { result } : {}),
-      ...(record.group ? { group: record.group } : {}),
+      ...(record.graph ? { graph: record.graph } : {}),
     });
     return aborted;
   }
 
-  /** Whether the agent belongs to a group whose turn for it still runs. */
-  private async isTurnLive(
+  /**
+   * A graph agent's state while its own conversation doesn't run: it waits
+   * until its inputs ended, then works until its node ended, also before the
+   * node sent the task. An agent that never answered shows why: skipped, or
+   * stopped by its graph. Undefined when the conversation decides.
+   */
+  private async nodeState(
     agentId: string,
     record: AgentRecord,
-  ): Promise<boolean> {
-    const group =
-      record.group === undefined ? undefined : this.groupRecords[record.group];
-    const turn = group?.turns[group.agents.indexOf(agentId)];
-    return turn !== undefined && (await this.taskOutcome(turn)) === undefined;
+    result: AgentResult | undefined,
+  ): Promise<AgentInfo["state"] | undefined> {
+    const graph =
+      record.graph === undefined ? undefined : this.graphRecords[record.graph];
+    const node = graph?.nodes.find((each) => each.agent === agentId);
+    if (!graph || !node) return undefined;
+    const outcome = await this.taskOutcome(node.task);
+    if (outcome === undefined) {
+      for (const input of node.after) {
+        const task = graph.nodes.find((each) => each.agent === input)?.task;
+        if (task !== undefined && (await this.taskOutcome(task)) === undefined)
+          return "waiting";
+      }
+      return "working";
+    }
+    if (result) return undefined;
+    if (
+      outcome.status === "completed" &&
+      (outcome.result as NodeResult).kind === "skipped"
+    )
+      return "skipped";
+    if (outcome.status === "aborted") return "interrupted";
+    return undefined;
   }
 
   /** The final outcome of a task once decided, read once and cached. */
@@ -1256,17 +1318,18 @@ export class AgentService {
     return entry;
   }
 
-  /** How a group agent's turn ended, once it did. */
-  private async memberOutcome(
-    turn: number,
+  /** How a graph agent's node ended, once it did. */
+  private async nodeOutcome(
+    task: number,
     agentId: string,
     name: string,
-  ): Promise<MemberOutcome | undefined> {
-    const outcome = await this.taskOutcome(turn);
+  ): Promise<NodeOutcome | undefined> {
+    const outcome = await this.taskOutcome(task);
     if (!outcome) return undefined;
     switch (outcome.status) {
       case "completed": {
-        const result = outcome.result as TurnResult;
+        const result = outcome.result as NodeResult;
+        if (result.kind === "skipped") return { kind: "skipped" };
         if (result.kind !== "answered") return { kind: "interrupted" };
         const answered = resultOf(
           await this.answer(result.entryId),
@@ -1286,27 +1349,39 @@ export class AgentService {
     }
   }
 
-  /** Recompute every group's info; returns stopped groups still pending. */
-  private async computeGroups(): Promise<string[]> {
+  /** Recompute every graph's info; returns stopped graphs still pending. */
+  private async computeGraphs(): Promise<string[]> {
     const stopped: string[] = [];
     const now = Date.now();
-    for (const [id, record] of Object.entries(this.groupRecords)) {
+    for (const [id, record] of Object.entries(this.graphRecords)) {
       const ended = await this.taskOutcome(Number(id));
-      const members: GroupMember[] = [];
-      for (const [index, agentId] of record.agents.entries()) {
+      const topology = record.nodes.map((node) => ({
+        key: node.agent,
+        inputs: node.after,
+      }));
+      const ends = new Set(endNodes(topology));
+      const byAgent = new Map<string, GraphNodeRecord>(
+        record.nodes.map((node) => [node.agent, node]),
+      );
+      const nodes: GraphNode[] = [];
+      for (const agentId of stages(topology).flat()) {
+        const node = byAgent.get(agentId);
+        if (!node) continue;
         const name = this.records[agentId]?.name ?? agentId;
-        const turn = record.turns[index];
-        const outcome =
-          turn === undefined
-            ? undefined
-            : await this.memberOutcome(turn, agentId, name);
-        members.push({ agentId, name, ...(outcome ? { outcome } : {}) });
+        const outcome = await this.nodeOutcome(node.task, agentId, name);
+        nodes.push({
+          agentId,
+          name,
+          inputs: [...node.after],
+          end: ends.has(agentId),
+          ...(outcome ? { outcome } : {}),
+        });
       }
-      const state = deriveGroupState(ended, members);
+      const state = deriveGraphState(ended, nodes);
       const isStopped = ended?.status === "aborted";
       if (isStopped && record.pending) stopped.push(id);
-      const previous = this.groupInfos.get(id);
-      this.groupInfos.set(id, {
+      const previous = this.graphInfos.get(id);
+      this.graphInfos.set(id, {
         id,
         name: record.name,
         policy: record.policy,
@@ -1320,10 +1395,10 @@ export class AgentService {
             : previous
               ? now
               : record.createdAt,
-        members,
+        nodes,
         usage: sumUsage(
-          record.agents.flatMap((agentId) => {
-            const usage = this.infos.get(agentId)?.usage;
+          record.nodes.flatMap((node) => {
+            const usage = this.infos.get(node.agent)?.usage;
             return usage ? [usage] : [];
           }),
         ),

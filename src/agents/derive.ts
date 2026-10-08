@@ -16,7 +16,7 @@ import {
   type AgentState,
   type AgentUsage,
   EMPTY_USAGE,
-  type GroupMember,
+  type GraphNode,
   type RequestOutcome,
 } from "./types.js";
 
@@ -164,19 +164,26 @@ export function outcomeOf(
 }
 
 /**
- * A group's state: `working` until the group task ended, then `interrupted`
- * when it was stopped, `failed` when an agent failed, `interrupted` when an
- * agent was interrupted or stopped, and `idle` when every agent answered.
+ * A graph's state: `working` until the graph task ended, then `interrupted`
+ * when it was stopped, and otherwise derived from the agents nothing waits
+ * for: `failed` when one failed or was skipped, `interrupted` when one was
+ * interrupted or stopped, and `idle` when they all answered.
  */
-export function deriveGroupState(
+export function deriveGraphState(
   ended: { status: string } | undefined,
-  members: readonly GroupMember[],
+  nodes: readonly GraphNode[],
 ): AgentState {
   if (!ended) return "working";
   if (ended.status === "aborted") return "interrupted";
   if (ended.status !== "completed") return "failed";
-  const kinds = members.map((member) => member.outcome?.kind);
-  if (kinds.some((kind) => kind === undefined || kind === "failed"))
+  const kinds = nodes
+    .filter((node) => node.end)
+    .map((node) => node.outcome?.kind);
+  if (
+    kinds.some(
+      (kind) => kind === undefined || kind === "failed" || kind === "skipped",
+    )
+  )
     return "failed";
   if (kinds.some((kind) => kind !== "answered")) return "interrupted";
   return "idle";

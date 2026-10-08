@@ -7,8 +7,8 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { isGroupVisible, isVisible } from "../agents/service.js";
-import type { AgentInfo, GroupInfo, MemberOutcome } from "../agents/types.js";
+import { isGraphVisible, isVisible } from "../agents/service.js";
+import type { AgentInfo, GraphInfo, NodeOutcome } from "../agents/types.js";
 import {
   confirmAndStop,
   errorText,
@@ -19,7 +19,8 @@ import {
   type Colorize,
   formatElapsed,
   formatUsage,
-  groupNote,
+  graphNote,
+  graphShape,
   oneLine,
   STATE_STYLES,
   shortModel,
@@ -27,13 +28,13 @@ import {
 } from "../ui/format.js";
 import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
 import type { AgentPanel } from "../ui/panel.js";
-import { attachTarget, buildRows, type Row } from "../ui/rows.js";
+import { attachTarget, buildRows, connector, type Row } from "../ui/rows.js";
 import type { SessionHost } from "./session.js";
 
 /** Lines of the latest result shown in the overlay's detail pane. */
 const DETAIL_RESULT_LINES = 200;
-/** Lines of each agent's result in a group's detail pane. */
-const DETAIL_MEMBER_LINES = 4;
+/** Lines of each agent's result in a graph's detail pane. */
+const DETAIL_NODE_LINES = 4;
 
 export interface CommandDeps {
   host: SessionHost;
@@ -57,7 +58,7 @@ function agentRow(
   const usage = formatUsage(agent.usage);
   const name = pad(agent.name, nameWidth - indent.length);
   return [
-    `${indent}${stateIcon(agent.state, color)} ${isVisible(agent) ? name : color("dim", name)}`,
+    `${color("dim", indent)}${stateIcon(agent.state, color)} ${isVisible(agent) ? name : color("dim", name)}`,
     color("dim", pad(agent.profile ?? "ad-hoc", 10)),
     color("dim", pad(shortModel(agent), 14)),
     color("dim", pad(formatElapsed(now - agent.stateSince), 7)),
@@ -65,25 +66,25 @@ function agentRow(
   ].join("  ");
 }
 
-function groupRow(
-  group: GroupInfo,
+function graphRow(
+  graph: GraphInfo,
   now: number,
   nameWidth: number,
   color: Colorize,
 ): string {
-  const usage = formatUsage(group.usage);
-  const name = pad(group.name, nameWidth);
+  const usage = formatUsage(graph.usage);
+  const name = pad(graph.name, nameWidth);
   return [
-    `${stateIcon(group.state, color)} ${isGroupVisible(group) ? name : color("dim", name)}`,
-    color("dim", pad("group", 10)),
-    color("dim", pad(`${group.members.length} agents`, 14)),
-    color("dim", pad(formatElapsed(now - group.stateSince), 7)),
+    `${stateIcon(graph.state, color)} ${isGraphVisible(graph) ? name : color("dim", name)}`,
+    color("dim", pad("graph", 10)),
+    color("dim", pad(`${graph.nodes.length} agents`, 14)),
+    color("dim", pad(formatElapsed(now - graph.stateSince), 7)),
     usage ? color("dim", usage) : "",
   ].join("  ");
 }
 
-function memberSummary(
-  outcome: MemberOutcome | undefined,
+function nodeSummary(
+  outcome: NodeOutcome | undefined,
   agent: AgentInfo | undefined,
 ): string {
   if (!outcome) return agent?.state ?? "working";
@@ -93,29 +94,36 @@ function memberSummary(
   return outcome.kind;
 }
 
-function groupDetail(
-  group: GroupInfo,
+function graphDetail(
+  graph: GraphInfo,
   lookup: (id: string) => AgentInfo | undefined,
   color: Colorize,
 ): string[] {
-  const lines = [color("accent", "Agents")];
-  for (const member of group.members) {
-    const agent = lookup(member.agentId);
-    const outcome = member.outcome;
+  const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
+  const lines = [
+    color("accent", "Shape"),
+    graphShape(graph),
+    "",
+    color("accent", "Agents"),
+  ];
+  for (const node of graph.nodes) {
+    const agent = lookup(node.agentId);
+    const outcome = node.outcome;
+    const inputs = node.inputs.map((input) => names.get(input) ?? input);
     lines.push(
-      `${agent ? stateIcon(agent.state, color) : " "} ${member.name} ${color("dim", memberSummary(outcome, agent))}`,
+      `${agent ? stateIcon(agent.state, color) : " "} ${node.name}${inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : ""} ${color("dim", nodeSummary(outcome, agent))}`,
     );
     if (agent) lines.push(color("dim", `  ${oneLine(agent.task, 200)}`));
     if (outcome?.kind === "answered" && outcome.result.text) {
       const body = outcome.result.text.split("\n");
       lines.push(
-        ...body.slice(0, DETAIL_MEMBER_LINES).map((line) => `  ${line}`),
+        ...body.slice(0, DETAIL_NODE_LINES).map((line) => `  ${line}`),
       );
-      if (body.length > DETAIL_MEMBER_LINES)
+      if (body.length > DETAIL_NODE_LINES)
         lines.push(
           color(
             "dim",
-            `  … ${body.length - DETAIL_MEMBER_LINES} more lines (attach to read)`,
+            `  … ${body.length - DETAIL_NODE_LINES} more lines (attach to read)`,
           ),
         );
     }
@@ -124,9 +132,9 @@ function groupDetail(
 }
 
 function rowName(row: Row): string {
-  return row.kind === "group"
-    ? row.group.name
-    : `${row.nested ? "  " : ""}${row.agent.name}`;
+  return row.kind === "graph"
+    ? row.graph.name
+    : `${connector(row)}${row.agent.name}`;
 }
 
 function agentDetail(agent: AgentInfo, color: Colorize): string[] {
@@ -164,13 +172,13 @@ async function openAgentsOverlay(
 ): Promise<void> {
   const service = await deps.host.ensure(ctx);
   let after: (() => void) | undefined;
-  // Groups and agents, open ones first, then closed ones, newest first; a
-  // group's agents follow it.
+  // Graphs and agents, open ones first, then closed ones, newest first; a
+  // graph's agents follow it.
   const items = () =>
     buildRows(
       {
         agents: service.list({ includeClosed: true }),
-        groups: service.groups({ includeClosed: true }),
+        graphs: service.graphs({ includeClosed: true }),
         agent: (id) => service.get(id),
       },
       (left, right) =>
@@ -187,9 +195,9 @@ async function openAgentsOverlay(
     keyOf: (row) => row.key,
     row: (row, color) => {
       const width = Math.max(...items().map((item) => rowName(item).length), 4);
-      return row.kind === "group"
-        ? groupRow(row.group, Date.now(), width, color)
-        : agentRow(row.agent, Date.now(), width, color, row.nested ? "  " : "");
+      return row.kind === "graph"
+        ? graphRow(row.graph, Date.now(), width, color)
+        : agentRow(row.agent, Date.now(), width, color, connector(row));
     },
     headerLine: (row, color) => {
       if (row.kind === "agent") {
@@ -199,22 +207,22 @@ async function openAgentsOverlay(
           `${agent.name} · ${agent.cwd} · started ${formatElapsed(Date.now() - agent.createdAt)} ago`,
         );
       }
-      const group = row.group;
-      const note = groupNote(group);
+      const graph = row.graph;
+      const note = graphNote(graph);
       return color(
         "dim",
         [
-          `${group.name} · group of ${group.members.length}`,
-          group.policy === "failFast" ? "stops on failure" : "waits for all",
+          `${graph.name} · graph of ${graph.nodes.length}`,
+          graph.policy === "failFast" ? "stops on failure" : "waits for all",
           ...(note ? [note] : []),
-          `started ${formatElapsed(Date.now() - group.createdAt)} ago`,
+          `started ${formatElapsed(Date.now() - graph.createdAt)} ago`,
         ].join(" · "),
       );
     },
     detail: (row, color) =>
       row.kind === "agent"
         ? agentDetail(row.agent, color)
-        : groupDetail(row.group, (id) => service.get(id), color),
+        : graphDetail(row.graph, (id) => service.get(id), color),
     onAction: (key, row) => {
       if (key === "enter") {
         const agentId = attachTarget(row);
@@ -227,7 +235,7 @@ async function openAgentsOverlay(
         const visible =
           row.kind === "agent"
             ? isVisible(row.agent)
-            : isGroupVisible(row.group);
+            : isGraphVisible(row.graph);
         if (!visible) return undefined;
         if (target.state !== "working") {
           void service
@@ -243,7 +251,7 @@ async function openAgentsOverlay(
     live: () =>
       items().some(
         (row) =>
-          (row.kind === "agent" ? row.agent.state : row.group.state) ===
+          (row.kind === "agent" ? row.agent.state : row.graph.state) ===
           "working",
       ),
   };

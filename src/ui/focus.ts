@@ -30,12 +30,12 @@ export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** What a row stops: an agent, or a group with its agents. */
+/** What a row stops: an agent, or a graph with its agents. */
 export function stopTarget(row: Row): Pick<AgentInfo, "id" | "name" | "state"> {
-  return row.kind === "agent" ? row.agent : row.group;
+  return row.kind === "agent" ? row.agent : row.graph;
 }
 
-/** Stop an agent or a group, confirming first while it still works. */
+/** Stop an agent or a graph, confirming first while it still works. */
 export async function confirmAndStop(
   ctx: ExtensionContext,
   host: SessionHost,

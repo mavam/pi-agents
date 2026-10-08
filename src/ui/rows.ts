@@ -1,24 +1,34 @@
 /**
- * Rows of the panel and of `/agents`: groups and standalone agents, each
- * group followed by its agents.
+ * Rows of the panel and of `/agents`: graphs and standalone agents, each
+ * graph followed by its agents in stages, drawn as a tree.
  */
 
-import type { AgentInfo, GroupInfo } from "../agents/types.js";
+import type { AgentInfo, GraphInfo } from "../agents/types.js";
 
 export type Row =
-  | { kind: "group"; key: string; group: GroupInfo }
-  | { kind: "agent"; key: string; agent: AgentInfo; nested: boolean };
+  | { kind: "graph"; key: string; graph: GraphInfo }
+  | {
+      kind: "agent";
+      key: string;
+      agent: AgentInfo;
+      /** Whether the agent belongs to the graph above it. */
+      nested: boolean;
+      /** Whether it is its graph's last agent. */
+      last: boolean;
+      /** Names of the agents whose results it receives. */
+      inputs: string[];
+    };
 
 export interface RowSource {
   /** Candidate standalone agents. */
   agents: readonly AgentInfo[];
-  groups: readonly GroupInfo[];
-  /** A group's agent by ID. */
+  graphs: readonly GraphInfo[];
+  /** A graph's agent by ID. */
   agent: (id: string) => AgentInfo | undefined;
 }
 
 type Entry =
-  | { kind: "group"; info: GroupInfo }
+  | { kind: "graph"; info: GraphInfo }
   | { kind: "agent"; info: AgentInfo };
 
 export type EntryOrder = (
@@ -27,20 +37,20 @@ export type EntryOrder = (
 ) => number;
 
 /**
- * Groups and the agents outside them in `order`; a group is followed by its
- * agents in spawn order when `expand` says so. An agent whose group is not
- * among `groups` stands alone.
+ * Graphs and the agents outside them in `order`; a graph is followed by its
+ * agents in stages when `expand` says so. An agent whose graph is not among
+ * `graphs` stands alone.
  */
 export function buildRows(
   source: RowSource,
   order: EntryOrder,
-  expand: (group: GroupInfo) => boolean,
+  expand: (graph: GraphInfo) => boolean,
 ): Row[] {
-  const groupIds = new Set(source.groups.map((group) => group.id));
+  const graphIds = new Set(source.graphs.map((graph) => graph.id));
   const entries: Entry[] = [
-    ...source.groups.map((info) => ({ kind: "group" as const, info })),
+    ...source.graphs.map((info) => ({ kind: "graph" as const, info })),
     ...source.agents
-      .filter((info) => info.group === undefined || !groupIds.has(info.group))
+      .filter((info) => info.graph === undefined || !graphIds.has(info.graph))
       .map((info) => ({ kind: "agent" as const, info })),
   ].sort((left, right) => order(left.info, right.info));
   return entries.flatMap((entry): Row[] => {
@@ -51,24 +61,41 @@ export function buildRows(
           key: `agent:${entry.info.id}`,
           agent: entry.info,
           nested: false,
+          last: false,
+          inputs: [],
         },
       ];
-    const group = entry.info;
-    const head: Row = { kind: "group", key: `group:${group.id}`, group };
-    if (!expand(group)) return [head];
+    const graph = entry.info;
+    const head: Row = { kind: "graph", key: `graph:${graph.id}`, graph };
+    if (!expand(graph)) return [head];
+    const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
+    const nodes = graph.nodes.flatMap((node) => {
+      const agent = source.agent(node.agentId);
+      return agent ? [{ node, agent }] : [];
+    });
     return [
       head,
-      ...group.members.flatMap((member): Row[] => {
-        const agent = source.agent(member.agentId);
-        return agent
-          ? [{ kind: "agent", key: `agent:${agent.id}`, agent, nested: true }]
-          : [];
-      }),
+      ...nodes.map(
+        ({ node, agent }, index): Row => ({
+          kind: "agent",
+          key: `agent:${agent.id}`,
+          agent,
+          nested: true,
+          last: index === nodes.length - 1,
+          inputs: node.inputs.map((input) => names.get(input) ?? input),
+        }),
+      ),
     ];
   });
 }
 
-/** The agent a row attaches to: the agent, or a group's first agent. */
+/** The tree connector before a row's line. */
+export function connector(row: Row): string {
+  if (row.kind === "graph" || !row.nested) return "";
+  return row.last ? "└─ " : "├─ ";
+}
+
+/** The agent a row attaches to: the agent, or a graph's first agent. */
 export function attachTarget(row: Row): string | undefined {
-  return row.kind === "agent" ? row.agent.id : row.group.members[0]?.agentId;
+  return row.kind === "agent" ? row.agent.id : row.graph.nodes[0]?.agentId;
 }

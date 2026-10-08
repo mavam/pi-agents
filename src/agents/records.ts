@@ -1,6 +1,6 @@
 /**
- * Durable bookkeeping for agents and groups: session documents keyed by
- * conversation ID and group task ID. Parent requests form an outbox: a
+ * Durable bookkeeping for agents and graphs: session documents keyed by
+ * conversation ID and graph task ID. Parent requests form an outbox: a
  * request is recorded before it is submitted with the same request ID, and
  * stays until its result is delivered or consumed by a wait.
  *
@@ -10,7 +10,7 @@
  */
 
 import { defineDoc } from "@earendil-works/pi-durable";
-import type { GroupPolicy } from "./types.js";
+import type { GraphPolicy } from "./types.js";
 
 export type ParentRequest = {
   message: string;
@@ -30,8 +30,8 @@ export type AgentRecord = {
   requests: Record<string, ParentRequest>;
   /** Answer entries already delivered, newest last, bounded. */
   delivered: number[];
-  /** The group this agent belongs to, by group ID; absent when standalone. */
-  group?: string;
+  /** The graph this agent belongs to, by graph ID; absent when standalone. */
+  graph?: string;
 };
 
 export type AgentsState = {
@@ -45,29 +45,36 @@ export const AgentsDoc = defineDoc<AgentsState>({
   initial: () => ({ agents: {} }),
 });
 
-export type GroupRecord = {
+export type GraphNodeRecord = {
+  /** The agent's conversation ID. */
+  agent: string;
+  /** The node task that sends the agent its task. */
+  task: number;
+  /** Agents whose results this agent receives, by conversation ID. */
+  after: string[];
+};
+
+export type GraphRecord = {
   name: string;
-  policy: GroupPolicy;
+  policy: GraphPolicy;
   createdAt: number;
-  /** Agent conversation IDs, in spawn order. */
-  agents: string[];
-  /** Turn task IDs, parallel to `agents`. */
-  turns: number[];
+  /** In spawn order. */
+  nodes: GraphNodeRecord[];
   /** Hidden from the panel; storage keeps it. */
   closed: boolean;
-  /** The parent still expects the group's result. */
+  /** The parent still expects the graph's result. */
   pending: boolean;
 };
 
-export type GroupsState = {
-  groups: Record<string, GroupRecord>;
+export type GraphsState = {
+  graphs: Record<string, GraphRecord>;
 };
 
-export const GroupsDoc = defineDoc<GroupsState>({
-  kind: "pi-agents.groups",
+export const GraphsDoc = defineDoc<GraphsState>({
+  kind: "pi-agents.graphs",
   version: 1,
   scope: "session",
-  initial: () => ({ groups: {} }),
+  initial: () => ({ graphs: {} }),
 });
 
 /** How many delivered answer IDs a record remembers for deduplication. */

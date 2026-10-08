@@ -5,7 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentService } from "../../src/agents/service.js";
 import { DeliveryManager } from "../../src/pi/delivery.js";
-import { GROUP_RESULT_MESSAGE, RESULT_MESSAGE } from "../../src/pi/messages.js";
+import { GRAPH_RESULT_MESSAGE, RESULT_MESSAGE } from "../../src/pi/messages.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import { MODEL, openService, until } from "../agents/helpers.js";
 
@@ -86,11 +86,37 @@ describe("DeliveryManager", () => {
     expect(sent).toHaveLength(1);
   });
 
-  test("posts one message per group and acknowledges it", async () => {
+  test("posts one message per graph with its end agent's answer", async () => {
     service = await openService();
     const state = { idle: true, pending: false };
     const { sent, delivery, ctx } = setup(state);
-    await service.spawnGroup({
+    await service.spawnGraph({
+      name: "pair",
+      agents: [
+        { name: "a", task: "a", cwd: ".", model: MODEL },
+        { name: "merge", task: "merge", cwd: ".", model: MODEL, after: ["a"] },
+      ],
+    });
+    await until(() => service?.pendingDeliveries().length === 1);
+    delivery.flush(ctx);
+    expect(sent.map((message) => message.customType)).toEqual([
+      GRAPH_RESULT_MESSAGE,
+    ]);
+    // Only the end agent's answer reaches the parent, attributed to it.
+    expect(sent[0]?.content).toStartWith("Graph pair: merge answered:\n\n");
+    expect(sent[0]?.content).toContain("done: merge");
+    expect(sent[0]?.options?.triggerTurn).toBe(true);
+    await until(() => service?.pendingDeliveries().length === 0);
+    delivery.flush(ctx);
+    expect(sent).toHaveLength(1);
+    expect(service.getGraph("pair")?.closed).toBe(true);
+  });
+
+  test("a graph without edges reports every agent's answer", async () => {
+    service = await openService();
+    const state = { idle: true, pending: false };
+    const { sent, delivery, ctx } = setup(state);
+    await service.spawnGraph({
       name: "pair",
       agents: [
         { task: "a", cwd: ".", model: MODEL },
@@ -99,12 +125,9 @@ describe("DeliveryManager", () => {
     });
     await until(() => service?.pendingDeliveries().length === 1);
     delivery.flush(ctx);
-    expect(sent.map((message) => message.customType)).toEqual([
-      GROUP_RESULT_MESSAGE,
-    ]);
     expect(sent[0]?.content).toBe(
       [
-        "Group pair finished: 2 answered.",
+        "Graph pair finished: 2 answered.",
         "",
         "## pair-1 (answered)",
         "done: a",
@@ -113,10 +136,5 @@ describe("DeliveryManager", () => {
         "done: b",
       ].join("\n"),
     );
-    expect(sent[0]?.options?.triggerTurn).toBe(true);
-    await until(() => service?.pendingDeliveries().length === 0);
-    delivery.flush(ctx);
-    expect(sent).toHaveLength(1);
-    expect(service.getGroup("pair")?.closed).toBe(true);
   });
 });

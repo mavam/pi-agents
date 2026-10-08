@@ -2,17 +2,18 @@ import { describe, expect, test } from "bun:test";
 import {
   type AgentInfo,
   EMPTY_USAGE,
-  type GroupInfo,
+  type GraphInfo,
 } from "../../src/agents/types.js";
 import { formatFooterSummary } from "../../src/ui/footer.js";
 import {
   formatAgentLine,
   formatElapsed,
-  formatGroupLine,
+  formatGraphLine,
+  graphShape,
   sanitizeLine,
 } from "../../src/ui/format.js";
 import { panelCompare, panelOrder } from "../../src/ui/panel.js";
-import { attachTarget, buildRows } from "../../src/ui/rows.js";
+import { attachTarget, buildRows, connector } from "../../src/ui/rows.js";
 
 function agent(overrides: Partial<AgentInfo>): AgentInfo {
   return {
@@ -32,7 +33,7 @@ function agent(overrides: Partial<AgentInfo>): AgentInfo {
   };
 }
 
-function group(overrides: Partial<GroupInfo>): GroupInfo {
+function graph(overrides: Partial<GraphInfo>): GraphInfo {
   return {
     id: "10",
     name: "review",
@@ -42,18 +43,21 @@ function group(overrides: Partial<GroupInfo>): GroupInfo {
     stopped: false,
     createdAt: 0,
     stateSince: 0,
-    members: [
-      { agentId: "11", name: "api" },
-      { agentId: "12", name: "tests" },
+    nodes: [
+      { agentId: "11", name: "api", inputs: [], end: false },
+      { agentId: "12", name: "tests", inputs: [], end: false },
+      { agentId: "13", name: "merge", inputs: ["11", "12"], end: true },
     ],
     usage: { ...EMPTY_USAGE },
     ...overrides,
   };
 }
 
-const answered = (agentId: string, name: string) => ({
+const answered = (agentId: string, name: string, inputs: string[] = []) => ({
   agentId,
   name,
+  inputs,
+  end: false,
   outcome: {
     kind: "answered" as const,
     result: { agentId, name, entryId: 1, text: "ok", stopReason: "stop" },
@@ -114,70 +118,99 @@ describe("formatting", () => {
     expect(ordered.map((info) => info.name)).toEqual(["c", "b", "d", "a"]);
   });
 
-  test("group lines carry progress, elapsed time, usage, and failures", () => {
+  test("graph lines carry progress, elapsed time, usage, and failures", () => {
     expect(
-      formatGroupLine(
-        group({
-          members: [answered("11", "api"), { agentId: "12", name: "tests" }],
+      formatGraphLine(
+        graph({
+          nodes: [
+            answered("11", "api"),
+            { agentId: "12", name: "tests", inputs: [], end: true },
+          ],
           usage: { ...EMPTY_USAGE, input: 31_500 },
         }),
         92_000,
       ),
-    ).toBe("◉ review · group 1/2 · 1m32s · 31.5k");
+    ).toBe("◉ review · graph 1/2 · 1m32s · 31.5k");
     expect(
-      formatGroupLine(
-        group({
+      formatGraphLine(
+        graph({
           state: "failed",
-          members: [
+          nodes: [
             answered("11", "api"),
             {
               agentId: "12",
               name: "tests",
+              inputs: [],
+              end: false,
               outcome: { kind: "failed", reason: "boom" },
+            },
+            {
+              agentId: "13",
+              name: "merge",
+              inputs: ["11", "12"],
+              end: true,
+              outcome: { kind: "skipped" },
             },
           ],
         }),
         92_000,
       ),
-    ).toBe("✗ review · group 2/2 · 1 failed");
+    ).toBe("✗ review · graph 3/3 · 1 failed, 1 skipped");
     expect(
-      formatGroupLine(group({ state: "interrupted", stopped: true }), 0),
-    ).toBe("⊘ review · group 0/2 · stopped");
+      formatGraphLine(graph({ state: "interrupted", stopped: true }), 0),
+    ).toBe("⊘ review · graph 0/3 · stopped");
+    expect(graphShape(graph({}))).toBe("{api, tests} → merge");
   });
 
-  test("rows nest a group's agents and fold finished groups", () => {
+  test("waiting agents show their inputs", () => {
+    expect(
+      formatAgentLine(
+        agent({ name: "merge", state: "waiting" }),
+        0,
+        undefined,
+        ["api", "tests"],
+      ),
+    ).toBe("○ merge ← api, tests · terra");
+  });
+
+  test("rows draw a graph's agents as a tree and fold finished graphs", () => {
     const agents = [
-      agent({ id: "11", name: "api", group: "10", createdAt: 5 }),
-      agent({ id: "12", name: "tests", group: "10", createdAt: 5 }),
+      agent({ id: "11", name: "api", graph: "10", createdAt: 5 }),
+      agent({ id: "12", name: "tests", graph: "10", createdAt: 5 }),
+      agent({ id: "13", name: "merge", graph: "10", createdAt: 5 }),
       agent({ id: "1", name: "solo", state: "idle", createdAt: 9 }),
     ];
-    const source = (info: GroupInfo) => ({
+    const source = (info: GraphInfo) => ({
       agents,
-      groups: [info],
+      graphs: [info],
       agent: (id: string) => agents.find((each) => each.id === id),
     });
     const working = buildRows(
-      source(group({ createdAt: 5 })),
+      source(graph({ createdAt: 5 })),
       panelCompare,
       () => true,
     );
     expect(working.map((row) => row.key)).toEqual([
-      "group:10",
+      "graph:10",
       "agent:11",
       "agent:12",
+      "agent:13",
       "agent:1",
     ]);
+    expect(working.map(connector)).toEqual(["", "├─ ", "├─ ", "└─ ", ""]);
+    const merge = working[3];
+    expect(merge?.kind === "agent" && merge.inputs).toEqual(["api", "tests"]);
     const first = working[0];
     expect(first && attachTarget(first)).toBe("11");
     const folded = buildRows(
-      source(group({ state: "idle", createdAt: 5 })),
+      source(graph({ state: "idle", createdAt: 5 })),
       panelCompare,
       (info) => info.state === "working",
     );
-    expect(folded.map((row) => row.key)).toEqual(["agent:1", "group:10"]);
-    // Without its group, a group agent stands alone.
+    expect(folded.map((row) => row.key)).toEqual(["agent:1", "graph:10"]);
+    // Without its graph, a graph's agent stands alone.
     const alone = buildRows(
-      { agents, groups: [], agent: () => undefined },
+      { agents, graphs: [], agent: () => undefined },
       panelCompare,
       () => true,
     );
@@ -185,6 +218,7 @@ describe("formatting", () => {
       "agent:1",
       "agent:11",
       "agent:12",
+      "agent:13",
     ]);
   });
 

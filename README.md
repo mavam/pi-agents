@@ -135,6 +135,46 @@ the agent instead.
 Agents of sessions started with `--no-session` live in memory and end with
 the session.
 
+### Architecture
+
+Agents run inside your Pi process. Pi-agents keeps one pi-durable harness per
+Pi session; each agent is a conversation in that harness:
+
+```text
++--------------------------------------------------------------------+
+| Pi process                                                         |
+|                                                                    |
+|  Your Pi session                                                   |
+|    |                                        ^                      |
+|    | agent_spawn, agent_send,               | results arrive       |
+|    | agent_wait, agent_status, agent_stop   | as messages          |
+|    v                                        |                      |
+|  +--------------------------------------------------------------+  |
+|  | pi-agents                                                    |  |
+|  |   tools . result delivery . panel . attach view . /agents    |  |
+|  +--------------------------------------------------------------+  |
+|    |                                        ^                      |
+|    | start, message, stop, wait             | live state, results  |
+|    v                                        |                      |
+|  +--------------------------------------------------------------+  |
+|  | pi-durable harness, one per Pi session                       |  |
+|  |                                                              |  |
+|  |   agent "reviewer"    agent "tests"    ...                   |  |
+|  |   (each: its own conversation, model, tools, working dir)    |  |
+|  |                                                              |  |
+|  |   agent records and undelivered results                      |  |
+|  +--------------------------------------------------------------+  |
+|    |                                                               |
++----|---------------------------------------------------------------+
+     | every step is checkpointed
+     v
+  ~/.pi/agent/pi-agents/sessions/<session-id>/   (JSONL files)
+```
+
+Because pi-durable checkpoints every step, a resumed session continues where
+its agents stopped. Agents use your Pi logins and models, so they need no
+separate setup.
+
 ## 🧑‍💻 Agent profiles
 
 A profile bundles reusable settings for agents. Create `.pi/agents/planner.md`:

@@ -29,8 +29,8 @@ export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Close an agent, confirming first while it still works. */
-export async function confirmAndClose(
+/** Stop an agent, confirming first while it still works. */
+export async function confirmAndStop(
   ctx: ExtensionContext,
   host: SessionHost,
   agent: AgentInfo,
@@ -39,13 +39,13 @@ export async function confirmAndClose(
   if (!service) return false;
   if (agent.state === "working") {
     const proceed = await ctx.ui.confirm(
-      `Close ${agent.name}?`,
-      `${agent.name} is still working. Closing stops it.`,
+      `Stop ${agent.name}?`,
+      `${agent.name} is still working.`,
     );
     if (!proceed) return false;
   }
   try {
-    await service.closeAgent(agent.id);
+    await service.stop(agent.id);
     return true;
   } catch (error) {
     ctx.ui.notify(errorText(error), "error");
@@ -170,19 +170,7 @@ export class FocusController {
     }
     if (key === "s") {
       const agent = this.panel.selected();
-      const service = this.host.current();
-      if (agent && service) {
-        if (agent.state === "working") {
-          void service
-            .stop(agent.id)
-            .catch((error) => ctx.ui.notify(errorText(error), "error"));
-        } else ctx.ui.notify(`${agent.name} is not working.`, "info");
-      }
-      return { consume: true };
-    }
-    if (key === "x") {
-      const agent = this.panel.selected();
-      if (agent) void confirmAndClose(ctx, this.host, agent);
+      if (agent) void confirmAndStop(ctx, this.host, agent);
       return { consume: true };
     }
     // Typing returns focus to the editor and lands there. Escape sequences

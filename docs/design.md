@@ -31,14 +31,14 @@ results is out of scope and builds on it later.
 Agent states are derived, never stored:
 
 - `working`: the conversation has a run (`pi.live.run`).
-- `stopped`: the last answer was aborted.
+- `interrupted`: the last answer was aborted.
 - `failed`: the last answer ended with an error.
 - `idle`: otherwise.
 
 `closed` is a flag that hides an idle agent from the panel; storage keeps it.
-An agent closes on its own once an answer to a parent request is delivered or
-consumed by a wait and no parent request remains. Failed and stopped agents
-stay open. A parent message to a closed agent opens it again. A closed agent
+Users and models call this *stopping* an agent. An agent closes on its own
+once an answer to a parent request is delivered or consumed by a wait and no
+parent request remains. Failed and interrupted agents stay open. A parent message to a closed agent opens it again. A closed agent
 that works again, for example because the user talks to it, shows in the
 panel until it is idle. Names are unique among
 visible agents; a name resolves to the visible agent first, then to the newest
@@ -53,8 +53,10 @@ closed one.
   after the current answer instead.
 - `wait` resolves once the named agents are idle and returns their results.
   Cancelling a wait cancels only the wait.
-- `stop` aborts the current work; the agent stays usable. `close` stops and
-  hides the agent, and asks for confirmation in the UI while it works.
+- `interrupt` aborts the current work; the agent stays open. Only the attach
+  view's Esc interrupts.
+- `stop` interrupts, drops pending parent requests, and closes the agent. The
+  UI asks for confirmation while the agent works.
 - Agents cannot spawn agents.
 
 ## Delivery
@@ -102,27 +104,29 @@ never lose one. On session resume, unacknowledged settled requests deliver.
 
 | Tool | Parameters |
 | --- | --- |
-| `agent_spawn` | `task`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `cwd?`, `wait?` |
-| `agent_send` | `name`, `message`, `followUp?`, `wait?` |
+| `agent_spawn` | `task`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `cwd?`, `wait?` (seconds) |
+| `agent_send` | `name`, `message`, `followUp?`, `wait?` (seconds) |
 | `agent_wait` | `names`, `timeout?` |
 | `agent_status` | `name?` |
 | `agent_stop` | `name` |
-| `agent_close` | `name` |
 
-The system prompt lists profiles, available models, and delegation guidance.
+The system prompt adds one line of guidance plus the usable profiles and the
+available models. Profiles with an unknown model or unresolvable skills stay
+out of the prompt, and the UI reports them once per session. Each tool call
+renders its explicit arguments as a dim `key=value` line.
 
 ## Frontend
 
 - Panel above the editor: one line per open agent, working first, idle agents
   always shown. Left arrow from an empty editor or Ctrl+Q focuses it; ↑↓
-  select, ⏎ attaches, `s` stops, `x` closes, Esc returns. The glyph carries
+  select, ⏎ attaches, `s` stops, Esc returns. The glyph carries
   the state; the line shows the time in that state.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's
   durable conversation view with Pi's message and tool components. ⏎ prompts
   or steers, Alt+⏎ queues a follow-up, Esc interrupts, ← detaches, Shift+↑↓
   scrolls.
 - `/agents`: a table of all agents, closed ones dimmed, with details, attach,
-  stop, and close. `/agent <name>` attaches.
+  and stop. `/agent <name>` attaches.
 - Result messages render the agent, its state, and the result as Markdown.
 - The fancy-footer integration reports working and idle counts.
 

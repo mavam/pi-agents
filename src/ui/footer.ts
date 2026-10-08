@@ -15,7 +15,7 @@ const FANCY_FOOTER_PROTOCOL = 1;
 const FANCY_FOOTER_WIDGET_EVENT = "pi-fancy-footer:widget";
 const FANCY_FOOTER_READY_EVENT = "pi-fancy-footer:ready";
 
-const ORDER: AgentState[] = ["working", "idle", "failed", "stopped"];
+const ORDER: AgentState[] = ["working", "idle", "failed", "interrupted"];
 
 /** Counts per state, empty without open agents. */
 export function formatFooterSummary(agents: readonly AgentInfo[]): string {

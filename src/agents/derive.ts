@@ -22,7 +22,7 @@ import {
 export const ASSISTANT_KIND = "pi.assistant";
 
 /** How the latest turn settled, as seen in this process. */
-export type TurnSettlement = "answered" | "stopped" | "failed";
+export type TurnSettlement = "answered" | "interrupted" | "failed";
 
 export function settlementOf(
   submission: SubmissionRecord,
@@ -30,7 +30,7 @@ export function settlementOf(
   if (submission.type !== "input") return undefined;
   if (submission.status === "done") return "answered";
   if (submission.status === "unanswered")
-    return submission.reason === "aborted" ? "stopped" : "failed";
+    return submission.reason === "aborted" ? "interrupted" : "failed";
   return undefined;
 }
 
@@ -40,11 +40,11 @@ export function deriveState(
   settlement?: TurnSettlement,
 ): AgentState {
   if (live?.run !== undefined) return "working";
-  // A turn can end without an answer entry, for example when it was stopped
-  // before the first token.
-  if (settlement === "stopped") return "stopped";
+  // A turn can end without an answer entry, for example when it was
+  // interrupted before the first token.
+  if (settlement === "interrupted") return "interrupted";
   if (settlement === "failed") return "failed";
-  if (last?.stopReason === "aborted") return "stopped";
+  if (last?.stopReason === "aborted") return "interrupted";
   if (last?.stopReason === "error") return "failed";
   return "idle";
 }

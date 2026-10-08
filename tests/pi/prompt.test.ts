@@ -6,7 +6,9 @@ import { resultContent } from "../../src/pi/messages.js";
 import {
   buildModelsPrompt,
   buildSystemPromptAppendix,
+  profileCatalog,
 } from "../../src/pi/prompt.js";
+import { formatCall, formatPairs } from "../../src/pi/tools.js";
 
 describe("system prompt appendix", () => {
   test("lists guidance, profiles, and models", () => {
@@ -18,7 +20,7 @@ describe("system prompt appendix", () => {
       path.join(project, ".pi", "agents", "scout.md"),
       "---\nname: scout\ndescription: Finds code\nthinking: low\n---\nBe fast.\n",
     );
-    const appendix = buildSystemPromptAppendix(project, "both", {
+    const catalog = {
       providers: [
         {
           id: "openai",
@@ -26,7 +28,22 @@ describe("system prompt appendix", () => {
           models: [{ id: "gpt", costOut: 1 }],
         },
       ],
-    });
+    };
+    fs.writeFileSync(
+      path.join(project, ".pi", "agents", "broken.md"),
+      "---\nname: broken\ndescription: Broken\nskills: [missing]\n---\n",
+    );
+    fs.writeFileSync(
+      path.join(project, ".pi", "agents", "offline.md"),
+      "---\nname: offline\ndescription: Offline\nmodel: nope/x\n---\n",
+    );
+    const { profiles, issues } = profileCatalog(project, "both", catalog);
+    expect(profiles.map((profile) => profile.name)).toEqual(["scout"]);
+    expect(issues).toEqual([
+      "profile broken: unavailable skills: missing",
+      "profile offline: unknown model nope/x",
+    ]);
+    const appendix = buildSystemPromptAppendix(profiles, catalog);
     expect(appendix).toBe(
       [
         "Delegate work to agents with the agent_* tools, but only when the user asks for it.",
@@ -38,7 +55,7 @@ describe("system prompt appendix", () => {
         "</agent_models>",
       ].join("\n"),
     );
-    expect(buildSystemPromptAppendix(project, "user", undefined)).toBe(
+    expect(buildSystemPromptAppendix([], undefined)).toBe(
       "Delegate work to agents with the agent_* tools, but only when the user asks for it.",
     );
   });
@@ -65,5 +82,36 @@ describe("result messages", () => {
     expect(
       resultContent({ ...base, kind: "failed", body: "rate limited" }),
     ).toBe("Agent reviewer failed: rate limited");
+  });
+});
+
+describe("tool calls", () => {
+  test("explicit arguments render as key=value pairs", () => {
+    expect(
+      formatPairs({
+        profile: "explorer",
+        model: "anthropic/claude-haiku-4-5",
+        tools: ["read", "grep"],
+        cwd: "src dir",
+        wait: undefined,
+      }),
+    ).toBe(
+      'profile=explorer model=anthropic/claude-haiku-4-5 tools=read,grep cwd="src dir"',
+    );
+  });
+
+  test("calls show a title, a pairs line, and the body", () => {
+    const plain = (_color: string, text: string) => text;
+    expect(
+      formatCall(
+        "spawn",
+        { title: "lister", pairs: { thinking: "low" }, body: "List\nfiles" },
+        false,
+        plain,
+      ),
+    ).toBe("✦ spawn lister\n  thinking=low\n  List files");
+    expect(formatCall("stop", { title: "lister" }, false, plain)).toBe(
+      "✦ stop lister",
+    );
   });
 });

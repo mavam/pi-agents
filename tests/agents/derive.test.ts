@@ -43,14 +43,14 @@ describe("deriveState", () => {
   test("settlements and stop reasons decide settled states", () => {
     const answered = resultOf(assistant(3, "ok"), "1", "a");
     expect(deriveState({}, answered)).toBe("idle");
-    expect(deriveState({}, answered, "stopped")).toBe("stopped");
+    expect(deriveState({}, answered, "interrupted")).toBe("interrupted");
     expect(deriveState({}, answered, "failed")).toBe("failed");
     expect(deriveState({}, resultOf(assistant(4, "", "error"), "1", "a"))).toBe(
       "failed",
     );
     expect(
       deriveState({}, resultOf(assistant(4, "", "aborted"), "1", "a")),
-    ).toBe("stopped");
+    ).toBe("interrupted");
     expect(deriveState(undefined, undefined)).toBe("idle");
   });
 });

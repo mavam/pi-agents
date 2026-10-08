@@ -10,7 +10,7 @@ import type {
 import { isVisible } from "../agents/service.js";
 import type { AgentInfo } from "../agents/types.js";
 import {
-  confirmAndClose,
+  confirmAndStop,
   errorText,
   type FocusController,
 } from "../ui/focus.js";
@@ -105,7 +105,7 @@ async function openAgentsOverlay(
   const spec: OverlaySpec<AgentInfo> = {
     title: "Agents",
     emptyText: "No agents yet. Ask Pi to delegate.",
-    footer: "↑↓ move · ⏎ attach · s stop · x close · esc",
+    footer: "↑↓ move · ⏎ attach · s stop · esc",
     items,
     keyOf: (agent) => agent.id,
     row: (agent, color) => {
@@ -124,15 +124,14 @@ async function openAgentsOverlay(
         return "close";
       }
       if (key === "s") {
-        if (agent.state === "working")
+        if (!isVisible(agent)) return undefined;
+        if (agent.state !== "working") {
           void service
             .stop(agent.id)
             .catch((error) => ctx.ui.notify(errorText(error), "error"));
-        return undefined;
-      }
-      if (key === "x") {
-        if (!isVisible(agent)) return undefined;
-        after = () => void confirmAndClose(ctx, deps.host, agent);
+          return undefined;
+        }
+        after = () => void confirmAndStop(ctx, deps.host, agent);
         return "close";
       }
       return undefined;
@@ -145,7 +144,7 @@ async function openAgentsOverlay(
 
 export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   pi.registerCommand("agents", {
-    description: "Browse agents: attach, stop, or close them",
+    description: "Browse agents: attach to or stop them",
     handler: async (_args, ctx) => {
       try {
         await openAgentsOverlay(ctx, deps);

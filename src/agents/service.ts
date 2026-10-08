@@ -331,7 +331,7 @@ export class AgentService {
   }
 
   /** Abort the agent's current work and withdraw its queued messages. */
-  async stop(nameOrId: string): Promise<void> {
+  async interrupt(nameOrId: string): Promise<void> {
     const info = this.require(nameOrId);
     const conversation = await this.harness.conversation(
       conversationId(info.id),
@@ -341,10 +341,13 @@ export class AgentService {
     await this.refresh([info.id]);
   }
 
-  /** Stop the agent and hide it. Storage keeps its conversation. */
-  async closeAgent(nameOrId: string): Promise<void> {
+  /**
+   * End an agent: interrupt its work, drop pending parent requests, and close
+   * it. Storage keeps its conversation; messaging it later reopens it.
+   */
+  async stop(nameOrId: string): Promise<void> {
     const info = this.require(nameOrId);
-    await this.stop(info.id);
+    await this.interrupt(info.id);
     await this.harness.commit(async (tx) => {
       const state = await tx.doc(AgentsDoc);
       const record = state.agents[info.id];

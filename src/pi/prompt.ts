@@ -5,7 +5,12 @@
 
 import { type ModelNoteRule, resolveModelNote } from "../catalog/config.js";
 import type { ModelCatalog, ModelCatalogEntry } from "../catalog/models.js";
-import { discoverProfiles, type Scope } from "../catalog/profiles.js";
+import {
+  discoverProfiles,
+  type Profile,
+  type Scope,
+} from "../catalog/profiles.js";
+import { profileProblem } from "./spawn.js";
 
 export const GUIDANCE =
   "Delegate work to agents with the agent_* tools, but only when the user asks for it.";
@@ -14,10 +19,28 @@ function oneLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-/** `- name: description (model, thinking, tools)` per profile. */
-export function buildProfilesPrompt(cwd: string, scope: Scope): string {
+/** Profiles that can spawn agents, and why the others cannot. */
+export function profileCatalog(
+  cwd: string,
+  scope: Scope,
+  catalog: ModelCatalog | undefined,
+): { profiles: Profile[]; issues: string[] } {
   const { profiles, diagnostics } = discoverProfiles(cwd, scope);
-  if (profiles.length === 0 && diagnostics.length === 0) return "";
+  const usable: Profile[] = [];
+  const issues = diagnostics.map(
+    (diagnostic) => `${diagnostic.filePath}: ${oneLine(diagnostic.message)}`,
+  );
+  for (const profile of profiles) {
+    const problem = profileProblem(profile, cwd, scope, catalog);
+    if (problem) issues.push(`profile ${profile.name}: ${problem}`);
+    else usable.push(profile);
+  }
+  return { profiles: usable, issues };
+}
+
+/** `- name: description (model, thinking, tools)` per usable profile. */
+export function buildProfilesPrompt(profiles: readonly Profile[]): string {
+  if (profiles.length === 0) return "";
   const lines = profiles.map((profile) => {
     const settings = [
       profile.model,
@@ -27,10 +50,6 @@ export function buildProfilesPrompt(cwd: string, scope: Scope): string {
     const suffix = settings.length > 0 ? ` (${settings.join(", ")})` : "";
     return `- ${profile.name}: ${oneLine(profile.description)}${suffix}`;
   });
-  for (const diagnostic of diagnostics)
-    lines.push(
-      `- invalid ${diagnostic.filePath}: ${oneLine(diagnostic.message)}`,
-    );
   return ["<agent_profiles>", ...lines, "</agent_profiles>"].join("\n");
 }
 
@@ -98,14 +117,13 @@ export function buildModelsPrompt(
 }
 
 export function buildSystemPromptAppendix(
-  cwd: string,
-  scope: Scope,
+  profiles: readonly Profile[],
   catalog: ModelCatalog | undefined,
   notes: readonly ModelNoteRule[] = [],
 ): string {
   return [
     GUIDANCE,
-    buildProfilesPrompt(cwd, scope),
+    buildProfilesPrompt(profiles),
     catalog ? buildModelsPrompt(catalog, notes) : "",
   ]
     .filter(Boolean)

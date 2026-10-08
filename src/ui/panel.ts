@@ -6,7 +6,7 @@
  *
  * Unfocused, it shows the first few agents, working ones first. Left arrow
  * from an empty editor or Ctrl+Q focuses it (see focus.ts); then ↑↓ select,
- * ⏎ attaches, `s` stops, `x` closes, and Esc returns to the editor.
+ * ⏎ attaches, `s` stops, and Esc returns to the editor.
  */
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -28,7 +28,12 @@ const SUMMARY_MIN_DISPLAY_MS = 3000;
 /** Focused-panel height cap, as a fraction of the terminal. */
 const MAX_HEIGHT_RATIO = 0.6;
 
-const STATE_ORDER = { working: 0, failed: 1, stopped: 2, idle: 3 } as const;
+const STATE_ORDER = {
+  working: 0,
+  failed: 1,
+  interrupted: 2,
+  idle: 3,
+} as const;
 
 /** Open agents in panel order: working first, then newest first. */
 export function panelOrder(agents: readonly AgentInfo[]): AgentInfo[] {
@@ -215,9 +220,7 @@ export class AgentPanel {
       );
     if (agents.length > start + visible)
       lines.push(color("dim", `  …+${agents.length - start - visible} more`));
-    lines.push(
-      color("dim", "  ↑↓ move · ⏎ attach · s stop · x close · esc editor"),
-    );
+    lines.push(color("dim", "  ↑↓ move · ⏎ attach · s stop · esc editor"));
     return lines;
   }
 

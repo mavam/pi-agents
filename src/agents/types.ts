@@ -24,7 +24,7 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 }
 
 /** Derived from the agent's conversation; never stored. */
-export type AgentState = "working" | "idle" | "failed" | "stopped";
+export type AgentState = "working" | "idle" | "failed" | "interrupted";
 
 export interface ModelRef {
   provider: string;

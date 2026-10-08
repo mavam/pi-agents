@@ -13,7 +13,7 @@ import { buildModelCatalog, createModelRefresher } from "./catalog/models.js";
 import { registerCommands } from "./pi/commands.js";
 import { DeliveryManager } from "./pi/delivery.js";
 import { registerMessageRenderers } from "./pi/messages.js";
-import { buildSystemPromptAppendix } from "./pi/prompt.js";
+import { buildSystemPromptAppendix, profileCatalog } from "./pi/prompt.js";
 import { SessionHost } from "./pi/session.js";
 import { scopeOf } from "./pi/spawn.js";
 import { registerAgentTools } from "./pi/tools.js";
@@ -54,14 +54,24 @@ export default function agentExtension(pi: ExtensionAPI): void {
     delivery.setContext(ctx);
   };
 
+  // Profile problems are reported once per session, not on every turn.
+  const reported = new Set<string>();
   pi.on("before_agent_start", (event, ctx) => {
     track(ctx);
     refreshModels(ctx.modelRegistry);
     const scope = scopeOf(ctx);
+    const catalog = buildModelCatalog(ctx.modelRegistry);
+    const { profiles, issues } = profileCatalog(ctx.cwd, scope, catalog);
+    const fresh = issues.filter((issue) => !reported.has(issue));
+    for (const issue of fresh) reported.add(issue);
+    if (fresh.length > 0 && ctx.hasUI)
+      ctx.ui.notify(
+        `pi-agents ignores these profiles:\n${fresh.join("\n")}`,
+        "warning",
+      );
     const appendix = buildSystemPromptAppendix(
-      ctx.cwd,
-      scope,
-      buildModelCatalog(ctx.modelRegistry),
+      profiles,
+      catalog,
       loadModelNotes(ctx.cwd, scope !== "user"),
     );
     return { systemPrompt: `${event.systemPrompt}\n\n${appendix}` };

@@ -118,15 +118,15 @@ describe("AgentService", () => {
     expect(service.pendingDeliveries()).toEqual([]);
   });
 
-  test("stop aborts work without delivering", async () => {
+  test("interrupt aborts work without delivering", async () => {
     const { models } = createFaux((prompt) => `${prompt} `.repeat(400), {
       tokensPerSecond: 20,
     });
     const service = await open({ models });
     await service.spawn({ task: "long", name: "w", cwd: ".", model: MODEL });
     await until(() => service.get("w")?.state === "working");
-    await service.stop("w");
-    await until(() => service.get("w")?.state === "stopped");
+    await service.interrupt("w");
+    await until(() => service.get("w")?.state === "interrupted");
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(service.pendingDeliveries()).toEqual([]);
     expect(service.get("w")?.pendingRequests).toBe(0);
@@ -153,14 +153,14 @@ describe("AgentService", () => {
     ).rejects.toThrow("Invalid agent name");
   });
 
-  test("close stops and hides an agent and frees its name", async () => {
+  test("stop ends and hides an agent and frees its name", async () => {
     const { models } = createFaux((prompt) => `${prompt} `.repeat(400), {
       tokensPerSecond: 20,
     });
     const service = await open({ models });
     await service.spawn({ task: "x", name: "w", cwd: ".", model: MODEL });
     await until(() => service.get("w")?.state === "working");
-    await service.closeAgent("w");
+    await service.stop("w");
     expect(service.list().map((agent) => agent.name)).toEqual([]);
     expect(service.list({ includeClosed: true })).toHaveLength(1);
     expect(service.pendingDeliveries()).toEqual([]);

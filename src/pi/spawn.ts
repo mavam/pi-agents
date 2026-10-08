@@ -14,7 +14,11 @@ import {
   type SpawnSpec,
   type ThinkingLevel,
 } from "../agents/types.js";
-import { buildModelCatalog, resolveModelReference } from "../catalog/models.js";
+import {
+  buildModelCatalog,
+  type ModelCatalog,
+  resolveModelReference,
+} from "../catalog/models.js";
 import {
   discoverProfiles,
   findProfile,
@@ -120,6 +124,31 @@ function profileInstructions(
     ...(instructions ? { instructions } : {}),
     ambientSkills: profile.skills === undefined,
   };
+}
+
+/**
+ * Why a profile cannot spawn agents, if it cannot: an unknown model or a
+ * skill that does not resolve.
+ */
+export function profileProblem(
+  profile: Profile,
+  cwd: string,
+  scope: Scope,
+  catalog: ModelCatalog | undefined,
+): string | undefined {
+  if (profile.model && catalog) {
+    const resolved = resolveModelReference(profile.model, catalog);
+    if (!resolved.ok) return `unknown model ${profile.model}`;
+  }
+  if (profile.skills && profile.skills.length > 0) {
+    const { failures } = resolveSkills(
+      profile.skills,
+      discoverSkills(cwd, scope),
+    );
+    if (failures.length > 0)
+      return `unavailable skills: ${failures.map((failure) => failure.name).join(", ")}`;
+  }
+  return undefined;
 }
 
 export function resolveSpawn(

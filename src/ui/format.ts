@@ -23,7 +23,7 @@ export const STATE_STYLES = {
   working: { icon: "◉", color: "warning" },
   idle: { icon: "●", color: "success" },
   failed: { icon: "✗", color: "error" },
-  stopped: { icon: "⊘", color: "dim" },
+  interrupted: { icon: "⊘", color: "dim" },
 } as const satisfies Record<
   AgentState,
   { icon: string; color: Parameters<Colorize>[0] }

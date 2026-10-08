@@ -42,7 +42,7 @@ messages in your conversation.
 | Result | The agent's final message after a task or message. |
 | Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
 | Attach | Open an agent's conversation to watch it and talk to it. |
-| Close | Hide an agent from the panel. Agents close on their own once their answer reaches Pi. Messaging a closed agent opens it again. |
+| Stop | End an agent and remove it from the panel. Agents end on their own once their answer reaches Pi. Messaging an agent that ended starts it again. |
 
 An agent is in one of these states:
 
@@ -51,7 +51,7 @@ An agent is in one of these states:
 | ◉ `working` | The agent works on a task or message. |
 | ● `idle` | The agent answered and waits for messages. |
 | ✗ `failed` | The last answer ended with an error. |
-| ⊘ `stopped` | The last answer was stopped before it finished. |
+| ⊘ `interrupted` | The last answer was interrupted before it finished. |
 
 Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, and
 `ls`, along with your context files such as `AGENTS.md` and your skills. They
@@ -67,8 +67,8 @@ state, followed by the time in that state:
 ✗ docs · sol · 3m · 8.0k · $0.02 · rate limit exceeded
 ```
 
-An agent leaves the panel once its answer reaches Pi. Failed and stopped
-agents stay until you or Pi close them.
+An agent leaves the panel once its answer reaches Pi. Failed and interrupted
+agents stay until you or Pi stop them.
 
 Press ← in an empty editor or Ctrl+Q to focus the panel. Then:
 
@@ -76,8 +76,7 @@ Press ← in an empty editor or Ctrl+Q to focus the panel. Then:
 | --- | --- |
 | ↑ ↓ | Select an agent. |
 | ⏎ | Attach to the agent. |
-| `s` | Stop the agent's current work. |
-| `x` | Close the agent. Pi asks first when it still works. |
+| `s` | Stop the agent. Pi asks first when it still works. |
 | Esc | Return to the editor. |
 
 Attaching shows the agent's conversation with Pi's own message and tool
@@ -98,7 +97,7 @@ results don't post into the parent conversation.
 
 | Command | Action |
 | --- | --- |
-| `/agents` | Browse all agents, including closed ones, with their task and latest result. Attach, stop, or close them. |
+| `/agents` | Browse all agents, including ended ones, with their task and latest result. Attach to or stop them. |
 | `/agent <name>` | Attach to an agent. |
 
 ### Tools
@@ -109,13 +108,21 @@ Pi uses these tools to work with agents:
 | --- | --- |
 | `agent_spawn` | Start an agent on a task, optionally waiting for its result. |
 | `agent_send` | Message an agent: prompt, steer, or queue a follow-up. |
-| `agent_wait` | Wait for agents and return their results. |
+| `agent_wait` | Block until agents answer and return their results. |
 | `agent_status` | Show agent states. |
-| `agent_stop` | Stop an agent's current work. |
-| `agent_close` | Close an agent that is no longer needed. |
+| `agent_stop` | Stop an agent. |
 
-A result that a wait returns doesn't post again as a message. Cancelling a
-wait leaves the agents working.
+`agent_spawn` and `agent_send` can also block for the result: their `wait`
+argument sets the most seconds to wait. A result that a wait returns doesn't
+post again as a message. Cancelling a wait leaves the agents working.
+
+Each tool call shows the arguments Pi chose on a dim line below it:
+
+```text
+✦ spawn lister
+  profile=explorer thinking=low tools=read,ls wait=120s
+  List the files in src and summarize them.
+```
 
 ### Durability
 

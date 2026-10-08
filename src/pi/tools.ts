@@ -1,6 +1,6 @@
 /**
  * The parent model's tools: agent_spawn, agent_send, agent_wait,
- * agent_status, agent_stop, and agent_close.
+ * agent_status, and agent_stop.
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -56,7 +56,7 @@ export function describeAgent(info: AgentInfo): string {
   if (info.state === "working") return head;
   if (info.state === "failed")
     return `${head}\nError: ${result?.errorMessage ?? (result?.text || "unknown")}`;
-  if (info.state === "stopped")
+  if (info.state === "interrupted")
     return result?.text ? `${head}\n${truncateResult(result.text)}` : head;
   return `${head}\n${truncateResult(result?.text || "(empty)")}`;
 }
@@ -80,13 +80,64 @@ type Execute<T extends TSchema> = (
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
 ) => Promise<{ content: string; details: AgentToolDetails }>;
 
+/** How a call renders: a title, the explicit arguments, and a body. */
+export interface CallView {
+  title: string;
+  pairs?: Record<string, unknown>;
+  body?: string;
+}
+
 interface AgentToolSpec<T extends TSchema> {
   name: string;
   label: string;
   description: string;
   parameters: T;
-  call: (args: Static<T>, color: Colorize) => string;
+  call: (args: Static<T>) => CallView;
   execute: Execute<T>;
+}
+
+function pairValue(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (Array.isArray(value)) return value.map(String).join(",");
+  if (typeof value === "string")
+    return /^[\w./:@+,-]+$/.test(value) ? value : JSON.stringify(value);
+  return String(value);
+}
+
+/** `key=value` pairs of the arguments the model set, in order. */
+export function formatPairs(pairs: Record<string, unknown> = {}): string {
+  return Object.entries(pairs)
+    .flatMap(([key, value]) => {
+      const formatted = pairValue(value);
+      return formatted === undefined ? [] : [`${key}=${formatted}`];
+    })
+    .join(" ");
+}
+
+/** Title line, a dim line of explicit arguments, then the body. */
+export function formatCall(
+  label: string,
+  view: CallView,
+  expanded: boolean,
+  color: Colorize,
+  bold: (text: string) => string = (text) => text,
+): string {
+  const lines = [`${color("accent", AGENT_ICON)} ${bold(label)} ${view.title}`];
+  const pairs = formatPairs(view.pairs);
+  if (pairs) lines.push(color("dim", `  ${pairs}`));
+  if (view.body)
+    lines.push(
+      color(
+        "muted",
+        expanded
+          ? view.body
+              .split("\n")
+              .map((line) => `  ${line}`)
+              .join("\n")
+          : `  ${oneLine(view.body, 160)}`,
+      ),
+    );
+  return lines.join("\n");
 }
 
 function renderDetails(
@@ -139,10 +190,16 @@ function defineAgentTool<T extends TSchema>(
         throw error;
       }
     },
-    renderCall(args, theme: Theme) {
+    renderCall(args, theme: Theme, context) {
       const color: Colorize = (name, value) => theme.fg(name, value);
       return new Text(
-        `${color("accent", AGENT_ICON)} ${theme.bold(spec.label)} ${spec.call(args as Static<T>, color)}`,
+        formatCall(
+          spec.label,
+          spec.call(args as Static<T>),
+          context.expanded,
+          color,
+          (value) => theme.bold(value),
+        ),
         0,
         0,
       );
@@ -208,9 +265,10 @@ async function waitWithProgress(
   }
 }
 
-const timeoutParam = Type.Optional(
+const waitParam = Type.Optional(
   Type.Number({
-    description: "Seconds to wait at most",
+    description:
+      "Block until the agent answers, at most this many seconds, and return its result",
     minimum: 1,
   }),
 );
@@ -222,15 +280,11 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         "Self-contained task; the agent does not see this conversation",
     }),
     name: Type.Optional(
-      Type.String({
-        description: "Unique short name, such as a role",
-      }),
+      Type.String({ description: "Short name, such as a role" }),
     ),
     profile: Type.Optional(Type.String({ description: "Profile name" })),
     model: Type.Optional(
-      Type.String({
-        description: "Model as provider/id or id",
-      }),
+      Type.String({ description: "Model as provider/id or id" }),
     ),
     thinking: Type.Optional(
       StringEnum(THINKING_LEVELS, { description: "Thinking level" }),
@@ -241,30 +295,35 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       }),
     ),
     cwd: Type.Optional(Type.String({ description: "Working directory" })),
-    wait: Type.Optional(
-      Type.Boolean({
-        description: "Wait for the result",
-      }),
-    ),
-    timeout: timeoutParam,
+    wait: waitParam,
   });
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_spawn",
       label: "spawn",
       description:
-        "Start an agent on a task. Its final message is its result, which arrives as a message unless you wait for it.",
+        "Start an agent on a task. Its final message is its result, which arrives later as a message. Set wait to block for the result instead.",
       parameters: spawnParams,
-      call: (args, color) =>
-        `${args.name ?? args.profile ?? "agent"}${args.profile && args.name ? color("dim", ` · ${args.profile}`) : ""}${args.task ? color("dim", `\n  ${oneLine(args.task, 160)}`) : ""}`,
+      call: (args) => ({
+        title: args.name ?? "agent",
+        pairs: {
+          profile: args.profile,
+          model: args.model,
+          thinking: args.thinking,
+          tools: args.tools,
+          cwd: args.cwd,
+          wait: args.wait === undefined ? undefined : `${args.wait}s`,
+        },
+        body: args.task,
+      }),
       async execute(service, params, ctx, signal, onUpdate) {
         const spec = resolveSpawn(params, ctx, pi.getThinkingLevel());
         const info = await service.spawn(spec);
-        if (params.wait)
+        if (params.wait !== undefined)
           return waitWithProgress(
             service,
             [info.name],
-            params.timeout,
+            params.wait,
             signal,
             onUpdate,
           );
@@ -278,24 +337,29 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
 
   const sendParams = Type.Object({
     name: Type.String({ description: "Agent name" }),
-    message: Type.String({ description: "Message" }),
+    message: Type.String(),
     followUp: Type.Optional(
       Type.Boolean({
         description: "Queue after the current answer instead of steering",
       }),
     ),
-    wait: Type.Optional(Type.Boolean({ description: "Wait for the result" })),
-    timeout: timeoutParam,
+    wait: waitParam,
   });
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_send",
       label: "send",
       description:
-        "Send a message to an agent, also one that already answered. A working agent receives it as steering. Its answer arrives as a message unless you wait for it.",
+        "Send a message to an agent, also one that answered or was stopped. A working agent receives it as steering. The answer arrives later as a message. Set wait to block for it instead.",
       parameters: sendParams,
-      call: (args, color) =>
-        `${args.name}${color("dim", `\n  ${oneLine(args.message ?? "", 160)}`)}`,
+      call: (args) => ({
+        title: args.name ?? "",
+        pairs: {
+          followUp: args.followUp,
+          wait: args.wait === undefined ? undefined : `${args.wait}s`,
+        },
+        body: args.message,
+      }),
       async execute(service, params, _ctx, signal, onUpdate) {
         const before = service.get(params.name);
         await service.send(
@@ -303,11 +367,11 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
           params.message,
           params.followUp ? "followUp" : "auto",
         );
-        if (params.wait)
+        if (params.wait !== undefined)
           return waitWithProgress(
             service,
             [params.name],
-            params.timeout,
+            params.wait,
             signal,
             onUpdate,
           );
@@ -329,17 +393,27 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   const waitParams = Type.Object({
     names: Type.Array(Type.String(), {
       minItems: 1,
-      description: "Agents to wait for",
+      description: "Agent names",
     }),
-    timeout: timeoutParam,
+    timeout: Type.Optional(
+      Type.Number({
+        description: "Give up after this many seconds",
+        minimum: 1,
+      }),
+    ),
   });
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_wait",
       label: "wait",
-      description: "Wait for agents to finish and return their results.",
+      description: "Block until agents answer and return their results.",
       parameters: waitParams,
-      call: (args) => (args.names ?? []).join(", "),
+      call: (args) => ({
+        title: (args.names ?? []).join(", "),
+        pairs: {
+          timeout: args.timeout === undefined ? undefined : `${args.timeout}s`,
+        },
+      }),
       execute: (service, params, _ctx, signal, onUpdate) =>
         waitWithProgress(
           service,
@@ -362,7 +436,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       label: "status",
       description: "List agents with their state and task.",
       parameters: statusParams,
-      call: (args) => args.name ?? "all",
+      call: (args) => ({ title: args.name ?? "all" }),
       async execute(service, params) {
         const agents = params.name
           ? [service.get(params.name)].filter(
@@ -382,39 +456,22 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     }),
   );
 
-  const nameParams = Type.Object({
-    name: Type.String({ description: "Agent name" }),
-  });
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_stop",
       label: "stop",
-      description: "Stop an agent's current work. The agent stays available.",
-      parameters: nameParams,
-      call: (args) => args.name,
+      description:
+        "Stop an agent: end its work and remove it. Messaging it later starts it again.",
+      parameters: Type.Object({
+        name: Type.String({ description: "Agent name" }),
+      }),
+      call: (args) => ({ title: args.name ?? "" }),
       async execute(service, params) {
         await service.stop(params.name);
         const info = service.get(params.name) as AgentInfo;
         return {
           content: `Stopped ${info.name}.`,
           details: { at: Date.now(), agents: [info] },
-        };
-      },
-    }),
-  );
-  pi.registerTool(
-    defineAgentTool(host, {
-      name: "agent_close",
-      label: "close",
-      description: "Close an agent you no longer need.",
-      parameters: nameParams,
-      call: (args) => args.name,
-      async execute(service, params) {
-        const info = service.get(params.name);
-        await service.closeAgent(params.name);
-        return {
-          content: `Closed ${info?.name ?? params.name}.`,
-          details: { at: Date.now(), agents: [] },
         };
       },
     }),

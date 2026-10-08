@@ -466,7 +466,7 @@ export class AgentPane implements Component {
     this.interrupting = true;
     const queued = queuedTexts(inboxOf(this.view));
     void this.options.service
-      .stop(this.options.agentId)
+      .interrupt(this.options.agentId)
       .then(() => {
         if (queued.length === 0 || this.disposed) return;
         this.editor.setText(restoredEditorText(queued, this.editor.getText()));

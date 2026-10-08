@@ -7,6 +7,7 @@ import { resultContent } from "../../src/pi/messages.js";
 import {
   buildModelsPrompt,
   buildSystemPromptAppendix,
+  newestModels,
   profileCatalog,
 } from "../../src/pi/prompt.js";
 import { FitLines, formatCall, formatPairs } from "../../src/pi/tools.js";
@@ -51,7 +52,7 @@ describe("system prompt appendix", () => {
         "<agent_profiles>",
         "- scout: Finds code (thinking low)",
         "</agent_profiles>",
-        '<agent_models note="$ to $$$: price tier">',
+        '<agent_models note="newest model per family; any older ID also works when the user names a version; $ to $$$: price tier">',
         "openai: gpt ($)",
         "</agent_models>",
       ].join("\n"),
@@ -63,13 +64,13 @@ describe("system prompt appendix", () => {
 
   test("model lists drop annotations to fit the budget", () => {
     const models = Array.from({ length: 300 }, (_, index) => ({
-      id: `model-${index}`,
+      id: `model${index}`,
       costOut: 20,
     }));
     const prompt = buildModelsPrompt({
       providers: [{ id: "p", subscription: false, models }],
     });
-    expect(prompt).toContain("model-299");
+    expect(prompt).toContain("model299");
     expect(prompt).not.toContain("$$$");
   });
 });
@@ -126,5 +127,30 @@ describe("call rendering", () => {
       .map((line) => stripVTControlCharacters(line));
     expect(plain).toEqual(["✦ spawn lister", "  List every file i…"]);
     expect(new FitLines(text, true).render(20).length).toBeGreaterThan(2);
+  });
+});
+
+describe("model families", () => {
+  test("the prompt lists only the newest model of each family", () => {
+    const ids = [
+      "claude-haiku-4-5",
+      "claude-haiku-4-5-20251001",
+      "claude-sonnet-4-5-20250929",
+      "claude-sonnet-4-6",
+      "claude-sonnet-5",
+      "claude-sonnet-5-5",
+      "gpt-5.6-sol",
+      "gpt-6.1-sol",
+      "gpt-6-sol",
+      "gpt-6-luna",
+    ];
+    expect(
+      newestModels(ids.map((id) => ({ id }))).map((model) => model.id),
+    ).toEqual([
+      "claude-haiku-4-5",
+      "claude-sonnet-5-5",
+      "gpt-6.1-sol",
+      "gpt-6-luna",
+    ]);
   });
 });

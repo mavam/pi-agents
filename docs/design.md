@@ -112,7 +112,10 @@ never lose one. On session resume, unacknowledged settled requests deliver.
 
 The system prompt adds one line of guidance, the usable profiles, and the
 user's scoped models (`ctx.scopedModels`, from `/scoped-models` or `--models`)
-so the parent recognizes model names. It lists no other models. The `model` argument and profile models resolve like `pi --model`
+so the parent recognizes model names. Profiles and models are XML elements
+whose attributes carry details: a model's ID, name, context window, cost per
+million input/output tokens, and pinned thinking level. It lists no other
+models. The `model` argument and profile models resolve like `pi --model`
 patterns among models with credentials: exact `provider/id` or `id` first,
 then the newest alias that partially matches. Choosing models per task is left to a future model router. Profiles
 with an unavailable model or unresolvable skills stay

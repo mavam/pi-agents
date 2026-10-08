@@ -42,20 +42,32 @@ describe("system prompt appendix", () => {
       [
         "Delegate work to agents with the agent_* tools when the user asks for it.",
         "<agent_profiles>",
-        "- scout: Finds code (thinking low)",
+        '  <profile name="scout" thinking="low">Finds code</profile>',
         "</agent_profiles>",
       ].join("\n"),
     );
     expect(
       buildSystemPromptAppendix([], [
-        { provider: "anthropic", id: "claude-sonnet-5-5" },
-        { provider: "openai-codex", id: "gpt-6.1-sol" },
+        {
+          model: {
+            provider: "anthropic",
+            id: "claude-sonnet-5-5",
+            name: "Claude Sonnet 5.5",
+            contextWindow: 1_000_000,
+            cost: { input: 2, output: 10 },
+          },
+        },
+        {
+          model: { provider: "openai-codex", id: "gpt-6.1-sol" },
+          thinkingLevel: "high",
+        },
       ] as never),
     ).toBe(
       [
         "Delegate work to agents with the agent_* tools when the user asks for it.",
-        "<agent_models>",
-        "anthropic/claude-sonnet-5-5, openai-codex/gpt-6.1-sol",
+        '<agent_models note="cost in USD per million input/output tokens">',
+        '  <model id="anthropic/claude-sonnet-5-5" name="Claude Sonnet 5.5" context="1M" cost="2/10"/>',
+        '  <model id="openai-codex/gpt-6.1-sol" thinking="high"/>',
         "</agent_models>",
       ].join("\n"),
     );

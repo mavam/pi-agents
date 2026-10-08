@@ -38,6 +38,7 @@ import {
 } from "./messages.js";
 import type { SessionHost } from "./session.js";
 import { resolveSpawn } from "./spawn.js";
+import { SteerWatch } from "./steering.js";
 
 const PROGRESS_MS = 1_000;
 
@@ -292,9 +293,13 @@ function defineAgentTool<T extends TSchema>(
   };
 }
 
-/** Wait for agents, streaming their lines as progress. */
+/**
+ * Wait for agents, streaming their lines as progress. A steer from the user
+ * ends the wait, so Pi can place it instead of holding it back.
+ */
 async function waitWithProgress(
   service: AgentService,
+  steering: SteerWatch,
   names: string[],
   timeoutSeconds: number | undefined,
   signal: AbortSignal | undefined,
@@ -324,9 +329,10 @@ async function waitWithProgress(
   };
   progress();
   const timer = setInterval(progress, PROGRESS_MS);
+  const steer = steering.open();
   try {
     const outcome = await service.wait(names, {
-      ...(signal ? { signal } : {}),
+      signal: signal ? AbortSignal.any([signal, steer.signal]) : steer.signal,
       ...(timeoutSeconds !== undefined
         ? { timeoutMs: timeoutSeconds * 1000 }
         : {}),
@@ -348,21 +354,27 @@ async function waitWithProgress(
       },
     };
   } catch (error) {
-    if (signal?.aborted) {
+    const steered = steer.signal.aborted && !signal?.aborted;
+    if (steered || signal?.aborted) {
       const { groups, agents } = snapshot();
       return {
-        content: "Stopped waiting. The agents keep working.",
+        content: steered
+          ? "Stopped waiting because the user sent a message. The agents keep working; their results arrive as messages."
+          : "Stopped waiting. The agents keep working.",
         details: {
           at: Date.now(),
           agents,
           ...(groups.length > 0 ? { groups } : {}),
-          message: "Stopped waiting",
+          message: steered
+            ? "Stopped waiting for your message"
+            : "Stopped waiting",
         },
       };
     }
     throw error;
   } finally {
     clearInterval(timer);
+    steer.release();
   }
 }
 
@@ -421,7 +433,11 @@ function describeTarget(service: AgentService, target: Target): string {
     : statusLine(service, target.info);
 }
 
-export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
+export function registerAgentTools(
+  pi: ExtensionAPI,
+  host: SessionHost,
+  steering: SteerWatch = new SteerWatch(),
+): void {
   const spawnParams = Type.Object({ ...agentFields, wait: waitParam });
   pi.registerTool(
     defineAgentTool(host, {
@@ -444,6 +460,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         if (params.wait !== undefined)
           return waitWithProgress(
             service,
+            steering,
             [info.name],
             params.wait,
             signal,
@@ -517,6 +534,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         if (params.wait !== undefined)
           return waitWithProgress(
             service,
+            steering,
             [group.name],
             params.wait,
             signal,
@@ -569,6 +587,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         if (params.wait !== undefined)
           return waitWithProgress(
             service,
+            steering,
             [params.name],
             params.wait,
             signal,
@@ -617,6 +636,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       execute: (service, params, _ctx, signal, onUpdate) =>
         waitWithProgress(
           service,
+          steering,
           params.names,
           params.timeout,
           signal,

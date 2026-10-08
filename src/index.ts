@@ -14,6 +14,7 @@ import { registerMessageRenderers } from "./pi/messages.js";
 import { buildSystemPromptAppendix, profileCatalog } from "./pi/prompt.js";
 import { SessionHost } from "./pi/session.js";
 import { scopeOf } from "./pi/spawn.js";
+import { SteerWatch } from "./pi/steering.js";
 import { registerAgentTools } from "./pi/tools.js";
 import { FocusController } from "./ui/focus.js";
 import { FancyFooterReporter } from "./ui/footer.js";
@@ -39,7 +40,13 @@ export default function agentExtension(pi: ExtensionAPI): void {
   });
 
   registerMessageRenderers(pi);
-  registerAgentTools(pi, host);
+  // A steer ends waits for agents, so Pi doesn't hold it back.
+  const steering = new SteerWatch();
+  pi.on("input", (event) => {
+    if (event.streamingBehavior === "steer") steering.steer();
+    return { action: "continue" };
+  });
+  registerAgentTools(pi, host, steering);
   registerCommands(pi, { host, panel, focus });
   pi.registerShortcut("ctrl+q", {
     description: "Focus the pi-agents panel",

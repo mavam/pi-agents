@@ -239,39 +239,8 @@ provider, and `*` is the only wildcard. The match with the longest literal
 prefix wins. A trusted project's `.pi/pi-agents.json` wins ties with your
 user configuration.
 
-### Project trust
-
-Pi-agents follows Pi's project-trust decision. Until you trust a project,
-project profiles, project configuration, context files, and project skills
-stay unavailable to agents.
-
 ### Footer counters
 
 With [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) installed,
 pi-agents can show open agents by state, such as `✦ 2◉ 1●`. Enable the
 `agents` widget through `/fancy-footer`.
-
-## 🧰 Requirements
-
-Pi-agents follows the latest Pi release. Keep Pi updated:
-
-```sh
-pi update pi
-```
-
-## 🩺 Troubleshooting
-
-- If agents report that another Pi process owns them, close the other Pi
-  instance of the same session.
-- Open `/agents` to read an agent's task and latest result, and attach to
-  read its full conversation.
-
-## 🧹 Uninstall
-
-```sh
-pi remove npm:pi-agents
-```
-
-## 📄 License
-
-Apache-2.0

@@ -1,0 +1,17 @@
+---
+title: Rewrite pi-agents on pi-durable
+type: breaking
+authors:
+  - mavam
+prs:
+  - 69
+created: 2026-10-08T11:31:47.73178Z
+---
+
+Pi-agents is a rewrite: it now gives Pi durable, named agents instead of workflows, and runs them inside your Pi process on [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable). Every agent step is checkpointed, so agents survive crashes and restarts. When you resume a session, interrupted agents continue and results that haven't arrived yet post into your conversation.
+
+Ask Pi to delegate, and it works with agents through `agent_spawn`, `agent_send`, `agent_wait`, `agent_status`, and `agent_stop`. An agent's result is its final message. Results that Pi doesn't wait for arrive later as messages, and agents leave the panel once their answer reaches Pi.
+
+A panel above the editor shows working, failed, and interrupted agents. Attach to any agent to watch its conversation live, steer it, or keep talking to it, including agents that already finished: `/agents` lists every agent and `/agent <name>` attaches directly.
+
+The workflow language, saved and event-triggered workflows, `/workflow` and `/workflows`, budgets, and the `pi-agents/api` extension client are gone. Agent profiles in `.pi/agents` keep working, and model notes move from `workflows.json` to `pi-agents.json`. Agents use Pi's built-in tools but not yet MCP servers or tools from other extensions.

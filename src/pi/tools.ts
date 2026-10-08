@@ -306,7 +306,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     ),
     profile: Type.Optional(Type.String({ description: "Profile name" })),
     model: Type.Optional(
-      Type.String({ description: "Model, such as sonnet or gpt-6.1-sol" }),
+      Type.String({ description: "Model, such as sonnet or opus" }),
     ),
     thinking: Type.Optional(
       StringEnum(THINKING_LEVELS, { description: "Thinking level" }),

@@ -6,6 +6,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   AgentError,
@@ -14,11 +15,7 @@ import {
   type SpawnSpec,
   type ThinkingLevel,
 } from "../agents/types.js";
-import {
-  buildModelCatalog,
-  type ModelCatalog,
-  resolveModelReference,
-} from "../catalog/models.js";
+import { resolveModelPattern } from "../catalog/models.js";
 import {
   discoverProfiles,
   findProfile,
@@ -44,22 +41,23 @@ export function scopeOf(ctx: ExtensionContext): Scope {
 }
 
 function resolveModel(
-  ref: string | undefined,
+  pattern: string | undefined,
   ctx: ExtensionContext,
-): ModelRef | undefined {
-  if (ref === undefined) {
+): { model?: ModelRef; thinking?: ThinkingLevel } {
+  if (pattern === undefined) {
     const model = ctx.model;
-    return model ? { provider: model.provider, modelId: model.id } : undefined;
+    return model
+      ? { model: { provider: model.provider, modelId: model.id } }
+      : {};
   }
-  const resolved = resolveModelReference(
-    ref,
-    buildModelCatalog(ctx.modelRegistry),
+  const resolved = resolveModelPattern(
+    pattern,
+    ctx.modelRegistry.getAvailable(),
   );
   if (!resolved.ok) throw new AgentError(resolved.message);
-  const slash = resolved.model.indexOf("/");
   return {
-    provider: resolved.model.slice(0, slash),
-    modelId: resolved.model.slice(slash + 1),
+    model: { provider: resolved.provider, modelId: resolved.modelId },
+    ...(resolved.thinking ? { thinking: resolved.thinking } : {}),
   };
 }
 
@@ -123,12 +121,10 @@ export function profileProblem(
   profile: Profile,
   cwd: string,
   scope: Scope,
-  catalog: ModelCatalog | undefined,
+  models: readonly Model<Api>[],
 ): string | undefined {
-  if (profile.model && catalog) {
-    const resolved = resolveModelReference(profile.model, catalog);
-    if (!resolved.ok) return `unknown model ${profile.model}`;
-  }
+  if (profile.model && !resolveModelPattern(profile.model, models).ok)
+    return `no available model matches ${profile.model}`;
   if (profile.skills && profile.skills.length > 0) {
     const { missing } = loadSkills(profile.skills, cwd, scope);
     if (missing.length > 0) return `unavailable skills: ${missing.join(", ")}`;
@@ -144,10 +140,15 @@ export function resolveSpawn(
   const scope = scopeOf(ctx);
   const cwd = resolveCwd(ctx.cwd, request.cwd);
   const profile = resolveProfile(request.profile, cwd, scope);
-  const thinking = request.thinking ?? profile?.thinking ?? parentThinking;
+  const resolved = resolveModel(request.model ?? profile?.model, ctx);
+  const model = resolved.model;
+  const thinking =
+    request.thinking ??
+    resolved.thinking ??
+    profile?.thinking ??
+    parentThinking;
   if (thinking !== undefined && !isThinkingLevel(thinking))
     throw new AgentError(`Invalid thinking level: ${thinking}`);
-  const model = resolveModel(request.model ?? profile?.model, ctx);
   const tools = request.tools ?? profile?.tools;
   const { instructions, ambientSkills } = profileInstructions(
     profile,

@@ -21,7 +21,6 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 export type ResourceKind = "agents" | "skills";
 
 const CONFIG_DIR = ".pi";
-const CONFIG_FILE = "pi-agents.json";
 
 /**
  * The second skills convention pi honors, alongside `.pi/skills`: `.agents`
@@ -43,7 +42,7 @@ function isDirectory(p: string): boolean {
  * PI_CODING_AGENT_DIR pointing at a `.pi` directory, user resources would
  * otherwise masquerade as project ones.
  */
-export function findProjectRoot(cwd: string): string | null {
+function findProjectRoot(cwd: string): string | null {
   const agentDir = path.resolve(getAgentDir());
   let dir = path.resolve(cwd);
   while (true) {
@@ -64,16 +63,6 @@ function projectResourceDir(root: string, kind: ResourceKind): string {
 /** `<agentDir>/<kind>` — the user-scope location for a resource kind. */
 export function userResourceDir(kind: ResourceKind): string {
   return path.join(getAgentDir(), kind);
-}
-
-/** `<agentDir>/pi-agents.json`: user-scoped configuration. */
-export function userConfigFile(): string {
-  return path.join(getAgentDir(), CONFIG_FILE);
-}
-
-/** `<root>/.pi/pi-agents.json`: project-scoped configuration. */
-export function projectConfigFile(root: string): string {
-  return path.join(root, CONFIG_DIR, CONFIG_FILE);
 }
 
 /**

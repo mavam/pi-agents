@@ -5,15 +5,13 @@ import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { resultContent } from "../../src/pi/messages.js";
 import {
-  buildModelsPrompt,
   buildSystemPromptAppendix,
-  newestModels,
   profileCatalog,
 } from "../../src/pi/prompt.js";
 import { FitLines, formatCall, formatPairs } from "../../src/pi/tools.js";
 
 describe("system prompt appendix", () => {
-  test("lists guidance, profiles, and models", () => {
+  test("lists guidance and usable profiles", () => {
     const project = fs.mkdtempSync(
       path.join(os.tmpdir(), "pi-agents-project-"),
     );
@@ -22,15 +20,9 @@ describe("system prompt appendix", () => {
       path.join(project, ".pi", "agents", "scout.md"),
       "---\nname: scout\ndescription: Finds code\nthinking: low\n---\nBe fast.\n",
     );
-    const catalog = {
-      providers: [
-        {
-          id: "openai",
-          subscription: true,
-          models: [{ id: "gpt", costOut: 1 }],
-        },
-      ],
-    };
+    const models = [
+      { provider: "openai", id: "gpt", name: "GPT" },
+    ] as unknown as Parameters<typeof profileCatalog>[2];
     fs.writeFileSync(
       path.join(project, ".pi", "agents", "broken.md"),
       "---\nname: broken\ndescription: Broken\nskills: [missing]\n---\n",
@@ -39,39 +31,24 @@ describe("system prompt appendix", () => {
       path.join(project, ".pi", "agents", "offline.md"),
       "---\nname: offline\ndescription: Offline\nmodel: nope/x\n---\n",
     );
-    const { profiles, issues } = profileCatalog(project, "both", catalog);
+    const { profiles, issues } = profileCatalog(project, "both", models);
     expect(profiles.map((profile) => profile.name)).toEqual(["scout"]);
     expect(issues).toEqual([
       "profile broken: unavailable skills: missing (unknown)",
-      "profile offline: unknown model nope/x",
+      "profile offline: no available model matches nope/x",
     ]);
-    const appendix = buildSystemPromptAppendix(profiles, catalog);
+    const appendix = buildSystemPromptAppendix(profiles);
     expect(appendix).toBe(
       [
         "Delegate work to agents with the agent_* tools, but only when the user asks for it.",
         "<agent_profiles>",
         "- scout: Finds code (thinking low)",
         "</agent_profiles>",
-        '<agent_models note="newest model per family; any older ID also works when the user names a version; $ to $$$: price tier">',
-        "openai: gpt ($)",
-        "</agent_models>",
       ].join("\n"),
     );
-    expect(buildSystemPromptAppendix([], undefined)).toBe(
+    expect(buildSystemPromptAppendix([])).toBe(
       "Delegate work to agents with the agent_* tools, but only when the user asks for it.",
     );
-  });
-
-  test("model lists drop annotations to fit the budget", () => {
-    const models = Array.from({ length: 300 }, (_, index) => ({
-      id: `model${index}`,
-      costOut: 20,
-    }));
-    const prompt = buildModelsPrompt({
-      providers: [{ id: "p", subscription: false, models }],
-    });
-    expect(prompt).toContain("model299");
-    expect(prompt).not.toContain("$$$");
   });
 });
 
@@ -127,30 +104,5 @@ describe("call rendering", () => {
       .map((line) => stripVTControlCharacters(line));
     expect(plain).toEqual(["✦ spawn lister", "  List every file i…"]);
     expect(new FitLines(text, true).render(20).length).toBeGreaterThan(2);
-  });
-});
-
-describe("model families", () => {
-  test("the prompt lists only the newest model of each family", () => {
-    const ids = [
-      "claude-haiku-4-5",
-      "claude-haiku-4-5-20251001",
-      "claude-sonnet-4-5-20250929",
-      "claude-sonnet-4-6",
-      "claude-sonnet-5",
-      "claude-sonnet-5-5",
-      "gpt-5.6-sol",
-      "gpt-6.1-sol",
-      "gpt-6-sol",
-      "gpt-6-luna",
-    ];
-    expect(
-      newestModels(ids.map((id) => ({ id }))).map((model) => model.id),
-    ).toEqual([
-      "claude-haiku-4-5",
-      "claude-sonnet-5-5",
-      "gpt-6.1-sol",
-      "gpt-6-luna",
-    ]);
   });
 });

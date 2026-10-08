@@ -306,7 +306,10 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     ),
     profile: Type.Optional(Type.String({ description: "Profile name" })),
     model: Type.Optional(
-      Type.String({ description: "Model as provider/id or id" }),
+      Type.String({
+        description:
+          "Model pattern as for pi --model, such as sonnet or openai-codex/gpt-6.1-sol; a :<thinking> suffix sets the thinking level. Defaults to this session's model. pi --list-models lists models.",
+      }),
     ),
     thinking: Type.Optional(
       StringEnum(THINKING_LEVELS, { description: "Thinking level" }),

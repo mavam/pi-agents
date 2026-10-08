@@ -226,25 +226,13 @@ name.
 
 ## ⚙️ Configuration
 
-### Model guidance
+### Models
 
-Pi sees the models available to agents, each marked with a price tier from
-`$` to `$$$`. Add notes about what models are good for in
-`~/.pi/agent/pi-agents.json`:
-
-```json
-{
-  "models": {
-    "google/gemini-*-flash*": "fast triage, summaries, extraction",
-    "claude-opus-*": "planning and final review"
-  }
-}
-```
-
-Patterns match provider-qualified model IDs. A pattern without `/` matches any
-provider, and `*` is the only wildcard. The match with the longest literal
-prefix wins. A trusted project's `.pi/pi-agents.json` wins ties with your
-user configuration.
+An agent runs on your session's model unless Pi or a profile picks another.
+Models resolve like `pi --model`: `sonnet` picks the newest Sonnet you have
+credentials for, an exact ID such as `claude-sonnet-4-6` picks that version,
+and a suffix such as `sonnet:high` sets the thinking level. Run
+`pi --list-models` to see what's available.
 
 ### Footer counters
 

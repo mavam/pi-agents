@@ -102,7 +102,7 @@ describe("resolveSpawn", () => {
     ).toThrow("missing (unknown)");
     expect(() =>
       resolveSpawn({ task: "x", model: "nope" }, context(cwd), undefined),
-    ).toThrow("unknown model 'nope'");
+    ).toThrow("No available model matches");
     expect(() =>
       resolveSpawn({ task: "x", cwd: "missing" }, context(cwd), undefined),
     ).toThrow("Working directory not found");

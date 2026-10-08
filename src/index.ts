@@ -8,8 +8,6 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadModelNotes } from "./catalog/config.js";
-import { buildModelCatalog, createModelRefresher } from "./catalog/models.js";
 import { registerCommands } from "./pi/commands.js";
 import { DeliveryManager } from "./pi/delivery.js";
 import { registerMessageRenderers } from "./pi/messages.js";
@@ -30,7 +28,6 @@ export default function agentExtension(pi: ExtensionAPI): void {
     pi,
     () => host.current()?.list() ?? [],
   );
-  const refreshModels = createModelRefresher();
 
   // While the user is attached to an agent, nothing wakes the parent.
   delivery.setBlocked(() => focus.isPaneOpen());
@@ -58,10 +55,12 @@ export default function agentExtension(pi: ExtensionAPI): void {
   const reported = new Set<string>();
   pi.on("before_agent_start", (event, ctx) => {
     track(ctx);
-    refreshModels(ctx.modelRegistry);
     const scope = scopeOf(ctx);
-    const catalog = buildModelCatalog(ctx.modelRegistry);
-    const { profiles, issues } = profileCatalog(ctx.cwd, scope, catalog);
+    const { profiles, issues } = profileCatalog(
+      ctx.cwd,
+      scope,
+      ctx.modelRegistry.getAvailable(),
+    );
     const fresh = issues.filter((issue) => !reported.has(issue));
     for (const issue of fresh) reported.add(issue);
     if (fresh.length > 0 && ctx.hasUI)
@@ -69,17 +68,12 @@ export default function agentExtension(pi: ExtensionAPI): void {
         `pi-agents ignores these profiles:\n${fresh.join("\n")}`,
         "warning",
       );
-    const appendix = buildSystemPromptAppendix(
-      profiles,
-      catalog,
-      loadModelNotes(ctx.cwd, scope !== "user"),
-    );
+    const appendix = buildSystemPromptAppendix(profiles);
     return { systemPrompt: `${event.systemPrompt}\n\n${appendix}` };
   });
 
   pi.on("session_start", async (_event, ctx) => {
     track(ctx);
-    refreshModels(ctx.modelRegistry);
     focus.install(ctx);
     panel.update(ctx);
     await host.start(ctx);

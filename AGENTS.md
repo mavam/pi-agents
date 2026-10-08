@@ -1,6 +1,7 @@
 # pi-agents
 
-`pi-agents` is a pi extension for explicit, composable multi-agent workflows.
+`pi-agents` is a pi extension for durable, named agents built on pi-durable.
+See `docs/design.md` for the design and core abstractions.
 
 ## Setup
 
@@ -16,9 +17,11 @@ manually.
 ## Development
 
 - Use Bun as the runtime and package manager.
-- Keep `README.md` and bundled workflow examples in sync with user-facing
-  changes.
-- Add or update tests when changing the workflow algebra or runtime behavior.
+- Keep `README.md` and `docs/design.md` in sync with user-facing changes.
+- Add or update tests when changing agent behavior, delivery, or the UI
+  formatting.
+- Only `src/host`, `src/agents`, and the attach view (`src/ui/attach.ts`) may
+  import pi-durable; everything else goes through `AgentService`.
 
 ## Release engineering
 

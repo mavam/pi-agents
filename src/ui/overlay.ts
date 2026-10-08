@@ -1,19 +1,18 @@
 /**
- * Interactive split-pane panel for /workflows and /agents: a keyboard-
- * navigable table on top, the selected item's flow tree in a detail pane
- * below. One generic component; the commands supply an OverlaySpec.
+ * Interactive split-pane panel for /agents: a keyboard-navigable table on top
+ * and the selected item's details below. One generic component; commands
+ * supply an OverlaySpec.
  *
- * The panel replaces the composer in the editor slot (like pi's /settings and
+ * The panel replaces the composer in the editor slot (like Pi's /settings and
  * /model selectors) rather than floating over the transcript, so it opens next
  * to where the user is looking.
  *
- *   ╭─ Runs · /triage (2/4) ─────────────────────────────╮
- *   │   ● 1a2b3c4d  completed  review    3t ↑12k  $0.08  │
- *   │ ▸ ● c9e5799a  completed  triage    5t ↑33k  $0.21  │
- *   ├─ c9e5799a · triage (command) · 1m32s · 33k tok ────┤
- *   │  ✦ scout → {files} · List files to review          │
- *   │  ⇶ map {files} (×4)                                │
- *   ╰─ ↑↓ move · ⏎ inspect · c cancel · r rerun · esc ───╯
+ *   ╭─ Agents (1/3) ──────────────────────────────────────────╮
+ *   │ ▸ ◉ reviewer  working  explorer  terra  1m32s  15.5k     │
+ *   │   ● docs      idle     ad-hoc    sol    3m     8.0k      │
+ *   ├─ reviewer · /repo · started 4m ago ─────────────────────┤
+ *   │ Task: Review src/run for error handling…                 │
+ *   ╰─ ↑↓ move · ⏎ attach · s stop · x close · esc ──────────╯
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -27,8 +26,8 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import type { RunPanel } from "./panel.js";
-import { type Colorize, plainColorize } from "./widget.js";
+import { type Colorize, plainColorize } from "./format.js";
+import type { AgentPanel } from "./panel.js";
 
 const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
@@ -58,7 +57,7 @@ export type OverlayAction =
   | undefined;
 
 /** What the overlay shows and does; items are re-read every render, so a
- * live model (runs completing, workflows hidden) refreshes for free. */
+ * live model refreshes for free. */
 export interface OverlaySpec<T> {
   title: OverlayChrome;
   /** Shown when items() is empty. */
@@ -74,7 +73,7 @@ export interface OverlaySpec<T> {
   row: (item: T, color: Colorize) => string;
   /** Metadata line embedded in the separator between table and detail. */
   headerLine: (item: T, color: Colorize) => string;
-  /** Detail pane lines (typically the flow tree). */
+  /** Detail pane lines. */
   detail: (item: T, color: Colorize) => string[];
   /** Show the beginning by default; live tails opt into the newest lines. */
   detailWindow?: (item: T) => "head" | "tail";
@@ -539,14 +538,13 @@ export class SplitPaneOverlay<T> implements Component {
 /**
  * Open the split-pane panel and resolve when the user dismisses it.
  *
- * Pass the run widget to mute the live summary for as long as the panel is
- * open: it renders directly above the composer slot the panel occupies and
- * repeats the run state the panel already shows.
+ * Pass the agent panel to hide it while the overlay is open: it renders right
+ * above the composer slot and repeats the same agents.
  */
 export async function openOverlay<T>(
   ctx: Pick<ExtensionContext, "ui">,
   spec: OverlaySpec<T>,
-  widget?: Pick<RunPanel, "setSuppressed">,
+  widget?: Pick<AgentPanel, "setSuppressed">,
 ): Promise<void> {
   widget?.setSuppressed(true);
   try {

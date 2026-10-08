@@ -1,11 +1,11 @@
 /**
- * Where agents, skills, and workflows live.
+ * Where agent profiles and skills live.
  *
- * One project root serves every resource kind: profiles, skills, and saved
- * workflows always come from the same `.pi` directory. Walking separately per
- * kind would let a run combine a parent project's profile with a child
- * project's skill catalog, and would make project trust — decided for a single
- * project — meaningless.
+ * One project root serves every resource kind: profiles and skills always
+ * come from the same `.pi` directory. Walking separately per kind would let an
+ * agent combine a parent project's profile with a child project's skill
+ * catalog, and would make project trust, decided for a single project,
+ * meaningless.
  *
  * User-scope resources live inside pi's agent dir (~/.pi/agent), matching
  * pi's own conventions for skills, prompts, and tools, and inheriting the
@@ -18,10 +18,10 @@ import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /** Resource kinds sharing one project root. */
-export type ResourceKind = "agents" | "skills" | "workflows";
+export type ResourceKind = "agents" | "skills";
 
 const CONFIG_DIR = ".pi";
-const WORKFLOWS_CONFIG_FILE = "workflows.json";
+const CONFIG_FILE = "pi-agents.json";
 
 /**
  * The second skills convention pi honors, alongside `.pi/skills`: `.agents`
@@ -66,14 +66,14 @@ export function userResourceDir(kind: ResourceKind): string {
   return path.join(getAgentDir(), kind);
 }
 
-/** `<agentDir>/workflows.json` — user-scoped workflow configuration. */
+/** `<agentDir>/pi-agents.json`: user-scoped configuration. */
 export function userConfigFile(): string {
-  return path.join(getAgentDir(), WORKFLOWS_CONFIG_FILE);
+  return path.join(getAgentDir(), CONFIG_FILE);
 }
 
-/** `<root>/.pi/workflows.json` — project-scoped workflow configuration. */
+/** `<root>/.pi/pi-agents.json`: project-scoped configuration. */
 export function projectConfigFile(root: string): string {
-  return path.join(root, CONFIG_DIR, WORKFLOWS_CONFIG_FILE);
+  return path.join(root, CONFIG_DIR, CONFIG_FILE);
 }
 
 /**

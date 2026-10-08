@@ -5,8 +5,7 @@
  * Discovery lists what a (cwd, scope) pair offers and reads no bodies.
  * Resolution turns requested names into self-contained `ResolvedSkill` values,
  * reading and stripping only the files actually asked for, and reports every
- * failure instead of degrading. Rendering is pure: it performs no I/O, so a
- * skill that resolves during preflight cannot fail at spawn time.
+ * failure instead of degrading. Rendering is pure: it performs no I/O.
  *
  * The catalog mirrors the locations and precedence pi itself advertises in
  * `<available_skills>`, so a name the model picked up there resolves here to
@@ -26,8 +25,8 @@ import {
   stripFrontmatter,
 } from "@earendil-works/pi-coding-agent";
 
-import type { Scope, Source } from "../model/ast.js";
 import { projectSkillDirs, userSkillDirs } from "./paths.js";
+import type { Scope, Source } from "./profiles.js";
 
 /** A skill with its instructions already loaded. */
 export interface ResolvedSkill {
@@ -52,8 +51,7 @@ export interface SkillCollision {
 
 /**
  * What one (cwd, scope) pair offers. Holds metadata plus a lazily filled cache
- * of stripped bodies, so preflight's read serves the later spawn and a wide
- * `map` neither rescans directories nor re-reads bodies per item.
+ * of stripped bodies.
  */
 export interface SkillCatalog {
   readonly cwd: string;
@@ -180,8 +178,8 @@ function escapeXmlAttribute(value: string): string {
 }
 
 /**
- * Render resolved skills into a delegated agent's system prompt. Pure: no
- * filesystem access, no failure mode, no missing-skill note.
+ * Render resolved skills into an agent's instructions. Pure: no filesystem
+ * access, no failure mode, no missing-skill note.
  */
 export function renderSkillsPrompt(skills: readonly ResolvedSkill[]): string {
   if (skills.length === 0) return "";

@@ -1,10 +1,12 @@
+/**
+ * Configuration in `pi-agents.json`: model guidance shown to the parent model
+ * when it picks models for agents.
+ */
+
 import * as fs from "node:fs";
 import { findProjectRoot, projectConfigFile, userConfigFile } from "./paths.js";
 
-export type BundledWorkflowsSetting = boolean | Record<string, boolean>;
-
-export interface WorkflowConfig {
-  bundledWorkflows?: BundledWorkflowsSetting;
+export interface AgentsConfig {
   /** Provider-qualified model glob to planning guidance. */
   models?: Record<string, string>;
 }
@@ -17,21 +19,16 @@ export interface ModelNoteRule {
   order: number;
 }
 
-export interface BundledWorkflowPolicy {
-  defaultEnabled: boolean;
-  overrides: ReadonlyMap<string, boolean>;
-}
-
-const ALLOWED_CONFIG_KEYS = new Set(["bundledWorkflows", "models"]);
+const ALLOWED_CONFIG_KEYS = new Set(["models"]);
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Read one user- or project-scoped workflow configuration file. */
-export function readWorkflowConfig(
+/** Read one user- or project-scoped configuration file. */
+export function readConfig(
   filePath: string,
-): WorkflowConfig | string | undefined {
+): AgentsConfig | string | undefined {
   if (!fs.existsSync(filePath)) return undefined;
 
   let parsed: unknown;
@@ -49,27 +46,10 @@ export function readWorkflowConfig(
     (key) => !ALLOWED_CONFIG_KEYS.has(key),
   );
   if (unknownKeys.length > 0) {
-    return `Unsupported keys: ${unknownKeys.join(", ")}. Allowed keys: bundledWorkflows, models.`;
+    return `Unsupported keys: ${unknownKeys.join(", ")}. Allowed keys: models.`;
   }
 
-  const config: WorkflowConfig = {};
-  const setting = record.bundledWorkflows;
-  if (setting !== undefined) {
-    if (typeof setting === "boolean") config.bundledWorkflows = setting;
-    else if (
-      typeof setting !== "object" ||
-      setting === null ||
-      Array.isArray(setting) ||
-      Object.values(setting).some((value) => typeof value !== "boolean")
-    ) {
-      return "Invalid 'bundledWorkflows' (must be a boolean or an object whose values are booleans)";
-    } else {
-      config.bundledWorkflows = {
-        ...(setting as Record<string, boolean>),
-      };
-    }
-  }
-
+  const config: AgentsConfig = {};
   const models = record.models;
   if (models !== undefined) {
     if (
@@ -86,33 +66,6 @@ export function readWorkflowConfig(
     config.models = { ...(models as Record<string, string>) };
   }
   return config;
-}
-
-/**
- * Layer one setting over the inherited policy. A scalar resets the policy for
- * every bundled workflow; an object changes only the named workflows. This
- * lets a project selectively re-enable a workflow after a user-level `false`.
- */
-export function applyBundledWorkflowsSetting(
-  inherited: BundledWorkflowPolicy,
-  setting: BundledWorkflowsSetting | undefined,
-): BundledWorkflowPolicy {
-  if (setting === undefined) return inherited;
-  if (typeof setting === "boolean") {
-    return { defaultEnabled: setting, overrides: new Map() };
-  }
-  const overrides = new Map(inherited.overrides);
-  for (const [name, enabled] of Object.entries(setting)) {
-    overrides.set(name, enabled);
-  }
-  return { defaultEnabled: inherited.defaultEnabled, overrides };
-}
-
-export function bundledWorkflowEnabled(
-  policy: BundledWorkflowPolicy,
-  name: string,
-): boolean {
-  return policy.overrides.get(name) ?? policy.defaultEnabled;
 }
 
 function normalizedPattern(pattern: string): string {
@@ -132,12 +85,12 @@ function patternSpecificity(pattern: string): number {
   return (wildcard < 0 ? pattern : pattern.slice(0, wildcard)).length;
 }
 
-/** Load model guidance independently from workflow discovery. */
+/** Load model guidance from the user and, when trusted, the project. */
 export function loadModelNotes(cwd: string, trusted: boolean): ModelNoteRule[] {
   const rules: ModelNoteRule[] = [];
   let order = 0;
   const load = (filePath: string, scope: ModelNoteRule["scope"]) => {
-    const config = readWorkflowConfig(filePath);
+    const config = readConfig(filePath);
     if (!config || typeof config === "string" || !config.models) return;
     for (const [pattern, note] of Object.entries(config.models)) {
       rules.push({

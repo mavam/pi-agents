@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { resultContent } from "../../src/pi/messages.js";
+import { groupContent, resultContent } from "../../src/pi/messages.js";
 import {
   buildSystemPromptAppendix,
   profileCatalog,
@@ -89,6 +89,35 @@ describe("result messages", () => {
   });
 });
 
+describe("group result messages", () => {
+  test("each agent's result reads under its own heading", () => {
+    const content = groupContent({
+      version: 1,
+      groupId: "7",
+      name: "review",
+      policy: "failFast",
+      members: [
+        { agentId: "8", name: "api", kind: "answered", body: "Two routes." },
+        { agentId: "9", name: "docs", kind: "failed", body: "rate limited" },
+        { agentId: "10", name: "tests", kind: "stopped", body: "" },
+      ],
+    });
+    expect(content).toBe(
+      [
+        "Group review finished: 1 answered, 1 failed, 1 stopped.",
+        "",
+        "## api (answered)",
+        "Two routes.",
+        "",
+        "## docs (failed)",
+        "Error: rate limited",
+        "",
+        "## tests (stopped)",
+      ].join("\n"),
+    );
+  });
+});
+
 describe("tool calls", () => {
   test("explicit arguments render as key=value pairs", () => {
     expect(
@@ -116,6 +145,22 @@ describe("tool calls", () => {
     ).toBe("✦ spawn lister\n  thinking=low\n  List files");
     expect(formatCall("stop", { title: "lister" }, false, plain)).toBe(
       "✦ stop lister",
+    );
+  });
+
+  test("group calls collapse to their agent names", () => {
+    const plain = (_color: string, text: string) => text;
+    const view = {
+      title: "review",
+      pairs: { failFast: true },
+      body: "api (model=sol): Map the API\n#2: Check the tests",
+      collapsed: "api, #2",
+    };
+    expect(formatCall("spawn group", view, false, plain)).toBe(
+      "✦ spawn group review\n  failFast=true\n  api, #2",
+    );
+    expect(formatCall("spawn group", view, true, plain)).toBe(
+      "✦ spawn group review\n  failFast=true\n  api (model=sol): Map the API\n  #2: Check the tests",
     );
   });
 });

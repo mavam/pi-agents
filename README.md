@@ -28,9 +28,15 @@ Spawn two agents in parallel: one maps the API surface, one checks the tests.
 Wait for both and merge their findings.
 ```
 
+```text
+Start a group of three agents to review src/run, src/ui, and src/host, and
+merge their findings once they all report back.
+```
+
 Pi starts agents only when you ask for delegation. An agent's result is its
 final message. Results of agents that Pi doesn't wait for arrive later as
-messages in your conversation.
+messages in your conversation. A group's agents report back together as one
+message.
 
 Every agent keeps its conversation. Open `/agents`, pick any agent, even one
 that finished hours ago, and keep talking to it like a regular Pi session.
@@ -70,8 +76,10 @@ Pi session; each agent is a conversation in that harness:
                    ╰───────────────────────────╯
 ```
 
-Because pi-durable checkpoints every step, a resumed session continues where
-its agents stopped. Agents use your Pi logins and models, so they need no
+A group is a task in the same harness that starts its agents and waits for
+them, so stopping a group reaches all of its agents. Because pi-durable
+checkpoints every step, a resumed session continues where its agents and
+groups stopped. Agents use your Pi logins and models, so they need no
 separate setup.
 
 ### Glossary
@@ -82,9 +90,10 @@ separate setup.
 | Task | The first message an agent gets. It must stand on its own, because the agent doesn't see your conversation. |
 | Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done. |
 | Result | The agent's final message after a task or message. |
+| Group | Agents that work in parallel on related tasks and report back together as one message. |
 | Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
 | Attach | Open an agent's conversation to watch it and talk to it. |
-| Stop | End an agent and remove it from the panel. Agents end on their own once their answer reaches Pi. Messaging an agent that ended starts it again. |
+| Stop | End an agent or group and remove it from the panel. Agents end on their own once their answer reaches Pi. Messaging an agent that ended starts it again. |
 
 An agent is in one of these states:
 
@@ -95,30 +104,40 @@ An agent is in one of these states:
 | ✗ `failed` | The last answer ended with an error. |
 | ⊘ `interrupted` | The last answer was interrupted before it finished. |
 
+A group uses the same glyphs: it works until all of its agents finished, then
+shows failed if one failed, interrupted if one was interrupted or stopped, and
+idle otherwise.
+
 Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, and
 `ls`, along with your context files such as `AGENTS.md` and your skills. They
 can't use MCP servers, tools from other extensions, or other agents.
 
 ### Watch and talk to agents
 
-A panel above the editor shows one line per open agent. The glyph shows the
-state, and working agents show how long they have worked:
+A panel above the editor shows one line per open agent or group, with a
+group's agents indented below it. The glyph shows the state, working agents
+show how long they have worked, and a group shows how many of its agents
+finished:
 
 ```text
 ◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep
 ✗ docs · sol · 8.0k · $0.02 · rate limit exceeded
+◉ review · group 1/3 · 40s · 12.0k
+  ● api · terra · 4.0k
+  ◉ tests · sol · 40s · 8.0k · Using grep
+  ◉ host · sol · 40s
 ```
 
-An agent leaves the panel once its answer reaches Pi. Failed and interrupted
-agents stay until you or Pi stop them.
+An agent leaves the panel once its answer reaches Pi, and a group once its
+result does. Failed and interrupted agents stay until you or Pi stop them.
 
 Press ← in an empty editor or Ctrl+Q to focus the panel. Then:
 
 | Key | Action |
 | --- | --- |
-| ↑ ↓ | Select an agent. |
-| ⏎ | Attach to the agent. |
-| `s` | Stop the agent. Pi asks first when it still works. |
+| ↑ ↓ | Select an agent or group. |
+| ⏎ | Attach to the agent, or to a group's first agent. |
+| `s` | Stop the agent, or the group with its agents. Pi asks first when it still works. |
 | Esc | Return to the editor. |
 
 Attaching shows the agent's conversation with Pi's own message and tool
@@ -137,14 +156,41 @@ results don't post into the parent conversation.
 
 You can attach to any agent, not only the ones in the panel. Agents that
 finished or were stopped keep their whole conversation: open `/agents`, select
-one, and continue where it left off. This also works after you resume a
-session.
+one, and continue where it left off. This also works for a group's agents
+after the group finished, and after you resume a session.
+
+### Groups
+
+A group starts two to eight agents at once, each on its own task. When all of
+them are done, their final messages arrive together as one message, so Pi can
+merge them in one go:
+
+```text
+● review finished · 2 answered · 1 failed
+● api · terra · 4.0k
+  The API has three entry points: …
+● tests · sol · 8.0k
+  …
+✗ host · sol
+  rate limit exceeded
+```
+
+By default a group waits for every agent, even when one fails. Ask Pi to stop
+the others as soon as one fails, and the remaining agents stop instead.
+Stopping a group stops all of its agents and posts nothing. Interrupting or
+stopping a single agent doesn't stop its group or the group's other agents.
+
+A group's agents are ordinary agents: attach to them, message them, and keep
+talking to them after the group finished. A message to a group agent while
+its group works joins its work; if the agent answers it separately, that
+answer arrives after the group's result. A queued follow-up to a group agent
+holds back the group's result until the agent answered it as well.
 
 ### Commands
 
 | Command | Action |
 | --- | --- |
-| `/agents` | Browse all agents, including ended ones, with their task and latest result. Attach to or stop them. |
+| `/agents` | Browse all agents and groups, including ended ones, with their tasks and latest results. Attach to or stop them. |
 | `/agent <name>` | Attach to an agent. |
 
 ### Tools
@@ -154,14 +200,16 @@ Pi uses these tools to work with agents:
 | Tool | Purpose |
 | --- | --- |
 | `agent_spawn` | Start an agent on a task, optionally waiting for its result. |
+| `agent_spawn_group` | Start a group of agents on related tasks, optionally waiting for their results. |
 | `agent_send` | Message an agent: prompt, steer, or queue a follow-up. |
-| `agent_wait` | Block until agents answer and return their results. |
-| `agent_status` | Show agent states. |
-| `agent_stop` | Stop an agent. |
+| `agent_wait` | Block until agents or groups answer and return their results. |
+| `agent_status` | Show agent and group states. |
+| `agent_stop` | Stop an agent or a group. |
 
-`agent_spawn` and `agent_send` can also block for the result: their `wait`
-argument sets the most seconds to wait. A result that a wait returns doesn't
-post again as a message. Cancelling a wait leaves the agents working.
+`agent_spawn`, `agent_spawn_group`, and `agent_send` can also block for the
+result: their `wait` argument sets the most seconds to wait. A result that a
+wait returns doesn't post again as a message. Cancelling a wait leaves the
+agents working.
 
 Each tool call shows the arguments Pi chose on a dim line below it:
 
@@ -176,7 +224,8 @@ Each tool call shows the arguments Pi chose on a dim line below it:
 Agents belong to the Pi session that started them. When you quit Pi or it
 crashes, agents pause. When you resume the session, for example with `pi -c`,
 interrupted work continues and results that haven't arrived yet post into the
-conversation. A tool call that can't safely repeat reports the interruption to
+conversation. A group continues too: its agents that already finished don't
+work again, and its result posts once. A tool call that can't safely repeat reports the interruption to
 the agent instead.
 
 Agents of sessions started with `--no-session` live in memory and end with

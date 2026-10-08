@@ -9,12 +9,61 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type { AgentService } from "../agents/service.js";
 import type { PendingDelivery } from "../agents/types.js";
-import { RESULT_MESSAGE, resultContent, resultDetails } from "./messages.js";
+import {
+  GROUP_RESULT_MESSAGE,
+  type GroupResultDetails,
+  groupContent,
+  groupResultDetails,
+  RESULT_MESSAGE,
+  type ResultDetails,
+  resultContent,
+  resultDetails,
+} from "./messages.js";
 import type { SessionHost } from "./session.js";
 
 function deliveryKey(delivery: PendingDelivery): string {
-  return `${delivery.agentId}:${delivery.requestIds.join(",")}`;
+  return delivery.kind === "group"
+    ? `group:${delivery.groupId}`
+    : `${delivery.agentId}:${delivery.requestIds.join(",")}`;
+}
+
+/** The parent message of one delivery: one per agent answer or group. */
+function message(
+  delivery: PendingDelivery,
+  service: AgentService,
+): {
+  customType: string;
+  content: string;
+  display: boolean;
+  details: GroupResultDetails | ResultDetails;
+} {
+  if (delivery.kind === "group") {
+    const group = service.getGroup(delivery.groupId);
+    const details = groupResultDetails(
+      {
+        id: delivery.groupId,
+        name: delivery.name,
+        policy: group?.policy ?? "allSettled",
+      },
+      delivery.members,
+      (agentId) => service.get(agentId),
+    );
+    return {
+      customType: GROUP_RESULT_MESSAGE,
+      content: groupContent(details),
+      display: true,
+      details,
+    };
+  }
+  const details = resultDetails(delivery, service.get(delivery.agentId));
+  return {
+    customType: RESULT_MESSAGE,
+    content: resultContent(details),
+    display: true,
+    details,
+  };
 }
 
 export class DeliveryManager {
@@ -70,14 +119,8 @@ export class DeliveryManager {
     try {
       deliveries.forEach((delivery, index) => {
         const wake = index === deliveries.length - 1;
-        const details = resultDetails(delivery, service.get(delivery.agentId));
         this.pi.sendMessage(
-          {
-            customType: RESULT_MESSAGE,
-            content: resultContent(details),
-            display: true,
-            details,
-          },
+          message(delivery, service),
           wake ? { triggerTurn: true } : undefined,
         );
         const key = deliveryKey(delivery);

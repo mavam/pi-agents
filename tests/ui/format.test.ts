@@ -1,12 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { type AgentInfo, EMPTY_USAGE } from "../../src/agents/types.js";
+import {
+  type AgentInfo,
+  EMPTY_USAGE,
+  type GroupInfo,
+} from "../../src/agents/types.js";
 import { formatFooterSummary } from "../../src/ui/footer.js";
 import {
   formatAgentLine,
   formatElapsed,
+  formatGroupLine,
   sanitizeLine,
 } from "../../src/ui/format.js";
-import { panelOrder } from "../../src/ui/panel.js";
+import { panelCompare, panelOrder } from "../../src/ui/panel.js";
+import { attachTarget, buildRows } from "../../src/ui/rows.js";
 
 function agent(overrides: Partial<AgentInfo>): AgentInfo {
   return {
@@ -25,6 +31,34 @@ function agent(overrides: Partial<AgentInfo>): AgentInfo {
     ...overrides,
   };
 }
+
+function group(overrides: Partial<GroupInfo>): GroupInfo {
+  return {
+    id: "10",
+    name: "review",
+    policy: "allSettled",
+    state: "working",
+    closed: false,
+    stopped: false,
+    createdAt: 0,
+    stateSince: 0,
+    members: [
+      { agentId: "11", name: "api" },
+      { agentId: "12", name: "tests" },
+    ],
+    usage: { ...EMPTY_USAGE },
+    ...overrides,
+  };
+}
+
+const answered = (agentId: string, name: string) => ({
+  agentId,
+  name,
+  outcome: {
+    kind: "answered" as const,
+    result: { agentId, name, entryId: 1, text: "ok", stopReason: "stop" },
+  },
+});
 
 describe("formatting", () => {
   test("agent lines carry state, model, elapsed time, usage, and activity", () => {
@@ -78,6 +112,80 @@ describe("formatting", () => {
       agent({ id: "d", name: "d", state: "failed", createdAt: 0 }),
     ]);
     expect(ordered.map((info) => info.name)).toEqual(["c", "b", "d", "a"]);
+  });
+
+  test("group lines carry progress, elapsed time, usage, and failures", () => {
+    expect(
+      formatGroupLine(
+        group({
+          members: [answered("11", "api"), { agentId: "12", name: "tests" }],
+          usage: { ...EMPTY_USAGE, input: 31_500 },
+        }),
+        92_000,
+      ),
+    ).toBe("◉ review · group 1/2 · 1m32s · 31.5k");
+    expect(
+      formatGroupLine(
+        group({
+          state: "failed",
+          members: [
+            answered("11", "api"),
+            {
+              agentId: "12",
+              name: "tests",
+              outcome: { kind: "failed", reason: "boom" },
+            },
+          ],
+        }),
+        92_000,
+      ),
+    ).toBe("✗ review · group 2/2 · 1 failed");
+    expect(
+      formatGroupLine(group({ state: "interrupted", stopped: true }), 0),
+    ).toBe("⊘ review · group 0/2 · stopped");
+  });
+
+  test("rows nest a group's agents and fold finished groups", () => {
+    const agents = [
+      agent({ id: "11", name: "api", group: "10", createdAt: 5 }),
+      agent({ id: "12", name: "tests", group: "10", createdAt: 5 }),
+      agent({ id: "1", name: "solo", state: "idle", createdAt: 9 }),
+    ];
+    const source = (info: GroupInfo) => ({
+      agents,
+      groups: [info],
+      agent: (id: string) => agents.find((each) => each.id === id),
+    });
+    const working = buildRows(
+      source(group({ createdAt: 5 })),
+      panelCompare,
+      () => true,
+    );
+    expect(working.map((row) => row.key)).toEqual([
+      "group:10",
+      "agent:11",
+      "agent:12",
+      "agent:1",
+    ]);
+    const first = working[0];
+    expect(first && attachTarget(first)).toBe("11");
+    const folded = buildRows(
+      source(group({ state: "idle", createdAt: 5 })),
+      panelCompare,
+      (info) => info.state === "working",
+    );
+    expect(folded.map((row) => row.key)).toEqual(["agent:1", "group:10"]);
+    // Without its group, a group agent stands alone.
+    const alone = buildRows(
+      { agents, groups: [], agent: () => undefined },
+      panelCompare,
+      () => true,
+    );
+    expect(alone.map((row) => row.key)).toEqual([
+      "agent:1",
+      "agent:11",
+      "agent:12",
+    ]);
   });
 
   test("footer counts states", () => {

@@ -9,6 +9,7 @@ import {
   type AgentState,
   type AgentUsage,
   formatModelRef,
+  type GroupInfo,
 } from "../agents/types.js";
 
 export type Colorize = (
@@ -121,6 +122,51 @@ export function formatAgentLine(
     activity
       ? color(info.state === "failed" ? "error" : "dim", oneLine(activity, 120))
       : undefined,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(dot);
+}
+
+/** `1 failed, 2 stopped`: how a finished group's agents did not answer. */
+export function groupNote(group: GroupInfo): string | undefined {
+  if (group.state === "working") return undefined;
+  if (group.stopped) return "stopped";
+  const counts = new Map<string, number>();
+  for (const member of group.members) {
+    const kind = member.outcome?.kind ?? "failed";
+    if (kind !== "answered") counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  const note = ["failed", "interrupted", "stopped"]
+    .flatMap((kind) => {
+      const count = counts.get(kind);
+      return count ? [`${count} ${kind}`] : [];
+    })
+    .join(", ");
+  return note || undefined;
+}
+
+/**
+ * One group line: the glyph carries the group's state, then how many agents
+ * finished, the elapsed time while working, the summed usage, and how many
+ * did not answer: `◉ review · group 1/3 · 1m32s · 31.5k`.
+ */
+export function formatGroupLine(
+  group: GroupInfo,
+  now: number,
+  color: Colorize = plainColorize,
+): string {
+  const done = group.members.filter((member) => member.outcome).length;
+  const usage = formatUsage(group.usage);
+  const note = groupNote(group);
+  const dot = color("dim", " · ");
+  return [
+    `${stateIcon(group.state, color)} ${group.name}`,
+    color("dim", `group ${done}/${group.members.length}`),
+    group.state === "working"
+      ? color("dim", formatElapsed(now - group.stateSince))
+      : undefined,
+    usage ? color("dim", usage) : undefined,
+    note ? color(group.state === "failed" ? "error" : "dim", note) : undefined,
   ]
     .filter((part): part is string => part !== undefined)
     .join(dot);

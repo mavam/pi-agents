@@ -17,6 +17,7 @@ import type { AgentInfo } from "../agents/types.js";
 import type { SessionHost } from "../pi/session.js";
 import { openAgentPane } from "./attach.js";
 import type { AgentPanel } from "./panel.js";
+import { attachTarget, type Row } from "./rows.js";
 
 /** True for text a user typed: no escape introducer, no control bytes. */
 function isPrintable(data: string): boolean {
@@ -29,11 +30,16 @@ export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Stop an agent, confirming first while it still works. */
+/** What a row stops: an agent, or a group with its agents. */
+export function stopTarget(row: Row): Pick<AgentInfo, "id" | "name" | "state"> {
+  return row.kind === "agent" ? row.agent : row.group;
+}
+
+/** Stop an agent or a group, confirming first while it still works. */
 export async function confirmAndStop(
   ctx: ExtensionContext,
   host: SessionHost,
-  agent: AgentInfo,
+  agent: Pick<AgentInfo, "id" | "name" | "state">,
 ): Promise<boolean> {
   const service = host.current();
   if (!service) return false;
@@ -166,15 +172,16 @@ export class FocusController {
       return { consume: true };
     }
     if (keybindings.matches(data, "tui.select.confirm")) {
-      const agent = this.panel.selected();
-      if (agent) this.attach(ctx, agent.id);
+      const row = this.panel.selected();
+      const agentId = row ? attachTarget(row) : undefined;
+      if (agentId) this.attach(ctx, agentId);
       return { consume: true };
     }
     if (key === "s") {
-      const agent = this.panel.selected();
-      if (agent) {
+      const row = this.panel.selected();
+      if (row) {
         this.confirming = true;
-        void confirmAndStop(ctx, this.host, agent).finally(() => {
+        void confirmAndStop(ctx, this.host, stopTarget(row)).finally(() => {
           this.confirming = false;
         });
       }

@@ -5,7 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentService } from "../../src/agents/service.js";
 import { DeliveryManager } from "../../src/pi/delivery.js";
-import { RESULT_MESSAGE } from "../../src/pi/messages.js";
+import { GROUP_RESULT_MESSAGE, RESULT_MESSAGE } from "../../src/pi/messages.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import { MODEL, openService, until } from "../agents/helpers.js";
 
@@ -84,5 +84,39 @@ describe("DeliveryManager", () => {
     attached = false;
     delivery.flush(ctx);
     expect(sent).toHaveLength(1);
+  });
+
+  test("posts one message per group and acknowledges it", async () => {
+    service = await openService();
+    const state = { idle: true, pending: false };
+    const { sent, delivery, ctx } = setup(state);
+    await service.spawnGroup({
+      name: "pair",
+      agents: [
+        { task: "a", cwd: ".", model: MODEL },
+        { task: "b", cwd: ".", model: MODEL },
+      ],
+    });
+    await until(() => service?.pendingDeliveries().length === 1);
+    delivery.flush(ctx);
+    expect(sent.map((message) => message.customType)).toEqual([
+      GROUP_RESULT_MESSAGE,
+    ]);
+    expect(sent[0]?.content).toBe(
+      [
+        "Group pair finished: 2 answered.",
+        "",
+        "## pair-1 (answered)",
+        "done: a",
+        "",
+        "## pair-2 (answered)",
+        "done: b",
+      ].join("\n"),
+    );
+    expect(sent[0]?.options?.triggerTurn).toBe(true);
+    await until(() => service?.pendingDeliveries().length === 0);
+    delivery.flush(ctx);
+    expect(sent).toHaveLength(1);
+    expect(service.getGroup("pair")?.closed).toBe(true);
   });
 });

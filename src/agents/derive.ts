@@ -16,6 +16,7 @@ import {
   type AgentState,
   type AgentUsage,
   EMPTY_USAGE,
+  type GroupMember,
   type RequestOutcome,
 } from "./types.js";
 
@@ -160,4 +161,35 @@ export function outcomeOf(
       : { kind: "failed", reason: submission.reason };
   }
   return undefined;
+}
+
+/**
+ * A group's state: `working` until the group task ended, then `interrupted`
+ * when it was stopped, `failed` when an agent failed, `interrupted` when an
+ * agent was interrupted or stopped, and `idle` when every agent answered.
+ */
+export function deriveGroupState(
+  ended: { status: string } | undefined,
+  members: readonly GroupMember[],
+): AgentState {
+  if (!ended) return "working";
+  if (ended.status === "aborted") return "interrupted";
+  if (ended.status !== "completed") return "failed";
+  const kinds = members.map((member) => member.outcome?.kind);
+  if (kinds.some((kind) => kind === undefined || kind === "failed"))
+    return "failed";
+  if (kinds.some((kind) => kind !== "answered")) return "interrupted";
+  return "idle";
+}
+
+export function sumUsage(usages: readonly AgentUsage[]): AgentUsage {
+  const total = { ...EMPTY_USAGE };
+  for (const usage of usages) {
+    total.input += usage.input;
+    total.output += usage.output;
+    total.cacheRead += usage.cacheRead;
+    total.cacheWrite += usage.cacheWrite;
+    total.cost += usage.cost;
+  }
+  return total;
 }

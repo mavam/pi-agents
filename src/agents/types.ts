@@ -103,6 +103,69 @@ export interface AgentInfo {
   activity: AgentActivity;
   /** Latest assistant result, once the agent answered. */
   result?: AgentResult;
+  /** The group this agent belongs to, by group ID. */
+  group?: string;
+}
+
+/** How a group waits for its agents: all of them, or until one fails. */
+export type GroupPolicy = "allSettled" | "failFast";
+
+/** How one agent of a group ended its task. `interrupted`: the agent itself
+ * was interrupted or stopped; `stopped`: the group stopped it. */
+export type MemberOutcome =
+  | { kind: "answered"; result: AgentResult }
+  | { kind: "failed"; reason: string }
+  | { kind: "interrupted" }
+  | { kind: "stopped" };
+
+export interface GroupMember {
+  agentId: string;
+  name: string;
+  /** Set once the agent's task ended. */
+  outcome?: MemberOutcome;
+}
+
+export interface GroupInfo {
+  id: string;
+  name: string;
+  policy: GroupPolicy;
+  /** `working` until every agent ended its task; then derived from them. */
+  state: AgentState;
+  closed: boolean;
+  /** The group was stopped before it finished. */
+  stopped: boolean;
+  createdAt: number;
+  /** When this process last saw the state change. */
+  stateSince: number;
+  members: GroupMember[];
+  /** Summed over the group's agents. */
+  usage: AgentUsage;
+}
+
+/** How many agents a group has. */
+export const GROUP_SIZE = { min: 2, max: 8 } as const;
+
+export interface GroupSpec {
+  name?: string;
+  failFast?: boolean;
+  agents: SpawnSpec[];
+}
+
+/** An agent or a group, as a name resolves. */
+export type Target =
+  | { kind: "agent"; info: AgentInfo }
+  | { kind: "group"; info: GroupInfo };
+
+/** A live task of the agent host, for diagnostics and tests. */
+export interface TaskNode {
+  id: string;
+  kind: string;
+  /** Owning task; absent for a task its conversation owns. */
+  owner?: string;
+  background: boolean;
+  status: string;
+  /** Conversations, and thus agents, the task owns. */
+  conversations: string[];
 }
 
 export interface SpawnSpec {
@@ -124,12 +187,23 @@ export type SendMode = "auto" | "followUp";
 
 /** Settled parent requests that still need delivery to the parent. Several
  * requests answered by one entry deliver together. */
-export interface PendingDelivery {
+export interface AgentDelivery {
+  kind: "agent";
   agentId: string;
   name: string;
   requestIds: string[];
   outcome: Exclude<RequestOutcome, { kind: "aborted" }>;
 }
+
+/** A finished group whose result the parent still expects. */
+export interface GroupDelivery {
+  kind: "group";
+  groupId: string;
+  name: string;
+  members: Array<GroupMember & { outcome: MemberOutcome }>;
+}
+
+export type PendingDelivery = AgentDelivery | GroupDelivery;
 
 /** Marks messages the user sends from the attach view, so the agent can tell
  * them from messages of the agent that started it. */

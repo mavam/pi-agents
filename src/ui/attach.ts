@@ -627,13 +627,20 @@ export async function openAgentPane(
   agentId: string,
 ): Promise<void> {
   const state = await service.view(agentId);
-  await ctx.ui.custom<void>(
-    (tui, theme, keybindings, done) =>
-      new AgentPane(tui, theme, keybindings, {
-        service,
-        agentId,
-        state,
-        done: () => done(undefined),
-      }),
-  );
+  // The pane draws its own status line; hide Pi's working loader for the
+  // parent session so only one spinner shows.
+  ctx.ui.setWorkingVisible(false);
+  try {
+    await ctx.ui.custom<void>(
+      (tui, theme, keybindings, done) =>
+        new AgentPane(tui, theme, keybindings, {
+          service,
+          agentId,
+          state,
+          done: () => done(undefined),
+        }),
+    );
+  } finally {
+    ctx.ui.setWorkingVisible(true);
+  }
 }

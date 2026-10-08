@@ -57,6 +57,8 @@ export class FocusController {
   private ctx: ExtensionContext | undefined;
   private unsubscribe: (() => void) | undefined;
   private paneOpen = false;
+  /** A stop confirmation is open; its dialog owns the keys. */
+  private confirming = false;
   /** Invoked after the attach view closes (deliver held results, etc.). */
   onPaneClosed: ((ctx: ExtensionContext) => void) | undefined;
   /** Some terminal stacks hand the same chunk to listeners twice. */
@@ -117,7 +119,7 @@ export class FocusController {
 
   private handle(data: string): { consume?: boolean } | undefined {
     const ctx = this.ctx;
-    if (!ctx || this.paneOpen) return undefined;
+    if (!ctx || this.paneOpen || this.confirming) return undefined;
     // The Kitty keyboard protocol reports releases separately; acting on
     // them would double every step.
     if (isKeyRelease(data)) return undefined;
@@ -170,7 +172,12 @@ export class FocusController {
     }
     if (key === "s") {
       const agent = this.panel.selected();
-      if (agent) void confirmAndStop(ctx, this.host, agent);
+      if (agent) {
+        this.confirming = true;
+        void confirmAndStop(ctx, this.host, agent).finally(() => {
+          this.confirming = false;
+        });
+      }
       return { consume: true };
     }
     // Typing returns focus to the editor and lands there. Escape sequences

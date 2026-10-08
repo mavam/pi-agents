@@ -1,0 +1,10 @@
+created: 2026-10-08
+title: Graphs of agents that pass results along
+intro: >-
+  Pi can now compose agents into graphs that pass their results to each other, so
+  a merging agent, a pipeline, or a diamond does the work and Pi gets one answer.
+  This release also lets you steer Pi while it waits for agents and fixes two glitches
+  in the agent panel and the attach view.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.22.0

@@ -9,12 +9,61 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type { AgentService } from "../agents/service.js";
 import type { PendingDelivery } from "../agents/types.js";
-import { RESULT_MESSAGE, resultContent, resultDetails } from "./messages.js";
+import {
+  GRAPH_RESULT_MESSAGE,
+  type GraphResultDetails,
+  graphContent,
+  graphResultDetails,
+  RESULT_MESSAGE,
+  type ResultDetails,
+  resultContent,
+  resultDetails,
+} from "./messages.js";
 import type { SessionHost } from "./session.js";
 
 function deliveryKey(delivery: PendingDelivery): string {
-  return `${delivery.agentId}:${delivery.requestIds.join(",")}`;
+  return delivery.kind === "graph"
+    ? `graph:${delivery.graphId}`
+    : `${delivery.agentId}:${delivery.requestIds.join(",")}`;
+}
+
+/** The parent message of one delivery: one per agent answer or graph. */
+function message(
+  delivery: PendingDelivery,
+  service: AgentService,
+): {
+  customType: string;
+  content: string;
+  display: boolean;
+  details: GraphResultDetails | ResultDetails;
+} {
+  if (delivery.kind === "graph") {
+    const graph = service.getGraph(delivery.graphId);
+    const details = graphResultDetails(
+      {
+        id: delivery.graphId,
+        name: delivery.name,
+        policy: graph?.policy ?? "allSettled",
+      },
+      delivery.nodes,
+      (agentId) => service.get(agentId),
+    );
+    return {
+      customType: GRAPH_RESULT_MESSAGE,
+      content: graphContent(details),
+      display: true,
+      details,
+    };
+  }
+  const details = resultDetails(delivery, service.get(delivery.agentId));
+  return {
+    customType: RESULT_MESSAGE,
+    content: resultContent(details),
+    display: true,
+    details,
+  };
 }
 
 export class DeliveryManager {
@@ -70,14 +119,8 @@ export class DeliveryManager {
     try {
       deliveries.forEach((delivery, index) => {
         const wake = index === deliveries.length - 1;
-        const details = resultDetails(delivery, service.get(delivery.agentId));
         this.pi.sendMessage(
-          {
-            customType: RESULT_MESSAGE,
-            content: resultContent(details),
-            display: true,
-            details,
-          },
+          message(delivery, service),
           wake ? { triggerTurn: true } : undefined,
         );
         const key = deliveryKey(delivery);

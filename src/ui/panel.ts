@@ -1,12 +1,17 @@
 /**
- * AgentPanel: one line per open agent above the editor.
+ * AgentPanel: one line per open agent or graph above the editor, a graph's
+ * agents below it as a tree.
  *
- *   ◉ reviewer · explorer · terra · working 1m32s · 15.5k · Using grep
- *   ● docs · sol · idle 3m · 8.0k
+ *   ◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep
+ *   ◉ review · graph 1/3 · 40s · 12.0k
+ *   ├─ ● api · terra · 4.0k
+ *   ├─ ◉ tests · sol · 40s · 8.0k · Using grep
+ *   └─ ○ merge ← api, tests · opus
  *
- * Unfocused, it shows the first few agents, working ones first. Left arrow
- * from an empty editor or Ctrl+Q focuses it (see focus.ts); then ↑↓ select,
- * ⏎ attaches, `s` stops, and Esc returns to the editor.
+ * Unfocused, it shows the first few lines, working ones first, and a
+ * finished graph as one line. Left arrow from an empty editor or Ctrl+Q
+ * focuses it (see focus.ts); then ↑↓ select, ⏎ attaches (a graph: its first
+ * agent), `s` stops, and Esc returns to the editor.
  */
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -17,10 +22,16 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AgentInfo } from "../agents/types.js";
 import type { SessionHost } from "../pi/session.js";
-import { type Colorize, formatAgentLine, sanitizeLine } from "./format.js";
+import {
+  type Colorize,
+  formatAgentLine,
+  formatGraphLine,
+  sanitizeLine,
+} from "./format.js";
+import { buildRows, connector, type EntryOrder, type Row } from "./rows.js";
 
 const WIDGET_KEY = "pi-agents:panel";
-const MAX_UNFOCUSED = 4;
+const MAX_UNFOCUSED = 6;
 const TICK_MS = 1000;
 /** A reasoning headline stays at least this long before the next replaces it. */
 const SUMMARY_MIN_DISPLAY_MS = 3000;
@@ -29,18 +40,21 @@ const MAX_HEIGHT_RATIO = 0.6;
 
 const STATE_ORDER = {
   working: 0,
+  waiting: 0,
   failed: 1,
   interrupted: 2,
+  skipped: 3,
   idle: 3,
 } as const;
 
-/** Open agents in panel order: working first, then newest first. */
+/** Panel order: working first, then newest first. */
+export const panelCompare: EntryOrder = (left, right) =>
+  STATE_ORDER[left.state] - STATE_ORDER[right.state] ||
+  right.createdAt - left.createdAt;
+
+/** Open agents in panel order. */
 export function panelOrder(agents: readonly AgentInfo[]): AgentInfo[] {
-  return [...agents].sort(
-    (left, right) =>
-      STATE_ORDER[left.state] - STATE_ORDER[right.state] ||
-      right.createdAt - left.createdAt,
-  );
+  return [...agents].sort(panelCompare);
 }
 
 class PanelLines implements Component {
@@ -71,7 +85,7 @@ export class AgentPanel {
   private disposed = false;
   private suppressed = false;
   private focused = false;
-  private selectedId: string | undefined;
+  private selectedKey: string | undefined;
   private readonly held = new Map<string, HeldSummary>();
 
   constructor(
@@ -79,8 +93,19 @@ export class AgentPanel {
     private readonly now: () => number = Date.now,
   ) {}
 
-  agents(): AgentInfo[] {
-    return panelOrder(this.host.current()?.list() ?? []);
+  /** Rows in panel order; `collapse` folds finished graphs to one line. */
+  rows(collapse = false): Row[] {
+    const service = this.host.current();
+    if (!service) return [];
+    return buildRows(
+      {
+        agents: service.list(),
+        graphs: service.graphs(),
+        agent: (id) => service.get(id),
+      },
+      panelCompare,
+      (graph) => !collapse || graph.state === "working",
+    );
   }
 
   update(ctx?: ExtensionContext): void {
@@ -112,7 +137,7 @@ export class AgentPanel {
   }
 
   private shouldShow(): boolean {
-    return !this.suppressed && this.agents().length > 0;
+    return !this.suppressed && this.hasRows();
   }
 
   /** Hide the panel while a view in the editor slot shows the same agents. */
@@ -123,7 +148,7 @@ export class AgentPanel {
   }
 
   hasRows(): boolean {
-    return this.agents().length > 0;
+    return this.rows().length > 0;
   }
 
   isFocused(): boolean {
@@ -137,24 +162,24 @@ export class AgentPanel {
     this.update();
   }
 
-  /** The selected agent, normalizing a stale selection to the first row. */
-  selected(): AgentInfo | undefined {
-    const agents = this.agents();
-    const current = agents.find((agent) => agent.id === this.selectedId);
+  /** The selected row, normalizing a stale selection to the first row. */
+  selected(): Row | undefined {
+    const rows = this.rows();
+    const current = rows.find((row) => row.key === this.selectedKey);
     if (current) return current;
-    this.selectedId = agents[0]?.id;
-    return agents[0];
+    this.selectedKey = rows[0]?.key;
+    return rows[0];
   }
 
   /** Move the selection; returns false when moving above the first row. */
   move(delta: number): boolean {
-    const agents = this.agents();
+    const rows = this.rows();
     const current = this.selected();
     if (!current) return false;
-    const next = agents.indexOf(current) + delta;
+    const next = rows.findIndex((row) => row.key === current.key) + delta;
     if (next < 0) return false;
-    if (next >= agents.length) return true;
-    this.selectedId = agents[next]?.id;
+    if (next >= rows.length) return true;
+    this.selectedKey = rows[next]?.key;
     this.update();
     return true;
   }
@@ -178,51 +203,58 @@ export class AgentPanel {
     return { ...info, activity: { ...info.activity, summary: held.text } };
   }
 
-  private lines(
-    agents: AgentInfo[],
-    budget: number,
-    color: Colorize,
-  ): string[] {
+  private lines(budget: number, color: Colorize): string[] {
     const now = this.now();
-    const line = (agent: AgentInfo) =>
-      formatAgentLine(this.heldActivity(agent, now), now, color);
+    const line = (row: Row) =>
+      row.kind === "graph"
+        ? formatGraphLine(row.graph, now, color)
+        : `${color("dim", connector(row))}${formatAgentLine(this.heldActivity(row.agent, now), now, color, row.inputs)}`;
     if (!this.focused) {
-      const shown = agents.slice(0, MAX_UNFOCUSED).map(line);
-      if (agents.length > MAX_UNFOCUSED)
+      const rows = this.rows(true);
+      const shown = rows.slice(0, MAX_UNFOCUSED).map(line);
+      if (rows.length > MAX_UNFOCUSED)
         shown.push(
-          color("dim", `+${agents.length - MAX_UNFOCUSED} more (/agents)`),
+          color("dim", `+${rows.length - MAX_UNFOCUSED} more (/agents)`),
         );
       return shown;
     }
+    const rows = this.rows();
     const selected = this.selected();
-    const index = selected ? Math.max(0, agents.indexOf(selected)) : 0;
+    const index = selected
+      ? Math.max(
+          0,
+          rows.findIndex((row) => row.key === selected.key),
+        )
+      : 0;
     const visible = Math.max(3, budget - 1);
     const start = Math.max(
       0,
-      Math.min(index - Math.floor(visible / 2), agents.length - visible),
+      Math.min(index - Math.floor(visible / 2), rows.length - visible),
     );
-    const lines = agents
+    const lines = rows
       .slice(start, start + visible)
       .map(
-        (agent, offset) =>
-          `${start + offset === index ? color("accent", "▸ ") : "  "}${line(agent)}`,
+        (row, offset) =>
+          `${start + offset === index ? color("accent", "▸ ") : "  "}${line(row)}`,
       );
-    if (agents.length > start + visible)
-      lines.push(color("dim", `  …+${agents.length - start - visible} more`));
+    if (rows.length > start + visible)
+      lines.push(color("dim", `  …+${rows.length - start - visible} more`));
     lines.push(color("dim", "  ↑↓ move · ⏎ attach · s stop · esc editor"));
     return lines;
   }
 
   private frame(tui: TUI, theme: Theme): string[] {
     if (this.disposed || this.suppressed) return [];
-    const agents = this.agents();
-    if (agents.length === 0) return [];
-    const ids = new Set(agents.map((agent) => agent.id));
+    const rows = this.rows();
+    if (rows.length === 0) return [];
+    const ids = new Set(
+      rows.flatMap((row) => (row.kind === "agent" ? [row.agent.id] : [])),
+    );
     for (const id of this.held.keys()) if (!ids.has(id)) this.held.delete(id);
     const color: Colorize = (name, text) => theme.fg(name, text);
-    const rows = tui?.terminal?.rows ?? 24;
-    const budget = Math.max(4, Math.floor(rows * MAX_HEIGHT_RATIO));
-    return this.lines(agents, budget, color);
+    const height = tui?.terminal?.rows ?? 24;
+    const budget = Math.max(4, Math.floor(height * MAX_HEIGHT_RATIO));
+    return this.lines(budget, color);
   }
 
   private startTicking(): void {

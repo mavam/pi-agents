@@ -5,7 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentService } from "../../src/agents/service.js";
 import { DeliveryManager } from "../../src/pi/delivery.js";
-import { RESULT_MESSAGE } from "../../src/pi/messages.js";
+import { GRAPH_RESULT_MESSAGE, RESULT_MESSAGE } from "../../src/pi/messages.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import { MODEL, openService, until } from "../agents/helpers.js";
 
@@ -84,5 +84,57 @@ describe("DeliveryManager", () => {
     attached = false;
     delivery.flush(ctx);
     expect(sent).toHaveLength(1);
+  });
+
+  test("posts one message per graph with its end agent's answer", async () => {
+    service = await openService();
+    const state = { idle: true, pending: false };
+    const { sent, delivery, ctx } = setup(state);
+    await service.spawnGraph({
+      name: "pair",
+      agents: [
+        { name: "a", task: "a", cwd: ".", model: MODEL },
+        { name: "merge", task: "merge", cwd: ".", model: MODEL, after: ["a"] },
+      ],
+    });
+    await until(() => service?.pendingDeliveries().length === 1);
+    delivery.flush(ctx);
+    expect(sent.map((message) => message.customType)).toEqual([
+      GRAPH_RESULT_MESSAGE,
+    ]);
+    // Only the end agent's answer reaches the parent, attributed to it.
+    expect(sent[0]?.content).toStartWith("Graph pair: merge answered:\n\n");
+    expect(sent[0]?.content).toContain("done: merge");
+    expect(sent[0]?.options?.triggerTurn).toBe(true);
+    await until(() => service?.pendingDeliveries().length === 0);
+    delivery.flush(ctx);
+    expect(sent).toHaveLength(1);
+    expect(service.getGraph("pair")?.closed).toBe(true);
+  });
+
+  test("a graph without edges reports every agent's answer", async () => {
+    service = await openService();
+    const state = { idle: true, pending: false };
+    const { sent, delivery, ctx } = setup(state);
+    await service.spawnGraph({
+      name: "pair",
+      agents: [
+        { task: "a", cwd: ".", model: MODEL },
+        { task: "b", cwd: ".", model: MODEL },
+      ],
+    });
+    await until(() => service?.pendingDeliveries().length === 1);
+    delivery.flush(ctx);
+    expect(sent[0]?.content).toBe(
+      [
+        "Graph pair finished: 2 answered.",
+        "",
+        "## pair-1 (answered)",
+        "done: a",
+        "",
+        "## pair-2 (answered)",
+        "done: b",
+      ].join("\n"),
+    );
   });
 });

@@ -7,27 +7,34 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { isVisible } from "../agents/service.js";
-import type { AgentInfo } from "../agents/types.js";
+import { isGraphVisible, isVisible } from "../agents/service.js";
+import type { AgentInfo, GraphInfo, NodeOutcome } from "../agents/types.js";
 import {
   confirmAndStop,
   errorText,
   type FocusController,
+  stopTarget,
 } from "../ui/focus.js";
 import {
   type Colorize,
   formatElapsed,
   formatUsage,
+  graphNote,
+  graphShape,
+  oneLine,
   STATE_STYLES,
   shortModel,
   stateIcon,
 } from "../ui/format.js";
 import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
 import type { AgentPanel } from "../ui/panel.js";
+import { attachTarget, buildRows, connector, type Row } from "../ui/rows.js";
 import type { SessionHost } from "./session.js";
 
 /** Lines of the latest result shown in the overlay's detail pane. */
 const DETAIL_RESULT_LINES = 200;
+/** Lines of each agent's result in a graph's detail pane. */
+const DETAIL_NODE_LINES = 4;
 
 export interface CommandDeps {
   host: SessionHost;
@@ -46,16 +53,88 @@ function agentRow(
   now: number,
   nameWidth: number,
   color: Colorize,
+  indent = "",
 ): string {
   const usage = formatUsage(agent.usage);
-  const name = pad(agent.name, nameWidth);
+  const name = pad(agent.name, nameWidth - indent.length);
   return [
-    `${stateIcon(agent.state, color)} ${isVisible(agent) ? name : color("dim", name)}`,
+    `${color("dim", indent)}${stateIcon(agent.state, color)} ${isVisible(agent) ? name : color("dim", name)}`,
     color("dim", pad(agent.profile ?? "ad-hoc", 10)),
     color("dim", pad(shortModel(agent), 14)),
     color("dim", pad(formatElapsed(now - agent.stateSince), 7)),
     usage ? color("dim", usage) : "",
   ].join("  ");
+}
+
+function graphRow(
+  graph: GraphInfo,
+  now: number,
+  nameWidth: number,
+  color: Colorize,
+): string {
+  const usage = formatUsage(graph.usage);
+  const name = pad(graph.name, nameWidth);
+  return [
+    `${stateIcon(graph.state, color)} ${isGraphVisible(graph) ? name : color("dim", name)}`,
+    color("dim", pad("graph", 10)),
+    color("dim", pad(`${graph.nodes.length} agents`, 14)),
+    color("dim", pad(formatElapsed(now - graph.stateSince), 7)),
+    usage ? color("dim", usage) : "",
+  ].join("  ");
+}
+
+function nodeSummary(
+  outcome: NodeOutcome | undefined,
+  agent: AgentInfo | undefined,
+): string {
+  if (!outcome) return agent?.state ?? "working";
+  if (outcome.kind === "answered")
+    return outcome.result.stopReason === "error" ? "failed" : "answered";
+  if (outcome.kind === "failed") return `failed: ${outcome.reason}`;
+  return outcome.kind;
+}
+
+function graphDetail(
+  graph: GraphInfo,
+  lookup: (id: string) => AgentInfo | undefined,
+  color: Colorize,
+): string[] {
+  const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
+  const lines = [
+    color("accent", "Shape"),
+    graphShape(graph),
+    "",
+    color("accent", "Agents"),
+  ];
+  for (const node of graph.nodes) {
+    const agent = lookup(node.agentId);
+    const outcome = node.outcome;
+    const inputs = node.inputs.map((input) => names.get(input) ?? input);
+    lines.push(
+      `${agent ? stateIcon(agent.state, color) : " "} ${node.name}${inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : ""} ${color("dim", nodeSummary(outcome, agent))}`,
+    );
+    if (agent) lines.push(color("dim", `  ${oneLine(agent.task, 200)}`));
+    if (outcome?.kind === "answered" && outcome.result.text) {
+      const body = outcome.result.text.split("\n");
+      lines.push(
+        ...body.slice(0, DETAIL_NODE_LINES).map((line) => `  ${line}`),
+      );
+      if (body.length > DETAIL_NODE_LINES)
+        lines.push(
+          color(
+            "dim",
+            `  … ${body.length - DETAIL_NODE_LINES} more lines (attach to read)`,
+          ),
+        );
+    }
+  }
+  return lines;
+}
+
+function rowName(row: Row): string {
+  return row.kind === "graph"
+    ? row.graph.name
+    : `${connector(row)}${row.agent.name}`;
 }
 
 function agentDetail(agent: AgentInfo, color: Colorize): string[] {
@@ -93,50 +172,88 @@ async function openAgentsOverlay(
 ): Promise<void> {
   const service = await deps.host.ensure(ctx);
   let after: (() => void) | undefined;
-  // Open agents first, then closed ones, newest first.
+  // Graphs and agents, open ones first, then closed ones, newest first; a
+  // graph's agents follow it.
   const items = () =>
-    service
-      .list({ includeClosed: true })
-      .sort(
-        (left, right) =>
-          Number(isVisible(right)) - Number(isVisible(left)) ||
-          right.createdAt - left.createdAt,
-      );
-  const spec: OverlaySpec<AgentInfo> = {
+    buildRows(
+      {
+        agents: service.list({ includeClosed: true }),
+        graphs: service.graphs({ includeClosed: true }),
+        agent: (id) => service.get(id),
+      },
+      (left, right) =>
+        Number(!right.closed || right.state === "working") -
+          Number(!left.closed || left.state === "working") ||
+        right.createdAt - left.createdAt,
+      () => true,
+    );
+  const spec: OverlaySpec<Row> = {
     title: "Agents",
     emptyText: "No agents yet. Ask Pi to delegate.",
     footer: "↑↓ move · ⏎ attach · s stop · esc",
     items,
-    keyOf: (agent) => agent.id,
-    row: (agent, color) => {
-      const width = Math.max(...items().map((item) => item.name.length), 4);
-      return agentRow(agent, Date.now(), width, color);
+    keyOf: (row) => row.key,
+    row: (row, color) => {
+      const width = Math.max(...items().map((item) => rowName(item).length), 4);
+      return row.kind === "graph"
+        ? graphRow(row.graph, Date.now(), width, color)
+        : agentRow(row.agent, Date.now(), width, color, connector(row));
     },
-    headerLine: (agent, color) =>
-      color(
+    headerLine: (row, color) => {
+      if (row.kind === "agent") {
+        const agent = row.agent;
+        return color(
+          "dim",
+          `${agent.name} · ${agent.cwd} · started ${formatElapsed(Date.now() - agent.createdAt)} ago`,
+        );
+      }
+      const graph = row.graph;
+      const note = graphNote(graph);
+      return color(
         "dim",
-        `${agent.name} · ${agent.cwd} · started ${formatElapsed(Date.now() - agent.createdAt)} ago`,
-      ),
-    detail: (agent, color) => agentDetail(agent, color),
-    onAction: (key, agent) => {
+        [
+          `${graph.name} · graph of ${graph.nodes.length}`,
+          graph.policy === "failFast" ? "stops on failure" : "waits for all",
+          ...(note ? [note] : []),
+          `started ${formatElapsed(Date.now() - graph.createdAt)} ago`,
+        ].join(" · "),
+      );
+    },
+    detail: (row, color) =>
+      row.kind === "agent"
+        ? agentDetail(row.agent, color)
+        : graphDetail(row.graph, (id) => service.get(id), color),
+    onAction: (key, row) => {
       if (key === "enter") {
-        after = () => deps.focus.attach(ctx, agent.id);
+        const agentId = attachTarget(row);
+        if (!agentId) return undefined;
+        after = () => deps.focus.attach(ctx, agentId);
         return "close";
       }
       if (key === "s") {
-        if (!isVisible(agent)) return undefined;
-        if (agent.state !== "working") {
+        const target = stopTarget(row);
+        const visible =
+          row.kind === "agent"
+            ? isVisible(row.agent)
+            : isGraphVisible(row.graph);
+        if (!visible) return undefined;
+        if (target.state !== "working") {
           void service
-            .stop(agent.id)
+            .stop(target.id)
             .catch((error) => ctx.ui.notify(errorText(error), "error"));
           return undefined;
         }
-        after = () => void confirmAndStop(ctx, deps.host, agent);
+        after = () => void confirmAndStop(ctx, deps.host, target);
         return "close";
       }
       return undefined;
     },
-    live: () => items().some((agent) => agent.state === "working"),
+    live: () =>
+      items().some(
+        (row) =>
+          (row.kind === "agent" ? row.agent.state : row.graph.state) ===
+          "working",
+      ),
   };
   await openOverlay(ctx, spec, deps.panel);
   after?.();

@@ -28,9 +28,15 @@ Spawn two agents in parallel: one maps the API surface, one checks the tests.
 Wait for both and merge their findings.
 ```
 
+```text
+Start a graph: three agents review src/run, src/ui, and src/host, and a
+fourth merges their findings into one list of issues.
+```
+
 Pi starts agents only when you ask for delegation. An agent's result is its
 final message. Results of agents that Pi doesn't wait for arrive later as
-messages in your conversation.
+messages in your conversation. In a graph, agents pass their results to each
+other, and Pi gets one message at the end.
 
 Every agent keeps its conversation. Open `/agents`, pick any agent, even one
 that finished hours ago, and keep talking to it like a regular Pi session.
@@ -70,8 +76,10 @@ Pi session; each agent is a conversation in that harness:
                    ╰───────────────────────────╯
 ```
 
-Because pi-durable checkpoints every step, a resumed session continues where
-its agents stopped. Agents use your Pi logins and models, so they need no
+A graph is a task in the same harness that starts its agents in order and
+hands results along, so stopping a graph reaches all of its agents. Because
+pi-durable checkpoints every step, a resumed session continues where its
+agents and graphs stopped. Agents use your Pi logins and models, so they need no
 separate setup.
 
 ### Glossary
@@ -82,9 +90,10 @@ separate setup.
 | Task | The first message an agent gets. It must stand on its own, because the agent doesn't see your conversation. |
 | Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done. |
 | Result | The agent's final message after a task or message. |
+| Graph | Agents that work together: some in parallel, some after others, receiving their results. Pi gets one message at the end. |
 | Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
 | Attach | Open an agent's conversation to watch it and talk to it. |
-| Stop | End an agent and remove it from the panel. Agents end on their own once their answer reaches Pi. Messaging an agent that ended starts it again. |
+| Stop | End an agent or graph and remove it from the panel. Agents end on their own once their answer reaches Pi. Messaging an agent that ended starts it again. |
 
 An agent is in one of these states:
 
@@ -94,6 +103,12 @@ An agent is in one of these states:
 | ● `idle` | The agent answered and waits for messages. |
 | ✗ `failed` | The last answer ended with an error. |
 | ⊘ `interrupted` | The last answer was interrupted before it finished. |
+| ○ `waiting` | In a graph: the agent waits for the agents whose results it needs. |
+| ⊖ `skipped` | In a graph: the agent never started because none of the agents it waited for answered. |
+
+A graph uses the same glyphs: it works until all of its agents finished, then
+shows the state of its last agents: failed if one failed or was skipped,
+interrupted if one was interrupted or stopped, and idle otherwise.
 
 Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, and
 `ls`, along with your context files such as `AGENTS.md` and your skills. They
@@ -101,24 +116,31 @@ can't use MCP servers, tools from other extensions, or other agents.
 
 ### Watch and talk to agents
 
-A panel above the editor shows one line per open agent. The glyph shows the
-state, and working agents show how long they have worked:
+A panel above the editor shows one line per open agent or graph, with a
+graph's agents below it as a tree. The glyph shows the state, working agents
+show how long they have worked, a graph shows how many of its agents
+finished, and `←` names the agents whose results an agent receives:
 
 ```text
 ◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep
 ✗ docs · sol · 8.0k · $0.02 · rate limit exceeded
+◉ review · graph 1/4 · 40s · 12.0k
+├─ ● api · terra · 4.0k
+├─ ◉ tests · sol · 40s · 8.0k · Using grep
+├─ ◉ host · sol · 40s
+└─ ○ merge ← api, tests, host · opus
 ```
 
-An agent leaves the panel once its answer reaches Pi. Failed and interrupted
-agents stay until you or Pi stop them.
+An agent leaves the panel once its answer reaches Pi, and a graph once its
+result does. Failed and interrupted agents stay until you or Pi stop them.
 
 Press ← in an empty editor or Ctrl+Q to focus the panel. Then:
 
 | Key | Action |
 | --- | --- |
-| ↑ ↓ | Select an agent. |
-| ⏎ | Attach to the agent. |
-| `s` | Stop the agent. Pi asks first when it still works. |
+| ↑ ↓ | Select an agent or graph. |
+| ⏎ | Attach to the agent, or to a graph's first agent. |
+| `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
 | Esc | Return to the editor. |
 
 Attaching shows the agent's conversation with Pi's own message and tool
@@ -137,14 +159,56 @@ results don't post into the parent conversation.
 
 You can attach to any agent, not only the ones in the panel. Agents that
 finished or were stopped keep their whole conversation: open `/agents`, select
-one, and continue where it left off. This also works after you resume a
-session.
+one, and continue where it left off. This also works for a graph's agents
+after the graph finished, and after you resume a session.
+
+### Graphs
+
+A graph starts two to twelve agents that work together. Agents run in
+parallel, and an agent that waits for others starts once they finished and
+receives their final messages with its task. Common shapes:
+
+| Shape | Example |
+| --- | --- |
+| Fan-out and merge | `{api, tests, host} → merge` |
+| Pipeline | `plan → implement → review` |
+| Diamond | `map → {api, tests} → merge` |
+
+Only the agents nothing waits for report back to Pi, as one message. With a
+single last agent, such as a merging one, Pi gets just its answer, and the
+results in between stay in the graph, where you can attach to read them:
+
+```text
+● review › merge answered · opus · 6.2k
+  Three issues stand out: …
+✗ host failed: rate limit exceeded
+```
+
+When an agent that others wait for fails, they still start with the results
+that did arrive, and learn which agent failed. An agent is skipped only when
+none of the agents it waits for answered.
+
+By default a graph runs to the end, even when an agent fails. Ask Pi to stop
+everything as soon as one agent fails, and the remaining agents stop instead.
+Stopping a graph stops all of its agents and posts nothing. Interrupting or
+stopping a single agent doesn't stop its graph or the graph's other agents.
+
+A graph's agents are ordinary agents: attach to them, message them, and keep
+talking to them after the graph finished. A message to a graph's agent while
+the graph works joins its work; if the agent answers it separately, that
+answer arrives after the graph's result. A queued follow-up to a graph's agent
+holds back the graph until the agent answered it as well.
+
+Graphs replace the workflow language of earlier versions with something
+smaller: edges carry final messages, and there are no references, schemas,
+loops, or conditions. For repeated rounds, such as review and fix, Pi can
+message the agents again.
 
 ### Commands
 
 | Command | Action |
 | --- | --- |
-| `/agents` | Browse all agents, including ended ones, with their task and latest result. Attach to or stop them. |
+| `/agents` | Browse all agents and graphs, including ended ones, with their tasks and latest results. Attach to or stop them. |
 | `/agent <name>` | Attach to an agent. |
 
 ### Tools
@@ -154,14 +218,17 @@ Pi uses these tools to work with agents:
 | Tool | Purpose |
 | --- | --- |
 | `agent_spawn` | Start an agent on a task, optionally waiting for its result. |
+| `agent_spawn_graph` | Start a graph of agents, optionally waiting for its result. |
 | `agent_send` | Message an agent: prompt, steer, or queue a follow-up. |
-| `agent_wait` | Block until agents answer and return their results. |
-| `agent_status` | Show agent states. |
-| `agent_stop` | Stop an agent. |
+| `agent_wait` | Block until agents or graphs answer and return their results. |
+| `agent_status` | Show agent and graph states. |
+| `agent_stop` | Stop an agent or a graph. |
 
-`agent_spawn` and `agent_send` can also block for the result: their `wait`
-argument sets the most seconds to wait. A result that a wait returns doesn't
-post again as a message. Cancelling a wait leaves the agents working.
+`agent_spawn`, `agent_spawn_graph`, and `agent_send` can also block for the
+result: their `wait` argument sets the most seconds to wait. A result that a
+wait returns doesn't post again as a message. Cancelling a wait leaves the
+agents working, and so does a message you send to Pi while it waits: Pi
+stops waiting and answers you right away.
 
 Each tool call shows the arguments Pi chose on a dim line below it:
 
@@ -176,7 +243,8 @@ Each tool call shows the arguments Pi chose on a dim line below it:
 Agents belong to the Pi session that started them. When you quit Pi or it
 crashes, agents pause. When you resume the session, for example with `pi -c`,
 interrupted work continues and results that haven't arrived yet post into the
-conversation. A tool call that can't safely repeat reports the interruption to
+conversation. A graph continues too: its agents that already finished don't
+work again, and no agent gets its task twice. A tool call that can't safely repeat reports the interruption to
 the agent instead.
 
 Agents of sessions started with `--no-session` live in memory and end with

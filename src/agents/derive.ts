@@ -16,6 +16,7 @@ import {
   type AgentState,
   type AgentUsage,
   EMPTY_USAGE,
+  type GraphNode,
   type RequestOutcome,
 } from "./types.js";
 
@@ -160,4 +161,42 @@ export function outcomeOf(
       : { kind: "failed", reason: submission.reason };
   }
   return undefined;
+}
+
+/**
+ * A graph's state: `working` until the graph task ended, then `interrupted`
+ * when it was stopped, and otherwise derived from the agents nothing waits
+ * for: `failed` when one failed or was skipped, `interrupted` when one was
+ * interrupted or stopped, and `idle` when they all answered.
+ */
+export function deriveGraphState(
+  ended: { status: string } | undefined,
+  nodes: readonly GraphNode[],
+): AgentState {
+  if (!ended) return "working";
+  if (ended.status === "aborted") return "interrupted";
+  if (ended.status !== "completed") return "failed";
+  const kinds = nodes
+    .filter((node) => node.end)
+    .map((node) => node.outcome?.kind);
+  if (
+    kinds.some(
+      (kind) => kind === undefined || kind === "failed" || kind === "skipped",
+    )
+  )
+    return "failed";
+  if (kinds.some((kind) => kind !== "answered")) return "interrupted";
+  return "idle";
+}
+
+export function sumUsage(usages: readonly AgentUsage[]): AgentUsage {
+  const total = { ...EMPTY_USAGE };
+  for (const usage of usages) {
+    total.input += usage.input;
+    total.output += usage.output;
+    total.cacheRead += usage.cacheRead;
+    total.cacheWrite += usage.cacheWrite;
+    total.cost += usage.cost;
+  }
+  return total;
 }

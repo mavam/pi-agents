@@ -3,13 +3,13 @@
 pi-agents gives a Pi session durable, named agents that the parent model and
 the user can start, message, wait on, watch, and stop. Agents run in-process as
 [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable)
-conversations. This document describes the 1.0 design; composition of agent
-results is out of scope and builds on it later.
+conversations. This document describes the 1.0 design and its first form of
+composition: graphs of agents that pass results to each other.
 
 ## Principles
 
-- The agent is the only core abstraction. An agent's result is its last
-  assistant message.
+- The agent is the core abstraction. An agent's result is its last assistant
+  message. A graph composes agents without changing them.
 - pi-durable is the substrate. We do not run agents as Pi processes.
 - The parent conversation stays primary. Agents appear as compact lines, tool
   calls, and result messages.
@@ -20,8 +20,12 @@ results is out of scope and builds on it later.
 | Abstraction | Meaning | Backed by |
 | --- | --- | --- |
 | Host | One pi-durable `Harness` per parent Pi session | JSONL storage in `~/.pi/agent/pi-agents/<session-id>/` |
-| Agent | A durable, named conversation | An ownerless conversation plus an `AgentRecord` |
-| AgentRecord | Name, profile, creation time, closed flag, parent requests | The session document `pi-agents.agents` |
+| Agent | A durable, named conversation | An ownerless conversation, or one a turn owns, plus an `AgentRecord` |
+| AgentRecord | Name, profile, creation time, closed flag, parent requests, graph | The session document `pi-agents.agents` |
+| Graph | Named agents plus edges that carry results; reports back as one result | A graph task plus a `GraphRecord` |
+| GraphRecord | Name, policy, creation time, nodes (agent, node task, inputs), closed flag, whether the parent still expects the result | The session document `pi-agents.graphs` |
+| Node | One graph agent's task: wait for its inputs, then one message and its answer | A node task |
+| Edge | `A → B`: B starts once A finished and receives A's final message | A node's `after` list |
 | Turn | One input and the work until its final answer | A pi-durable input submission |
 | Result | The last assistant message: text, stop reason, entry ID | The turn's assistant entry |
 | Parent request | A turn the parent model started through `spawn` or `send` | An outbox entry in the record plus a submission with the same request ID |
@@ -59,6 +63,119 @@ closed one.
   UI asks for confirmation while the agent works.
 - Agents cannot spawn agents.
 
+## Graphs
+
+A graph runs on pi-durable's tasks and ownership tree, so its bookkeeping is
+durable and cancellable without hand-written state machines.
+
+### Model
+
+A graph is agents plus edges. An edge `A → B` means B starts once A finished
+and receives A's final message, appended to its task under "Results of other
+agents". The agents nothing waits for are the graph's end nodes; their
+results are the graph's result. A graph without edges reports every agent's
+result; a merging agent after all others makes the graph's result that
+agent's answer. There is no language: no references, schemas, loops, or
+conditions. Edges only carry final messages.
+
+### Tasks
+
+The extension `pi-agents-graphs` registers two tasks in the harness registry.
+Agents never select it; tasks resolve their definitions from the registry.
+
+- `pi-agents.node` (version 1) has two phases.
+  - `wait` reads the node's inputs from its `GraphRecord` and commits
+    `waiting` on their node tasks with `allSettled`, the only policy pi-durable
+    allows for tasks a task doesn't own. A node without inputs goes straight
+    to `run`.
+  - `run` builds the message from the task and the inputs' stored answers.
+    When no input answered, it completes as skipped. Otherwise it finds its
+    agent's conversation through the ownership index, submits with request ID
+    `node:<task-id>`, waits for the submission, and commits its outcome:
+    `completed` with the answer entry, `completed` as interrupted when the
+    agent itself was interrupted or stopped, `failed` on a model error, or
+    `aborted` from its abort handler when the graph stopped it.
+- `pi-agents.graph` (version 1) reads its nodes from its `GraphRecord` in
+  phase `join` and commits `waiting` on all of them with `allSettled` or
+  `failFast`. Phase `report` reads their outcomes and completes. Its abort
+  handler commits `aborted`.
+
+### Ownership
+
+```text
+host conversation (the harness root; never runs)
+└─ graph task             background, owned by the conversation
+   └─ node task × n       owned by the graph
+      └─ agent conversation   owned by its node
+         └─ pi.generation, pi.tool
+```
+
+`AgentService.spawnGraph` creates the graph, its nodes, the agent
+conversations, their `AgentRecord`s, and the `GraphRecord` in one commit.
+Names, tools, thinking levels, and edges are validated before it: `after`
+must name agents of the same graph, an agent can't wait for itself, and the
+edges form no cycle. A graph starts whole or not at all. Then:
+
+- The graph task is a background task, so nothing on the host conversation
+  reaches it, and it never blocks idle waits of standalone agents.
+- Conversations hang below their nodes, not below the graph. `failFast` marks
+  every other live node, including nodes still waiting for inputs, and the
+  abort cascade reaches their agents' runs. Such nodes end as stopped, not
+  skipped.
+- Stopping a graph is `abortTask` on the graph. Abort runs bottom-up: the
+  agents' runs, then the nodes' abort handlers, then the graph's.
+- A node finishes only once its agent's work drained, and the graph only once
+  its nodes did. A follow-up queued to a graph agent therefore holds back the
+  graph until the agent answered it.
+- A node waits until all its inputs finished, even when one already failed.
+- Interrupting or stopping one agent settles its submission as aborted. Its
+  node completes as interrupted rather than failing, so `failFast` keeps the
+  other agents working, and nodes after it still run with the others'
+  results.
+- Agents outlive their graph. Once a node is terminal, new work in its
+  agent's conversation is ordinary work: the user can attach, and the parent
+  can message the agent like any other.
+
+A graph agent has no parent request for its task; its node sends it. A graph
+agent counts as waiting while an input's node is live, then as working until
+its own node ended. Graphs and standalone agents share one name space among
+visible agents and graphs.
+
+### Restart
+
+Closing the harness preserves every task. On reopen, waiting nodes and the
+waiting graph stay waiting, finished nodes stay terminal and never run again,
+and a running node reruns its phase. It builds the same message from stored
+answers and names, and its request ID finds the submission it already made,
+so the agent gets its task once while pi-durable resumes its run. These
+guarantees cover admission: a model call or tool effect that was in flight at
+the crash can run again, and delivery to Pi stays at least once.
+
+### Versions and migration
+
+Both tasks and both documents are at version 1. A later change to a task's
+input or checkpoint bumps its `version` and adds `migrate(input, checkpoint,
+fromVersion)`; pi-durable migrates a live task atomically when it next
+reserves it. A migration must keep the task IDs in the checkpoints (a node's
+`inputs`, the graph's `nodes`). Terminal tasks are stored results and never
+migrate. A task whose definition is missing or older than the stored one
+stays blocked rather than lost; stopping its graph then settles it as
+`orphaned`. Documents migrate the same way through `defineDoc`'s `migrate`,
+applied on their next access. The new optional `AgentRecord.graph` field
+needed no migration.
+
+### Agents that delegate (planned)
+
+The next step lets a graph's agent spawn a subgraph itself, for fan-out over
+what it discovers. The subgraph runs inside a blocking tool call: the tool
+owns the subgraph and returns its result, so the agent merges it in the same
+run, Esc stops the subgraph with the agent, and no asynchronous result
+protocol is needed. Delegation is opt-in per agent, depth is capped at 2, and
+a total node limit is inherited by nested graphs. Spikes confirmed the
+ownership mechanics on pi-durable 1.1.0: an agent's idle wait covers a graph
+it owns, stopping the top graph reaches nested graphs bottom-up, and Esc on
+the delegating agent stops its subgraph.
+
 ## Delivery
 
 Parent requests use an outbox for exactly-once submission: the record stores
@@ -74,6 +191,24 @@ When a parent request settles:
    otherwise. Delivery also waits while the user is attached to an agent.
 3. Aborted requests deliver nothing.
 4. Several requests answered by the same entry deliver once.
+
+A graph delivers one `pi-agents:graph-result` message with the outcomes of
+its end nodes: an answer, a failure, or that the node was interrupted,
+stopped, or skipped. With one end node, the message reads as that agent's
+answer (`Graph review: merge answered: …`). Agents in between that didn't
+answer are named after it, so the parent sees why a merge is partial. A
+node's answer is the one to its graph task, even if the agent answered later
+messages since. The `GraphRecord`'s `pending` flag is the outbox:
+
+1. A wait on the graph consumes the result instead.
+2. A stopped graph delivers nothing.
+3. While the result is pending, the graph's agents deliver nothing of their
+   own. Acknowledging the graph marks the agents' answers delivered, so a
+   parent message answered by the same entry delivers with the graph, and a
+   later answer delivers on its own.
+4. The graph closes on delivery, and so do its agents that answered, were
+   skipped, or that the graph stopped. Failed and interrupted agents stay
+   open.
 
 Turns the user starts from the attach view never deliver into the parent.
 Delivery is acknowledged after posting, so a crash can repeat a delivery but
@@ -105,10 +240,24 @@ never lose one. On session resume, unacknowledged settled requests deliver.
 | Tool | Parameters |
 | --- | --- |
 | `agent_spawn` | `task`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `cwd?`, `wait?` (seconds) |
+| `agent_spawn_graph` | `name?`, `agents` (2 to 12 of `task`, `name?`, `after?`, `profile?`, `model?`, `thinking?`, `tools?`, `cwd?`), `failFast?`, `wait?` (seconds) |
 | `agent_send` | `name`, `message`, `followUp?`, `wait?` (seconds) |
-| `agent_wait` | `names`, `timeout?` |
-| `agent_status` | `name?` |
-| `agent_stop` | `name` |
+| `agent_wait` | `names` (agents or graphs), `timeout?` |
+| `agent_status` | `name?` (agent or graph) |
+| `agent_stop` | `name` (agent or graph) |
+
+`agent_spawn_graph` is a separate tool rather than an `agents` argument of
+`agent_spawn`, because "either `task` or `agents`" cannot be expressed in the
+tool schemas that providers accept. Its description nudges the model to add a
+merging agent after the others when it wants one answer. `after` names
+agents of the same graph; agents without a name are called `<graph>-<n>`, or
+after their profile. The spawn result names the graph's shape, such as
+`{api, tests} → merge`. `agent_send` to a graph fails and lists its agents.
+
+Pi places a user's steering message only after the current tool round. A
+wait would therefore hold a steer back until the agents answer, so a steer
+ends every running wait at once; the agents keep working and their results
+arrive as messages. Follow-ups don't end waits.
 
 The system prompt adds one line of guidance, the usable profiles, and the
 user's scoped models (`ctx.scopedModels`, from `/scoped-models` or `--models`)
@@ -124,27 +273,47 @@ renders its explicit arguments as a dim `key=value` line.
 
 ## Frontend
 
-- Panel above the editor: one line per open agent, working first, idle agents
-  always shown. Left arrow from an empty editor or Ctrl+Q focuses it; ↑↓
-  select, ⏎ attaches, `s` stops, Esc returns. The glyph carries
-  the state; working agents show how long they have worked.
+- Panel above the editor: one line per open agent or graph, working first,
+  idle ones always shown. A graph's line shows how many of its agents
+  finished, with its agents below it as a tree in stages, each with `←` and
+  the agents it receives results from; unfocused, a finished graph
+  folds to its line. Left arrow from an empty editor or Ctrl+Q focuses it; ↑↓
+  select, ⏎ attaches (a graph: its first agent), `s` stops an agent or a
+  graph, and Esc returns. While the stop confirmation is open, keys go to
+  the confirmation. The glyph carries the state; working agents show how long
+  they have worked.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's
   durable conversation view with Pi's message and tool components. ⏎ prompts
   or steers, Alt+⏎ queues a follow-up, Esc interrupts, ← detaches, Shift+↑↓
   scrolls.
-- `/agents`: a table of all agents, closed ones dimmed, with details, attach,
-  and stop. `/agent <name>` attaches.
-- Result messages render the agent, its state, and the result as Markdown.
+- `/agents`: a table of all agents and graphs, a graph's agents below it,
+  closed ones dimmed, with details, attach, and stop. `/agent <name>`
+  attaches.
+- Result messages render the agent, its state, and the result as Markdown. A
+  graph's message renders its end agents' results and names the agents in
+  between that didn't answer. `/agents` shows a graph's shape, such as
+  `map → {api, tests} → merge`.
+- Graphs reuse the look of the earlier workflow trees (status glyphs, `├─`
+  connectors) but not their code, which was bound to the workflow language.
+  `○` marks an agent waiting for inputs and `⊖` a skipped one.
+- pi-durable's task graph stays out of the UI: graph and agent states say what
+  users need. `AgentService.liveTasks()` exposes it for tests and debugging.
 - The fancy-footer integration reports working and idle counts.
 
 ## Testing
 
 Tests use pi-durable's memory storage and pi-ai's faux provider. Restart tests
 use JSONL storage: interrupt a turn, close, reopen, and verify that the turn
-completes and its result delivers once.
+completes and its result delivers once. Graph tests cover `allSettled` with
+answers and failures, pipelines, merges with failed inputs, skipped agents,
+`failFast` stopping waiting agents, edge validation, stopping a graph, the
+ownership tree through the task graph, restarts mid-graph and mid-pipeline
+that repeat no finished agent and send no task twice, and messaging a
+graph's agent after the graph finished. A tool test steers during a wait.
 
 ## Deferred
 
-Composition, budgets, MCP, extension tools, nested agents, forking agents, a
-daemon or CLI, agents shared across sessions, and model changes for running
-agents.
+Agents that delegate (above), composition beyond graphs (result schemas,
+loops, conditions), edges to agents outside a graph, budgets, MCP, extension
+tools, forking agents, a daemon or CLI, agents shared across sessions, and
+model changes for running agents.

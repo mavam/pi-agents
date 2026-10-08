@@ -4,11 +4,13 @@
  */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { shapeLine } from "../agents/topology.js";
 import {
   type AgentInfo,
   type AgentState,
   type AgentUsage,
   formatModelRef,
+  type GraphInfo,
 } from "../agents/types.js";
 
 export type Colorize = (
@@ -21,9 +23,11 @@ export const plainColorize: Colorize = (_color, text) => text;
 /** The status vocabulary shared by every surface. */
 export const STATE_STYLES = {
   working: { icon: "◉", color: "warning" },
+  waiting: { icon: "○", color: "dim" },
   idle: { icon: "●", color: "success" },
   failed: { icon: "✗", color: "error" },
   interrupted: { icon: "⊘", color: "dim" },
+  skipped: { icon: "⊖", color: "muted" },
 } as const satisfies Record<
   AgentState,
   { icon: string; color: Parameters<Colorize>[0] }
@@ -104,14 +108,17 @@ export function formatAgentLine(
   info: AgentInfo,
   now: number,
   color: Colorize = plainColorize,
+  /** Names of the agents whose results it receives, in a graph. */
+  inputs: readonly string[] = [],
 ): string {
   const usage = formatUsage(info.usage);
   const activity =
     activityText(info, now) ??
     (info.state === "failed" ? info.result?.errorMessage : undefined);
   const dot = color("dim", " · ");
+  const from = inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : "";
   return [
-    `${stateIcon(info.state, color)} ${info.name}`,
+    `${stateIcon(info.state, color)} ${info.name}${from}`,
     info.profile ? color("dim", info.profile) : undefined,
     color("dim", shortModel(info)),
     info.state === "working"
@@ -121,6 +128,61 @@ export function formatAgentLine(
     activity
       ? color(info.state === "failed" ? "error" : "dim", oneLine(activity, 120))
       : undefined,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(dot);
+}
+
+/** `1 failed, 2 stopped`: how many of a finished graph's agents did not
+ * answer. */
+export function graphNote(graph: GraphInfo): string | undefined {
+  if (graph.state === "working") return undefined;
+  if (graph.stopped) return "stopped";
+  const counts = new Map<string, number>();
+  for (const node of graph.nodes) {
+    const kind = node.outcome?.kind ?? "failed";
+    if (kind !== "answered") counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  const note = ["failed", "interrupted", "stopped", "skipped"]
+    .flatMap((kind) => {
+      const count = counts.get(kind);
+      return count ? [`${count} ${kind}`] : [];
+    })
+    .join(", ");
+  return note || undefined;
+}
+
+/** `map → {api, tests} → merge`: the graph's stages by agent name. */
+export function graphShape(graph: Pick<GraphInfo, "nodes">): string {
+  const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
+  return shapeLine(
+    graph.nodes.map((node) => ({ key: node.agentId, inputs: node.inputs })),
+    (key) => names.get(key) ?? key,
+  );
+}
+
+/**
+ * One graph line: the glyph carries the graph's state, then how many agents
+ * finished, the elapsed time while working, the summed usage, and how many
+ * did not answer: `◉ review · graph 1/3 · 1m32s · 31.5k`.
+ */
+export function formatGraphLine(
+  graph: GraphInfo,
+  now: number,
+  color: Colorize = plainColorize,
+): string {
+  const done = graph.nodes.filter((node) => node.outcome).length;
+  const usage = formatUsage(graph.usage);
+  const note = graphNote(graph);
+  const dot = color("dim", " · ");
+  return [
+    `${stateIcon(graph.state, color)} ${graph.name}`,
+    color("dim", `graph ${done}/${graph.nodes.length}`),
+    graph.state === "working"
+      ? color("dim", formatElapsed(now - graph.stateSince))
+      : undefined,
+    usage ? color("dim", usage) : undefined,
+    note ? color(graph.state === "failed" ? "error" : "dim", note) : undefined,
   ]
     .filter((part): part is string => part !== undefined)
     .join(dot);

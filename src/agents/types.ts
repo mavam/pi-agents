@@ -23,8 +23,15 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
   );
 }
 
-/** Derived from the agent's conversation; never stored. */
-export type AgentState = "working" | "idle" | "failed" | "interrupted";
+/** Derived from the agent's conversation; never stored. A graph's agent
+ * also `waits` for its inputs or was `skipped` because none answered. */
+export type AgentState =
+  | "working"
+  | "waiting"
+  | "idle"
+  | "failed"
+  | "interrupted"
+  | "skipped";
 
 export interface ModelRef {
   provider: string;
@@ -103,6 +110,82 @@ export interface AgentInfo {
   activity: AgentActivity;
   /** Latest assistant result, once the agent answered. */
   result?: AgentResult;
+  /** The graph this agent belongs to, by graph ID. */
+  graph?: string;
+}
+
+/** How a graph waits for its agents: all of them, or until one fails. */
+export type GraphPolicy = "allSettled" | "failFast";
+
+/** How one agent of a graph ended its task. `interrupted`: the agent itself
+ * was interrupted or stopped; `stopped`: the graph stopped it; `skipped`: it
+ * never started because none of its inputs answered. */
+export type NodeOutcome =
+  | { kind: "answered"; result: AgentResult }
+  | { kind: "failed"; reason: string }
+  | { kind: "interrupted" }
+  | { kind: "stopped" }
+  | { kind: "skipped" };
+
+export interface GraphNode {
+  agentId: string;
+  name: string;
+  /** Agents whose results this agent receives, by agent ID. */
+  inputs: string[];
+  /** Whether no other agent of the graph needs this agent's result. */
+  end: boolean;
+  /** Set once the agent's task ended. */
+  outcome?: NodeOutcome;
+}
+
+export interface GraphInfo {
+  id: string;
+  name: string;
+  policy: GraphPolicy;
+  /** `working` until every agent ended its task; then derived from the
+   * agents nothing waits for. */
+  state: AgentState;
+  closed: boolean;
+  /** The graph was stopped before it finished. */
+  stopped: boolean;
+  createdAt: number;
+  /** When this process last saw the state change. */
+  stateSince: number;
+  /** Agents in stages: each after the agents it waits for. */
+  nodes: GraphNode[];
+  /** Summed over the graph's agents. */
+  usage: AgentUsage;
+}
+
+/** How many agents a graph has. */
+export const GRAPH_SIZE = { min: 2, max: 12 } as const;
+
+export interface GraphAgentSpec extends SpawnSpec {
+  /** Names of agents of the same graph whose results this agent needs. */
+  after?: string[];
+}
+
+export interface GraphSpec {
+  name?: string;
+  failFast?: boolean;
+  agents: GraphAgentSpec[];
+}
+
+/** An agent or a graph, as a name resolves. */
+export type Target =
+  | { kind: "agent"; info: AgentInfo }
+  | { kind: "graph"; info: GraphInfo };
+
+/** A live task of the agent host, for diagnostics and tests. */
+export interface TaskNode {
+  id: string;
+  kind: string;
+  /** Owning task; absent for a task its conversation owns. */
+  owner?: string;
+  background: boolean;
+  status: string;
+  /** Conversations, and thus agents, the task owns. */
+  conversations: string[];
 }
 
 export interface SpawnSpec {
@@ -124,12 +207,23 @@ export type SendMode = "auto" | "followUp";
 
 /** Settled parent requests that still need delivery to the parent. Several
  * requests answered by one entry deliver together. */
-export interface PendingDelivery {
+export interface AgentDelivery {
+  kind: "agent";
   agentId: string;
   name: string;
   requestIds: string[];
   outcome: Exclude<RequestOutcome, { kind: "aborted" }>;
 }
+
+/** A finished graph whose result the parent still expects. */
+export interface GraphDelivery {
+  kind: "graph";
+  graphId: string;
+  name: string;
+  nodes: Array<GraphNode & { outcome: NodeOutcome }>;
+}
+
+export type PendingDelivery = AgentDelivery | GraphDelivery;
 
 /** Marks messages the user sends from the attach view, so the agent can tell
  * them from messages of the agent that started it. */

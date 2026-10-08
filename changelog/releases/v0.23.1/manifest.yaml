@@ -1,0 +1,9 @@
+created: 2026-10-08
+title: More reliable agent and graph execution
+intro: >-
+  Agent graphs now wait for every agent to finish before reporting results, and stopping
+  a graph halts remaining work. Simultaneous agent starts now preserve unique names
+  and prevent ambiguous references.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.23.0

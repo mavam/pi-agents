@@ -81,11 +81,11 @@ const RENDERERS: Record<string, (cwd: string) => AnyDefinition> = {
   ls: createLsToolDefinition,
 };
 
-export function liveOf(view: ConversationView): LiveState {
+function liveOf(view: ConversationView): LiveState {
   return (view.docs["pi.live"] ?? {}) as LiveState;
 }
 
-export function inboxOf(view: ConversationView): InboxState {
+function inboxOf(view: ConversationView): InboxState {
   return (view.docs["pi.inbox"] ?? { items: [] }) as InboxState;
 }
 
@@ -127,7 +127,7 @@ export function restoredEditorText(
 }
 
 /** Renders one durable conversation view with Pi's components. */
-export class ChatView {
+class ChatView {
   readonly transcript = new Container();
   /** The newest card per call ID; provider call IDs may repeat across turns. */
   private readonly tools = new Map<string, ToolExecutionComponent>();
@@ -328,7 +328,7 @@ export class ChatView {
 }
 
 /** The status line of a live view, like Pi's working indicator. */
-export function statusText(live: LiveState): string {
+function statusText(live: LiveState): string {
   const generation = live.generation;
   const compaction = live.compactions?.[0];
   const runningTool = live.tools?.find((slot) => slot.status === "running");
@@ -347,7 +347,7 @@ export function statusText(live: LiveState): string {
 }
 
 /** `──────── badge ──`: a border row with a right-aligned badge. */
-export function badgeBorder(
+function badgeBorder(
   label: string,
   width: number,
   border: (text: string) => string,
@@ -360,7 +360,7 @@ export function badgeBorder(
 }
 
 /** Fit queued messages into a row budget, oldest first. */
-export function formatQueuedLines(
+function formatQueuedLines(
   queued: readonly string[],
   maxRows: number,
   color: Colorize,
@@ -376,14 +376,14 @@ export function formatQueuedLines(
   return shown;
 }
 
-export interface AgentPaneOptions {
+interface AgentPaneOptions {
   service: AgentService;
   agentId: string;
   state: AttachedReplicatedState<ConversationView>;
   done: () => void;
 }
 
-export class AgentPane implements Component {
+class AgentPane implements Component {
   private readonly editor: CustomEditor;
   private readonly chat: ChatView;
   private readonly color: Colorize;

@@ -17,7 +17,7 @@ import { createToolsExtension } from "../../src/host/tools.js";
 export const MODEL = { provider: "faux", modelId: "faux-1" };
 
 /** The text of the newest user message in a request. */
-export function lastUserText(
+function lastUserText(
   context: Parameters<
     Extract<FauxResponseStep, (...args: never[]) => unknown>
   >[0],

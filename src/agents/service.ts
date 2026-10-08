@@ -72,7 +72,6 @@ export interface AgentServiceOptions {
   /** Installed extensions; also the default selection of every agent. */
   extensions: Extension[];
   settings?: HarnessSettings;
-  now?: () => number;
   onReport?: (error: unknown) => void;
 }
 
@@ -95,7 +94,7 @@ function contextFor(signal: AbortSignal | undefined): Context {
   return signal ? withAbortSignal(signal, CONTEXT) : CONTEXT;
 }
 
-export function isValidAgentName(name: string): boolean {
+function isValidAgentName(name: string): boolean {
   return NAME_PATTERN.test(name);
 }
 
@@ -114,16 +113,12 @@ export class AgentService {
   private refreshChain: Promise<void> = Promise.resolve();
   private unsubscribe: (() => void) | undefined;
   private closed = false;
-  private readonly now: () => number;
 
   private constructor(
     private readonly harness: Harness,
     private readonly registry: Registry,
     private readonly envs: ExecutionEnvs,
-    now: (() => number) | undefined,
-  ) {
-    this.now = now ?? Date.now;
-  }
+  ) {}
 
   static async open(options: AgentServiceOptions): Promise<AgentService> {
     const registry = createRegistry();
@@ -136,12 +131,11 @@ export class AgentService {
         registry,
         settings: { ...options.settings, extensions: options.extensions },
         env: envs.env,
-        ...(options.now ? { now: options.now } : {}),
         ...(options.onReport ? { onReport: options.onReport } : {}),
       },
       CONTEXT,
     );
-    const service = new AgentService(harness, registry, envs, options.now);
+    const service = new AgentService(harness, registry, envs);
     try {
       await service.start();
     } catch (error) {
@@ -234,7 +228,7 @@ export class AgentService {
   }
 
   /** Whether a wait currently covers the agent. */
-  isAwaited(agentId: string): boolean {
+  private isAwaited(agentId: string): boolean {
     return (this.waiters.get(agentId) ?? 0) > 0;
   }
 
@@ -255,7 +249,7 @@ export class AgentService {
     if (!task) throw new AgentError("The task must not be empty");
     const first = requestId(1);
     const request: ParentRequest = { message: task, whenBusy: "followUp" };
-    const createdAt = this.now();
+    const createdAt = Date.now();
     const conversation = await this.harness.createConversation(
       {
         ownership: { kind: "ownerless" },
@@ -575,7 +569,7 @@ export class AgentService {
 
   /** Commit listener: record what changed. Must not call Session APIs. */
   private onCommit(publication: CommitPublication): void {
-    const now = this.now();
+    const now = Date.now();
     let records = false;
     for (const change of publication.changes) {
       if (change.type === "document") {
@@ -684,7 +678,7 @@ export class AgentService {
     );
     const state = deriveState(live, result, this.settlements.get(id));
     const previous = this.infos.get(id);
-    const now = this.now();
+    const now = Date.now();
     const durable = (agent ?? {}) as DurableAgentState;
     const tools = Array.isArray(durable.tools) ? durable.tools : undefined;
     this.infos.set(id, {
@@ -714,8 +708,6 @@ export class AgentService {
       usage: addPartialUsage(summarizeUsage(usage), live),
       activity: activityOf(live),
       ...(result ? { result } : {}),
-      pendingRequests:
-        Object.keys(record.requests).length - outcomes.size - aborted.length,
     });
     return aborted;
   }

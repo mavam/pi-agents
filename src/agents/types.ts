@@ -103,8 +103,6 @@ export interface AgentInfo {
   activity: AgentActivity;
   /** Latest assistant result, once the agent answered. */
   result?: AgentResult;
-  /** Parent requests that have not settled yet. */
-  pendingRequests: number;
 }
 
 export interface SpawnSpec {

@@ -41,7 +41,7 @@ function pad(value: string, width: number): string {
     : value + " ".repeat(width - value.length);
 }
 
-export function agentRow(
+function agentRow(
   agent: AgentInfo,
   now: number,
   nameWidth: number,
@@ -58,7 +58,7 @@ export function agentRow(
   ].join("  ");
 }
 
-export function agentDetail(agent: AgentInfo, color: Colorize): string[] {
+function agentDetail(agent: AgentInfo, color: Colorize): string[] {
   const lines = [color("accent", "Task"), ...agent.task.split("\n")];
   const result = agent.result;
   if (agent.state === "failed") {

@@ -41,7 +41,7 @@ describe("system prompt appendix", () => {
     const { profiles, issues } = profileCatalog(project, "both", catalog);
     expect(profiles.map((profile) => profile.name)).toEqual(["scout"]);
     expect(issues).toEqual([
-      "profile broken: unavailable skills: missing",
+      "profile broken: unavailable skills: missing (unknown)",
       "profile offline: unknown model nope/x",
     ]);
     const appendix = buildSystemPromptAppendix(profiles, catalog);

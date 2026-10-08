@@ -1,6 +1,6 @@
 /**
  * Test preload: point pi's user directory and HOME at a fresh temp dir so
- * user-scope discovery (~/.pi/agent/{agents,skills,workflows} and
+ * user-scope discovery (~/.pi/agent/{agents,skills} and
  * ~/.agents/skills) never leaks the developer's real home configuration into
  * the suite.
  */

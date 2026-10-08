@@ -19,7 +19,7 @@ import { openAgentPane } from "./attach.js";
 import type { AgentPanel } from "./panel.js";
 
 /** True for text a user typed: no escape introducer, no control bytes. */
-export function isPrintable(data: string): boolean {
+function isPrintable(data: string): boolean {
   if (data.length === 0) return false;
   const code = data.codePointAt(0) ?? 0;
   return code >= 0x20 && code !== 0x7f;

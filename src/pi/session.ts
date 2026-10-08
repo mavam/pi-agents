@@ -22,7 +22,7 @@ import { createPromptExtension } from "../host/prompt.js";
 import { openStorage, type Storage } from "../host/storage.js";
 import { createToolsExtension } from "../host/tools.js";
 
-export function sessionDirectory(sessionId: string): string {
+function sessionDirectory(sessionId: string): string {
   return path.join(getAgentDir(), "pi-agents", "sessions", sessionId);
 }
 

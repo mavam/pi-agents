@@ -33,7 +33,7 @@ import { resolveSpawn } from "./spawn.js";
 const MAX_RESULT_CHARS = 40_000;
 const PROGRESS_MS = 1_000;
 
-export interface AgentToolDetails {
+interface AgentToolDetails {
   at: number;
   agents: AgentInfo[];
   timedOut?: string[];
@@ -50,7 +50,7 @@ function truncateResult(body: string): string {
 }
 
 /** The model-facing summary of one agent: its state and result. */
-export function describeAgent(info: AgentInfo): string {
+function describeAgent(info: AgentInfo): string {
   const head = `## ${info.name} (${info.state})`;
   const result = info.result;
   if (info.state === "working") return head;

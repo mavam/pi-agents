@@ -22,7 +22,6 @@ function agent(overrides: Partial<AgentInfo>): AgentInfo {
     lastActivityAt: 0,
     usage: { ...EMPTY_USAGE },
     activity: {},
-    pendingRequests: 0,
     ...overrides,
   };
 }

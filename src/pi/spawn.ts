@@ -25,11 +25,7 @@ import {
   type Profile,
   type Scope,
 } from "../catalog/profiles.js";
-import {
-  discoverSkills,
-  renderSkillsPrompt,
-  resolveSkills,
-} from "../catalog/skills.js";
+import { loadSkills } from "../catalog/skills.js";
 
 export interface SpawnRequest {
   task: string;
@@ -105,19 +101,12 @@ function profileInstructions(
   if (!profile) return { ambientSkills: true };
   const parts = [profile.instructions];
   if (profile.skills !== undefined) {
-    const catalog = discoverSkills(cwd, scope);
-    const { resolved, failures } = resolveSkills(profile.skills, catalog);
-    if (failures.length > 0) {
-      const names = failures.map((failure) =>
-        failure.reason === "unknown"
-          ? `${failure.name} (unknown)`
-          : `${failure.name} (${failure.message})`,
-      );
+    const { prompt, missing } = loadSkills(profile.skills, cwd, scope);
+    if (missing.length > 0)
       throw new AgentError(
-        `Profile ${profile.name} requests unavailable skills: ${names.join(", ")}`,
+        `Profile ${profile.name} requests unavailable skills: ${missing.join(", ")}`,
       );
-    }
-    parts.push(renderSkillsPrompt(resolved));
+    parts.push(prompt);
   }
   const instructions = parts.filter((part) => part.trim()).join("\n\n");
   return {
@@ -141,12 +130,8 @@ export function profileProblem(
     if (!resolved.ok) return `unknown model ${profile.model}`;
   }
   if (profile.skills && profile.skills.length > 0) {
-    const { failures } = resolveSkills(
-      profile.skills,
-      discoverSkills(cwd, scope),
-    );
-    if (failures.length > 0)
-      return `unavailable skills: ${failures.map((failure) => failure.name).join(", ")}`;
+    const { missing } = loadSkills(profile.skills, cwd, scope);
+    if (missing.length > 0) return `unavailable skills: ${missing.join(", ")}`;
   }
   return undefined;
 }

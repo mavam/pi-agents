@@ -32,7 +32,7 @@ export const STATE_STYLES = {
 export const AGENT_ICON = "✦";
 
 /** A working agent counts as silent after this much time without progress. */
-export const STALL_AFTER_MS = 60_000;
+const STALL_AFTER_MS = 60_000;
 
 export function stateIcon(state: AgentState, color: Colorize): string {
   const style = STATE_STYLES[state];
@@ -49,18 +49,18 @@ export function formatElapsed(ms: number): string {
   return `${seconds}s`;
 }
 
-export function formatTokens(count: number): string {
+function formatTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}m`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
   return String(count);
 }
 
-export function formatCost(cost: number): string {
+function formatCost(cost: number): string {
   if (cost <= 0) return "";
   return `$${cost.toFixed(cost < 0.1 ? 3 : 2)}`;
 }
 
-export function totalTokens(usage: AgentUsage): number {
+function totalTokens(usage: AgentUsage): number {
   return usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
 
@@ -83,7 +83,7 @@ export function shortModel(info: Pick<AgentInfo, "model">): string {
 }
 
 /** What the agent is doing right now, for working agents. */
-export function activityText(info: AgentInfo, now: number): string | undefined {
+function activityText(info: AgentInfo, now: number): string | undefined {
   if (info.state !== "working") return undefined;
   const silent = now - info.lastActivityAt;
   if (silent >= STALL_AFTER_MS)
@@ -104,7 +104,6 @@ export function formatAgentLine(
   info: AgentInfo,
   now: number,
   color: Colorize = plainColorize,
-  modelLabel?: string,
 ): string {
   const usage = formatUsage(info.usage);
   const activity =
@@ -114,7 +113,7 @@ export function formatAgentLine(
   return [
     `${stateIcon(info.state, color)} ${info.name}`,
     info.profile ? color("dim", info.profile) : undefined,
-    color("dim", modelLabel ?? shortModel(info)),
+    color("dim", shortModel(info)),
     info.state === "working"
       ? color("dim", formatElapsed(now - info.stateSince))
       : undefined,

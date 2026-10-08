@@ -1,167 +1,100 @@
 /**
- * Interactive split-pane panel for /agents: a keyboard-navigable table on top
- * and the selected item's details below. One generic component; commands
- * supply an OverlaySpec.
+ * The split-pane overlay behind /agents: a keyboard-navigable table on top
+ * and the selected item's details below, wrapped to the pane width.
  *
- * The panel replaces the composer in the editor slot (like Pi's /settings and
- * /model selectors) rather than floating over the transcript, so it opens next
- * to where the user is looking.
+ * It replaces the composer in the editor slot (like Pi's /settings and
+ * /model selectors) rather than floating over the transcript.
  *
- *   ╭─ Agents (1/3) ──────────────────────────────────────────╮
- *   │ ▸ ◉ reviewer  working  explorer  terra  1m32s  15.5k     │
- *   │   ● docs      idle     ad-hoc    sol    3m     8.0k      │
- *   ├─ reviewer · /repo · started 4m ago ─────────────────────┤
- *   │ Task: Review src/run for error handling…                 │
- *   ╰─ ↑↓ move · ⏎ attach · s stop · x close · esc ──────────╯
+ *   ╭─ Agents (1/2) ───────────────────────────────────╮
+ *   │ ▸ ◉ reviewer  explorer  terra  15.5k             │
+ *   │   ● docs      ad-hoc    sol    8.0k              │
+ *   ├─ reviewer · /repo · started 4m ago ──────────────┤
+ *   │ Task                                             │
+ *   │ Review src/run for error handling                │
+ *   ╰─ ↑↓ move · ⏎ attach · s stop · esc ──────────────╯
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   getKeybindings,
-  Input,
   matchesKey,
   parseKey,
   type TUI,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { type Colorize, plainColorize } from "./format.js";
 import type { AgentPanel } from "./panel.js";
 
 const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
-/** Rows the frame itself owns: title border, table/detail separator, footer
- * border, and the blank row below the box. */
+/** Rows of the frame: title border, separator, footer border, blank row. */
 const CHROME_ROWS = 4;
 
-/** Blank row under the closing border, so the panel does not butt against
- * whatever pi renders beneath it (status line, footer). Empty rather than a
- * padded box row: it is outside the frame. */
-const TRAILING_BLANK = "";
+/** `close` dismisses the overlay; anything else keeps it open. */
+type OverlayAction = "close" | undefined;
 
-/** Border text; a function makes it dynamic (e.g. per drill-down mode). */
-export type OverlayChrome = string | (() => string);
-
-/** What an action asks the overlay to do: dismiss, move the selection
- * (e.g. after a mode switch changes the key namespace), or nothing. */
-export interface OverlayComposer {
-  label: string;
-  submit: (value: string) => void | Promise<void>;
-}
-
-export type OverlayAction =
-  | "close"
-  | { selectKey: string }
-  | { compose: OverlayComposer }
-  | undefined;
-
-/** What the overlay shows and does; items are re-read every render, so a
- * live model refreshes for free. */
+/** What the overlay shows and does; items are re-read every render. */
 export interface OverlaySpec<T> {
-  title: OverlayChrome;
+  title: string;
   /** Shown when items() is empty. */
-  emptyText: OverlayChrome;
-  /** Key-hint line embedded in the bottom border. */
-  footer: OverlayChrome;
-  /** Optional item-sensitive footer (for actions available only when live). */
-  footerFor?: (item: T) => string;
+  emptyText: string;
+  /** Key hints embedded in the bottom border. */
+  footer: string;
   items: () => T[];
-  /** Stable identity, so selection survives list reorder/refresh. */
+  /** Stable identity, so the selection survives reordering. */
   keyOf: (item: T) => string;
-  /** One table line (no selection marker; the renderer adds it). */
+  /** One table line; the renderer adds the selection marker. */
   row: (item: T, color: Colorize) => string;
-  /** Metadata line embedded in the separator between table and detail. */
+  /** Metadata line embedded in the separator. */
   headerLine: (item: T, color: Colorize) => string;
-  /** Detail pane lines. */
+  /** Detail pane lines, wrapped to the pane width. */
   detail: (item: T, color: Colorize) => string[];
-  /** Show the beginning by default; live tails opt into the newest lines. */
-  detailWindow?: (item: T) => "head" | "tail";
-  /** Handle enter or a single-letter shortcut. */
+  /** Handle enter or a single-letter key. */
   onAction: (key: string, item: T) => OverlayAction;
-  /** Intercept esc (e.g. to back out of a drill-down); default closes. */
-  onCancel?: () => OverlayAction;
-  /** When true, the overlay re-renders every 500ms. */
+  /** Whether to re-render every 500 ms. */
   live?: () => boolean;
-}
-
-function chrome(value: OverlayChrome): string {
-  return typeof value === "function" ? value() : value;
 }
 
 function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
 }
 
-/** Render pi-tui's single-line input without its built-in `> ` prompt. */
-function renderInlineInput(input: Input, width: number): string {
-  const line = input.render(width + 2)[0] ?? "";
-  return line.startsWith("> ") ? line.slice(2) : line;
-}
-
-/** Window the detail lines into the pane, honouring a scroll offset.
- *
- * When the detail overflows and the pane has room, one row is spent on a
- * marker that reports what is hidden. A one-row pane shows content instead;
- * the footer still indicates that it can scroll. The marker sits on the side
- * content continues on, so the window always touches the edge it is scrolled
- * against: at the bottom while more lines follow (including the unscrolled
- * default), at the top once the last line is visible — which keeps a followed
- * live tail pinned to the bottom. `offset` is the first detail line to show;
- * "end" pins the window to the last line. The resolved offset is returned so
- * the caller can clamp its state. */
-export function windowDetail(
+/** Window the detail lines into `rows`, marking hidden lines. Returns the
+ * clamped offset and the largest offset for scrolling. */
+function windowDetail(
   detail: string[],
   rows: number,
-  offset: number | "end" = 0,
+  offset = 0,
   color: Colorize = plainColorize,
 ): { shown: string[]; offset: number; maxOffset: number } {
   if (rows <= 0) return { shown: [], offset: 0, maxOffset: 0 };
   if (detail.length <= rows) return { shown: detail, offset: 0, maxOffset: 0 };
-  const markerRows = rows > 1 ? 1 : 0;
-  const contentRows = rows - markerRows;
+  const contentRows = rows > 1 ? rows - 1 : rows;
   const maxOffset = detail.length - contentRows;
-  const start = clamp(offset === "end" ? maxOffset : offset, 0, maxOffset);
-  const hiddenAbove = start;
-  const hiddenBelow = detail.length - start - contentRows;
+  const start = clamp(offset, 0, maxOffset);
+  const below = detail.length - start - contentRows;
+  const content = detail.slice(start, start + contentRows);
+  if (contentRows === rows) return { shown: content, offset: start, maxOffset };
   const marker = color(
     "dim",
     [
-      hiddenAbove > 0 ? `… ${hiddenAbove} earlier lines` : undefined,
-      hiddenBelow > 0 ? `… +${hiddenBelow} more lines` : undefined,
+      start > 0 ? `… ${start} earlier lines` : undefined,
+      below > 0 ? `… +${below} more lines` : undefined,
     ]
       .filter(Boolean)
       .join("  "),
   );
-  const content = detail.slice(start, start + contentRows);
   return {
-    shown:
-      markerRows === 0
-        ? content
-        : hiddenBelow === 0
-          ? [marker, ...content]
-          : [...content, marker],
+    shown: below === 0 ? [marker, ...content] : [...content, marker],
     offset: start,
     maxOffset,
   };
 }
 
-/** Split the height budget between the table and the detail pane. */
-function paneRows(
-  itemCount: number,
-  height: number,
-  reservedRows = 0,
-): { tableRows: number; detailRows: number } {
-  const available = Math.max(2, height - CHROME_ROWS - reservedRows);
-  const tableRows = Math.min(
-    itemCount,
-    MAX_TABLE_ROWS,
-    Math.max(1, Math.ceil(available / 2)),
-  );
-  return { tableRows, detailRows: Math.max(0, available - tableRows) };
-}
-
-/** `│ content…pad │` — ANSI-aware fill to the exact overlay width. */
+/** `│ content…pad │`, filled to the exact width. */
 function boxLine(content: string, width: number, color: Colorize): string {
   const inner = Math.max(1, width - 4);
   const clipped = truncateToWidth(content, inner);
@@ -169,7 +102,7 @@ function boxLine(content: string, width: number, color: Colorize): string {
   return `${color("dim", "│ ")}${clipped}${pad}${color("dim", " │")}`;
 }
 
-/** `╭─ label ────╮` — a border row with an embedded (pre-colored) label. */
+/** `╭─ label ────╮`: a border row with an embedded label. */
 function edgeLine(
   corners: [string, string],
   label: string,
@@ -187,158 +120,23 @@ function edgeLine(
   );
 }
 
-/** Render-time knobs the stateful component supplies; all optional so tests
- * can render a bare snapshot. */
-export interface OverlayView {
-  color?: Colorize;
-  /** High-water mark of detail rows, so the pane never shrinks. */
-  minDetailRows?: number;
-  /** Extra rows below the detail pane (the inline composer). */
-  composerLines?: string[];
-  /** Replaces the footer hints (e.g. while composing). */
-  footerOverride?: string;
-  /** First detail line to show; "end" follows the newest line. Defaults to
-   * the natural edge for the item's `detailWindow`. */
-  detailOffset?: number | "end";
-  /** Receives the resolved scroll geometry, so the caller can clamp state. */
-  onDetailGeometry?: (geometry: { offset: number; maxOffset: number }) => void;
-}
-
-/**
- * Pure layout: title border, scrolling table window with a ▸ marker,
- * separator with the selected item's metadata, detail pane, footer border.
- * Testable with plainColorize; every line fits `width`.
- */
-export function renderOverlay<T>(
-  spec: OverlaySpec<T>,
-  items: T[],
-  selected: number,
-  width: number,
-  height: number,
-  view: OverlayView = {},
-): string[] {
-  const {
-    color = plainColorize,
-    minDetailRows = 0,
-    composerLines = [],
-    footerOverride,
-    detailOffset,
-    onDetailGeometry,
-  } = view;
-  const lines: string[] = [];
-  if (items.length === 0) {
-    lines.push(
-      edgeLine(["╭", "╮"], color("accent", chrome(spec.title)), width, color),
-    );
-    lines.push(boxLine(color("dim", chrome(spec.emptyText)), width, color));
-    lines.push(
-      edgeLine(
-        ["╰", "╯"],
-        color("dim", footerOverride ?? chrome(spec.footer)),
-        width,
-        color,
-      ),
-    );
-    lines.push(TRAILING_BLANK);
-    return lines;
-  }
-
-  const index = clamp(selected, 0, items.length - 1);
-  const item = items[index] as T;
-  const { tableRows, detailRows } = paneRows(
-    items.length,
-    height,
-    composerLines.length,
-  );
-
-  const title = `${chrome(spec.title)} (${index + 1}/${items.length})`;
-  lines.push(edgeLine(["╭", "╮"], color("accent", title), width, color));
-
-  const start = clamp(
-    index - Math.floor(tableRows / 2),
-    0,
-    items.length - tableRows,
-  );
-  for (let i = start; i < start + tableRows; i++) {
-    const marker = i === index ? color("accent", "▸ ") : "  ";
-    lines.push(
-      boxLine(`${marker}${spec.row(items[i] as T, color)}`, width, color),
-    );
-  }
-
-  lines.push(edgeLine(["├", "┤"], spec.headerLine(item, color), width, color));
-
-  const detail = spec.detail(item, color);
-  const { shown, offset, maxOffset } = windowDetail(
-    detail,
-    detailRows,
-    detailOffset ?? (spec.detailWindow?.(item) === "tail" ? "end" : 0),
-    color,
-  );
-  onDetailGeometry?.({ offset, maxOffset });
-  // Pad to the floor so the pane never shrinks while browsing (no layout
-  // shift on the rows above; the box only ever grows downward).
-  const floor = clamp(minDetailRows, 0, detailRows);
-  for (const line of shown) lines.push(boxLine(line, width, color));
-  for (let i = shown.length; i < floor; i++)
-    lines.push(boxLine("", width, color));
-
-  for (const line of composerLines) lines.push(boxLine(line, width, color));
-
-  const hints = footerOverride ?? spec.footerFor?.(item) ?? chrome(spec.footer);
-  lines.push(
-    edgeLine(
-      ["╰", "╯"],
-      color(
-        "dim",
-        // Keep the scroll hint first so long action lists cannot truncate it.
-        maxOffset > 0 && footerOverride === undefined
-          ? `⇧↑↓/JK scroll · ${hints}`
-          : hints,
-      ),
-      width,
-      color,
-    ),
-  );
-  lines.push(TRAILING_BLANK);
-  return lines;
-}
-
-/** The focused overlay component: selection state, keys, live refresh. */
-export class SplitPaneOverlay<T> implements Component {
-  private readonly tui: TUI;
-  private readonly color: Colorize;
-  private readonly spec: OverlaySpec<T>;
-  private readonly done: () => void;
+class SplitPaneOverlay<T> implements Component {
   private selectedKey: string | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
-  private composer: { spec: OverlayComposer; input: Input } | undefined;
-  /** High-water mark of detail rows shown, so the pane never shrinks. */
+  /** Highest detail row count shown, so the pane never shrinks. */
   private detailFloor = 0;
-  /** First detail line to show; "end" follows the newest line. Reset when the
-   * selection or drill level changes, so a new pane starts at its natural
-   * edge instead of inheriting a stale offset. */
-  private detailOffset: number | "end" = 0;
-  /** Scroll geometry from the last render, so key handling can clamp without
-   * recomputing the layout. */
-  private detailScroll = { offset: 0, maxOffset: 0, rows: 1 };
-  /** Identity the current offset belongs to (selection + window mode). */
+  private detailOffset = 0;
+  private detailScroll = { maxOffset: 0, rows: 1 };
   private detailAnchor: string | undefined;
 
   constructor(
-    tui: TUI,
-    color: Colorize,
-    spec: OverlaySpec<T>,
-    done: () => void,
-  ) {
-    this.tui = tui;
-    this.color = color;
-    this.spec = spec;
-    this.done = done;
-  }
+    private readonly tui: TUI,
+    private readonly color: Colorize,
+    private readonly spec: OverlaySpec<T>,
+    private readonly done: () => void,
+  ) {}
 
-  private currentIndex(items: T[]): number {
-    if (this.selectedKey === undefined) return 0;
+  private index(items: T[]): number {
     const index = items.findIndex(
       (item) => this.spec.keyOf(item) === this.selectedKey,
     );
@@ -347,29 +145,7 @@ export class SplitPaneOverlay<T> implements Component {
 
   private select(items: T[], index: number): void {
     const item = items[clamp(index, 0, items.length - 1)];
-    this.selectedKey = item !== undefined ? this.spec.keyOf(item) : undefined;
-  }
-
-  /** Move the detail window by `delta` rows (page-sized when |delta| > 1). */
-  private scrollDetail(delta: number): void {
-    const { offset, maxOffset } = this.detailScroll;
-    if (maxOffset === 0) return;
-    const next = clamp(offset + delta, 0, maxOffset);
-    // Sticking to the bottom re-arms follow mode, so a live tail keeps
-    // tracking new output after the user scrolls back down to it.
-    this.detailOffset = next >= maxOffset && this.follows() ? "end" : next;
-  }
-
-  /** Whether the selected item's detail pane is a followed live tail. */
-  private follows(): boolean {
-    const items = this.spec.items();
-    const item = items[this.currentIndex(items)];
-    return item !== undefined && this.spec.detailWindow?.(item) === "tail";
-  }
-
-  private close(): void {
-    this.dispose();
-    this.done();
+    this.selectedKey = item === undefined ? undefined : this.spec.keyOf(item);
   }
 
   private syncTimer(): void {
@@ -384,149 +160,130 @@ export class SplitPaneOverlay<T> implements Component {
   }
 
   render(width: number): string[] {
-    const items = this.spec.items();
+    const { color, spec } = this;
+    const items = spec.items();
     this.syncTimer();
-    const index = this.currentIndex(items);
+    if (items.length === 0)
+      return [
+        edgeLine(["╭", "╮"], color("accent", spec.title), width, color),
+        boxLine(color("dim", spec.emptyText), width, color),
+        edgeLine(["╰", "╯"], color("dim", spec.footer), width, color),
+        "",
+      ];
+    const index = this.index(items);
     this.select(items, index);
-    // Self-cap: the panel mounts in the editor slot, so every row it renders
-    // pushes the transcript up. Stay under ~80% of the terminal to keep some
-    // conversation visible above, with an 8-row floor so the split pane is
-    // still usable on short terminals (it always fits: the floor only wins
-    // when the terminal is tiny, where there is nothing to preserve anyway).
-    // Detail longer than the budget scrolls (shift+↑↓, page keys) rather than
-    // pushing the panel taller.
-    const height = Math.max(
-      8,
-      Math.min(
-        this.tui.terminal.rows - 6,
-        Math.floor(this.tui.terminal.rows * 0.8),
-      ),
+    const item = items[index] as T;
+    // Stay under about 80% of the terminal so some conversation stays
+    // visible, with a floor that keeps the pane usable.
+    const rows = this.tui.terminal.rows;
+    const height = Math.max(8, Math.min(rows - 6, Math.floor(rows * 0.8)));
+    const available = Math.max(2, height - CHROME_ROWS);
+    const tableRows = Math.min(
+      items.length,
+      MAX_TABLE_ROWS,
+      Math.max(1, Math.ceil(available / 2)),
     );
-    const item = items[index];
-    let detailRows = 1;
-    if (item !== undefined) {
-      detailRows = paneRows(
-        items.length,
-        height,
-        this.composer ? 1 : 0,
-      ).detailRows;
-      const needed = this.spec.detail(item, this.color).length;
-      this.detailFloor = clamp(
-        Math.max(this.detailFloor, needed),
-        0,
-        detailRows,
+    const detailRows = Math.max(0, available - tableRows);
+
+    const lines = [
+      edgeLine(
+        ["╭", "╮"],
+        color("accent", `${spec.title} (${index + 1}/${items.length})`),
+        width,
+        color,
+      ),
+    ];
+    const start = clamp(
+      index - Math.floor(tableRows / 2),
+      0,
+      items.length - tableRows,
+    );
+    for (let i = start; i < start + tableRows; i++) {
+      const marker = i === index ? color("accent", "▸ ") : "  ";
+      lines.push(
+        boxLine(`${marker}${spec.row(items[i] as T, color)}`, width, color),
       );
-      // A different row (or a tail toggle) gets a fresh window.
-      const anchor = `${this.spec.keyOf(item)}\u0000${this.spec.detailWindow?.(item) ?? "head"}`;
-      if (anchor !== this.detailAnchor) {
-        this.detailAnchor = anchor;
-        this.detailOffset =
-          this.spec.detailWindow?.(item) === "tail" ? "end" : 0;
-      }
     }
-    const composerLines = this.composer
-      ? [
-          `${this.color("accent", `${this.composer.spec.label}:`)} ${renderInlineInput(this.composer.input, Math.max(1, width - this.composer.spec.label.length - 8))}`,
-        ]
-      : [];
-    return renderOverlay(this.spec, items, index, width, height, {
-      color: this.color,
-      minDetailRows: this.detailFloor,
-      composerLines,
-      footerOverride: this.composer ? "enter send · esc cancel" : undefined,
-      detailOffset: this.detailOffset,
-      onDetailGeometry: ({ offset, maxOffset }) => {
-        // Persist render-time clamping across later geometry changes. Keep the
-        // sentinel for followed tails so they continue tracking new output.
-        if (this.detailOffset !== "end") this.detailOffset = offset;
-        this.detailScroll = {
-          offset,
-          maxOffset,
-          rows: Math.max(1, detailRows),
-        };
-      },
-    });
+    lines.push(
+      edgeLine(["├", "┤"], spec.headerLine(item, color), width, color),
+    );
+
+    const anchor = spec.keyOf(item);
+    if (anchor !== this.detailAnchor) {
+      this.detailAnchor = anchor;
+      this.detailOffset = 0;
+    }
+    const inner = Math.max(1, width - 4);
+    const detail = spec
+      .detail(item, color)
+      .flatMap((line) => (line ? wrapTextWithAnsi(line, inner) : [""]));
+    const { shown, offset, maxOffset } = windowDetail(
+      detail,
+      detailRows,
+      this.detailOffset,
+      color,
+    );
+    this.detailOffset = offset;
+    this.detailScroll = { maxOffset, rows: Math.max(1, detailRows) };
+    this.detailFloor = clamp(
+      Math.max(this.detailFloor, detail.length),
+      0,
+      detailRows,
+    );
+    for (const line of shown) lines.push(boxLine(line, width, color));
+    for (let i = shown.length; i < this.detailFloor; i++)
+      lines.push(boxLine("", width, color));
+
+    const hints = maxOffset > 0 ? `⇧↑↓ scroll · ${spec.footer}` : spec.footer;
+    lines.push(edgeLine(["╰", "╯"], color("dim", hints), width, color), "");
+    return lines;
+  }
+
+  private scroll(delta: number): void {
+    this.detailOffset = clamp(
+      this.detailOffset + delta,
+      0,
+      this.detailScroll.maxOffset,
+    );
   }
 
   handleInput(data: string): void {
-    if (this.composer) {
-      this.composer.input.handleInput(data);
-      this.tui.requestRender();
-      return;
-    }
     const keybindings = getKeybindings();
     if (keybindings.matches(data, "tui.select.cancel")) {
-      this.apply(this.spec.onCancel ? this.spec.onCancel() : "close");
-      this.tui.requestRender();
+      this.close();
       return;
     }
     const items = this.spec.items();
     if (items.length === 0) return;
-    const index = this.currentIndex(items);
-    // Detail-pane scrolling: shift+arrows or shifted j/k by a line, page keys
-    // by a pane. Plain arrows and j/k stay on the table so the primary
-    // navigation and the single-letter actions keep their meaning.
+    const index = this.index(items);
     const key = parseKey(data) ?? data;
     const page = Math.max(1, this.detailScroll.rows - 1);
-    if (key === "shift+up" || key === "ctrl+y" || matchesKey(data, "shift+k")) {
-      this.scrollDetail(-1);
-    } else if (
-      key === "shift+down" ||
-      key === "ctrl+e" ||
-      matchesKey(data, "shift+j")
-    ) {
-      this.scrollDetail(1);
-    } else if (key === "shift+pageUp" || key === "ctrl+u") {
-      this.scrollDetail(-page);
-    } else if (key === "shift+pageDown" || key === "ctrl+d") {
-      this.scrollDetail(page);
-    } else if (key === "shift+home") {
-      this.detailOffset = 0;
-    } else if (key === "shift+end") {
-      this.detailOffset = this.follows() ? "end" : this.detailScroll.maxOffset;
-    } else if (keybindings.matches(data, "tui.select.up") || data === "k") {
+    if (key === "shift+up" || matchesKey(data, "shift+k")) this.scroll(-1);
+    else if (key === "shift+down" || matchesKey(data, "shift+j"))
+      this.scroll(1);
+    else if (key === "shift+pageUp") this.scroll(-page);
+    else if (key === "shift+pageDown") this.scroll(page);
+    else if (keybindings.matches(data, "tui.select.up") || data === "k")
       this.select(items, index - 1);
-    } else if (keybindings.matches(data, "tui.select.down") || data === "j") {
+    else if (keybindings.matches(data, "tui.select.down") || data === "j")
       this.select(items, index + 1);
-    } else if (keybindings.matches(data, "tui.select.pageUp")) {
-      this.select(items, index - MAX_TABLE_ROWS);
-    } else if (keybindings.matches(data, "tui.select.pageDown")) {
-      this.select(items, index + MAX_TABLE_ROWS);
-    } else if (keybindings.matches(data, "tui.select.confirm")) {
+    else if (keybindings.matches(data, "tui.select.confirm"))
       this.act("enter", items[index] as T);
-    } else {
-      if (/^[a-z]$/.test(key)) this.act(key, items[index] as T);
-    }
+    else if (/^[a-z]$/.test(key)) this.act(key, items[index] as T);
     this.tui.requestRender();
   }
 
   private act(key: string, item: T): void {
-    this.apply(this.spec.onAction(key, item));
+    if (this.spec.onAction(key, item) === "close") this.close();
   }
 
-  private apply(action: OverlayAction): void {
-    if (action === "close") this.close();
-    else if (action && "selectKey" in action)
-      this.selectedKey = action.selectKey;
-    else if (action && "compose" in action) {
-      const input = new Input();
-      input.focused = true;
-      input.onEscape = () => {
-        this.composer = undefined;
-        this.tui.requestRender();
-      };
-      input.onSubmit = (value) => {
-        const composer = this.composer;
-        this.composer = undefined;
-        if (composer) void Promise.resolve(composer.spec.submit(value));
-        this.tui.requestRender();
-      };
-      this.composer = { spec: action.compose, input };
-    }
+  private close(): void {
+    this.dispose();
+    this.done();
   }
 
   invalidate(): void {
-    // Stateless rendering: every render() re-reads the spec's items.
+    // Stateless rendering: every render re-reads the spec's items.
   }
 
   dispose(): void {
@@ -535,31 +292,19 @@ export class SplitPaneOverlay<T> implements Component {
   }
 }
 
-/**
- * Open the split-pane panel and resolve when the user dismisses it.
- *
- * Pass the agent panel to hide it while the overlay is open: it renders right
- * above the composer slot and repeats the same agents.
- */
+/** Open the overlay in the editor slot, hiding the agent panel meanwhile. */
 export async function openOverlay<T>(
   ctx: Pick<ExtensionContext, "ui">,
   spec: OverlaySpec<T>,
-  widget?: Pick<AgentPanel, "setSuppressed">,
+  panel?: Pick<AgentPanel, "setSuppressed">,
 ): Promise<void> {
-  widget?.setSuppressed(true);
+  panel?.setSuppressed(true);
   try {
-    // No `overlay: true`: the panel mounts in the editor slot where the
-    // composer was — the same placement pi uses for /settings and /model — so
-    // it appears exactly where the user was typing instead of floating at the
-    // top of a tall terminal. The host restores the editor and its focus when
-    // done() fires. The component budgets its own height from terminal.rows.
     await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
       const color: Colorize = (name, text) => theme.fg(name, text);
       return new SplitPaneOverlay(tui, color, spec, () => done(undefined));
     });
   } finally {
-    // finally: a throwing panel must not leave the summary muted for the
-    // rest of the session.
-    widget?.setSuppressed(false);
+    panel?.setSuppressed(false);
   }
 }

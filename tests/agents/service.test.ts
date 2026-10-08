@@ -129,7 +129,6 @@ describe("AgentService", () => {
     await until(() => service.get("w")?.state === "interrupted");
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(service.pendingDeliveries()).toEqual([]);
-    expect(service.get("w")?.pendingRequests).toBe(0);
   });
 
   test("names are unique among open agents and generated when absent", async () => {

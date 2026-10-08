@@ -9,7 +9,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentInfo, AgentState } from "../agents/types.js";
 import { AGENT_ICON, STATE_STYLES } from "./format.js";
 
-export const FANCY_FOOTER_AGENTS_WIDGET_ID = "pi-agents.agents";
+const FANCY_FOOTER_AGENTS_WIDGET_ID = "pi-agents.agents";
 
 const FANCY_FOOTER_PROTOCOL = 1;
 const FANCY_FOOTER_WIDGET_EVENT = "pi-fancy-footer:widget";

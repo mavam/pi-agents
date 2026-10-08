@@ -35,7 +35,7 @@ export interface ResultDetails {
   usage?: string;
 }
 
-export function isResultDetails(value: unknown): value is ResultDetails {
+function isResultDetails(value: unknown): value is ResultDetails {
   if (typeof value !== "object" || value === null) return false;
   const details = value as Record<string, unknown>;
   return (
@@ -80,7 +80,7 @@ export function resultContent(details: ResultDetails): string {
     : `Agent ${details.name} failed: ${details.body}`;
 }
 
-export function resultHeader(
+function resultHeader(
   details: ResultDetails,
   color: Colorize = plainColorize,
 ): string {

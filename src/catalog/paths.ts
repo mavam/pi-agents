@@ -57,7 +57,7 @@ export function findProjectRoot(cwd: string): string | null {
 }
 
 /** `<root>/.pi/<kind>` for a project root from `findProjectRoot`. */
-export function projectResourceDir(root: string, kind: ResourceKind): string {
+function projectResourceDir(root: string, kind: ResourceKind): string {
   return path.join(root, CONFIG_DIR, kind);
 }
 

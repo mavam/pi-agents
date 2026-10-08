@@ -51,7 +51,7 @@ export const DEFAULT_AGENT_TOOLS: readonly AgentToolName[] = [
   "write",
 ];
 
-export function isAgentToolName(name: string): name is AgentToolName {
+function isAgentToolName(name: string): name is AgentToolName {
   return (AGENT_TOOL_NAMES as readonly string[]).includes(name);
 }
 

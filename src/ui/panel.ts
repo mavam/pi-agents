@@ -15,10 +15,9 @@ import {
   type TUI,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
-import { type AgentInfo, formatModelRef } from "../agents/types.js";
+import type { AgentInfo } from "../agents/types.js";
 import type { SessionHost } from "../pi/session.js";
 import { type Colorize, formatAgentLine, sanitizeLine } from "./format.js";
-import { shortModels } from "./model-label.js";
 
 const WIDGET_KEY = "pi-agents:panel";
 const MAX_UNFOCUSED = 4;
@@ -185,18 +184,8 @@ export class AgentPanel {
     color: Colorize,
   ): string[] {
     const now = this.now();
-    const labels = shortModels(
-      agents.flatMap((agent) =>
-        agent.model ? [formatModelRef(agent.model)] : [],
-      ),
-    );
     const line = (agent: AgentInfo) =>
-      formatAgentLine(
-        this.heldActivity(agent, now),
-        now,
-        color,
-        agent.model ? labels.get(formatModelRef(agent.model)) : undefined,
-      );
+      formatAgentLine(this.heldActivity(agent, now), now, color);
     if (!this.focused) {
       const shown = agents.slice(0, MAX_UNFOCUSED).map(line);
       if (agents.length > MAX_UNFOCUSED)

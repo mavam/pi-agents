@@ -113,7 +113,7 @@ export function activityOf(live: LiveState | undefined): AgentActivity {
   return activity;
 }
 
-export function messageText(message: AssistantMessage): string {
+function messageText(message: AssistantMessage): string {
   return message.content
     .flatMap((block) => (block.type === "text" ? [block.text] : []))
     .join("")

@@ -12,7 +12,7 @@ import {
 } from "../catalog/profiles.js";
 import { profileProblem } from "./spawn.js";
 
-export const GUIDANCE =
+const GUIDANCE =
   "Delegate work to agents with the agent_* tools, but only when the user asks for it.";
 
 function oneLine(value: string): string {
@@ -39,7 +39,7 @@ export function profileCatalog(
 }
 
 /** `- name: description (model, thinking, tools)` per usable profile. */
-export function buildProfilesPrompt(profiles: readonly Profile[]): string {
+function buildProfilesPrompt(profiles: readonly Profile[]): string {
   if (profiles.length === 0) return "";
   const lines = profiles.map((profile) => {
     const settings = [
@@ -53,7 +53,7 @@ export function buildProfilesPrompt(profiles: readonly Profile[]): string {
   return ["<agent_profiles>", ...lines, "</agent_profiles>"].join("\n");
 }
 
-export const MODELS_PROMPT_BUDGET = 4_096;
+const MODELS_PROMPT_BUDGET = 4_096;
 
 function costTier(costOut: number | undefined): string | undefined {
   if (costOut === undefined) return undefined;

@@ -34,7 +34,7 @@ export interface Profile {
   filePath: string;
 }
 
-export interface Diagnostic {
+interface Diagnostic {
   source: Source;
   filePath: string;
   message: string;

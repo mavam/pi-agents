@@ -1,7 +1,7 @@
 {
   "name": "pi-agents",
   "description": "Durable, named agents for pi, built on pi-durable.",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "type": "module",
   "files": [
     "src",

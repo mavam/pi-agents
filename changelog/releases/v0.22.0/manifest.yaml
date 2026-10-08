@@ -1,0 +1,9 @@
+created: 2026-10-08
+title: Durable named agents on pi-durable
+intro: >-
+  Pi-agents is now a rewrite that runs durable, named agents on pi-durable inside
+  your Pi process. Agents checkpoint every step, so they survive crashes and resume
+  where they left off.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.21.0

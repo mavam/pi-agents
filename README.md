@@ -233,6 +233,10 @@ Models resolve like `pi --model`: `sonnet` picks the newest Sonnet you have
 credentials for, and an exact ID such as `claude-sonnet-4-6` picks that
 version. Run `pi --list-models` to see what's available.
 
+Pi learns which names are models from your scoped models, the ones you pick
+with `/scoped-models` or `--models`. Scope the models you want agents to use,
+and Pi picks them by name: "spawn a Luna agent" runs on your scoped Luna.
+
 ### Footer counters
 
 With [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) installed,

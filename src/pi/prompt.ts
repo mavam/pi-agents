@@ -1,7 +1,6 @@
 /**
- * The parent's system prompt section: one line of guidance and the usable
- * profiles. The tools describe themselves; model choice stays with Pi's
- * `--model` patterns.
+ * The parent's system prompt section: one line of guidance, the usable
+ * profiles, and the user's scoped models. The tools describe themselves.
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -53,8 +52,26 @@ function buildProfilesPrompt(profiles: readonly Profile[]): string {
   return ["<agent_profiles>", ...lines, "</agent_profiles>"].join("\n");
 }
 
+/** The models the user scoped with `--models` or `/scoped-models`, so the
+ * parent knows which names are models. */
+function buildModelsPrompt(models: readonly Model<Api>[]): string {
+  if (models.length === 0) return "";
+  return [
+    "<agent_models>",
+    models.map((model) => `${model.provider}/${model.id}`).join(", "),
+    "</agent_models>",
+  ].join("\n");
+}
+
 export function buildSystemPromptAppendix(
   profiles: readonly Profile[],
+  scopedModels: readonly Model<Api>[] = [],
 ): string {
-  return [GUIDANCE, buildProfilesPrompt(profiles)].filter(Boolean).join("\n");
+  return [
+    GUIDANCE,
+    buildProfilesPrompt(profiles),
+    buildModelsPrompt(scopedModels),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

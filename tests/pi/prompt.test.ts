@@ -46,6 +46,19 @@ describe("system prompt appendix", () => {
         "</agent_profiles>",
       ].join("\n"),
     );
+    expect(
+      buildSystemPromptAppendix([], [
+        { provider: "anthropic", id: "claude-sonnet-5-5" },
+        { provider: "openai-codex", id: "gpt-6.1-sol" },
+      ] as never),
+    ).toBe(
+      [
+        "Delegate work to agents with the agent_* tools when the user asks for it.",
+        "<agent_models>",
+        "anthropic/claude-sonnet-5-5, openai-codex/gpt-6.1-sol",
+        "</agent_models>",
+      ].join("\n"),
+    );
     expect(buildSystemPromptAppendix([])).toBe(
       "Delegate work to agents with the agent_* tools when the user asks for it.",
     );

@@ -4,6 +4,9 @@ Give [Pi](https://pi.dev) durable, named agents. Delegate a task, keep working
 while the agent runs, and get its result back as a message. Watch any agent
 live, talk to it, or stop it. Agents survive crashes and restarts.
 
+Every agent keeps its conversation. Open `/agents`, pick any agent, even one
+that finished hours ago, and keep talking to it like a regular Pi session.
+
 Agents run inside your Pi process on
 [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable), which
 checkpoints every step. When you resume a session, interrupted agents continue
@@ -131,6 +134,11 @@ rendering. The editor then talks to the agent:
 
 Messages you send while attached stay between you and the agent. Their
 results don't post into the parent conversation.
+
+You can attach to any agent, not only the ones in the panel. Agents that
+finished or were stopped keep their whole conversation: open `/agents`, select
+one, and continue where it left off. This also works after you resume a
+session.
 
 ### Commands
 

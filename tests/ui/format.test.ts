@@ -45,6 +45,12 @@ describe("formatting", () => {
     );
   });
 
+  test("settled agents show no elapsed time", () => {
+    expect(formatAgentLine(agent({ state: "idle" }), 5_000)).toBe(
+      "● reviewer · terra",
+    );
+  });
+
   test("silent working agents show a stall hint", () => {
     const line = formatAgentLine(
       agent({ state: "working", lastActivityAt: 0 }),

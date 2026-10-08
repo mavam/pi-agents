@@ -120,7 +120,7 @@ renders its explicit arguments as a dim `key=value` line.
 - Panel above the editor: one line per open agent, working first, idle agents
   always shown. Left arrow from an empty editor or Ctrl+Q focuses it; ↑↓
   select, ⏎ attaches, `s` stops, Esc returns. The glyph carries
-  the state; the line shows the time in that state.
+  the state; working agents show how long they have worked.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's
   durable conversation view with Pi's message and tool components. ⏎ prompts
   or steers, Alt+⏎ queues a follow-up, Esc interrupts, ← detaches, Shift+↑↓

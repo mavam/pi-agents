@@ -60,11 +60,11 @@ can't use MCP servers, tools from other extensions, or other agents.
 ### Watch and talk to agents
 
 A panel above the editor shows one line per open agent. The glyph shows the
-state, followed by the time in that state:
+state, and working agents show how long they have worked:
 
 ```text
 ◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep
-✗ docs · sol · 3m · 8.0k · $0.02 · rate limit exceeded
+✗ docs · sol · 8.0k · $0.02 · rate limit exceeded
 ```
 
 An agent leaves the panel once its answer reaches Pi. Failed and interrupted

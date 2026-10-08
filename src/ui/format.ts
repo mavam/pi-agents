@@ -96,7 +96,8 @@ export function activityText(info: AgentInfo, now: number): string | undefined {
 }
 
 /**
- * One agent line for the panel; the glyph carries the state:
+ * One agent line for the panel and tool results; the glyph carries the state
+ * and working agents show how long they have worked:
  * `◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep`.
  */
 export function formatAgentLine(
@@ -114,7 +115,9 @@ export function formatAgentLine(
     `${stateIcon(info.state, color)} ${info.name}`,
     info.profile ? color("dim", info.profile) : undefined,
     color("dim", modelLabel ?? shortModel(info)),
-    color("dim", formatElapsed(now - info.stateSince)),
+    info.state === "working"
+      ? color("dim", formatElapsed(now - info.stateSince))
+      : undefined,
     usage ? color("dim", usage) : undefined,
     activity
       ? color(info.state === "failed" ? "error" : "dim", oneLine(activity, 120))

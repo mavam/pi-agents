@@ -13,7 +13,12 @@ import {
   buildSystemPromptAppendix,
   profileCatalog,
 } from "../../src/pi/prompt.js";
-import { FitLines, formatCall, formatPairs } from "../../src/pi/tools.js";
+import {
+  FitLines,
+  formatCall,
+  formatPairs,
+  prepareSeconds,
+} from "../../src/pi/tools.js";
 
 describe("system prompt appendix", () => {
   test("lists guidance and usable profiles", () => {
@@ -217,6 +222,14 @@ describe("tool calls", () => {
     expect(formatCall("spawn graph", view, true, plain)).toBe(
       "✦ spawn graph review\n  failFast=true\n  api (model=sol): Map the API\n  tests: Check the tests\n  merge ← api, tests: Merge",
     );
+  });
+});
+
+describe("tool arguments", () => {
+  test("seconds that aren't positive numbers mean no wait", () => {
+    expect(prepareSeconds({ name: "a", wait: false })).toEqual({ name: "a" });
+    expect(prepareSeconds({ wait: "120", timeout: 0 })).toEqual({ wait: 120 });
+    expect(prepareSeconds({ wait: 30 })).toEqual({ wait: 30 });
   });
 });
 

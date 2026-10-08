@@ -257,6 +257,36 @@ function renderDetails(
   return lines.join("\n");
 }
 
+/** A number of seconds, if the value is a positive number or its string. */
+function positiveSeconds(value: unknown): number | undefined {
+  const seconds = typeof value === "string" ? Number(value) : value;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
+    ? seconds
+    : undefined;
+}
+
+/** `120s` for a call line; nothing for what prepareSeconds drops. */
+function seconds(value: unknown): string | undefined {
+  const parsed = positiveSeconds(value);
+  return parsed === undefined ? undefined : `${parsed}s`;
+}
+
+/**
+ * Models sometimes write `wait: false` for "don't wait" or quote numbers.
+ * Seconds that aren't a positive number mean no wait; numeric strings count.
+ */
+export function prepareSeconds(args: unknown): unknown {
+  if (typeof args !== "object" || args === null) return args;
+  const prepared: Record<string, unknown> = { ...args };
+  for (const key of ["wait", "timeout"]) {
+    if (!(key in prepared)) continue;
+    const parsed = positiveSeconds(prepared[key]);
+    if (parsed === undefined) delete prepared[key];
+    else prepared[key] = parsed;
+  }
+  return prepared;
+}
+
 function defineAgentTool<T extends TSchema>(
   host: SessionHost,
   spec: AgentToolSpec<T>,
@@ -266,6 +296,7 @@ function defineAgentTool<T extends TSchema>(
     label: spec.label,
     description: spec.description,
     parameters: spec.parameters,
+    prepareArguments: (args) => prepareSeconds(args) as Static<T>,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       let service: AgentService;
       try {
@@ -469,7 +500,7 @@ export function registerAgentTools(
         title: args.name ?? "agent",
         pairs: {
           ...agentPairs(args),
-          wait: args.wait === undefined ? undefined : `${args.wait}s`,
+          wait: seconds(args.wait),
         },
         body: args.task,
       }),
@@ -541,7 +572,7 @@ export function registerAgentTools(
           title: args.name ?? "graph",
           pairs: {
             failFast: args.failFast,
-            wait: args.wait === undefined ? undefined : `${args.wait}s`,
+            wait: seconds(args.wait),
           },
           body: agents
             .map((agent, index) => {
@@ -612,7 +643,7 @@ export function registerAgentTools(
         title: args.name ?? "",
         pairs: {
           followUp: args.followUp,
-          wait: args.wait === undefined ? undefined : `${args.wait}s`,
+          wait: seconds(args.wait),
         },
         body: args.message,
       }),
@@ -669,7 +700,7 @@ export function registerAgentTools(
       call: (args) => ({
         title: (args.names ?? []).join(", "),
         pairs: {
-          timeout: args.timeout === undefined ? undefined : `${args.timeout}s`,
+          timeout: seconds(args.timeout),
         },
       }),
       execute: (service, params, _ctx, signal, onUpdate) =>

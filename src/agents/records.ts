@@ -64,6 +64,8 @@ export type GraphRecord = {
   closed: boolean;
   /** The parent still expects the graph's result. */
   pending: boolean;
+  /** Stopped before it finished; absent in records written before. */
+  stopped?: boolean;
 };
 
 export type GraphsState = {

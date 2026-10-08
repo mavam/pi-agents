@@ -158,8 +158,9 @@ Pi session; each agent is a conversation in that harness:
 │  │  pi-durable harness                                        │  │
 │  │                                                            │  │
 │  │   ╭─────────────╮   ╭─────────────╮   ╭─────────────╮      │  │
-│  │   │ ◉ reviewer  │   │ ◉ tests     │   │ ● docs      │  …   │  │
+│  │   │ ◉ agent     │   │ ◉ agent     │   │ ● agent     │  …   │  │
 │  │   ╰─────────────╯   ╰─────────────╯   ╰─────────────╯      │  │
+│  │   one conversation per agent                               │  │
 │  ╰─────────────────────────────┬──────────────────────────────╯  │
 ╰────────────────────────────────┼─────────────────────────────────╯
                                  │ checkpoint every step

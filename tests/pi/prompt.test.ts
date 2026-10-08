@@ -40,14 +40,14 @@ describe("system prompt appendix", () => {
     const appendix = buildSystemPromptAppendix(profiles);
     expect(appendix).toBe(
       [
-        "Delegate work to agents with the agent_* tools, but only when the user asks for it.",
+        "Delegate work to agents with the agent_* tools when the user asks for it.",
         "<agent_profiles>",
         "- scout: Finds code (thinking low)",
         "</agent_profiles>",
       ].join("\n"),
     );
     expect(buildSystemPromptAppendix([])).toBe(
-      "Delegate work to agents with the agent_* tools, but only when the user asks for it.",
+      "Delegate work to agents with the agent_* tools when the user asks for it.",
     );
   });
 });

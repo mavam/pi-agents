@@ -13,7 +13,7 @@ import {
 import { profileProblem } from "./spawn.js";
 
 const GUIDANCE =
-  "Delegate work to agents with the agent_* tools, but only when the user asks for it.";
+  "Delegate work to agents with the agent_* tools when the user asks for it.";
 
 function oneLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();

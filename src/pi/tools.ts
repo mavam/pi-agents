@@ -11,7 +11,7 @@ import type {
   Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { type Static, type TSchema, Type } from "typebox";
 import type { AgentService } from "../agents/service.js";
 import {
@@ -114,6 +114,29 @@ export function formatPairs(pairs: Record<string, unknown> = {}): string {
     .join(" ");
 }
 
+/**
+ * Lines that wrap when expanded and otherwise end in an ellipsis at the
+ * terminal width, so a collapsed call never spills onto a stray line.
+ */
+export class FitLines implements Component {
+  constructor(
+    private readonly text: string,
+    private readonly wrap: boolean,
+  ) {}
+
+  render(width: number): string[] {
+    if (width <= 0 || !this.text) return [];
+    if (this.wrap) return new Text(this.text, 0, 0).render(width);
+    return this.text
+      .split("\n")
+      .map((line) => truncateToWidth(line, width, "…"));
+  }
+
+  invalidate(): void {
+    // Stateless: every render derives from the text.
+  }
+}
+
 /** Title line, a dim line of explicit arguments, then the body. */
 export function formatCall(
   label: string,
@@ -134,7 +157,7 @@ export function formatCall(
               .split("\n")
               .map((line) => `  ${line}`)
               .join("\n")
-          : `  ${oneLine(view.body, 160)}`,
+          : `  ${view.body.replace(/\s+/g, " ").trim()}`,
       ),
     );
   return lines.join("\n");
@@ -192,7 +215,7 @@ function defineAgentTool<T extends TSchema>(
     },
     renderCall(args, theme: Theme, context) {
       const color: Colorize = (name, value) => theme.fg(name, value);
-      return new Text(
+      return new FitLines(
         formatCall(
           spec.label,
           spec.call(args as Static<T>),
@@ -200,8 +223,7 @@ function defineAgentTool<T extends TSchema>(
           color,
           (value) => theme.bold(value),
         ),
-        0,
-        0,
+        context.expanded,
       );
     },
     renderResult(result, options, theme: Theme) {
@@ -211,7 +233,7 @@ function defineAgentTool<T extends TSchema>(
         options.expanded,
         color,
       );
-      return new Text(body, 0, 0);
+      return new FitLines(body, options.expanded);
     },
   };
 }

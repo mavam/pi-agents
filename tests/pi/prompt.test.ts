@@ -2,13 +2,14 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { resultContent } from "../../src/pi/messages.js";
 import {
   buildModelsPrompt,
   buildSystemPromptAppendix,
   profileCatalog,
 } from "../../src/pi/prompt.js";
-import { formatCall, formatPairs } from "../../src/pi/tools.js";
+import { FitLines, formatCall, formatPairs } from "../../src/pi/tools.js";
 
 describe("system prompt appendix", () => {
   test("lists guidance, profiles, and models", () => {
@@ -113,5 +114,17 @@ describe("tool calls", () => {
     expect(formatCall("stop", { title: "lister" }, false, plain)).toBe(
       "✦ stop lister",
     );
+  });
+});
+
+describe("call rendering", () => {
+  test("collapsed lines end in an ellipsis instead of wrapping", () => {
+    const text =
+      "✦ spawn lister\n  List every file in a very long directory name";
+    const plain = new FitLines(text, false)
+      .render(20)
+      .map((line) => stripVTControlCharacters(line));
+    expect(plain).toEqual(["✦ spawn lister", "  List every file i…"]);
+    expect(new FitLines(text, true).render(20).length).toBeGreaterThan(2);
   });
 });

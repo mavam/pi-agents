@@ -57,6 +57,7 @@ import {
   type RequestOutcome,
   type SendMode,
   type SpawnSpec,
+  USER_MESSAGE_PREFIX,
 } from "./types.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
@@ -317,7 +318,7 @@ export class AgentService {
     await conversation.submit(
       {
         type: "input",
-        content: text,
+        content: `${USER_MESSAGE_PREFIX}${text}`,
         whenBusy: mode === "followUp" ? "followUp" : "steer",
       },
       CONTEXT,

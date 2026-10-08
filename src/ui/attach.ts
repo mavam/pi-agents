@@ -56,7 +56,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { AgentService } from "../agents/service.js";
-import type { AgentInfo } from "../agents/types.js";
+import { type AgentInfo, USER_MESSAGE_PREFIX } from "../agents/types.js";
 import {
   type Colorize,
   fitLine,
@@ -97,13 +97,22 @@ function userText(content: UserMessage["content"]): string {
     .join("");
 }
 
+/** The text as the user typed it, without the marker the agent sees. */
+export function withoutUserPrefix(text: string): string {
+  return text.startsWith(USER_MESSAGE_PREFIX)
+    ? text.slice(USER_MESSAGE_PREFIX.length)
+    : text;
+}
+
 /** Queued user texts of an inbox, steering first like Pi restores them. */
 export function queuedTexts(inbox: InboxState): string[] {
   const steer: string[] = [];
   const followUp: string[] = [];
   for (const item of inbox.items) {
     if (item.mode === "write") continue;
-    const text = userText(item.content as UserMessage["content"]);
+    const text = withoutUserPrefix(
+      userText(item.content as UserMessage["content"]),
+    );
     (item.mode === "steer" ? steer : followUp).push(text);
   }
   return [...steer, ...followUp];
@@ -203,7 +212,10 @@ export class ChatView {
     if (entry.kind === "pi.user" && message?.role === "user") {
       this.transcript.addChild(new Spacer(1));
       this.transcript.addChild(
-        new UserMessageComponent(userText(message.content), getMarkdownTheme()),
+        new UserMessageComponent(
+          withoutUserPrefix(userText(message.content)),
+          getMarkdownTheme(),
+        ),
       );
     } else if (entry.kind === "pi.assistant" && message?.role === "assistant") {
       const component =

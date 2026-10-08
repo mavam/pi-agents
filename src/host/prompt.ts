@@ -18,12 +18,16 @@ import {
   section,
 } from "@earendil-works/pi-durable";
 import { AgentsDoc } from "../agents/records.js";
+import { USER_MESSAGE_PREFIX } from "../agents/types.js";
 import { toolPromptContribution } from "./tools.js";
 
 export const PROMPT_EXTENSION = "pi-agents-prompt";
 
-export const AGENT_PREAMBLE =
-  "You are an expert coding assistant operating inside pi, a coding agent harness. You work on a task someone gave you. They see only your final message, so make it a self-contained result with concrete file paths. If you need a decision, ask for it in your final message.";
+export const AGENT_PREAMBLE = [
+  "You are an expert coding assistant operating inside pi, a coding agent harness.",
+  "Another agent gave you a task. It sees only your final message, so make that message a self-contained result with concrete file paths. If you need a decision, ask for it in your final message.",
+  `Messages that start with ${USER_MESSAGE_PREFIX.trim()} come from the user, who sees your whole conversation. Answer the user directly.`,
+].join("\n\n");
 
 export interface PromptOptions {
   /** Whether project-local resources (context files, project skills) load. */

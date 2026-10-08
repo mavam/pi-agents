@@ -133,4 +133,8 @@ export interface PendingDelivery {
   outcome: Exclude<RequestOutcome, { kind: "aborted" }>;
 }
 
+/** Marks messages the user sends from the attach view, so the agent can tell
+ * them from messages of the agent that started it. */
+export const USER_MESSAGE_PREFIX = "[user] ";
+
 export class AgentError extends Error {}

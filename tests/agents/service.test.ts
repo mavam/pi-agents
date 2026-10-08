@@ -73,7 +73,9 @@ describe("AgentService", () => {
     await service.spawn({ task: "first", name: "w", cwd: ".", model: MODEL });
     await service.wait(["w"]);
     await service.prompt("w", "from the user", "auto");
-    await until(() => service.get("w")?.result?.text === "done: from the user");
+    await until(
+      () => service.get("w")?.result?.text === "done: [user] from the user",
+    );
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(service.pendingDeliveries()).toEqual([]);
   });

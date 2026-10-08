@@ -64,7 +64,7 @@ export function agentDetail(agent: AgentInfo, color: Colorize): string[] {
       "",
       color(
         "error",
-        `Error: ${result?.errorMessage ?? "the last turn failed"}`,
+        `Error: ${result?.errorMessage ?? "the last answer failed"}`,
       ),
     );
   } else if (result?.text) {

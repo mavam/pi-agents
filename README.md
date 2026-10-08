@@ -4,9 +4,6 @@ Give [Pi](https://pi.dev) durable, named agents. Delegate a task, keep working
 while the agent runs, and get its result back as a message. Watch any agent
 live, talk to it, or stop it. Agents survive crashes and restarts.
 
-Every agent keeps its conversation. Open `/agents`, pick any agent, even one
-that finished hours ago, and keep talking to it like a regular Pi session.
-
 Agents run inside your Pi process on
 [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable), which
 checkpoints every step. When you resume a session, interrupted agents continue
@@ -34,6 +31,9 @@ Wait for both and merge their findings.
 Pi starts agents only when you ask for delegation. An agent's result is its
 final message. Results of agents that Pi doesn't wait for arrive later as
 messages in your conversation.
+
+Every agent keeps its conversation. Open `/agents`, pick any agent, even one
+that finished hours ago, and keep talking to it like a regular Pi session.
 
 ### Architecture
 

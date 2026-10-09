@@ -149,8 +149,10 @@ describe("graphs", () => {
       "review-3: done: check the tests",
     ]);
     expect(service.getGraph("review")?.state).toBe("failed");
+    expect(service.getGraph("review")?.queued).toBe(true);
 
     await service.acknowledge(graphDelivery(deliveries));
+    expect(service.getGraph("review")?.queued).toBeUndefined();
     expect(service.pendingDeliveries()).toEqual([]);
     expect(service.graphs()).toEqual([]);
     expect(service.getGraph("review")?.closed).toBe(true);

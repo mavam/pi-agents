@@ -146,7 +146,15 @@ finished, and `←` names the agents whose results an agent receives:
 ```
 
 An agent leaves the panel once its answer reaches Pi, and a graph once its
-result does. Failed and interrupted agents stay until you or Pi stop them.
+result does. Pi takes results only between turns, so while Pi works, an
+agent that answered shows `●` in the accent color instead of green and says
+`result queued`:
+
+```text
+● series-review · sol · 1.1m · $0.42 · result queued
+```
+
+Failed and interrupted agents stay until you or Pi stop them.
 
 Press ← in an empty editor or Ctrl+Q to focus the panel. When no agents are
 open, they open `/agents` instead. Then:

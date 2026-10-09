@@ -46,8 +46,11 @@ describe("AgentService", () => {
       expect(delivery.outcome.result.text).toBe("done: review src");
     expect(service.get("reviewer")?.state).toBe("idle");
     expect(service.get("reviewer")?.result?.text).toBe("done: review src");
+    // Until the parent takes it, the answer is queued.
+    expect(service.get("reviewer")?.queued).toBe(true);
 
     if (delivery) await service.acknowledge(delivery);
+    expect(service.get("reviewer")?.queued).toBeUndefined();
     expect(service.pendingDeliveries()).toEqual([]);
     // A delivered answer closes the agent; it stays reachable by name.
     expect(service.list()).toEqual([]);

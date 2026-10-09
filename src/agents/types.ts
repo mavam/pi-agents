@@ -119,6 +119,8 @@ export interface AgentInfo {
   graph?: string;
   /** Whether the agent can start helper agents. */
   delegates?: boolean;
+  /** An answer waits for delivery to the parent, which is still busy. */
+  queued?: boolean;
 }
 
 /** How a graph waits for its agents: all of them, or until one fails. */
@@ -164,6 +166,8 @@ export interface GraphInfo {
   usage: AgentUsage;
   /** The agent that started this graph as its helpers, by agent ID. */
   owner?: string;
+  /** The graph's result waits for delivery to the parent. */
+  queued?: boolean;
 }
 
 /** How many agents a graph has. */

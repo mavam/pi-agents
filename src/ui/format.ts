@@ -33,6 +33,12 @@ export const STATE_STYLES = {
   { icon: string; color: Parameters<Colorize>[0] }
 >;
 
+/** An answer that waits for the parent: idle, but not done yet. */
+export const QUEUED_STYLE = { icon: "●", color: "accent" } as const;
+
+/** The note on agents and graphs whose result waits for the parent. */
+export const QUEUED_NOTE = "result queued";
+
 export const AGENT_ICON = "✦";
 
 /** A working agent counts as silent after this much time without progress. */
@@ -41,6 +47,17 @@ const STALL_AFTER_MS = 60_000;
 export function stateIcon(state: AgentState, color: Colorize): string {
   const style = STATE_STYLES[state];
   return color(style.color, style.icon);
+}
+
+/** The glyph of an agent or a graph; an idle one with a queued result
+ * differs from one whose result reached the parent. */
+export function statusIcon(
+  item: { state: AgentState; queued?: boolean },
+  color: Colorize,
+): string {
+  if (item.queued && item.state === "idle")
+    return color(QUEUED_STYLE.color, QUEUED_STYLE.icon);
+  return stateIcon(item.state, color);
 }
 
 export function formatElapsed(ms: number): string {
@@ -104,7 +121,9 @@ function activityText(info: AgentInfo, now: number): string | undefined {
 /**
  * One agent line for the panel and tool results; the glyph carries the state
  * and working agents show how long they have worked:
- * `◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep`.
+ * `◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep`. An idle
+ * agent whose answer waits for the parent shows `●` in the accent color and
+ * `result queued`.
  */
 export function formatAgentLine(
   info: AgentInfo,
@@ -116,11 +135,12 @@ export function formatAgentLine(
   const usage = formatUsage(info.usage);
   const activity =
     activityText(info, now) ??
-    (info.state === "failed" ? info.result?.errorMessage : undefined);
+    (info.state === "failed" ? info.result?.errorMessage : undefined) ??
+    (info.queued ? QUEUED_NOTE : undefined);
   const dot = color("dim", " · ");
   const from = inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : "";
   return [
-    `${stateIcon(info.state, color)} ${info.name}${from}`,
+    `${statusIcon(info, color)} ${info.name}${from}`,
     info.profile ? color("dim", info.profile) : undefined,
     color("dim", shortModel(info)),
     info.state === "working"
@@ -176,7 +196,8 @@ export function graphShape(graph: Pick<GraphInfo, "nodes">): string {
 /**
  * One graph line: the glyph carries the graph's state, then how many agents
  * finished, the elapsed time while working, the summed usage, and how many
- * did not answer: `◉ review · graph 1/3 · 1m32s · 31.5k`.
+ * did not answer: `◉ review · graph 1/3 · 1m32s · 31.5k`. A finished graph
+ * whose result waits for the parent says so.
  */
 export function formatGraphLine(
   graph: GraphInfo,
@@ -188,13 +209,14 @@ export function formatGraphLine(
   const note = graphNote(graph);
   const dot = color("dim", " · ");
   return [
-    `${stateIcon(graph.state, color)} ${graph.name}`,
+    `${statusIcon(graph, color)} ${graph.name}`,
     color("dim", `graph ${done}/${graph.nodes.length}`),
     graph.state === "working"
       ? color("dim", formatElapsed(now - graph.stateSince))
       : undefined,
     usage ? color("dim", usage) : undefined,
     note ? color(graph.state === "failed" ? "error" : "dim", note) : undefined,
+    graph.queued ? color("dim", QUEUED_NOTE) : undefined,
   ]
     .filter((part): part is string => part !== undefined)
     .join(dot);

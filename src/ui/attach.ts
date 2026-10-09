@@ -63,7 +63,7 @@ import {
   fitLine,
   formatUsage,
   shortModel,
-  stateIcon,
+  statusIcon,
 } from "./format.js";
 
 const PANE_REFRESH_MS = 250;
@@ -546,7 +546,7 @@ class AgentPane implements Component {
     const editorLines = this.editor.render(width);
     if (editorLines.length > 0) {
       const badge = info
-        ? `${stateIcon(info.state, color)}${this.header(info)}`
+        ? `${statusIcon(info, color)}${this.header(info)}`
         : this.header(info);
       editorLines[0] = fitLine(
         badgeBorder(

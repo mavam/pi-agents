@@ -31,6 +31,7 @@ import {
   shortModel,
   shortName,
   stateIcon,
+  statusIcon,
 } from "../ui/format.js";
 import {
   type Bold,
@@ -78,7 +79,7 @@ function agentRow(
   const usage = formatUsage(agent.usage);
   const name = pad(agent.name, nameWidth - indent.length);
   return [
-    `${color("dim", indent)}${stateIcon(agent.state, color)} ${isVisible(agent) ? name : color("dim", name)}`,
+    `${color("dim", indent)}${statusIcon(agent, color)} ${isVisible(agent) ? name : color("dim", name)}`,
     color("dim", pad(agent.profile ?? "ad-hoc", 10)),
     color("dim", pad(shortModel(agent), 14)),
     color("dim", pad(formatElapsed(now - agent.stateSince), 7)),
@@ -96,7 +97,7 @@ function graphRow(
   const usage = formatUsage(graph.usage);
   const name = pad(graph.name, nameWidth - indent.length);
   return [
-    `${color("dim", indent)}${stateIcon(graph.state, color)} ${isGraphVisible(graph) ? name : color("dim", name)}`,
+    `${color("dim", indent)}${statusIcon(graph, color)} ${isGraphVisible(graph) ? name : color("dim", name)}`,
     color("dim", pad(graph.owner ? "helpers" : "graph", 10)),
     color("dim", pad(`${graph.nodes.length} agents`, 14)),
     color("dim", pad(formatElapsed(now - graph.stateSince), 7)),

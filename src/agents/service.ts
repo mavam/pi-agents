@@ -1343,6 +1343,10 @@ export class AgentService {
       ...(taskAnswer !== undefined ? { taskAnswer } : {}),
       ...(record.graph ? { graph: record.graph } : {}),
       ...(record.delegate ? { delegates: true } : {}),
+      ...(state === "idle" &&
+      [...outcomes.values()].some((outcome) => outcome.kind === "answered")
+        ? { queued: true }
+        : {}),
     });
     return aborted;
   }
@@ -1551,6 +1555,9 @@ export class AgentService {
           }),
         ),
         ...(record.owner ? { owner: record.owner.agent } : {}),
+        ...(record.pending && ended !== undefined && !isStopped
+          ? { queued: true }
+          : {}),
       });
     }
     this.deriveDelegation();

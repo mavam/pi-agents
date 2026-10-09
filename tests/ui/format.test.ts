@@ -95,6 +95,47 @@ describe("formatting", () => {
     );
   });
 
+  test("queued results show in the accent color with a note", () => {
+    const color = (name: string, text: string) => `<${name}>${text}`;
+    expect(
+      formatAgentLine(agent({ state: "idle", queued: true }), 5_000, color),
+    ).toBe("<accent>● reviewer<dim> · <dim>terra<dim> · <dim>result queued");
+    expect(formatAgentLine(agent({ state: "idle" }), 5_000, color)).toBe(
+      "<success>● reviewer<dim> · <dim>terra",
+    );
+    expect(
+      formatGraphLine(
+        graph({
+          state: "idle",
+          queued: true,
+          nodes: [answered("11", "api"), answered("12", "tests")],
+        }),
+        0,
+        color,
+      ),
+    ).toBe("<accent>● review<dim> · <dim>graph 2/2<dim> · <dim>result queued");
+    // A failed graph keeps its glyph; the note still says it waits.
+    expect(
+      formatGraphLine(
+        graph({
+          state: "failed",
+          queued: true,
+          nodes: [
+            answered("11", "api"),
+            {
+              agentId: "12",
+              name: "tests",
+              inputs: [],
+              end: true,
+              outcome: { kind: "failed", reason: "boom" },
+            },
+          ],
+        }),
+        0,
+      ),
+    ).toBe("✗ review · graph 2/2 · 1 failed · result queued");
+  });
+
   test("silent working agents show a stall hint", () => {
     const line = formatAgentLine(
       agent({ state: "working", lastActivityAt: 0 }),

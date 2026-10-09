@@ -149,8 +149,10 @@ describe("graphs", () => {
       "review-3: done: check the tests",
     ]);
     expect(service.getGraph("review")?.state).toBe("failed");
+    expect(service.getGraph("review")?.queued).toBe(true);
 
     await service.acknowledge(graphDelivery(deliveries));
+    expect(service.getGraph("review")?.queued).toBeUndefined();
     expect(service.pendingDeliveries()).toEqual([]);
     expect(service.graphs()).toEqual([]);
     expect(service.getGraph("review")?.closed).toBe(true);
@@ -541,6 +543,8 @@ describe("graphs that hold their result", () => {
     const graph = service.getGraph("g");
     expect(graph?.stopped).toBe(true);
     expect(graph?.state).toBe("interrupted");
+    // A stopped graph delivers nothing, so nothing waits.
+    expect(graph?.queued).toBeUndefined();
     expect(service.get("quick")?.state).toBe("interrupted");
     expect(await service.liveTasks()).toEqual([]);
     await new Promise((resolve) => setTimeout(resolve, 100));

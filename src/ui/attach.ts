@@ -62,8 +62,9 @@ import {
   type Colorize,
   fitLine,
   formatUsage,
+  QUEUED_NOTE,
   shortModel,
-  stateIcon,
+  statusIcon,
 } from "./format.js";
 
 const PANE_REFRESH_MS = 250;
@@ -511,6 +512,8 @@ class AgentPane implements Component {
       shortModel(info),
       info.thinking,
       formatUsage(info.usage),
+      // Results wait while the user is attached, and while Pi works.
+      info.queued ? QUEUED_NOTE : undefined,
     ].filter(Boolean);
     return ` ${parts.join(" · ")} `;
   }
@@ -546,7 +549,7 @@ class AgentPane implements Component {
     const editorLines = this.editor.render(width);
     if (editorLines.length > 0) {
       const badge = info
-        ? `${stateIcon(info.state, color)}${this.header(info)}`
+        ? `${statusIcon(info, color)}${this.header(info)}`
         : this.header(info);
       editorLines[0] = fitLine(
         badgeBorder(

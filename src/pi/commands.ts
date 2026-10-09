@@ -27,10 +27,12 @@ import {
   formatElapsed,
   formatUsage,
   graphNote,
+  QUEUED_NOTE,
   STATE_STYLES,
   shortModel,
   shortName,
   stateIcon,
+  statusIcon,
 } from "../ui/format.js";
 import {
   type Bold,
@@ -68,6 +70,16 @@ function pad(value: string, width: number): string {
     : value + " ".repeat(width - value.length);
 }
 
+/** A row's last column: usage, then whether its result is queued. */
+function rowTail(
+  usage: string,
+  queued: boolean | undefined,
+  color: Colorize,
+): string {
+  const tail = [usage, queued ? QUEUED_NOTE : ""].filter(Boolean).join("  ");
+  return tail ? color("dim", tail) : "";
+}
+
 function agentRow(
   agent: AgentInfo,
   now: number,
@@ -78,11 +90,11 @@ function agentRow(
   const usage = formatUsage(agent.usage);
   const name = pad(agent.name, nameWidth - indent.length);
   return [
-    `${color("dim", indent)}${stateIcon(agent.state, color)} ${isVisible(agent) ? name : color("dim", name)}`,
+    `${color("dim", indent)}${statusIcon(agent, color)} ${isVisible(agent) ? name : color("dim", name)}`,
     color("dim", pad(agent.profile ?? "ad-hoc", 10)),
     color("dim", pad(shortModel(agent), 14)),
     color("dim", pad(formatElapsed(now - agent.stateSince), 7)),
-    usage ? color("dim", usage) : "",
+    rowTail(usage, agent.queued, color),
   ].join("  ");
 }
 
@@ -96,11 +108,11 @@ function graphRow(
   const usage = formatUsage(graph.usage);
   const name = pad(graph.name, nameWidth - indent.length);
   return [
-    `${color("dim", indent)}${stateIcon(graph.state, color)} ${isGraphVisible(graph) ? name : color("dim", name)}`,
+    `${color("dim", indent)}${statusIcon(graph, color)} ${isGraphVisible(graph) ? name : color("dim", name)}`,
     color("dim", pad(graph.owner ? "helpers" : "graph", 10)),
     color("dim", pad(`${graph.nodes.length} agents`, 14)),
     color("dim", pad(formatElapsed(now - graph.stateSince), 7)),
-    usage ? color("dim", usage) : "",
+    rowTail(usage, graph.queued, color),
   ].join("  ");
 }
 
@@ -146,6 +158,8 @@ export function graphDetail(
     (key) => names.get(key) ?? key,
   );
   if (order) lines.push(color("dim", order), "");
+  if (graph.queued)
+    lines.push(color("dim", "The result waits until Pi's turn ends."), "");
   graph.nodes.forEach((node, index) => {
     const agent = lookup(node.agentId);
     const outcome = node.outcome;
@@ -247,8 +261,9 @@ export function agentDetail(
         : color("dim", ` · ${formatElapsed(now - result.at)} ago`);
     const label =
       result.entryId === agent.taskAnswer ? "Result" : "Latest result";
+    const queued = agent.queued ? color("dim", ` · ${QUEUED_NOTE}`) : "";
     lines.push(
-      { divider: `${color("accent", label)}${when}` },
+      { divider: `${color("accent", label)}${when}${queued}` },
       {
         markdown: result.text,
         maxLines: DETAIL_RESULT_LINES,

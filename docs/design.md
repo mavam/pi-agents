@@ -317,6 +317,27 @@ agents of the same graph; agents without a name are called `<graph>-<n>`, or
 after their profile. The spawn result names the graph's shape, such as
 `{api, tests} → merge`. `agent_send` to a graph fails and lists its agents.
 
+Each tool also declares an output schema and returns structured content,
+which codemode scripts receive instead of the text (`src/pi/output.ts`):
+
+| Tool | Output |
+| --- | --- |
+| `agent_spawn`, `agent_send` | the agent |
+| `agent_spawn_graph` | the graph |
+| `agent_wait` | `agents`, `graphs`, and `pending`: names still working when the wait ended |
+| `agent_status` | `agents` and `graphs` |
+| `agent_stop` | the agent or the graph, by `kind` |
+
+An agent is its `name`, `state`, `graph`, and `result` or `error`; a
+working agent has no result, even when it answered before. A graph is its
+`state`, `stopped`, and per agent its `after`, `end`, and `outcome` with
+`result` or `error`. Nodes carry the answer to the graph's task, not later
+replies of the agent. Results keep the limit of the text the model reads
+and say when they were cut with `truncated`. The output names facts
+scripts act on; IDs, models, usage, and activity stay in the text and the
+UI's details. Calls that wait return the state after the wait, so a
+timeout or a steer leaves the agent `working` and the name `pending`.
+
 Models sometimes pass `wait: false` or quoted numbers, so the tools drop
 seconds that aren't positive numbers and parse numeric strings before
 validation.

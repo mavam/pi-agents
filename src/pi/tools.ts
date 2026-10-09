@@ -3,7 +3,7 @@
  * agent_wait, agent_status, and agent_stop.
  */
 
-import { StringEnum } from "@earendil-works/pi-ai";
+import { type JsonValue, StringEnum } from "@earendil-works/pi-ai";
 import type {
   AgentToolUpdateCallback,
   ExtensionAPI,
@@ -43,6 +43,18 @@ import {
   nodeCounts,
   truncateResult,
 } from "./messages.js";
+import {
+  AgentOutput,
+  agentOutput,
+  GraphOutput,
+  graphOutput,
+  type OutputLookup,
+  StatusOutput,
+  statusOutput,
+  TargetOutput,
+  targetOutput,
+  WaitOutput,
+} from "./output.js";
 import type { SessionHost } from "./session.js";
 import { resolveSpawn } from "./spawn.js";
 import { SteerWatch } from "./steering.js";
@@ -61,6 +73,28 @@ interface AgentToolDetails {
 
 function text(content: string, details: AgentToolDetails) {
   return { content: [{ type: "text" as const, text: content }], details };
+}
+
+function lookup(service: AgentService): OutputLookup {
+  return {
+    agent: (id) => service.get(id),
+    graph: (id) => service.getGraph(id),
+  };
+}
+
+/** An agent as scripts see it now, by ID. */
+function agentNow(service: AgentService, id: string): AgentOutput {
+  return agentOutput(
+    service.get(id) as AgentInfo,
+    (graph) => service.getGraph(graph)?.name,
+  );
+}
+
+/** A graph as scripts see it now, by ID. */
+function graphNow(service: AgentService, id: string): GraphOutput {
+  return graphOutput(service.getGraph(id) as GraphInfo, (agent) =>
+    service.get(agent),
+  );
 }
 
 /** The model-facing summary of one agent: its state and result. */
@@ -125,13 +159,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-type Execute<T extends TSchema> = (
+/** What a call returns: text for the model, details for the UI, and its
+ * output for scripts. */
+interface Returned<O> {
+  content: string;
+  details: AgentToolDetails;
+  output: O;
+}
+
+type Execute<T extends TSchema, O extends TSchema> = (
   service: AgentService,
   params: Static<T>,
   ctx: ExtensionContext,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
-) => Promise<{ content: string; details: AgentToolDetails }>;
+) => Promise<Returned<Static<O>>>;
 
 /** How a call renders: a title, the explicit arguments, and a body. */
 export interface CallView {
@@ -142,13 +184,15 @@ export interface CallView {
   collapsed?: string;
 }
 
-interface AgentToolSpec<T extends TSchema> {
+interface AgentToolSpec<T extends TSchema, O extends TSchema> {
   name: string;
   label: string;
   description: string;
   parameters: T;
+  /** The schema of the output scripts get. */
+  output: O;
   call: (args: Static<T>) => CallView;
-  execute: Execute<T>;
+  execute: Execute<T, O>;
 }
 
 function pairValue(value: unknown): string | undefined {
@@ -359,15 +403,16 @@ export function prepareSeconds(args: unknown): unknown {
   return prepared;
 }
 
-function defineAgentTool<T extends TSchema>(
+function defineAgentTool<T extends TSchema, O extends TSchema>(
   host: SessionHost,
-  spec: AgentToolSpec<T>,
+  spec: AgentToolSpec<T, O>,
 ): ToolDefinition<T, AgentToolDetails> {
   return {
     name: spec.name,
     label: spec.label,
     description: spec.description,
     parameters: spec.parameters,
+    outputSchema: spec.output,
     prepareArguments: (args) => prepareSeconds(args) as Static<T>,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       let service: AgentService;
@@ -384,7 +429,10 @@ function defineAgentTool<T extends TSchema>(
           signal,
           onUpdate,
         );
-        return text(result.content, result.details);
+        return {
+          ...text(result.content, result.details),
+          structuredContent: result.output as JsonValue,
+        };
       } catch (error) {
         if (error instanceof AgentError) throw new Error(error.message);
         throw error;
@@ -435,7 +483,7 @@ async function waitWithProgress(
   timeoutSeconds: number | undefined,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
-): Promise<{ content: string; details: AgentToolDetails }> {
+): Promise<Returned<WaitOutput>> {
   const snapshot = () => {
     const targets = names.flatMap((name) => service.find(name) ?? []);
     const graphs = targets.flatMap((target) =>
@@ -444,7 +492,11 @@ async function waitWithProgress(
     const agents = targets.flatMap((target) =>
       target.kind === "agent" ? [target.info] : [],
     );
-    return { graphs, agents: withNodes(service, graphs, agents) };
+    return {
+      graphs,
+      named: agents,
+      agents: withNodes(service, graphs, agents),
+    };
   };
   const progress = () => {
     const { graphs, agents } = snapshot();
@@ -473,6 +525,10 @@ async function waitWithProgress(
       ...outcome.agents.map(describeAgent),
     ].join("\n\n");
     return {
+      output: {
+        ...statusOutput(outcome.agents, outcome.graphs, lookup(service)),
+        pending: outcome.timedOut,
+      },
       content:
         outcome.timedOut.length > 0
           ? `${content}\n\nTimed out; still working: ${outcome.timedOut.join(", ")}.`
@@ -487,8 +543,17 @@ async function waitWithProgress(
   } catch (error) {
     const steered = steer.signal.aborted && !signal?.aborted;
     if (steered || signal?.aborted) {
-      const { graphs, agents } = snapshot();
+      const { graphs, named, agents } = snapshot();
       return {
+        output: {
+          ...statusOutput(named, graphs, lookup(service)),
+          pending: [
+            ...named.filter(
+              (info) => info.state === "working" || info.state === "waiting",
+            ),
+            ...graphs.filter((graph) => graph.state === "working"),
+          ].map((info) => info.name),
+        },
         content: steered
           ? "Stopped waiting because the user sent a message. The agents keep working; their results arrive as messages."
           : "Stopped waiting. The agents keep working.",
@@ -585,6 +650,7 @@ export function registerAgentTools(
       description:
         "Start an agent on a task. Its final message is its result, which arrives later as a message. Set wait to block for the result instead.",
       parameters: spawnParams,
+      output: AgentOutput,
       call: (args) => ({
         title: args.name ?? "agent",
         pairs: {
@@ -596,8 +662,8 @@ export function registerAgentTools(
       async execute(service, params, ctx, signal, onUpdate) {
         const spec = resolveSpawn(params, ctx, pi.getThinkingLevel());
         const info = await service.spawn(spec);
-        if (params.wait !== undefined)
-          return waitWithProgress(
+        if (params.wait !== undefined) {
+          const waited = await waitWithProgress(
             service,
             steering,
             [info.name],
@@ -605,9 +671,12 @@ export function registerAgentTools(
             signal,
             onUpdate,
           );
+          return { ...waited, output: agentNow(service, info.id) };
+        }
         return {
           content: `Started ${info.name}.`,
           details: { at: Date.now(), started: true, agents: [info] },
+          output: agentNow(service, info.id),
         };
       },
     }),
@@ -653,6 +722,7 @@ export function registerAgentTools(
       description:
         "Start agents that work together on related tasks. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. Set wait to block for the result instead.",
       parameters: graphParams,
+      output: GraphOutput,
       call: (args) => {
         const agents = args.agents ?? [];
         const label = (agent: { name?: string }, index: number) =>
@@ -702,8 +772,8 @@ export function registerAgentTools(
             ...(agent.after ? { after: agent.after } : {}),
           })),
         });
-        if (params.wait !== undefined)
-          return waitWithProgress(
+        if (params.wait !== undefined) {
+          const waited = await waitWithProgress(
             service,
             steering,
             [graph.name],
@@ -711,6 +781,8 @@ export function registerAgentTools(
             signal,
             onUpdate,
           );
+          return { ...waited, output: graphNow(service, graph.id) };
+        }
         return {
           content: `Started graph ${graph.name}: ${graphShape(graph)}.`,
           details: {
@@ -719,6 +791,7 @@ export function registerAgentTools(
             graphs: [graph],
             agents: withNodes(service, [graph], []),
           },
+          output: graphNow(service, graph.id),
         };
       },
     }),
@@ -741,6 +814,7 @@ export function registerAgentTools(
       description:
         "Send a message to an agent, also one that answered or was stopped. A working agent receives it as steering. The answer arrives later as a message. Set wait to block for it instead.",
       parameters: sendParams,
+      output: AgentOutput,
       call: (args) => ({
         title: args.name ?? "",
         pairs: {
@@ -756,8 +830,8 @@ export function registerAgentTools(
           params.message,
           params.followUp ? "followUp" : "auto",
         );
-        if (params.wait !== undefined)
-          return waitWithProgress(
+        if (params.wait !== undefined) {
+          const waited = await waitWithProgress(
             service,
             steering,
             [params.name],
@@ -765,6 +839,9 @@ export function registerAgentTools(
             signal,
             onUpdate,
           );
+          const info = service.get(params.name) as AgentInfo;
+          return { ...waited, output: agentNow(service, info.id) };
+        }
         const info = service.get(params.name) as AgentInfo;
         const verb =
           before?.state === "working"
@@ -775,6 +852,7 @@ export function registerAgentTools(
         return {
           content: `${verb} ${info.name}.`,
           details: { at: Date.now(), started: true, agents: [info] },
+          output: agentNow(service, info.id),
         };
       },
     }),
@@ -799,6 +877,7 @@ export function registerAgentTools(
       description:
         "Block until agents or graphs answer and return their results.",
       parameters: waitParams,
+      output: WaitOutput,
       call: (args) => ({
         title: (args.names ?? []).join(", "),
         pairs: {
@@ -828,6 +907,7 @@ export function registerAgentTools(
       label: "status",
       description: "List agents and graphs with their state and task.",
       parameters: statusParams,
+      output: StatusOutput,
       call: (args) => ({ title: args.name ?? "all" }),
       async execute(service, params) {
         if (params.name) {
@@ -842,6 +922,7 @@ export function registerAgentTools(
               agents: withNodes(service, graphs, agents),
               ...(graphs.length > 0 ? { graphs } : {}),
             },
+            output: statusOutput(agents, graphs, lookup(service)),
           };
         }
         const graphs = service.graphs();
@@ -857,6 +938,7 @@ export function registerAgentTools(
             agents: withNodes(service, graphs, agents),
             ...(graphs.length > 0 ? { graphs } : {}),
           },
+          output: statusOutput(agents, graphs, lookup(service)),
         };
       },
     }),
@@ -871,9 +953,11 @@ export function registerAgentTools(
       parameters: Type.Object({
         name: Type.String({ description: "Agent or graph name" }),
       }),
+      output: TargetOutput,
       call: (args) => ({ title: args.name ?? "" }),
       async execute(service, params) {
         const target = await service.stop(params.name);
+        const output = targetOutput(target, lookup(service));
         if (target.kind === "graph")
           return {
             content: `Stopped graph ${target.info.name} and its agents.`,
@@ -882,10 +966,12 @@ export function registerAgentTools(
               graphs: [target.info],
               agents: withNodes(service, [target.info], []),
             },
+            output,
           };
         return {
           content: `Stopped ${target.info.name}.`,
           details: { at: Date.now(), agents: [target.info] },
+          output,
         };
       },
     }),

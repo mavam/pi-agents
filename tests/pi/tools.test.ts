@@ -10,6 +10,7 @@ import {
   EMPTY_USAGE,
   type GraphInfo,
 } from "../../src/agents/types.js";
+import { agentOutput, graphOutput } from "../../src/pi/output.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import { SteerWatch } from "../../src/pi/steering.js";
 import {
@@ -42,6 +43,196 @@ function tools(steering: SteerWatch): Map<string, AnyTool> {
   return registered;
 }
 
+const ctx = {
+  cwd: process.cwd(),
+  model: { provider: MODEL.provider, id: MODEL.modelId },
+  isProjectTrusted: () => false,
+} as unknown as ExtensionContext;
+
+/** Run a tool and return what a script gets. */
+async function output(
+  tool: AnyTool | undefined,
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  const result = await tool?.execute("call", params, undefined, undefined, ctx);
+  return result?.structuredContent;
+}
+
+describe("script output", () => {
+  test("every agent tool declares the output scripts get", () => {
+    for (const tool of tools(new SteerWatch()).values())
+      expect(tool.outputSchema, tool.name).toBeDefined();
+  });
+
+  test("agents resolve to their names, states, and results", async () => {
+    service = await openService();
+    const registered = tools(new SteerWatch());
+    expect(
+      await output(registered.get("agent_spawn"), {
+        task: "one",
+        name: "a",
+        wait: 60,
+      }),
+    ).toEqual({ kind: "agent", name: "a", state: "idle", result: "done: one" });
+    expect(
+      await output(registered.get("agent_send"), {
+        name: "a",
+        message: "two",
+        wait: 60,
+      }),
+    ).toEqual({ kind: "agent", name: "a", state: "idle", result: "done: two" });
+    expect(await output(registered.get("agent_status"), { name: "a" })).toEqual(
+      {
+        agents: [
+          { kind: "agent", name: "a", state: "idle", result: "done: two" },
+        ],
+        graphs: [],
+      },
+    );
+    expect(
+      await output(registered.get("agent_wait"), { names: ["a"] }),
+    ).toEqual({
+      agents: [
+        { kind: "agent", name: "a", state: "idle", result: "done: two" },
+      ],
+      graphs: [],
+      pending: [],
+    });
+    expect(await output(registered.get("agent_stop"), { name: "a" })).toEqual({
+      kind: "agent",
+      name: "a",
+      state: "idle",
+      result: "done: two",
+    });
+  });
+
+  test("a graph resolves to how each agent ended its task", async () => {
+    service = await openService();
+    const graph = (await output(
+      tools(new SteerWatch()).get("agent_spawn_graph"),
+      {
+        name: "g",
+        agents: [
+          { task: "one", name: "a" },
+          { task: "two", name: "b", after: ["a"] },
+        ],
+        wait: 60,
+      },
+    )) as { agents: unknown[] };
+    expect(graph).toMatchObject({
+      kind: "graph",
+      name: "g",
+      state: "idle",
+      stopped: false,
+    });
+    expect(graph.agents).toEqual([
+      {
+        name: "a",
+        after: [],
+        end: false,
+        outcome: "answered",
+        result: "done: one",
+      },
+      {
+        name: "b",
+        after: ["a"],
+        end: true,
+        outcome: "answered",
+        result: expect.stringContaining("two"),
+      },
+    ]);
+  });
+
+  test("a wait names what still works when it ends early", async () => {
+    const { models } = createFaux((prompt) => `${prompt} `.repeat(400), {
+      tokensPerSecond: 20,
+    });
+    service = await openService({ models });
+    const registered = tools(new SteerWatch());
+    expect(
+      await output(registered.get("agent_spawn"), { task: "long", name: "w" }),
+    ).toEqual({ kind: "agent", name: "w", state: "working" });
+    expect(
+      await output(registered.get("agent_wait"), { names: ["w"], timeout: 1 }),
+    ).toEqual({
+      agents: [{ kind: "agent", name: "w", state: "working" }],
+      graphs: [],
+      pending: ["w"],
+    });
+    await service.stop("w");
+  });
+});
+
+describe("output", () => {
+  const info = (result: string): AgentInfo => ({
+    id: "1",
+    name: "a",
+    task: "a",
+    cwd: "/repo",
+    state: "idle",
+    closed: false,
+    createdAt: 0,
+    stateSince: 0,
+    lastActivityAt: 0,
+    usage: { ...EMPTY_USAGE },
+    activity: {},
+    result: {
+      agentId: "1",
+      name: "a",
+      entryId: 1,
+      text: result,
+      stopReason: "stop",
+    },
+  });
+
+  test("long results are cut like the text the model reads", () => {
+    const output = agentOutput(info("x".repeat(50_000)), () => undefined);
+    expect(output.result).toHaveLength(40_000);
+    expect(output.truncated).toBe(true);
+  });
+
+  test("failed agents carry their error", () => {
+    const failed = info("");
+    failed.state = "failed";
+    if (failed.result) failed.result.errorMessage = "boom";
+    expect(agentOutput(failed, () => undefined)).toEqual({
+      kind: "agent",
+      name: "a",
+      state: "failed",
+      error: "boom",
+    });
+  });
+
+  test("a graph keeps the answer to its task, not later replies", () => {
+    const later = info("a later reply");
+    const answer = { ...(later.result as NonNullable<AgentInfo["result"]>) };
+    answer.text = "the task's answer";
+    const graph: GraphInfo = {
+      id: "10",
+      name: "g",
+      policy: "allSettled",
+      state: "idle",
+      closed: false,
+      stopped: false,
+      createdAt: 0,
+      stateSince: 0,
+      nodes: [
+        {
+          agentId: "1",
+          name: "a",
+          inputs: [],
+          end: true,
+          outcome: { kind: "answered", result: answer },
+        },
+      ],
+      usage: { ...EMPTY_USAGE },
+    };
+    expect(graphOutput(graph, () => later).agents[0]?.result).toBe(
+      "the task's answer",
+    );
+  });
+});
+
 describe("waiting tools", () => {
   test("a steer from the user ends a wait; the agent keeps working", async () => {
     const { models } = createFaux((prompt) => `${prompt} `.repeat(400), {
@@ -65,6 +256,7 @@ describe("waiting tools", () => {
     expect(result?.content[0]).toMatchObject({
       text: "Stopped waiting because the user sent a message. The agents keep working; their results arrive as messages.",
     });
+    expect(result?.structuredContent).toMatchObject({ pending: ["w"] });
     expect(service.get("w")?.state).toBe("working");
     await service.stop("w");
   });

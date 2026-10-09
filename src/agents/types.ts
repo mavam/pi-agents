@@ -25,13 +25,16 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 
 /** Derived from the agent's conversation; never stored. A graph's agent
  * also `waits` for its inputs or was `skipped` because none answered. */
-export type AgentState =
-  | "working"
-  | "waiting"
-  | "idle"
-  | "failed"
-  | "interrupted"
-  | "skipped";
+export const AGENT_STATES = [
+  "working",
+  "waiting",
+  "idle",
+  "failed",
+  "interrupted",
+  "skipped",
+] as const;
+
+export type AgentState = (typeof AGENT_STATES)[number];
 
 export interface ModelRef {
   provider: string;

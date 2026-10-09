@@ -4,15 +4,18 @@
  */
 
 /** How one agent of a graph did; `working` and `waiting` only in waits
- * that timed out. */
-export type NodeKind =
-  | "answered"
-  | "failed"
-  | "interrupted"
-  | "stopped"
-  | "skipped"
-  | "working"
-  | "waiting";
+ * that timed out. In report order. */
+export const NODE_KINDS = [
+  "answered",
+  "failed",
+  "interrupted",
+  "stopped",
+  "skipped",
+  "working",
+  "waiting",
+] as const;
+
+export type NodeKind = (typeof NODE_KINDS)[number];
 
 export interface ReportNode {
   name: string;
@@ -37,36 +40,31 @@ export const PARENT_LIMIT: ResultLimit = {
   hint: "Attach to the agent to read all of it.",
 };
 
+/** Cut a result to its limit: the text it keeps and how many characters it
+ * leaves out. */
+export function cutResult(
+  body: string,
+  limit: ResultLimit = PARENT_LIMIT,
+): { text: string; omitted: number } {
+  const lines = body.split("\n");
+  const kept = lines.length > limit.lines ? lines.slice(0, limit.lines) : lines;
+  const text = kept.join("\n").slice(0, limit.chars);
+  return { text, omitted: body.length - text.length };
+}
+
 /** Cut a result to its limit, saying how much is left out. */
 export function truncateResult(
   body: string,
   limit: ResultLimit = PARENT_LIMIT,
 ): string {
-  const lines = body.split("\n");
-  let kept = lines.length > limit.lines ? lines.slice(0, limit.lines) : lines;
-  let text = kept.join("\n");
-  if (text.length > limit.chars) {
-    text = text.slice(0, limit.chars);
-    kept = text.split("\n");
-  }
-  const missing = body.length - text.length;
-  if (missing <= 0) return body;
-  return `${text}\n\n[Result truncated: ${missing} more characters. ${limit.hint}]`;
+  const { text, omitted } = cutResult(body, limit);
+  if (omitted <= 0) return body;
+  return `${text}\n\n[Result truncated: ${omitted} more characters. ${limit.hint}]`;
 }
-
-const KIND_ORDER: NodeKind[] = [
-  "answered",
-  "failed",
-  "interrupted",
-  "stopped",
-  "skipped",
-  "working",
-  "waiting",
-];
 
 /** `2 answered, 1 failed`. */
 export function nodeCounts(nodes: readonly ReportNode[]): string {
-  return KIND_ORDER.flatMap((kind) => {
+  return NODE_KINDS.flatMap((kind) => {
     const count = nodes.filter((node) => node.kind === kind).length;
     return count > 0 ? [`${count} ${kind}`] : [];
   }).join(", ");

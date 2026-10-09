@@ -29,6 +29,7 @@ import {
   type Colorize,
   formatAgentLine,
   formatGraphLine,
+  formatStartedLine,
   graphShape,
   oneLine,
 } from "../ui/format.js";
@@ -46,6 +47,8 @@ const PROGRESS_MS = 1_000;
 
 interface AgentToolDetails {
   at: number;
+  /** The call started work and reports what it started, not its state. */
+  started?: boolean;
   agents: AgentInfo[];
   graphs?: GraphInfo[];
   timedOut?: string[];
@@ -211,7 +214,13 @@ export function formatCall(
   return lines.join("\n");
 }
 
-function renderDetails(
+/**
+ * A call's agents and graphs below it. A call that started work shows what
+ * it started without glyphs, times, or usage: the transcript keeps them,
+ * and they would only describe the moment of the call. The panel shows how
+ * the agents do.
+ */
+export function renderDetails(
   details: AgentToolDetails | undefined,
   expanded: boolean,
   color: Colorize,
@@ -227,7 +236,11 @@ function renderDetails(
     inputs: string[] = [],
   ) => {
     lines.push(
-      `${color("dim", lead)}${formatAgentLine(info, details.at, color, inputs)}`,
+      `${color("dim", lead)}${
+        details.started
+          ? formatStartedLine(info, color, inputs)
+          : formatAgentLine(info, details.at, color, inputs)
+      }`,
     );
     if (expanded && info.state !== "working" && info.result?.text)
       lines.push(
@@ -237,7 +250,11 @@ function renderDetails(
       );
   };
   for (const graph of details.graphs ?? []) {
-    lines.push(formatGraphLine(graph, details.at, color));
+    lines.push(
+      details.started
+        ? `${graph.name}${color("dim", ` · graph of ${graph.nodes.length}`)}`
+        : formatGraphLine(graph, details.at, color),
+    );
     const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
     graph.nodes.forEach((node, index) => {
       const info = byId.get(node.agentId);
@@ -533,7 +550,7 @@ export function registerAgentTools(
           );
         return {
           content: `Started ${info.name}.`,
-          details: { at: Date.now(), agents: [info] },
+          details: { at: Date.now(), started: true, agents: [info] },
         };
       },
     }),
@@ -629,6 +646,7 @@ export function registerAgentTools(
           content: `Started graph ${graph.name}: ${graphShape(graph)}.`,
           details: {
             at: Date.now(),
+            started: true,
             graphs: [graph],
             agents: withNodes(service, [graph], []),
           },
@@ -687,7 +705,7 @@ export function registerAgentTools(
             : "Sent to";
         return {
           content: `${verb} ${info.name}.`,
-          details: { at: Date.now(), agents: [info] },
+          details: { at: Date.now(), started: true, agents: [info] },
         };
       },
     }),

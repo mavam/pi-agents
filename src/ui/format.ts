@@ -201,6 +201,24 @@ export function formatGraphLine(
 }
 
 /**
+ * What a call started, without the state it had in that moment, which goes
+ * stale in the transcript: `report ← review, docs · explorer · luna`.
+ */
+export function formatStartedLine(
+  info: Pick<AgentInfo, "name" | "profile" | "model">,
+  color: Colorize = plainColorize,
+  inputs: readonly string[] = [],
+): string {
+  return [
+    `${info.name}${inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : ""}`,
+    info.profile ? color("dim", info.profile) : undefined,
+    color("dim", shortModel(info)),
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(color("dim", " · "));
+}
+
+/**
  * Neutralize characters that can desynchronize or control the terminal.
  * Preserve only CSI SGR sequences produced by Pi's theme renderers. Strip
  * cursor movement, screen control, OSC/DCS/APC strings, malformed escapes,

@@ -324,7 +324,11 @@ patterns among models with credentials: exact `provider/id` or `id` first,
 then the newest alias that partially matches. Choosing models per task is left to a future model router. Profiles
 with an unavailable model or unresolvable skills stay
 out of the prompt, and the UI reports them once per session. Each tool call
-renders its explicit arguments as a dim `key=value` line.
+renders its explicit arguments as a dim `key=value` line. A call that starts
+work without waiting lists what it started, with inputs and models but
+without glyphs, times, or usage, which would only describe the moment of the
+call; the panel shows the live state. Calls that report outcomes show the
+agents' states.
 
 ## Frontend
 

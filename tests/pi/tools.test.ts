@@ -12,7 +12,13 @@ import {
 } from "../../src/agents/types.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import { SteerWatch } from "../../src/pi/steering.js";
-import { registerAgentTools, renderDetails } from "../../src/pi/tools.js";
+import {
+  FitLines,
+  formatCall,
+  registerAgentTools,
+  renderDetails,
+  startedView,
+} from "../../src/pi/tools.js";
 import { createFaux, MODEL, openService, until } from "../agents/helpers.js";
 
 let service: AgentService | undefined;
@@ -97,18 +103,50 @@ describe("call results", () => {
     usage: { ...EMPTY_USAGE },
   };
 
-  test("a call that started work shows what started, not its state", () => {
+  test("a started graph draws below its call's title", () => {
+    const details = { at: 5_000, started: true, graphs: [graph], agents };
+    const view = {
+      title: "audit",
+      pairs: { failFast: true },
+      body: "map → report\nmap: Map the code.\n\nreport ← map: Write it up.",
+      collapsed: "map → report",
+    };
+    const started = startedView(details, plain);
     expect(
-      renderDetails(
-        { at: 5_000, started: true, graphs: [graph], agents },
-        false,
-        plain,
-      ),
+      formatCall("spawn graph", view, false, plain, undefined, started),
     ).toBe(
-      ["audit · graph of 2", "├─ map · luna", "└─ report ← map · luna"].join(
-        "\n",
-      ),
+      [
+        "✦ spawn graph audit · graph of 2",
+        "├─ map · luna",
+        "└─ report ← map · luna",
+        "  failFast=true",
+        "  map → report",
+      ].join("\n"),
     );
+    expect(
+      formatCall("spawn graph", view, true, plain, undefined, started),
+    ).toBe(
+      [
+        "✦ spawn graph audit · graph of 2",
+        "├─ map · luna",
+        "└─ report ← map · luna",
+        "",
+        "  failFast=true",
+        "  map → report",
+        "  map: Map the code.",
+        "",
+        "  report ← map: Write it up.",
+      ].join("\n"),
+    );
+    // A started agent needs nothing beyond its call.
+    expect(startedView({ ...details, graphs: [] }, plain)).toBeUndefined();
+  });
+
+  test("wrapped lines continue under their indentation", () => {
+    expect(new FitLines("  one two three four", true).render(12)).toEqual([
+      "  one two",
+      "  three four",
+    ]);
   });
 
   test("other calls show the agents' states", () => {

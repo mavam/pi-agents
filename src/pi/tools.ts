@@ -458,7 +458,19 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
     },
     renderResult(result, options, theme: Theme, context) {
       const details = result.details as AgentToolDetails | undefined;
-      if (details?.started) {
+      // An error carries no agent details: the tool threw, or Pi never ran
+      // the call because the model's message broke off. Show why.
+      if (context.isError || !details?.agents) {
+        const reason = result.content
+          .map((part) => (part.type === "text" ? part.text : ""))
+          .join("\n")
+          .trim();
+        return new FitLines(
+          theme.fg("error", reason || "Failed"),
+          options.expanded,
+        );
+      }
+      if (details.started) {
         (context.state as { started?: AgentToolDetails }).started = details;
         return new FitLines("", false);
       }

@@ -552,6 +552,68 @@ describe("call results", () => {
     ]);
   });
 
+  test("an error result shows its reason", () => {
+    const tools = new Map<string, AnyTool>();
+    registerAgentTools(
+      {
+        registerTool: (tool: AnyTool) => tools.set(tool.name, tool),
+        getThinkingLevel: () => undefined,
+      } as unknown as ExtensionAPI,
+      { ensure: async () => service } as unknown as SessionHost,
+    );
+    const theme = {
+      fg: (name: string, text: string) => `<${name}>${text}`,
+      bold: (text: string) => text,
+    };
+    const render = (
+      details: unknown,
+      isError: boolean,
+      {
+        text = "terminated",
+        expanded = false,
+        width = 80,
+        state = {},
+      }: {
+        text?: string;
+        expanded?: boolean;
+        width?: number;
+        state?: object;
+      } = {},
+    ) =>
+      tools
+        .get("agent_send")
+        ?.renderResult?.(
+          { content: [{ type: "text", text }], details },
+          { expanded, isPartial: false },
+          theme,
+          { isError, state },
+        )
+        .render(width);
+    const details = { at: 5_000, agents: [agent("1", "map")] };
+    // Pi never ran the call because the model's message broke off.
+    expect(render(undefined, true)).toEqual(["<error>terminated"]);
+    // The tool threw, and Pi passes empty details.
+    expect(render({}, true)).toEqual(["<error>terminated"]);
+    // Missing details alone count as an error.
+    expect(render(undefined, false)).toEqual(["<error>terminated"]);
+    // An error with valid details still shows its reason.
+    expect(render(details, true)).toEqual(["<error>terminated"]);
+    // An error without text still says it failed.
+    expect(render(undefined, true, { text: "" })).toEqual(["<error>Failed"]);
+    // Collapsed truncates; expanded wraps.
+    const long = "connection reset by peer";
+    expect(render(undefined, true, { text: long, width: 12 })).toHaveLength(1);
+    expect(
+      render(undefined, true, { text: long, width: 16, expanded: true })
+        ?.length,
+    ).toBeGreaterThan(1);
+    // Results with details render as before.
+    expect(render(details, false)?.join("\n")).toContain("map");
+    const state: { started?: unknown } = {};
+    expect(render({ ...details, started: true }, false, { state })).toEqual([]);
+    expect(state.started).toBeDefined();
+  });
+
   test("wrapped lines continue under their indentation", () => {
     expect(new FitLines("  one two three four", true).render(12)).toEqual([
       "  one two",

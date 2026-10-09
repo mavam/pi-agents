@@ -317,6 +317,38 @@ agents of the same graph; agents without a name are called `<graph>-<n>`, or
 after their profile. The spawn result names the graph's shape, such as
 `{api, tests} → merge`. `agent_send` to a graph fails and lists its agents.
 
+Each tool also declares an output schema and returns structured content,
+which codemode scripts receive instead of the text (`src/pi/output.ts`):
+
+| Tool | Output |
+| --- | --- |
+| `agent_spawn`, `agent_send` | the agent |
+| `agent_spawn_graph` | the graph |
+| `agent_wait` | `agents`, `graphs`, and `pending`: the names the wait ended before |
+| `agent_status` | `agents` and `graphs` |
+| `agent_stop` | `kind`, `name`, and `state` of what stopped |
+
+An agent is its `name`, `state`, `graph`, and what its latest turn
+produced: `result` when it answered or wrote something before it was
+interrupted, `error` when it failed, and nothing while it works or waits.
+A turn never reports an earlier turn's answer: the service records the
+first input entry of a turn that ended without an answer
+(`AgentInfo.unanswered`), and a result older than it belongs to an earlier
+turn. A failed turn without an error message reports pi-durable's reason,
+such as `no_model`. The text that waits return follows the same rule.
+
+A graph is its `state`, `stopped`, and per agent its `after`, `end`, and
+`outcome`, which is how its task ended or that it still works or waits,
+with `result` or `error`. Nodes carry the answer to the graph's task, not
+later replies of the agent. Results keep the limit of the text the model
+reads and say when they were cut with `truncated`. Objects have exactly
+their declared fields. The output names facts scripts act on; IDs, models,
+usage, and activity stay in the text and the UI's details. `agent_stop`
+returns only what stopped, which keeps its declaration short. Calls that
+wait return what they observed after the wait: a timeout or a steer can
+leave an agent `working` or `waiting`, and only `agent_wait` lists the
+names it didn't finish waiting for in `pending`.
+
 Models sometimes pass `wait: false` or quoted numbers, so the tools drop
 seconds that aren't positive numbers and parse numeric strings before
 validation.
@@ -406,7 +438,12 @@ answers and failures, pipelines, merges with failed inputs, skipped agents,
 `failFast` stopping waiting agents, edge validation, stopping a graph, the
 ownership tree through the task graph, restarts mid-graph and mid-pipeline
 that repeat no finished agent and send no task twice, and messaging a
-graph's agent after the graph finished. A tool test steers during a wait.
+graph's agent after the graph finished. Tool tests check every result
+scripts get against its output schema, for answers, interrupted and failed
+turns after an earlier answer, waits ended by a timeout, an abort, or a
+steer, and answered, failed, skipped, and stopped graphs. A faux model
+holds prompts until the test releases them or the request aborts, so
+these tests don't race the model.
 Delegation tests cover a fan-out with a merging helper, that helpers and
 other agents can't delegate, progress, Esc on the agent, stopping a graph
 above it, stopping only the helpers, tool and size limits, names, and a

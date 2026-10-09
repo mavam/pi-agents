@@ -292,6 +292,21 @@ wait returns doesn't post again as a message. Cancelling a wait leaves the
 agents working, and so does a message you send to Pi while it waits: Pi
 stops waiting and answers you right away.
 
+With [codemode](https://pi.dev/docs/latest/codemode), scripts get the
+results as data instead of text: an agent's `name`, `state`, and `result`
+or `error`, a graph's `state` and how each of its agents ended its task,
+and the names a wait leaves `pending`. A script can start agents, wait for
+all of them, and pick out what it needs before Pi reads anything:
+
+```js
+const names = ["api", "tests", "docs"];
+await Promise.all(
+  names.map((name) => tools.agent_spawn({ name, task: `Review the ${name}.` })),
+);
+const { agents, pending } = await tools.agent_wait({ names, timeout: 600 });
+return { failed: agents.filter((a) => a.state === "failed"), pending };
+```
+
 Each tool call shows the arguments Pi chose on a dim line below it:
 
 ```text

@@ -25,13 +25,16 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 
 /** Derived from the agent's conversation; never stored. A graph's agent
  * also `waits` for its inputs or was `skipped` because none answered. */
-export type AgentState =
-  | "working"
-  | "waiting"
-  | "idle"
-  | "failed"
-  | "interrupted"
-  | "skipped";
+export const AGENT_STATES = [
+  "working",
+  "waiting",
+  "idle",
+  "failed",
+  "interrupted",
+  "skipped",
+] as const;
+
+export type AgentState = (typeof AGENT_STATES)[number];
 
 export interface ModelRef {
   provider: string;
@@ -112,6 +115,8 @@ export interface AgentInfo {
   activity: AgentActivity;
   /** Latest assistant result, once the agent answered. */
   result?: AgentResult;
+  /** The latest turn ended without an answer, as this process saw it. */
+  unanswered?: UnansweredTurn;
   /** The entry that answered the agent's task, once one did. The latest
    * result answers the task only while it is this entry. */
   taskAnswer?: number;
@@ -121,6 +126,17 @@ export interface AgentInfo {
   delegates?: boolean;
   /** An answer waits for delivery to the parent, which is still busy. */
   queued?: boolean;
+}
+
+/** A turn that ended without an answer. */
+export interface UnansweredTurn {
+  /** Why, such as `aborted`, `model_error`, or `no_model`. */
+  reason: string;
+  /** The error's text, when there is one. */
+  detail?: string;
+  /** Whether the agent's `result` came from this turn, rather than from an
+   * earlier one. */
+  current: boolean;
 }
 
 /** How a graph waits for its agents: all of them, or until one fails. */

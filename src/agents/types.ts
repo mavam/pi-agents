@@ -112,6 +112,9 @@ export interface AgentInfo {
   activity: AgentActivity;
   /** Latest assistant result, once the agent answered. */
   result?: AgentResult;
+  /** The entry that answered the agent's task, once one did. The latest
+   * result answers the task only while it is this entry. */
+  taskAnswer?: number;
   /** The graph this agent belongs to, by graph ID. */
   graph?: string;
   /** Whether the agent can start helper agents. */

@@ -180,8 +180,35 @@ describe("/agents detail", () => {
         agentHeader(agent({ cwd: `${os.homedir()}/repo` }), plainColorize, at),
       ),
     ).toBe("Task · a · started 1m00s ago · ~/repo");
+    // The task renders as Markdown; the answer to it is its result.
     expect(
-      plain(agentDetail(agent({ result: done }), plainColorize, at)),
+      plain(
+        agentDetail(
+          agent({
+            task: "Review **a**:\n\n- read `a.ts`",
+            result: done,
+            taskAnswer: done.entryId,
+          }),
+          plainColorize,
+          at,
+        ),
+      ),
+    ).toEqual([
+      "Review a:",
+      "",
+      "- read a.ts",
+      "├─ Result · 1m00s ago",
+      "done",
+    ]);
+    // An answer to a later message is the latest result.
+    expect(
+      plain(
+        agentDetail(
+          agent({ result: { ...done, entryId: 7 }, taskAnswer: done.entryId }),
+          plainColorize,
+          at,
+        ),
+      ),
     ).toEqual(["review a", "├─ Latest result · 1m00s ago", "done"]);
     expect(
       plain(

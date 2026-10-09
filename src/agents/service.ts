@@ -67,6 +67,7 @@ import {
   NODE_TASK,
   type NodeResult,
   NodeTask,
+  nodeRequestId,
 } from "./graphs.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
 import {
@@ -202,6 +203,9 @@ export class AgentService {
   >();
   /** Answer entries of graph agents' tasks; entries never change. */
   private readonly answers = new Map<number, EntryRecord>();
+  /** Per agent, the entry that answered its task, or null when the task
+   * ended without an answer; settled submissions never change. */
+  private readonly taskAnswers = new Map<string, number | null>();
   private readonly waiters = new Map<string, number>();
   private readonly graphWaiters = new Map<string, number>();
   /** Checks run after every refresh, for waits on graphs and nodes. */
@@ -1293,6 +1297,7 @@ export class AgentService {
     if (outcomes.size > 0) this.settled.set(id, outcomes);
     else this.settled.delete(id);
 
+    const taskAnswer = await this.taskAnswer(id, record);
     const result: AgentResult | undefined = resultOf(
       this.lastAssistant.get(id),
       id,
@@ -1335,10 +1340,39 @@ export class AgentService {
       usage: addPartialUsage(summarizeUsage(usage), live),
       activity: activityOf(live),
       ...(result ? { result } : {}),
+      ...(taskAnswer !== undefined ? { taskAnswer } : {}),
       ...(record.graph ? { graph: record.graph } : {}),
       ...(record.delegate ? { delegates: true } : {}),
     });
     return aborted;
+  }
+
+  /**
+   * The entry that answered the agent's task: the answer to the submission
+   * of its task, under `parent:1` for agents the parent started and under
+   * its node's request ID for a graph's agents.
+   */
+  private async taskAnswer(
+    agentId: string,
+    record: AgentRecord,
+  ): Promise<number | undefined> {
+    const cached = this.taskAnswers.get(agentId);
+    if (cached !== undefined) return cached ?? undefined;
+    const graph =
+      record.graph === undefined ? undefined : this.graphRecords[record.graph];
+    const node = graph?.nodes.find((each) => each.agent === agentId);
+    const rid = node ? nodeRequestId(node.task) : requestId(1);
+    const submission = await this.harness.commit(
+      (tx) => tx.submissionByRequest(conversationId(agentId), rid),
+      CONTEXT,
+    );
+    if (submission?.type !== "input") return undefined;
+    if (submission.status === "done") {
+      this.taskAnswers.set(agentId, submission.answer);
+      return submission.answer;
+    }
+    if (submission.status === "unanswered") this.taskAnswers.set(agentId, null);
+    return undefined;
   }
 
   /**

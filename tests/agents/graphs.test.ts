@@ -293,6 +293,11 @@ describe("graphs", () => {
     expect(view.value).toBeDefined();
     view.dispose();
 
+    // A graph's agent knows its task's answer, too.
+    const answered = service.getGraph("g")?.nodes[0]?.outcome;
+    expect(answered?.kind).toBe("answered");
+    if (answered?.kind === "answered")
+      expect(service.get("g-1")?.taskAnswer).toBe(answered.result.entryId);
     await service.send("g-1", "again", "auto");
     expect(service.get("g-1")?.closed).toBe(false);
     await until(() => service.pendingDeliveries().length === 1);

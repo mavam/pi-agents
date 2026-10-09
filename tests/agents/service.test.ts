@@ -97,6 +97,18 @@ describe("AgentService", () => {
     expect(service.list().map((agent) => agent.name)).toEqual(["w"]);
   });
 
+  test("an agent knows which answer replied to its task", async () => {
+    const service = await open();
+    await service.spawn({ task: "first", name: "w", cwd: ".", model: MODEL });
+    const first = (await service.wait(["w"])).agents[0];
+    expect(first?.taskAnswer).toBe(first?.result?.entryId);
+    await service.send("w", "second", "auto");
+    const second = (await service.wait(["w"])).agents[0];
+    expect(second?.result?.text).toBe("done: second");
+    expect(second?.taskAnswer).toBe(first?.result?.entryId);
+    expect(second?.result?.entryId).not.toBe(second?.taskAnswer);
+  });
+
   test("send starts a new turn on an idle agent", async () => {
     const service = await open();
     await service.spawn({ task: "first", name: "w", cwd: ".", model: MODEL });

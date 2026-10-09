@@ -343,9 +343,12 @@ renders its explicit arguments as a dim `key=value` line.
   scrolls.
 - `/agents`: a table of all agents and graphs, a graph's agents below it,
   closed ones dimmed, with details, attach, and stop. `/agent <name>`
-  attaches. Results in its detail pane render as Markdown. An agent's detail
+  attaches. Tasks and results in its detail pane render as Markdown. An agent's detail
   separates its task and its latest result (or error) with dividers like the
-  one under the table, each naming its section. A graph's detail says its
+  one under the table, each naming its section: "Result" while the answer
+  replies to the task, "Latest result" once the agent answered later
+  messages. An agent never ends for good, since a message reopens it, so
+  there is no "final" result. A graph's detail says its
   order in words when it has edges ("Runs map, then api and tests at once,
   then merge."), then each agent under a heading with its glyph, name, and
   spend, and its result below; only ⊘, which covers stopped and interrupted,

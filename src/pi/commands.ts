@@ -48,6 +48,8 @@ import {
 } from "../ui/rows.js";
 import type { SessionHost } from "./session.js";
 
+/** Lines of an agent's task shown in the overlay's detail pane. */
+const DETAIL_TASK_LINES = 20;
 /** Lines of the latest result shown in the overlay's detail pane. */
 const DETAIL_RESULT_LINES = 200;
 /** Lines of each agent's result in a graph's detail pane. */
@@ -216,15 +218,23 @@ export function agentHeader(
 }
 
 /**
- * An agent's detail below its task's divider: the task as plain text, then
- * a divider and its latest result as Markdown, or its error.
+ * An agent's detail below its task's divider: the task, then a divider and
+ * its latest result, both as Markdown, or its error. The divider says
+ * "Result" while that result answers the task, and "Latest result" once the
+ * agent answered later messages.
  */
 export function agentDetail(
   agent: AgentInfo,
   color: Colorize,
   now: number = Date.now(),
 ): DetailLine[] {
-  const lines: DetailLine[] = [...agent.task.split("\n")];
+  const lines: DetailLine[] = [
+    {
+      markdown: agent.task,
+      maxLines: DETAIL_TASK_LINES,
+      more: (hidden) => `… ${hidden} more lines (attach to read)`,
+    },
+  ];
   const result = agent.result;
   if (agent.state === "failed") {
     lines.push(
@@ -236,8 +246,10 @@ export function agentDetail(
       result.at === undefined
         ? ""
         : color("dim", ` · ${formatElapsed(now - result.at)} ago`);
+    const label =
+      result.entryId === agent.taskAnswer ? "Result" : "Latest result";
     lines.push(
-      { divider: `${color("accent", "Latest result")}${when}` },
+      { divider: `${color("accent", label)}${when}` },
       {
         markdown: result.text,
         maxLines: DETAIL_RESULT_LINES,

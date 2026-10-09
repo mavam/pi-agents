@@ -11,8 +11,8 @@
  * Unfocused, it shows the first few lines, working ones first, and a
  * finished graph as one line. Left arrow from an empty editor or Ctrl+Q
  * focuses it (see focus.ts); then ↑↓ select, space folds a graph or an
- * agent's helpers, ⏎ attaches (a graph: its first agent), `s` stops, and Esc
- * returns to the editor.
+ * agent's helpers, ⏎ attaches (a graph: its first agent), `s` stops, Tab
+ * opens `/agents` at the selected row, and Esc returns to the editor.
  */
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -118,6 +118,12 @@ export class AgentPanel {
       (graph) => !collapse || graph.state === "working",
       this.disclosure,
     );
+  }
+
+  /** Select a row by key, if the panel shows it. */
+  select(key: string | undefined): void {
+    if (key !== undefined && this.rows().some((row) => row.key === key))
+      this.selectedKey = key;
   }
 
   /** Space: fold or unfold the selected row, or the row it sits below. */
@@ -274,7 +280,10 @@ export class AgentPanel {
     if (rows.length > start + visible)
       lines.push(color("dim", `  …+${rows.length - start - visible} more`));
     lines.push(
-      color("dim", "  ↑↓ move · space fold · ⏎ attach · s stop · esc editor"),
+      color(
+        "dim",
+        "  ↑↓ move · space fold · ⏎ attach · s stop · tab /agents · esc editor",
+      ),
     );
     return lines;
   }

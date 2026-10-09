@@ -262,6 +262,8 @@ export function agentDetail(
 async function openAgentsOverlay(
   ctx: ExtensionContext,
   deps: CommandDeps,
+  /** The row to select first, by key, such as the panel's selection. */
+  select?: string,
 ): Promise<void> {
   const service = await deps.host.ensure(ctx);
   let after: (() => void) | undefined;
@@ -284,7 +286,10 @@ async function openAgentsOverlay(
   const spec: OverlaySpec<Row> = {
     title: "Agents",
     emptyText: "No agents yet. Ask Pi to delegate.",
-    footer: "↑↓ move · space fold · ⏎ attach · s stop · esc",
+    // Tab returns to the panel only while it shows agents.
+    footer: () =>
+      `↑↓ move · space fold · ⏎ attach · s stop${deps.panel.hasRows() ? " · tab panel" : ""} · esc`,
+    ...(select ? { initialKey: select } : {}),
     items,
     keyOf: (row) => row.key,
     row: (row, color) => {
@@ -328,6 +333,11 @@ async function openAgentsOverlay(
         : graphDetail(row.graph, (id) => service.get(id), color, bold),
     onAction: (key, row) => {
       if (key === "space") return { select: fold(row, deps.panel.disclosure) };
+      if (key === "tab") {
+        if (!deps.panel.hasRows()) return undefined;
+        after = () => deps.focus.focusPanelAt(ctx, row.key);
+        return "close";
+      }
       if (key === "enter") {
         const agentId = attachTarget(row);
         if (!agentId) return undefined;
@@ -364,8 +374,8 @@ async function openAgentsOverlay(
 }
 
 export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
-  deps.focus.onBrowse = (ctx) =>
-    void openAgentsOverlay(ctx, deps).catch((error) =>
+  deps.focus.onBrowse = (ctx, select) =>
+    void openAgentsOverlay(ctx, deps, select).catch((error) =>
       ctx.ui.notify(errorText(error), "error"),
     );
 

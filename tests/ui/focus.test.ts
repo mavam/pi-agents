@@ -8,14 +8,23 @@ import type { AgentPanel } from "../../src/ui/panel.js";
 const LEFT = "\u001b[D";
 
 /** A focus controller over a fake panel, host, and terminal. */
-function setup(state: { rows: boolean; agents: number; suppressed: boolean }) {
+function setup(state: {
+  rows: boolean;
+  agents: number;
+  suppressed: boolean;
+  focused?: boolean;
+}) {
   let input: ((data: string) => { consume?: boolean } | undefined) | undefined;
   const focused: boolean[] = [];
   const panel = {
-    isFocused: () => false,
+    isFocused: () => state.focused === true,
+    selected: () => ({ key: "agent:7" }),
     hasRows: () => state.rows,
     isSuppressed: () => state.suppressed,
-    setFocused: (value: boolean) => focused.push(value),
+    setFocused: (value: boolean) => {
+      state.focused = value;
+      focused.push(value);
+    },
   } as unknown as AgentPanel;
   const service = {
     list: () => Array.from({ length: state.agents }),
@@ -32,13 +41,14 @@ function setup(state: { rows: boolean; agents: number; suppressed: boolean }) {
     },
   } as unknown as ExtensionContext;
   const focus = new FocusController(host, panel);
-  const browsed: unknown[] = [];
-  focus.onBrowse = (context) => browsed.push(context);
+  const browsed: Array<string | undefined> = [];
+  focus.onBrowse = (_context, select) => browsed.push(select);
   focus.install(ctx);
-  // Distinct presses, so the duplicate-chunk guard doesn't merge them.
+  // Distinct presses, so the duplicate-chunk guard doesn't merge them; a
+  // terminal focus report is neither a key nor text.
   const press = (data: string) => {
     const result = input?.(data);
-    input?.("x");
+    input?.("\u001b[I");
     return result;
   };
   return { press, focused, browsed };
@@ -74,5 +84,17 @@ describe("focus", () => {
     const open = setup({ rows: true, agents: 2, suppressed: true });
     expect(open.press(LEFT)).toBeUndefined();
     expect(open.focused).toEqual([]);
+  });
+
+  test("Tab trades the focused panel for /agents at the same row", () => {
+    const { press, focused, browsed } = setup({
+      rows: true,
+      agents: 2,
+      suppressed: false,
+      focused: true,
+    });
+    expect(press("\t")).toEqual({ consume: true });
+    expect(focused).toEqual([false]);
+    expect(browsed).toEqual(["agent:7"]);
   });
 });

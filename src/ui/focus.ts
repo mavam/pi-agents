@@ -6,6 +6,7 @@
  *   editor ── ← (empty editor) / ctrl+q ──▶ panel, or /agents if it's empty
  *   panel  ── esc / → / typing ──▶ editor
  *   panel  ── ⏎ ──▶ attach view (ctx.ui.custom owns focus until it closes)
+ *   panel  ◀─ tab ─▶ /agents, at the same row (back only while agents are open)
  *
  * It also owns attaching, so the panel, the overlay, and `/agent` share one
  * path that hides the panel and holds deliveries while attached.
@@ -65,8 +66,9 @@ export class FocusController {
   private paneOpen = false;
   /** A stop confirmation is open; its dialog owns the keys. */
   private confirming = false;
-  /** Opens `/agents`, for ← and Ctrl+Q while the panel is empty. */
-  onBrowse: ((ctx: ExtensionContext) => void) | undefined;
+  /** Opens `/agents`, at the row with key `select` if given: for ← and
+   * Ctrl+Q while the panel is empty, and for Tab from the panel. */
+  onBrowse: ((ctx: ExtensionContext, select?: string) => void) | undefined;
   /** Invoked after the attach view closes (deliver held results, etc.). */
   onPaneClosed: ((ctx: ExtensionContext) => void) | undefined;
   /** Some terminal stacks hand the same chunk to listeners twice. */
@@ -99,6 +101,14 @@ export class FocusController {
     if (this.paneOpen || this.panel.isSuppressed()) return;
     if (this.panel.hasRows()) this.panel.setFocused(true);
     else if (this.ctx) this.browse(this.ctx);
+  }
+
+  /** Tab from `/agents`: focus the panel at the same row, if it shows it. */
+  focusPanelAt(ctx: ExtensionContext, key: string): void {
+    this.ctx = ctx;
+    if (this.paneOpen || !this.panel.hasRows()) return;
+    this.panel.select(key);
+    this.panel.setFocused(true);
   }
 
   /** Open `/agents` when there are agents to browse; whether it did. */
@@ -191,6 +201,13 @@ export class FocusController {
     }
     if (key === "space") {
       this.panel.toggle();
+      return { consume: true };
+    }
+    // Tab trades the panel for /agents at the same row; Tab there trades back.
+    if (key === "tab" && this.onBrowse) {
+      const row = this.panel.selected();
+      this.panel.setFocused(false);
+      this.onBrowse(ctx, row?.key);
       return { consume: true };
     }
     if (key === "s") {

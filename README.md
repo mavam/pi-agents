@@ -151,6 +151,7 @@ open, they open `/agents` instead. Then:
 | ↑ ↓ | Select an agent or graph. |
 | Space | Fold or unfold a graph, or an agent's helpers. On a row inside one, fold what it sits in. |
 | ⏎ | Attach to the agent, or to a graph's first agent. |
+| Tab | Open `/agents` at the same row. Tab there returns to the panel while agents are open. |
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
 | Esc | Return to the editor. |
 

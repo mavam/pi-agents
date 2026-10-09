@@ -344,7 +344,9 @@ states.
   or opens `/agents` while it's empty; ↑↓
   select, space folds a graph or an agent's helpers (on a row inside one, the
   row it sits in), ⏎ attaches (a graph: its first agent), `s` stops an agent
-  or a graph, and Esc returns. A folded row says how many agents it hides.
+  or a graph, Tab opens `/agents` at the same row, and Esc returns. Tab in
+  `/agents` returns to the panel at the same row while the panel shows agents;
+  its footer only offers it then. A folded row says how many agents it hides.
   The panel and `/agents` share what the user folded, which wins over
   folding finished graphs. While the stop confirmation is open, keys go to
   the confirmation. The glyph carries the state; working agents show how long

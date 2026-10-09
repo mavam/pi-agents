@@ -129,8 +129,10 @@ export interface OverlaySpec<T> {
   title: string;
   /** Shown when items() is empty. */
   emptyText: string;
-  /** Key hints embedded in the bottom border. */
-  footer: string;
+  /** Key hints embedded in the bottom border, read on every render. */
+  footer: string | (() => string);
+  /** The item to select first, by key. */
+  initialKey?: string;
   items: () => T[];
   /** Stable identity, so the selection survives reordering. */
   keyOf: (item: T) => string;
@@ -225,7 +227,9 @@ class SplitPaneOverlay<T> implements Component {
     private readonly bold: Bold,
     private readonly spec: OverlaySpec<T>,
     private readonly done: () => void,
-  ) {}
+  ) {
+    this.selectedKey = spec.initialKey;
+  }
 
   private index(items: T[]): number {
     const index = items.findIndex(
@@ -250,6 +254,11 @@ class SplitPaneOverlay<T> implements Component {
     }
   }
 
+  private footer(): string {
+    const { footer } = this.spec;
+    return typeof footer === "string" ? footer : footer();
+  }
+
   render(width: number): string[] {
     const { color, spec } = this;
     const items = spec.items();
@@ -258,7 +267,7 @@ class SplitPaneOverlay<T> implements Component {
       return [
         edgeLine(["╭", "╮"], color("accent", spec.title), width, color),
         boxLine(color("dim", spec.emptyText), width, color),
-        edgeLine(["╰", "╯"], color("dim", spec.footer), width, color),
+        edgeLine(["╰", "╯"], color("dim", this.footer()), width, color),
         "",
       ];
     const index = this.index(items);
@@ -326,7 +335,8 @@ class SplitPaneOverlay<T> implements Component {
     for (let i = shown.length; i < this.detailFloor; i++)
       lines.push(boxLine("", width, color));
 
-    const hints = maxOffset > 0 ? `⇧↑↓ scroll · ${spec.footer}` : spec.footer;
+    const footer = this.footer();
+    const hints = maxOffset > 0 ? `⇧↑↓ scroll · ${footer}` : footer;
     lines.push(edgeLine(["╰", "╯"], color("dim", hints), width, color), "");
     return lines;
   }
@@ -361,7 +371,7 @@ class SplitPaneOverlay<T> implements Component {
       this.select(items, index + 1);
     else if (keybindings.matches(data, "tui.select.confirm"))
       this.act("enter", items[index] as T);
-    else if (key === "space") this.act("space", items[index] as T);
+    else if (key === "space" || key === "tab") this.act(key, items[index] as T);
     else if (/^[a-z]$/.test(key)) this.act(key, items[index] as T);
     this.tui.requestRender();
   }

@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import * as os from "node:os";
 import { stripVTControlCharacters } from "node:util";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import {
@@ -7,7 +8,11 @@ import {
   type GraphInfo,
   type GraphNode,
 } from "../../src/agents/types.js";
-import { agentDetail, graphDetail } from "../../src/pi/commands.js";
+import {
+  agentDetail,
+  agentHeader,
+  graphDetail,
+} from "../../src/pi/commands.js";
 import { plainColorize } from "../../src/ui/format.js";
 import { type DetailLine, renderDetail } from "../../src/ui/overlay.js";
 
@@ -52,10 +57,13 @@ function graph(nodes: GraphNode[], overrides: Partial<GraphInfo> = {}) {
   } satisfies GraphInfo;
 }
 
-/** The detail as plain text, at a width of 60. */
+/** The detail as plain text, at a width of 60; dividers as `├─ label`. */
 function plain(lines: DetailLine[]): string[] {
   return renderDetail(lines, 60, plainColorize, getMarkdownTheme()).map(
-    (line) => stripVTControlCharacters(line),
+    (line) =>
+      stripVTControlCharacters(
+        "divider" in line ? `├─ ${line.divider}` : line.text,
+      ),
   );
 }
 
@@ -117,7 +125,7 @@ describe("/agents detail", () => {
     ]);
   });
 
-  test("a graph with edges shows its shape without the owner's name", () => {
+  test("a graph with edges says its order without the owner's name", () => {
     const lines = plain(
       graphDetail(
         graph(
@@ -131,8 +139,8 @@ describe("/agents detail", () => {
         plainColorize,
       ),
     );
-    expect(lines.slice(0, 3)).toEqual(["Shape", "a → b", ""]);
-    expect(lines[5]).toBe("● lead.b ← lead.a · sol · 2.0k");
+    expect(lines.slice(0, 2)).toEqual(["Runs a, then b.", ""]);
+    expect(lines[4]).toBe("● lead.b ← lead.a · sol · 2.0k");
   });
 
   test("long results end in a line that says how to read the rest", () => {
@@ -162,13 +170,30 @@ describe("/agents detail", () => {
         { markdown: "one\n\ntwo\n\nthree", maxLines: 2, more: (n) => `+${n}` },
       ]),
     ).toEqual(["one", "+3"]);
+  });
+
+  test("a divider separates an agent's task from its result", () => {
+    const at = 60_000;
+    const done = { ...answered("1", "a", "**done**").result, at: 0 };
+    expect(
+      stripVTControlCharacters(
+        agentHeader(agent({ cwd: `${os.homedir()}/repo` }), plainColorize, at),
+      ),
+    ).toBe("Task · a · started 1m00s ago · ~/repo");
+    expect(
+      plain(agentDetail(agent({ result: done }), plainColorize, at)),
+    ).toEqual(["review a", "├─ Latest result · 1m00s ago", "done"]);
     expect(
       plain(
         agentDetail(
-          agent({ result: answered("1", "a", "**done**").result }),
+          agent({
+            state: "failed",
+            result: { ...done, stopReason: "error", errorMessage: "boom" },
+          }),
           plainColorize,
+          at,
         ),
       ),
-    ).toEqual(["Task", "review a", "", "Latest result", "done"]);
+    ).toEqual(["review a", "├─ Error", "boom"]);
   });
 });

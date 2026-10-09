@@ -3,11 +3,13 @@
  * attaches to an agent.
  */
 
+import * as os from "node:os";
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { isGraphVisible, isVisible } from "../agents/service.js";
+import { orderSentence } from "../agents/topology.js";
 import type {
   AgentInfo,
   AgentState,
@@ -25,7 +27,6 @@ import {
   formatElapsed,
   formatUsage,
   graphNote,
-  graphShape,
   STATE_STYLES,
   shortModel,
   stateIcon,
@@ -133,16 +134,18 @@ export function graphDetail(
 ): DetailLine[] {
   const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
   const lines: DetailLine[] = [];
-  if (graph.nodes.some((node) => node.inputs.length > 0)) {
-    // Helpers repeat their agent's name; the shape reads better without it.
-    const owner = graph.owner ? lookup(graph.owner)?.name : undefined;
-    const shape = graphShape(graph);
-    lines.push(
-      color("accent", "Shape"),
-      owner ? shape.replaceAll(`${owner}.`, "") : shape,
-      "",
-    );
-  }
+  // Helpers repeat their agent's name; the order reads better without it.
+  const owner = graph.owner ? lookup(graph.owner)?.name : undefined;
+  const order = orderSentence(
+    graph.nodes.map((node) => ({ key: node.agentId, inputs: node.inputs })),
+    (key) => {
+      const name = names.get(key) ?? key;
+      return owner && name.startsWith(`${owner}.`)
+        ? name.slice(owner.length + 1)
+        : name;
+    },
+  );
+  if (order) lines.push(color("dim", order), "");
   graph.nodes.forEach((node, index) => {
     const agent = lookup(node.agentId);
     const outcome = node.outcome;
@@ -192,27 +195,55 @@ function rowName(row: Row): string {
   return `${connector(row)}${row.kind === "graph" ? row.graph.name : row.agent.name}`;
 }
 
-/** An agent's detail: its task, then its latest result as Markdown. */
-export function agentDetail(agent: AgentInfo, color: Colorize): DetailLine[] {
-  const lines: DetailLine[] = [
-    color("accent", "Task"),
-    ...agent.task.split("\n"),
-  ];
+/** `~/…` for paths in the home directory. */
+function tildePath(path: string): string {
+  const home = os.homedir();
+  return path === home || path.startsWith(`${home}/`)
+    ? `~${path.slice(home.length)}`
+    : path;
+}
+
+/** The divider over an agent's task: `Task · name · started … · cwd`. */
+export function agentHeader(
+  agent: AgentInfo,
+  color: Colorize,
+  now: number = Date.now(),
+): string {
+  return `${color("accent", "Task")}${color(
+    "dim",
+    ` · ${agent.name} · started ${formatElapsed(now - agent.createdAt)} ago · ${tildePath(agent.cwd)}`,
+  )}`;
+}
+
+/**
+ * An agent's detail below its task's divider: the task as plain text, then
+ * a divider and its latest result as Markdown, or its error.
+ */
+export function agentDetail(
+  agent: AgentInfo,
+  color: Colorize,
+  now: number = Date.now(),
+): DetailLine[] {
+  const lines: DetailLine[] = [...agent.task.split("\n")];
   const result = agent.result;
   if (agent.state === "failed") {
     lines.push(
-      "",
-      color(
-        "error",
-        `Error: ${result?.errorMessage ?? "the last answer failed"}`,
-      ),
+      { divider: color("error", "Error") },
+      color("error", result?.errorMessage ?? "The last answer failed."),
     );
   } else if (result?.text) {
-    lines.push("", color("accent", "Latest result"), {
-      markdown: result.text,
-      maxLines: DETAIL_RESULT_LINES,
-      more: (hidden) => `… ${hidden} more lines (attach to read)`,
-    });
+    const when =
+      result.at === undefined
+        ? ""
+        : color("dim", ` · ${formatElapsed(now - result.at)} ago`);
+    lines.push(
+      { divider: `${color("accent", "Latest result")}${when}` },
+      {
+        markdown: result.text,
+        maxLines: DETAIL_RESULT_LINES,
+        more: (hidden) => `… ${hidden} more lines (attach to read)`,
+      },
+    );
   }
   return lines;
 }
@@ -255,13 +286,7 @@ async function openAgentsOverlay(
       return hidden ? `${line}  ${color("dim", hidden)}` : line;
     },
     headerLine: (row, color) => {
-      if (row.kind === "agent") {
-        const agent = row.agent;
-        return color(
-          "dim",
-          `${agent.name} · ${agent.cwd} · started ${formatElapsed(Date.now() - agent.createdAt)} ago`,
-        );
-      }
+      if (row.kind === "agent") return agentHeader(row.agent, color);
       const graph = row.graph;
       const note = graphNote(graph);
       return color(

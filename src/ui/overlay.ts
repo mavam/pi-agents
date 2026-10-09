@@ -41,12 +41,14 @@ const CHROME_ROWS = 4;
 export type Bold = (text: string) => string;
 
 /**
- * A line of the detail pane: text, wrapped to the pane, or Markdown such as
- * an agent's result, rendered and indented, at most `maxLines` lines with a
- * dim `more` line for the rest.
+ * A line of the detail pane: text, wrapped to the pane; a divider across the
+ * pane that starts a section, like the one under the table; or Markdown such
+ * as an agent's result, rendered and indented, at most `maxLines` lines with
+ * a dim `more` line for the rest.
  */
 export type DetailLine =
   | string
+  | { divider: string }
   | {
       markdown: string;
       indent?: number;
@@ -54,36 +56,49 @@ export type DetailLine =
       more?: (hidden: number) => string;
     };
 
+/** A rendered row of the detail pane. */
+export type PaneLine = { text: string } | { divider: string };
+
 /** Render detail lines to the pane's inner width. */
 export function renderDetail(
   lines: readonly DetailLine[],
   width: number,
   color: Colorize,
   markdownTheme: MarkdownTheme,
-): string[] {
-  return lines.flatMap((line) => {
+): PaneLine[] {
+  return lines.flatMap((line): PaneLine[] => {
     if (typeof line === "string")
-      return line ? wrapTextWithAnsi(line, width) : [""];
-    const indent = " ".repeat(line.indent ?? 0);
-    const rendered = new Markdown(line.markdown, 0, 0, markdownTheme)
-      .render(Math.max(1, width - indent.length))
-      // Agents write the text, so only styling survives.
-      .map((each) => `${indent}${sanitizeLine(each).trimEnd()}`);
-    while (rendered.length > 0 && rendered.at(-1)?.trim() === "")
-      rendered.pop();
-    const max = line.maxLines ?? Number.POSITIVE_INFINITY;
-    if (rendered.length <= max) return rendered;
-    const hidden = rendered.length - max;
-    const kept = rendered.slice(0, max);
-    while (kept.length > 0 && kept.at(-1)?.trim() === "") kept.pop();
-    return [
-      ...kept,
-      color(
-        "dim",
-        `${indent}${line.more?.(hidden) ?? `… ${hidden} more lines`}`,
-      ),
-    ];
+      return (line ? wrapTextWithAnsi(line, width) : [""]).map((text) => ({
+        text,
+      }));
+    if ("divider" in line) return [line];
+    return renderMarkdown(line, width, color, markdownTheme).map((text) => ({
+      text,
+    }));
   });
+}
+
+function renderMarkdown(
+  line: Extract<DetailLine, { markdown: string }>,
+  width: number,
+  color: Colorize,
+  markdownTheme: MarkdownTheme,
+): string[] {
+  const indent = " ".repeat(line.indent ?? 0);
+  const rendered = new Markdown(line.markdown, 0, 0, markdownTheme)
+    .render(Math.max(1, width - indent.length))
+    // Agents write the text, so only styling survives.
+    .map((each) => `${indent}${sanitizeLine(each).trimEnd()}`);
+  while (rendered.length > 0 && rendered.at(-1)?.trim() === "") rendered.pop();
+  const max = line.maxLines ?? Number.POSITIVE_INFINITY;
+  if (rendered.length <= max) return rendered;
+  const hidden = rendered.length - max;
+  const kept = rendered.slice(0, max);
+  while (kept.length > 0 && kept.at(-1)?.trim() === "") kept.pop();
+  return [
+    ...kept,
+    color("dim", `${indent}${line.more?.(hidden) ?? `… ${hidden} more lines`}`),
+  ];
 }
 
 /** `close` dismisses the overlay, `select` moves the selection, and
@@ -119,11 +134,11 @@ function clamp(value: number, low: number, high: number): number {
 /** Window the detail lines into `rows`, marking hidden lines. Returns the
  * clamped offset and the largest offset for scrolling. */
 function windowDetail(
-  detail: string[],
+  detail: PaneLine[],
   rows: number,
   offset = 0,
   color: Colorize = plainColorize,
-): { shown: string[]; offset: number; maxOffset: number } {
+): { shown: PaneLine[]; offset: number; maxOffset: number } {
   if (rows <= 0) return { shown: [], offset: 0, maxOffset: 0 };
   if (detail.length <= rows) return { shown: detail, offset: 0, maxOffset: 0 };
   const contentRows = rows > 1 ? rows - 1 : rows;
@@ -132,15 +147,17 @@ function windowDetail(
   const below = detail.length - start - contentRows;
   const content = detail.slice(start, start + contentRows);
   if (contentRows === rows) return { shown: content, offset: start, maxOffset };
-  const marker = color(
-    "dim",
-    [
-      start > 0 ? `… ${start} earlier lines` : undefined,
-      below > 0 ? `… +${below} more lines` : undefined,
-    ]
-      .filter(Boolean)
-      .join("  "),
-  );
+  const marker = {
+    text: color(
+      "dim",
+      [
+        start > 0 ? `… ${start} earlier lines` : undefined,
+        below > 0 ? `… +${below} more lines` : undefined,
+      ]
+        .filter(Boolean)
+        .join("  "),
+    ),
+  };
   return {
     shown: below === 0 ? [marker, ...content] : [...content, marker],
     offset: start,
@@ -288,7 +305,12 @@ class SplitPaneOverlay<T> implements Component {
       0,
       detailRows,
     );
-    for (const line of shown) lines.push(boxLine(line, width, color));
+    for (const line of shown)
+      lines.push(
+        "divider" in line
+          ? edgeLine(["├", "┤"], line.divider, width, color)
+          : boxLine(line.text, width, color),
+      );
     for (let i = shown.length; i < this.detailFloor; i++)
       lines.push(boxLine("", width, color));
 

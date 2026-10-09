@@ -343,15 +343,16 @@ renders its explicit arguments as a dim `key=value` line.
   scrolls.
 - `/agents`: a table of all agents and graphs, a graph's agents below it,
   closed ones dimmed, with details, attach, and stop. `/agent <name>`
-  attaches.
-  Results in its detail pane render as Markdown. A graph's detail shows its
-  shape when it has edges, then each agent under a heading with its glyph,
-  name, and spend, and its result below; only ⊘, which covers stopped and
-  interrupted, adds a word.
+  attaches. Results in its detail pane render as Markdown. An agent's detail
+  separates its task and its latest result (or error) with dividers like the
+  one under the table, each naming its section. A graph's detail says its
+  order in words when it has edges ("Runs map, then api and tests at once,
+  then merge."), then each agent under a heading with its glyph, name, and
+  spend, and its result below; only ⊘, which covers stopped and interrupted,
+  adds a word.
 - Result messages render the agent, its state, and the result as Markdown. A
   graph's message renders its end agents' results and names the agents in
-  between that didn't answer. `/agents` shows a graph's shape, such as
-  `map → {api, tests} → merge`.
+  between that didn't answer.
 - Graphs reuse the look of the earlier workflow trees (status glyphs, `├─`
   connectors) but not their code, which was bound to the workflow language.
   `○` marks an agent waiting for inputs and `⊖` a skipped one.

@@ -344,6 +344,10 @@ renders its explicit arguments as a dim `key=value` line.
 - `/agents`: a table of all agents and graphs, a graph's agents below it,
   closed ones dimmed, with details, attach, and stop. `/agent <name>`
   attaches.
+  Results in its detail pane render as Markdown. A graph's detail shows its
+  shape when it has edges, then each agent under a heading with its glyph,
+  name, and spend, and its result below; only ⊘, which covers stopped and
+  interrupted, adds a word.
 - Result messages render the agent, its state, and the result as Markdown. A
   graph's message renders its end agents' results and names the agents in
   between that didn't answer. `/agents` shows a graph's shape, such as

@@ -14,10 +14,15 @@
  *   ╰─ ↑↓ move · ⏎ attach · s stop · esc ──────────────╯
  */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionContext,
+  getMarkdownTheme,
+} from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   getKeybindings,
+  Markdown,
+  type MarkdownTheme,
   matchesKey,
   parseKey,
   type TUI,
@@ -25,13 +30,61 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { type Colorize, plainColorize } from "./format.js";
+import { type Colorize, plainColorize, sanitizeLine } from "./format.js";
 import type { AgentPanel } from "./panel.js";
 
 const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
 /** Rows of the frame: title border, separator, footer border, blank row. */
 const CHROME_ROWS = 4;
+
+export type Bold = (text: string) => string;
+
+/**
+ * A line of the detail pane: text, wrapped to the pane, or Markdown such as
+ * an agent's result, rendered and indented, at most `maxLines` lines with a
+ * dim `more` line for the rest.
+ */
+export type DetailLine =
+  | string
+  | {
+      markdown: string;
+      indent?: number;
+      maxLines?: number;
+      more?: (hidden: number) => string;
+    };
+
+/** Render detail lines to the pane's inner width. */
+export function renderDetail(
+  lines: readonly DetailLine[],
+  width: number,
+  color: Colorize,
+  markdownTheme: MarkdownTheme,
+): string[] {
+  return lines.flatMap((line) => {
+    if (typeof line === "string")
+      return line ? wrapTextWithAnsi(line, width) : [""];
+    const indent = " ".repeat(line.indent ?? 0);
+    const rendered = new Markdown(line.markdown, 0, 0, markdownTheme)
+      .render(Math.max(1, width - indent.length))
+      // Agents write the text, so only styling survives.
+      .map((each) => `${indent}${sanitizeLine(each).trimEnd()}`);
+    while (rendered.length > 0 && rendered.at(-1)?.trim() === "")
+      rendered.pop();
+    const max = line.maxLines ?? Number.POSITIVE_INFINITY;
+    if (rendered.length <= max) return rendered;
+    const hidden = rendered.length - max;
+    const kept = rendered.slice(0, max);
+    while (kept.length > 0 && kept.at(-1)?.trim() === "") kept.pop();
+    return [
+      ...kept,
+      color(
+        "dim",
+        `${indent}${line.more?.(hidden) ?? `… ${hidden} more lines`}`,
+      ),
+    ];
+  });
+}
 
 /** `close` dismisses the overlay, `select` moves the selection, and
  * anything else keeps it open as it is. */
@@ -52,7 +105,7 @@ export interface OverlaySpec<T> {
   /** Metadata line embedded in the separator. */
   headerLine: (item: T, color: Colorize) => string;
   /** Detail pane lines, wrapped to the pane width. */
-  detail: (item: T, color: Colorize) => string[];
+  detail: (item: T, color: Colorize, bold: Bold) => DetailLine[];
   /** Handle enter, space, or a single-letter key. */
   onAction: (key: string, item: T) => OverlayAction;
   /** Whether to re-render every 500 ms. */
@@ -133,6 +186,7 @@ class SplitPaneOverlay<T> implements Component {
   constructor(
     private readonly tui: TUI,
     private readonly color: Colorize,
+    private readonly bold: Bold,
     private readonly spec: OverlaySpec<T>,
     private readonly done: () => void,
   ) {}
@@ -215,9 +269,12 @@ class SplitPaneOverlay<T> implements Component {
       this.detailOffset = 0;
     }
     const inner = Math.max(1, width - 4);
-    const detail = spec
-      .detail(item, color)
-      .flatMap((line) => (line ? wrapTextWithAnsi(line, inner) : [""]));
+    const detail = renderDetail(
+      spec.detail(item, color, this.bold),
+      inner,
+      color,
+      getMarkdownTheme(),
+    );
     const { shown, offset, maxOffset } = windowDetail(
       detail,
       detailRows,
@@ -306,7 +363,13 @@ export async function openOverlay<T>(
   try {
     await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
       const color: Colorize = (name, text) => theme.fg(name, text);
-      return new SplitPaneOverlay(tui, color, spec, () => done(undefined));
+      return new SplitPaneOverlay(
+        tui,
+        color,
+        (text) => theme.bold(text),
+        spec,
+        () => done(undefined),
+      );
     });
   } finally {
     panel?.setSuppressed(false);

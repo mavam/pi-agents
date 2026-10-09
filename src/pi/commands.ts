@@ -8,7 +8,12 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { isGraphVisible, isVisible } from "../agents/service.js";
-import type { AgentInfo, GraphInfo, NodeOutcome } from "../agents/types.js";
+import type {
+  AgentInfo,
+  AgentState,
+  GraphInfo,
+  NodeOutcome,
+} from "../agents/types.js";
 import {
   confirmAndStop,
   errorText,
@@ -21,12 +26,16 @@ import {
   formatUsage,
   graphNote,
   graphShape,
-  oneLine,
   STATE_STYLES,
   shortModel,
   stateIcon,
 } from "../ui/format.js";
-import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
+import {
+  type Bold,
+  type DetailLine,
+  type OverlaySpec,
+  openOverlay,
+} from "../ui/overlay.js";
 import type { AgentPanel } from "../ui/panel.js";
 import {
   attachTarget,
@@ -41,7 +50,7 @@ import type { SessionHost } from "./session.js";
 /** Lines of the latest result shown in the overlay's detail pane. */
 const DETAIL_RESULT_LINES = 200;
 /** Lines of each agent's result in a graph's detail pane. */
-const DETAIL_NODE_LINES = 4;
+const DETAIL_NODE_LINES = 8;
 
 export interface CommandDeps {
   host: SessionHost;
@@ -91,51 +100,91 @@ function graphRow(
   ].join("  ");
 }
 
-function nodeSummary(
+/** The glyph state of a graph's agent: how its task ended, else its
+ * current state. */
+function nodeState(
   outcome: NodeOutcome | undefined,
   agent: AgentInfo | undefined,
-): string {
+): AgentState {
   if (!outcome) return agent?.state ?? "working";
-  if (outcome.kind === "answered")
-    return outcome.result.stopReason === "error" ? "failed" : "answered";
-  if (outcome.kind === "failed") return `failed: ${outcome.reason}`;
-  return outcome.kind;
+  switch (outcome.kind) {
+    case "answered":
+      return outcome.result.stopReason === "error" ? "failed" : "idle";
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "skipped";
+    default:
+      return "interrupted";
+  }
 }
 
-function graphDetail(
+/**
+ * A graph's detail: its shape when it has edges, then one block per agent:
+ * a heading with its glyph, name, and spend, and its result as Markdown.
+ * The glyph says how the agent did; only ⊘, which means both stopped and
+ * interrupted, gets a word.
+ */
+export function graphDetail(
   graph: GraphInfo,
   lookup: (id: string) => AgentInfo | undefined,
   color: Colorize,
-): string[] {
+  bold: Bold = (text) => text,
+): DetailLine[] {
   const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
-  const lines = [
-    color("accent", "Shape"),
-    graphShape(graph),
-    "",
-    color("accent", "Agents"),
-  ];
-  for (const node of graph.nodes) {
+  const lines: DetailLine[] = [];
+  if (graph.nodes.some((node) => node.inputs.length > 0)) {
+    // Helpers repeat their agent's name; the shape reads better without it.
+    const owner = graph.owner ? lookup(graph.owner)?.name : undefined;
+    const shape = graphShape(graph);
+    lines.push(
+      color("accent", "Shape"),
+      owner ? shape.replaceAll(`${owner}.`, "") : shape,
+      "",
+    );
+  }
+  graph.nodes.forEach((node, index) => {
     const agent = lookup(node.agentId);
     const outcome = node.outcome;
     const inputs = node.inputs.map((input) => names.get(input) ?? input);
+    const usage = agent ? formatUsage(agent.usage) : "";
+    const meta = [agent ? shortModel(agent) : undefined, usage || undefined]
+      .filter(Boolean)
+      .join(" · ");
+    const word =
+      outcome?.kind === "stopped" || outcome?.kind === "interrupted"
+        ? outcome.kind
+        : undefined;
+    if (index > 0) lines.push("");
     lines.push(
-      `${agent ? stateIcon(agent.state, color) : " "} ${node.name}${inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : ""} ${color("dim", nodeSummary(outcome, agent))}`,
+      [
+        `${stateIcon(nodeState(outcome, agent), color)} ${bold(node.name)}`,
+        inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : "",
+        meta ? color("dim", ` · ${meta}`) : "",
+        word ? color("dim", ` · ${word}`) : "",
+      ].join(""),
     );
-    if (agent) lines.push(color("dim", `  ${oneLine(agent.task, 200)}`));
-    if (outcome?.kind === "answered" && outcome.result.text) {
-      const body = outcome.result.text.split("\n");
-      lines.push(
-        ...body.slice(0, DETAIL_NODE_LINES).map((line) => `  ${line}`),
-      );
-      if (body.length > DETAIL_NODE_LINES)
+    if (outcome?.kind === "answered") {
+      const result = outcome.result;
+      if (result.stopReason === "error")
         lines.push(
           color(
-            "dim",
-            `  … ${body.length - DETAIL_NODE_LINES} more lines (attach to read)`,
+            "error",
+            `  ${result.errorMessage ?? (result.text || "error")}`,
           ),
         );
+      else if (result.text)
+        lines.push({
+          markdown: result.text,
+          indent: 2,
+          maxLines: DETAIL_NODE_LINES,
+          more: (hidden) =>
+            `… ${hidden} more lines · select ${node.name} to read all`,
+        });
+    } else if (outcome?.kind === "failed") {
+      lines.push(color("error", `  ${outcome.reason}`));
     }
-  }
+  });
   return lines;
 }
 
@@ -143,8 +192,12 @@ function rowName(row: Row): string {
   return `${connector(row)}${row.kind === "graph" ? row.graph.name : row.agent.name}`;
 }
 
-function agentDetail(agent: AgentInfo, color: Colorize): string[] {
-  const lines = [color("accent", "Task"), ...agent.task.split("\n")];
+/** An agent's detail: its task, then its latest result as Markdown. */
+export function agentDetail(agent: AgentInfo, color: Colorize): DetailLine[] {
+  const lines: DetailLine[] = [
+    color("accent", "Task"),
+    ...agent.task.split("\n"),
+  ];
   const result = agent.result;
   if (agent.state === "failed") {
     lines.push(
@@ -155,19 +208,11 @@ function agentDetail(agent: AgentInfo, color: Colorize): string[] {
       ),
     );
   } else if (result?.text) {
-    const body = result.text.split("\n");
-    lines.push(
-      "",
-      color("accent", "Latest result"),
-      ...body.slice(0, DETAIL_RESULT_LINES),
-    );
-    if (body.length > DETAIL_RESULT_LINES)
-      lines.push(
-        color(
-          "dim",
-          `… ${body.length - DETAIL_RESULT_LINES} more lines (attach to read)`,
-        ),
-      );
+    lines.push("", color("accent", "Latest result"), {
+      markdown: result.text,
+      maxLines: DETAIL_RESULT_LINES,
+      more: (hidden) => `… ${hidden} more lines (attach to read)`,
+    });
   }
   return lines;
 }
@@ -229,10 +274,10 @@ async function openAgentsOverlay(
         ].join(" · "),
       );
     },
-    detail: (row, color) =>
+    detail: (row, color, bold) =>
       row.kind === "agent"
         ? agentDetail(row.agent, color)
-        : graphDetail(row.graph, (id) => service.get(id), color),
+        : graphDetail(row.graph, (id) => service.get(id), color, bold),
     onAction: (key, row) => {
       if (key === "space") return { select: fold(row, deps.panel.disclosure) };
       if (key === "enter") {

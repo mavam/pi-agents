@@ -1,0 +1,8 @@
+created: 2026-10-09
+title: Visible tool call failures
+intro: >-
+  This release shows why an agent tool call failed. Calls cut short by a broken model
+  response now show their error instead of looking like they never finished.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.26.0

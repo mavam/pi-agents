@@ -51,7 +51,8 @@ that finished hours ago, and keep talking to it like a regular Pi session.
 ### Architecture
 
 Agents run inside your Pi process. Pi-agents keeps one pi-durable harness per
-Pi session; each agent is a conversation in that harness:
+Pi session. Each agent is a conversation in that harness, and each graph a
+task that starts its agents and passes their results along:
 
 ```text
 ╭─ Pi process ─────────────────────────────────────────────────────╮
@@ -70,10 +71,14 @@ Pi session; each agent is a conversation in that harness:
 │  ╭──────────────┴─────────────────────────────────────────────╮  │
 │  │  pi-durable harness                                        │  │
 │  │                                                            │  │
-│  │   ╭─────────────╮   ╭─────────────╮   ╭─────────────╮      │  │
-│  │   │ ◉ agent     │   │ ◉ agent     │   │ ● agent     │  …   │  │
-│  │   ╰─────────────╯   ╰─────────────╯   ╰─────────────╯      │  │
-│  │   one conversation per agent                               │  │
+│  │   ◉ agent     ╭─ graph ─────────────────────────╮          │  │
+│  │               │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │          │  │
+│  │   ● agent     │        └─▶ ◉ ui ───┘            │          │  │
+│  │               │            └─ ◉ ◉ ◉ helpers     │          │  │
+│  │   …           ╰─────────────────────────────────╯          │  │
+│  │                                                            │  │
+│  │   agents are conversations; a graph is a task that starts  │  │
+│  │   them in order and passes their results on                │  │
 │  ╰─────────────────────────────┬──────────────────────────────╯  │
 ╰────────────────────────────────┼─────────────────────────────────╯
                                  │ checkpoint every step
@@ -83,11 +88,11 @@ Pi session; each agent is a conversation in that harness:
                    ╰───────────────────────────╯
 ```
 
-A graph is a task in the same harness that starts its agents in order and
-hands results along, so stopping a graph reaches all of its agents. Because
-pi-durable checkpoints every step, a resumed session continues where its
-agents and graphs stopped. Agents use your Pi logins and models, so they need no
-separate setup.
+A graph owns its agents, so stopping a graph reaches all of them. An agent
+that delegates starts its helpers as a graph of its own, owned by the call
+that waits for them. Because pi-durable checkpoints every step, a resumed
+session continues where its agents and graphs stopped. Agents use your Pi
+logins and models, so they need no separate setup.
 
 ### Glossary
 
@@ -293,8 +298,8 @@ Agents belong to the Pi session that started them. When you quit Pi or it
 crashes, agents pause. When you resume the session, for example with `pi -c`,
 interrupted work continues and results that haven't arrived yet post into the
 conversation. A graph continues too: its agents that already finished don't
-work again, and no agent gets its task twice. A tool call that can't safely repeat reports the interruption to
-the agent instead.
+work again, and no agent gets its task twice. A tool call that can't safely
+repeat reports the interruption to the agent instead.
 
 Agents of sessions started with `--no-session` live in memory and end with
 the session.

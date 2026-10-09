@@ -376,7 +376,9 @@ stores what started in the renderers' shared state, and the call reads it
 when it draws. A started agent adds nothing to its call. Expanded, a call
 shows its arguments and tasks in full, one paragraph per agent, wrapped
 under their indentation. Calls that report outcomes show the agents'
-states.
+states. A failed call shows its error text in the error color instead: Pi
+marks a call failed without agent details when the tool throws or when the
+model's message broke off before Pi ran it.
 
 ## Frontend
 

@@ -315,6 +315,9 @@ Each tool call shows the arguments Pi chose on a dim line below it:
   List the files in src and summarize them.
 ```
 
+A call that fails shows the reason below it, for example `terminated` when
+the model's response broke off before Pi could run the call.
+
 ### Durability
 
 Agents belong to the Pi session that started them. When you quit Pi or it

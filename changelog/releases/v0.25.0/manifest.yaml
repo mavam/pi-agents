@@ -1,0 +1,8 @@
+created: 2026-10-09
+title: Concurrent request limit
+intro: >-
+  This release lets you cap how many model requests your agents send at once, so they
+  work well with model servers that serve one request at a time, such as local LLMs.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.24.0

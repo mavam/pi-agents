@@ -1,7 +1,7 @@
 {
   "name": "pi-agents",
   "description": "Durable, named agents for Pi: delegate tasks, compose agents into graphs, and watch them work.",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "type": "module",
   "files": [
     "src",

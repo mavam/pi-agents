@@ -1,7 +1,38 @@
 /**
- * The text of a graph's result, for the parent model and for an agent that
- * waits for its helpers. Pure functions over plain data.
+ * What agents and graphs produced: an agent's latest turn, and the text of a
+ * graph's result for the parent model and for an agent that waits for its
+ * helpers. Pure functions over plain data.
  */
+
+import type { AgentInfo } from "./types.js";
+
+/**
+ * What an agent's latest turn produced: its answer, what it wrote before it
+ * was interrupted, or why it failed. Nothing while it works or waits, and
+ * nothing of an earlier turn.
+ */
+export function turnResult(info: AgentInfo): {
+  result?: string;
+  error?: string;
+} {
+  const ended = info.unanswered;
+  const own = ended && !ended.current ? undefined : info.result;
+  switch (info.state) {
+    case "idle":
+      return own ? { result: own.text } : {};
+    case "interrupted":
+      return own?.text ? { result: own.text } : {};
+    case "failed":
+      return {
+        error:
+          own?.errorMessage ??
+          ended?.detail ??
+          (own?.text || ended?.reason || "unknown"),
+      };
+    default:
+      return {};
+  }
+}
 
 /** How one agent of a graph did; `working` and `waiting` only in waits
  * that timed out. In report order. */

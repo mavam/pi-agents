@@ -35,6 +35,40 @@ export function settlementOf(
   return undefined;
 }
 
+/** A turn without an answer: why, and the first entry of its inputs. */
+export interface EndedTurn {
+  reason: string;
+  detail?: string;
+  /** Absent when none of its inputs reached the transcript. */
+  since?: number;
+}
+
+/**
+ * The turn an unanswered submission ended, merged with `turn`, what other
+ * submissions of the same commit ended: a run settles all of its inputs
+ * at once, and its output follows the first of them.
+ */
+export function endedTurnOf(
+  submission: SubmissionRecord,
+  turn?: EndedTurn,
+): EndedTurn | undefined {
+  if (submission.type !== "input" || submission.status !== "unanswered")
+    return undefined;
+  const detail = submission.detail;
+  const entries = [turn?.since, submission.entry].filter(
+    (entry): entry is number => entry !== undefined,
+  );
+  return {
+    reason: turn?.reason ?? submission.reason,
+    ...(turn?.detail !== undefined
+      ? { detail: turn.detail }
+      : typeof detail === "string"
+        ? { detail }
+        : {}),
+    ...(entries.length > 0 ? { since: Math.min(...entries) } : {}),
+  };
+}
+
 export function deriveState(
   live: LiveState | undefined,
   last: AgentResult | undefined,

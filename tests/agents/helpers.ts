@@ -51,6 +51,39 @@ export function createFaux(
   return { faux, models };
 }
 
+/**
+ * A faux model that answers `done: <prompt>`, fails prompts that contain
+ * `fail`, and holds prompts that contain `hold` until `release()` or until
+ * the request aborts, so tests decide when work ends instead of racing it.
+ */
+export function createGatedFaux() {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const step: FauxResponseStep = async (context, options) => {
+    const prompt = lastUserText(context);
+    if (prompt.includes("hold"))
+      await new Promise<void>((resolve) => {
+        void gate.then(resolve);
+        options?.signal?.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
+      });
+    if (prompt.includes("fail"))
+      return fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: `cannot ${prompt.split("\n")[0]}`,
+      });
+    return fauxAssistantMessage(`done: ${prompt}`);
+  };
+  faux.setResponses(Array.from({ length: 200 }, () => step));
+  return { models, release };
+}
+
 export function tempDir(prefix = "pi-agents-"): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }

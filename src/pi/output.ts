@@ -6,8 +6,8 @@
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type Static, Type } from "typebox";
-import { cutResult, NODE_KINDS } from "../agents/report.js";
+import { type Static, type TProperties, Type } from "typebox";
+import { cutResult, NODE_KINDS, turnResult } from "../agents/report.js";
 import {
   AGENT_STATES,
   type AgentInfo,
@@ -16,18 +16,26 @@ import {
 } from "../agents/types.js";
 import { nodeDetails } from "./messages.js";
 
+/** An object with exactly these fields. */
+function exact<T extends TProperties>(properties: T) {
+  return Type.Object(properties, { additionalProperties: false });
+}
+
 /** A result cut to the limit of the text the model reads. */
 const resultFields = {
   result: Type.Optional(
-    Type.String({ description: "Its final message, once it answered" }),
+    Type.String({
+      description:
+        "Its answer, or what it wrote before it was interrupted; absent while it works",
+    }),
   ),
   error: Type.Optional(Type.String({ description: "Why it failed" })),
   truncated: Type.Optional(
-    Type.Boolean({ description: "The result was cut to fit" }),
+    Type.Boolean({ description: "The result or error was cut to fit" }),
   ),
 };
 
-export const AgentOutput = Type.Object({
+export const AgentOutput = exact({
   kind: Type.Literal("agent"),
   name: Type.String(),
   state: StringEnum(AGENT_STATES),
@@ -37,21 +45,21 @@ export const AgentOutput = Type.Object({
 
 export type AgentOutput = Static<typeof AgentOutput>;
 
-const NodeOutput = Type.Object({
+const NodeOutput = exact({
   name: Type.String(),
   after: Type.Array(Type.String(), {
-    description: "Agents whose results it received",
+    description: "Agents of the graph it depends on",
   }),
   end: Type.Boolean({
     description: "Nothing waits for it; the graph's result is its result",
   }),
   outcome: StringEnum(NODE_KINDS, {
-    description: "How its task in the graph ended",
+    description: "How its task in the graph ended, or that it still runs",
   }),
   ...resultFields,
 });
 
-export const GraphOutput = Type.Object({
+export const GraphOutput = exact({
   kind: Type.Literal("graph"),
   name: Type.String(),
   state: StringEnum(AGENT_STATES),
@@ -61,26 +69,31 @@ export const GraphOutput = Type.Object({
 
 export type GraphOutput = Static<typeof GraphOutput>;
 
-export const StatusOutput = Type.Object({
+export const StatusOutput = exact({
   agents: Type.Array(AgentOutput),
   graphs: Type.Array(GraphOutput),
 });
 
 export type StatusOutput = Static<typeof StatusOutput>;
 
-export const WaitOutput = Type.Object({
+export const WaitOutput = exact({
   agents: Type.Array(AgentOutput),
   graphs: Type.Array(GraphOutput),
   pending: Type.Array(Type.String(), {
-    description: "Names still working when the wait ended",
+    description: "Names the wait ended before",
   }),
 });
 
 export type WaitOutput = Static<typeof WaitOutput>;
 
-export const TargetOutput = Type.Union([AgentOutput, GraphOutput]);
+/** What a stop stopped. */
+export const StopOutput = exact({
+  kind: StringEnum(["agent", "graph"] as const),
+  name: Type.String(),
+  state: StringEnum(AGENT_STATES),
+});
 
-export type TargetOutput = Static<typeof TargetOutput>;
+export type StopOutput = Static<typeof StopOutput>;
 
 /** `result` or `error` from a message body. */
 function bodyFields(
@@ -94,28 +107,23 @@ function bodyFields(
     : { error: text, ...truncated };
 }
 
-/**
- * An agent with its latest result. A working agent has none yet, even when
- * it answered before; a failed one has its error instead.
- */
+/** An agent with what its latest turn produced. */
 export function agentOutput(
   info: AgentInfo,
   graphName: (graphId: string) => string | undefined,
 ): AgentOutput {
   const graph = info.graph ? graphName(info.graph) : undefined;
-  const result = info.result;
-  const body =
-    info.state === "failed"
-      ? bodyFields("error", result?.errorMessage ?? (result?.text || "unknown"))
-      : (info.state === "idle" || info.state === "interrupted") && result
-        ? bodyFields("result", result.text)
-        : {};
+  const { result, error } = turnResult(info);
   return {
     kind: "agent",
     name: info.name,
     state: info.state,
     ...(graph ? { graph } : {}),
-    ...body,
+    ...(error !== undefined
+      ? bodyFields("error", error)
+      : result !== undefined
+        ? bodyFields("result", result)
+        : {}),
   };
 }
 
@@ -156,13 +164,12 @@ export interface OutputLookup {
   graph: (graphId: string) => GraphInfo | undefined;
 }
 
-export function targetOutput(
-  target: Target,
-  lookup: OutputLookup,
-): TargetOutput {
-  return target.kind === "graph"
-    ? graphOutput(target.info, lookup.agent)
-    : agentOutput(target.info, (id) => lookup.graph(id)?.name);
+export function stopOutput(target: Target): StopOutput {
+  return {
+    kind: target.kind,
+    name: target.info.name,
+    state: target.info.state,
+  };
 }
 
 export function statusOutput(

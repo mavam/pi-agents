@@ -53,6 +53,8 @@ import {
   addPartialUsage,
   deriveGraphState,
   deriveState,
+  type EndedTurn,
+  endedTurnOf,
   outcomeOf,
   resultOf,
   settlementOf,
@@ -195,6 +197,8 @@ export class AgentService {
   private readonly lastAssistant = new Map<string, EntryRecord>();
   private readonly activityAt = new Map<string, number>();
   private readonly settlements = new Map<string, TurnSettlement>();
+  /** Per agent, the latest turn when it ended without an answer. */
+  private readonly endedTurns = new Map<string, EndedTurn>();
   /** Decided outcomes of graph and node tasks, which never change, and
    * whether the task is terminal, which a held outcome is not yet. */
   private readonly outcomes = new Map<
@@ -1120,6 +1124,8 @@ export class AgentService {
     const now = Date.now();
     let records = false;
     let graphs = false;
+    // Turns this commit ended, which may settle several inputs of one run.
+    const ended = new Map<string, EndedTurn>();
     for (const change of publication.changes) {
       if (change.type === "document") {
         if (change.record.kind === AgentsDoc.definition.kind) records = true;
@@ -1136,6 +1142,12 @@ export class AgentService {
         const id = String(change.value.conversationId);
         const settlement = settlementOf(change.value);
         if (settlement) this.settlements.set(id, settlement);
+        const turn = endedTurnOf(change.value, ended.get(id));
+        if (turn) ended.set(id, turn);
+        else if (settlement === "answered") {
+          ended.delete(id);
+          this.endedTurns.delete(id);
+        }
         this.touch(id, now);
       } else if (change.type === "task") {
         if (change.value.kind === GRAPH_TASK) graphs = true;
@@ -1148,6 +1160,7 @@ export class AgentService {
         }
       }
     }
+    for (const [id, turn] of ended) this.endedTurns.set(id, turn);
     if (records) for (const id of Object.keys(this.records)) this.dirty.add(id);
     if (records || graphs || this.dirty.size > 0) this.scheduleRefresh();
   }
@@ -1307,6 +1320,7 @@ export class AgentService {
       (live?.run === undefined
         ? await this.nodeState(id, record, result)
         : undefined) ?? deriveState(live, result, this.settlements.get(id));
+    const ended = this.endedTurns.get(id);
     const previous = this.infos.get(id);
     const now = Date.now();
     const durable = (agent ?? {}) as DurableAgentState;
@@ -1340,6 +1354,18 @@ export class AgentService {
       usage: addPartialUsage(summarizeUsage(usage), live),
       activity: activityOf(live),
       ...(result ? { result } : {}),
+      ...(ended && (state === "interrupted" || state === "failed")
+        ? {
+            unanswered: {
+              reason: ended.reason,
+              ...(ended.detail !== undefined ? { detail: ended.detail } : {}),
+              current:
+                result !== undefined &&
+                ended.since !== undefined &&
+                result.entryId > ended.since,
+            },
+          }
+        : {}),
       ...(taskAnswer !== undefined ? { taskAnswer } : {}),
       ...(record.graph ? { graph: record.graph } : {}),
       ...(record.delegate ? { delegates: true } : {}),

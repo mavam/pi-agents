@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { renderToolOutputType } from "@earendil-works/pi-codemode";
 import type {
+  AgentToolUpdateCallback,
   ExtensionAPI,
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Value } from "typebox/value";
 import type { AgentService } from "../../src/agents/service.js";
 import {
   type AgentInfo,
@@ -20,11 +23,14 @@ import {
   renderDetails,
   startedView,
 } from "../../src/pi/tools.js";
-import { createFaux, MODEL, openService, until } from "../agents/helpers.js";
+import { createGatedFaux, MODEL, openService } from "../agents/helpers.js";
 
 let service: AgentService | undefined;
+let release: (() => void) | undefined;
 
 afterEach(async () => {
+  release?.();
+  release = undefined;
   await service?.close();
   service = undefined;
 });
@@ -49,117 +55,283 @@ const ctx = {
   isProjectTrusted: () => false,
 } as unknown as ExtensionContext;
 
-/** Run a tool and return what a script gets. */
-async function output(
-  tool: AnyTool | undefined,
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  const result = await tool?.execute("call", params, undefined, undefined, ctx);
-  return result?.structuredContent;
+/** Agent tools over a service whose model holds prompts with `hold`. */
+async function gated(steering = new SteerWatch()) {
+  const faux = createGatedFaux();
+  release = faux.release;
+  service = await openService({ models: faux.models });
+  const registered = tools(steering);
+  /**
+   * Run a tool and return its text and what a script gets, which must match
+   * the tool's output schema.
+   */
+  return async (
+    name: string,
+    params: Record<string, unknown>,
+    options: {
+      signal?: AbortSignal;
+      onUpdate?: AgentToolUpdateCallback<unknown>;
+    } = {},
+  ): Promise<{ text: string; output: unknown }> => {
+    const tool = registered.get(name);
+    if (!tool) throw new Error(`No tool ${name}`);
+    const result = await tool.execute(
+      "call",
+      params,
+      options.signal,
+      options.onUpdate,
+      ctx,
+    );
+    const output = result.structuredContent;
+    expect([...Value.Errors(tool.outputSchema, output)], name).toEqual([]);
+    const [first] = result.content;
+    return { text: first?.type === "text" ? first.text : "", output };
+  };
+}
+
+/** Resolves once a wait reported progress, and thus listens for steers. */
+function firstUpdate(): {
+  onUpdate: AgentToolUpdateCallback<unknown>;
+  started: Promise<void>;
+} {
+  let resolve!: () => void;
+  const started = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { onUpdate: () => resolve(), started };
 }
 
 describe("script output", () => {
   test("every agent tool declares the output scripts get", () => {
-    for (const tool of tools(new SteerWatch()).values())
+    const registered = tools(new SteerWatch());
+    for (const tool of registered.values())
       expect(tool.outputSchema, tool.name).toBeDefined();
+    const stop = registered.get("agent_stop");
+    expect(renderToolOutputType(stop?.outputSchema)).toBe(
+      '{ kind: "agent" | "graph"; name: string; state: "working" | "waiting" | "idle" | "failed" | "interrupted" | "skipped"; }',
+    );
   });
 
-  test("agents resolve to their names, states, and results", async () => {
-    service = await openService();
-    const registered = tools(new SteerWatch());
+  test("agents resolve to what their latest turn produced", async () => {
+    const run = await gated();
+    const a = { kind: "agent", name: "a", state: "idle" };
     expect(
-      await output(registered.get("agent_spawn"), {
-        task: "one",
-        name: "a",
-        wait: 60,
-      }),
-    ).toEqual({ kind: "agent", name: "a", state: "idle", result: "done: one" });
+      (await run("agent_spawn", { task: "one", name: "a", wait: 60 })).output,
+    ).toEqual({ ...a, result: "done: one" });
     expect(
-      await output(registered.get("agent_send"), {
-        name: "a",
-        message: "two",
-        wait: 60,
-      }),
-    ).toEqual({ kind: "agent", name: "a", state: "idle", result: "done: two" });
-    expect(await output(registered.get("agent_status"), { name: "a" })).toEqual(
-      {
-        agents: [
-          { kind: "agent", name: "a", state: "idle", result: "done: two" },
-        ],
-        graphs: [],
-      },
-    );
-    expect(
-      await output(registered.get("agent_wait"), { names: ["a"] }),
-    ).toEqual({
-      agents: [
-        { kind: "agent", name: "a", state: "idle", result: "done: two" },
-      ],
+      (await run("agent_send", { name: "a", message: "two", wait: 60 })).output,
+    ).toEqual({ ...a, result: "done: two" });
+    expect((await run("agent_status", { name: "a" })).output).toEqual({
+      agents: [{ ...a, result: "done: two" }],
+      graphs: [],
+    });
+    expect((await run("agent_wait", { names: ["a"] })).output).toEqual({
+      agents: [{ ...a, result: "done: two" }],
       graphs: [],
       pending: [],
     });
-    expect(await output(registered.get("agent_stop"), { name: "a" })).toEqual({
+    expect((await run("agent_stop", { name: "a" })).output).toEqual(a);
+  });
+
+  test("an interrupted turn doesn't report an earlier answer", async () => {
+    const run = await gated();
+    await run("agent_spawn", { task: "one", name: "a", wait: 60 });
+    expect(
+      (await run("agent_send", { name: "a", message: "hold two" })).output,
+    ).toEqual({ kind: "agent", name: "a", state: "working" });
+    await run("agent_stop", { name: "a" });
+    const interrupted = { kind: "agent", name: "a", state: "interrupted" };
+    expect((await run("agent_status", { name: "a" })).output).toEqual({
+      agents: [interrupted],
+      graphs: [],
+    });
+    const waited = await run("agent_wait", { names: ["a"] });
+    expect(waited.output).toEqual({
+      agents: [interrupted],
+      graphs: [],
+      pending: [],
+    });
+    expect(waited.text).toBe("## a (interrupted)");
+  });
+
+  test("a failed turn reports its error, not an earlier answer", async () => {
+    const run = await gated();
+    await run("agent_spawn", { task: "one", name: "a", wait: 60 });
+    const failed = await run("agent_send", {
+      name: "a",
+      message: "fail two",
+      wait: 60,
+    });
+    expect(failed.output).toEqual({
       kind: "agent",
       name: "a",
-      state: "idle",
-      result: "done: two",
+      state: "failed",
+      error: "cannot fail two",
+    });
+    expect(failed.text).toBe("## a (failed)\nError: cannot fail two");
+  });
+
+  test("status lists open agents; answered ones need their name", async () => {
+    const run = await gated();
+    await run("agent_spawn", { task: "one", name: "a", wait: 60 });
+    await run("agent_spawn", { task: "hold", name: "w" });
+    const w = { kind: "agent", name: "w", state: "working" };
+    expect((await run("agent_status", {})).output).toEqual({
+      agents: [w],
+      graphs: [],
+    });
+    expect((await run("agent_status", { name: "a" })).output).toEqual({
+      agents: [
+        { kind: "agent", name: "a", state: "idle", result: "done: one" },
+      ],
+      graphs: [],
     });
   });
 
-  test("a graph resolves to how each agent ended its task", async () => {
-    service = await openService();
-    const graph = (await output(
-      tools(new SteerWatch()).get("agent_spawn_graph"),
-      {
-        name: "g",
-        agents: [
-          { task: "one", name: "a" },
-          { task: "two", name: "b", after: ["a"] },
-        ],
-        wait: 60,
-      },
-    )) as { agents: unknown[] };
-    expect(graph).toMatchObject({
+  test("waits that end early return the state and what is pending", async () => {
+    const steering = new SteerWatch();
+    const run = await gated(steering);
+    const w = { kind: "agent", name: "w", state: "working" };
+    // A timeout.
+    expect(
+      (await run("agent_spawn", { task: "hold", name: "w", wait: 1 })).output,
+    ).toEqual(w);
+    // An abort.
+    const abort = new AbortController();
+    const aborted = firstUpdate();
+    const waiting = run(
+      "agent_wait",
+      { names: ["w"] },
+      { signal: abort.signal, onUpdate: aborted.onUpdate },
+    );
+    await aborted.started;
+    abort.abort();
+    expect((await waiting).output).toEqual({
+      agents: [w],
+      graphs: [],
+      pending: ["w"],
+    });
+    // A steer from the user, to an agent that is steered itself.
+    const steered = firstUpdate();
+    const sending = run(
+      "agent_send",
+      { name: "w", message: "and more", wait: 60 },
+      { onUpdate: steered.onUpdate },
+    );
+    await steered.started;
+    steering.steer();
+    expect((await sending).output).toEqual(w);
+    expect(
+      (await run("agent_send", { name: "w", message: "more" })).output,
+    ).toEqual(w);
+  });
+
+  test("graphs resolve to how each agent ended its task", async () => {
+    const run = await gated();
+    expect(
+      (
+        await run("agent_spawn_graph", {
+          name: "g",
+          agents: [
+            { task: "one", name: "a" },
+            { task: "two", name: "b", after: ["a"] },
+          ],
+          wait: 60,
+        })
+      ).output,
+    ).toMatchObject({
       kind: "graph",
       name: "g",
       state: "idle",
       stopped: false,
+      agents: [
+        {
+          name: "a",
+          after: [],
+          end: false,
+          outcome: "answered",
+          result: "done: one",
+        },
+        {
+          name: "b",
+          after: ["a"],
+          end: true,
+          outcome: "answered",
+          result: expect.stringContaining("two"),
+        },
+      ],
     });
-    expect(graph.agents).toEqual([
-      {
-        name: "a",
-        after: [],
-        end: false,
-        outcome: "answered",
-        result: "done: one",
-      },
-      {
-        name: "b",
-        after: ["a"],
-        end: true,
-        outcome: "answered",
-        result: expect.stringContaining("two"),
-      },
-    ]);
   });
 
-  test("a wait names what still works when it ends early", async () => {
-    const { models } = createFaux((prompt) => `${prompt} `.repeat(400), {
-      tokensPerSecond: 20,
-    });
-    service = await openService({ models });
-    const registered = tools(new SteerWatch());
+  test("graphs report failed, skipped, and stopped agents", async () => {
+    const run = await gated();
     expect(
-      await output(registered.get("agent_spawn"), { task: "long", name: "w" }),
-    ).toEqual({ kind: "agent", name: "w", state: "working" });
-    expect(
-      await output(registered.get("agent_wait"), { names: ["w"], timeout: 1 }),
+      (
+        await run("agent_spawn_graph", {
+          name: "g",
+          agents: [
+            { task: "fail one", name: "a" },
+            { task: "two", name: "b", after: ["a"] },
+          ],
+          wait: 60,
+        })
+      ).output,
     ).toEqual({
-      agents: [{ kind: "agent", name: "w", state: "working" }],
-      graphs: [],
-      pending: ["w"],
+      kind: "graph",
+      name: "g",
+      state: "failed",
+      stopped: false,
+      agents: [
+        {
+          name: "a",
+          after: [],
+          end: false,
+          outcome: "failed",
+          error: "cannot fail one",
+        },
+        { name: "b", after: ["a"], end: true, outcome: "skipped" },
+      ],
     });
-    await service.stop("w");
+    expect(
+      (
+        await run("agent_spawn_graph", {
+          name: "h",
+          agents: [
+            { task: "hold", name: "c" },
+            { task: "two", name: "d", after: ["c"] },
+          ],
+        })
+      ).output,
+    ).toEqual({
+      kind: "graph",
+      name: "h",
+      state: "working",
+      stopped: false,
+      agents: [
+        { name: "c", after: [], end: false, outcome: "working" },
+        { name: "d", after: ["c"], end: true, outcome: "waiting" },
+      ],
+    });
+    expect((await run("agent_stop", { name: "h" })).output).toEqual({
+      kind: "graph",
+      name: "h",
+      state: "interrupted",
+    });
+    expect((await run("agent_status", { name: "h" })).output).toEqual({
+      agents: [],
+      graphs: [
+        {
+          kind: "graph",
+          name: "h",
+          state: "interrupted",
+          stopped: true,
+          agents: [
+            { name: "c", after: [], end: false, outcome: "stopped" },
+            { name: "d", after: ["c"], end: true, outcome: "stopped" },
+          ],
+        },
+      ],
+    });
   });
 });
 
@@ -203,6 +375,28 @@ describe("output", () => {
     });
   });
 
+  test("a turn that failed before any output says why", () => {
+    const failed = info("an earlier answer");
+    failed.state = "failed";
+    failed.unanswered = { reason: "no_model", current: false };
+    expect(agentOutput(failed, () => undefined).error).toBe("no_model");
+    failed.unanswered = {
+      reason: "model_error",
+      detail: "overloaded",
+      current: false,
+    };
+    expect(agentOutput(failed, () => undefined).error).toBe("overloaded");
+  });
+
+  test("an interrupted turn keeps what it wrote", () => {
+    const interrupted = info("half an answer");
+    interrupted.state = "interrupted";
+    interrupted.unanswered = { reason: "aborted", current: true };
+    expect(agentOutput(interrupted, () => undefined).result).toBe(
+      "half an answer",
+    );
+  });
+
   test("a graph keeps the answer to its task, not later replies", () => {
     const later = info("a later reply");
     const answer = { ...(later.result as NonNullable<AgentInfo["result"]>) };
@@ -235,30 +429,19 @@ describe("output", () => {
 
 describe("waiting tools", () => {
   test("a steer from the user ends a wait; the agent keeps working", async () => {
-    const { models } = createFaux((prompt) => `${prompt} `.repeat(400), {
-      tokensPerSecond: 20,
-    });
-    service = await openService({ models });
-    await service.spawn({ task: "long", name: "w", cwd: ".", model: MODEL });
-    await until(() => service?.get("w")?.state === "working");
     const steering = new SteerWatch();
-    const wait = tools(steering).get("agent_wait");
-    const running = wait?.execute(
-      "call-1",
-      { names: ["w"] },
-      undefined,
-      undefined,
-      {} as ExtensionContext,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const run = await gated(steering);
+    await run("agent_spawn", { task: "hold", name: "w" });
+    const { onUpdate, started } = firstUpdate();
+    const waiting = run("agent_wait", { names: ["w"] }, { onUpdate });
+    await started;
     steering.steer();
-    const result = await running;
-    expect(result?.content[0]).toMatchObject({
-      text: "Stopped waiting because the user sent a message. The agents keep working; their results arrive as messages.",
-    });
-    expect(result?.structuredContent).toMatchObject({ pending: ["w"] });
-    expect(service.get("w")?.state).toBe("working");
-    await service.stop("w");
+    const result = await waiting;
+    expect(result.text).toBe(
+      "Stopped waiting because the user sent a message. The agents keep working; their results arrive as messages.",
+    );
+    expect(result.output).toMatchObject({ pending: ["w"] });
+    expect(service?.get("w")?.state).toBe("working");
   });
 });
 

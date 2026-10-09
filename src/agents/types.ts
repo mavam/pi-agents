@@ -115,6 +115,8 @@ export interface AgentInfo {
   activity: AgentActivity;
   /** Latest assistant result, once the agent answered. */
   result?: AgentResult;
+  /** The latest turn ended without an answer, as this process saw it. */
+  unanswered?: UnansweredTurn;
   /** The entry that answered the agent's task, once one did. The latest
    * result answers the task only while it is this entry. */
   taskAnswer?: number;
@@ -124,6 +126,17 @@ export interface AgentInfo {
   delegates?: boolean;
   /** An answer waits for delivery to the parent, which is still busy. */
   queued?: boolean;
+}
+
+/** A turn that ended without an answer. */
+export interface UnansweredTurn {
+  /** Why, such as `aborted`, `model_error`, or `no_model`. */
+  reason: string;
+  /** The error's text, when there is one. */
+  detail?: string;
+  /** Whether the agent's `result` came from this turn, rather than from an
+   * earlier one. */
+  current: boolean;
 }
 
 /** How a graph waits for its agents: all of them, or until one fails. */

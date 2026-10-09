@@ -17,6 +17,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { type Static, type TSchema, Type } from "typebox";
+import { turnResult } from "../agents/report.js";
 import type { AgentService } from "../agents/service.js";
 import { shapeLine } from "../agents/topology.js";
 import {
@@ -50,9 +51,9 @@ import {
   graphOutput,
   type OutputLookup,
   StatusOutput,
+  StopOutput,
   statusOutput,
-  TargetOutput,
-  targetOutput,
+  stopOutput,
   WaitOutput,
 } from "./output.js";
 import type { SessionHost } from "./session.js";
@@ -100,13 +101,11 @@ function graphNow(service: AgentService, id: string): GraphOutput {
 /** The model-facing summary of one agent: its state and result. */
 function describeAgent(info: AgentInfo): string {
   const head = `## ${info.name} (${info.state})`;
-  const result = info.result;
-  if (info.state === "working") return head;
-  if (info.state === "failed")
-    return `${head}\nError: ${result?.errorMessage ?? (result?.text || "unknown")}`;
-  if (info.state === "interrupted")
-    return result?.text ? `${head}\n${truncateResult(result.text)}` : head;
-  return `${head}\n${truncateResult(result?.text || "(empty)")}`;
+  const { result, error } = turnResult(info);
+  if (error !== undefined) return `${head}\nError: ${error}`;
+  if (info.state === "idle")
+    return `${head}\n${truncateResult(result || "(empty)")}`;
+  return result ? `${head}\n${truncateResult(result)}` : head;
 }
 
 /** The model-facing summary of a graph: its result once it finished. */
@@ -953,11 +952,11 @@ export function registerAgentTools(
       parameters: Type.Object({
         name: Type.String({ description: "Agent or graph name" }),
       }),
-      output: TargetOutput,
+      output: StopOutput,
       call: (args) => ({ title: args.name ?? "" }),
       async execute(service, params) {
         const target = await service.stop(params.name);
-        const output = targetOutput(target, lookup(service));
+        const output = stopOutput(target);
         if (target.kind === "graph")
           return {
             content: `Stopped graph ${target.info.name} and its agents.`,

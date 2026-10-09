@@ -28,7 +28,14 @@ import {
 } from "../ui/format.js";
 import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
 import type { AgentPanel } from "../ui/panel.js";
-import { attachTarget, buildRows, connector, type Row } from "../ui/rows.js";
+import {
+  attachTarget,
+  buildRows,
+  connector,
+  fold,
+  hiddenNote,
+  type Row,
+} from "../ui/rows.js";
 import type { SessionHost } from "./session.js";
 
 /** Lines of the latest result shown in the overlay's detail pane. */
@@ -185,18 +192,22 @@ async function openAgentsOverlay(
           Number(!left.closed || left.state === "working") ||
         right.createdAt - left.createdAt,
       () => true,
+      deps.panel.disclosure,
     );
   const spec: OverlaySpec<Row> = {
     title: "Agents",
     emptyText: "No agents yet. Ask Pi to delegate.",
-    footer: "↑↓ move · ⏎ attach · s stop · esc",
+    footer: "↑↓ move · space fold · ⏎ attach · s stop · esc",
     items,
     keyOf: (row) => row.key,
     row: (row, color) => {
       const width = Math.max(...items().map((item) => rowName(item).length), 4);
-      return row.kind === "graph"
-        ? graphRow(row.graph, Date.now(), width, color, connector(row))
-        : agentRow(row.agent, Date.now(), width, color, connector(row));
+      const line =
+        row.kind === "graph"
+          ? graphRow(row.graph, Date.now(), width, color, connector(row))
+          : agentRow(row.agent, Date.now(), width, color, connector(row));
+      const hidden = hiddenNote(row);
+      return hidden ? `${line}  ${color("dim", hidden)}` : line;
     },
     headerLine: (row, color) => {
       if (row.kind === "agent") {
@@ -223,6 +234,7 @@ async function openAgentsOverlay(
         ? agentDetail(row.agent, color)
         : graphDetail(row.graph, (id) => service.get(id), color),
     onAction: (key, row) => {
+      if (key === "space") return { select: fold(row, deps.panel.disclosure) };
       if (key === "enter") {
         const agentId = attachTarget(row);
         if (!agentId) return undefined;

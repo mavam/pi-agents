@@ -177,6 +177,10 @@ export class FocusController {
       if (agentId) this.attach(ctx, agentId);
       return { consume: true };
     }
+    if (key === "space") {
+      this.panel.toggle();
+      return { consume: true };
+    }
     if (key === "s") {
       const row = this.panel.selected();
       if (row) {

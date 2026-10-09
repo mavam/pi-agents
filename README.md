@@ -146,6 +146,7 @@ Press ← in an empty editor or Ctrl+Q to focus the panel. Then:
 | Key | Action |
 | --- | --- |
 | ↑ ↓ | Select an agent or graph. |
+| Space | Fold or unfold a graph, or an agent's helpers. On a row inside one, fold what it sits in. |
 | ⏎ | Attach to the agent, or to a graph's first agent. |
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
 | Esc | Return to the editor. |
@@ -251,7 +252,7 @@ their agent's name.
 
 | Command | Action |
 | --- | --- |
-| `/agents` | Browse all agents and graphs, including ended ones, with their tasks and latest results. Attach to or stop them. |
+| `/agents` | Browse all agents and graphs, including ended ones, with their tasks and latest results. Attach to, fold, or stop them. |
 | `/agent <name>` | Attach to an agent. |
 
 ### Tools

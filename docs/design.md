@@ -330,8 +330,11 @@ renders its explicit arguments as a dim `key=value` line.
   finished, with its agents below it as a tree in stages, each with `←` and
   the agents it receives results from; unfocused, a finished graph
   folds to its line. Left arrow from an empty editor or Ctrl+Q focuses it; ↑↓
-  select, ⏎ attaches (a graph: its first agent), `s` stops an agent or a
-  graph, and Esc returns. While the stop confirmation is open, keys go to
+  select, space folds a graph or an agent's helpers (on a row inside one, the
+  row it sits in), ⏎ attaches (a graph: its first agent), `s` stops an agent
+  or a graph, and Esc returns. A folded row says how many agents it hides.
+  The panel and `/agents` share what the user folded, which wins over
+  folding finished graphs. While the stop confirmation is open, keys go to
   the confirmation. The glyph carries the state; working agents show how long
   they have worked.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's

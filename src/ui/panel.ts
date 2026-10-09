@@ -10,8 +10,9 @@
  *
  * Unfocused, it shows the first few lines, working ones first, and a
  * finished graph as one line. Left arrow from an empty editor or Ctrl+Q
- * focuses it (see focus.ts); then ↑↓ select, ⏎ attaches (a graph: its first
- * agent), `s` stops, and Esc returns to the editor.
+ * focuses it (see focus.ts); then ↑↓ select, space folds a graph or an
+ * agent's helpers, ⏎ attaches (a graph: its first agent), `s` stops, and Esc
+ * returns to the editor.
  */
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -28,7 +29,15 @@ import {
   formatGraphLine,
   sanitizeLine,
 } from "./format.js";
-import { buildRows, connector, type EntryOrder, type Row } from "./rows.js";
+import {
+  buildRows,
+  connector,
+  Disclosure,
+  type EntryOrder,
+  fold,
+  hiddenNote,
+  type Row,
+} from "./rows.js";
 
 const WIDGET_KEY = "pi-agents:panel";
 const MAX_UNFOCUSED = 6;
@@ -86,6 +95,8 @@ export class AgentPanel {
   private suppressed = false;
   private focused = false;
   private selectedKey: string | undefined;
+  /** What the user folded; `/agents` shares it. */
+  readonly disclosure = new Disclosure();
   private readonly held = new Map<string, HeldSummary>();
 
   constructor(
@@ -105,7 +116,16 @@ export class AgentPanel {
       },
       panelCompare,
       (graph) => !collapse || graph.state === "working",
+      this.disclosure,
     );
+  }
+
+  /** Space: fold or unfold the selected row, or the row it sits below. */
+  toggle(): void {
+    const row = this.selected();
+    if (!row) return;
+    this.selectedKey = fold(row, this.disclosure);
+    this.update();
   }
 
   update(ctx?: ExtensionContext): void {
@@ -205,10 +225,19 @@ export class AgentPanel {
 
   private lines(budget: number, color: Colorize): string[] {
     const now = this.now();
-    const line = (row: Row) =>
-      row.kind === "graph"
-        ? `${color("dim", row.lead)}${formatGraphLine(row.graph, now, color)}`
-        : `${color("dim", connector(row))}${formatAgentLine(this.heldActivity(row.agent, now), now, color, row.inputs)}`;
+    const line = (row: Row) => {
+      const text =
+        row.kind === "graph"
+          ? formatGraphLine(row.graph, now, color)
+          : formatAgentLine(
+              this.heldActivity(row.agent, now),
+              now,
+              color,
+              row.inputs,
+            );
+      const hidden = hiddenNote(row);
+      return `${color("dim", connector(row))}${text}${hidden ? color("dim", ` · ${hidden}`) : ""}`;
+    };
     if (!this.focused) {
       const rows = this.rows(true);
       const shown = rows.slice(0, MAX_UNFOCUSED).map(line);
@@ -239,7 +268,9 @@ export class AgentPanel {
       );
     if (rows.length > start + visible)
       lines.push(color("dim", `  …+${rows.length - start - visible} more`));
-    lines.push(color("dim", "  ↑↓ move · ⏎ attach · s stop · esc editor"));
+    lines.push(
+      color("dim", "  ↑↓ move · space fold · ⏎ attach · s stop · esc editor"),
+    );
     return lines;
   }
 

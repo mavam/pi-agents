@@ -33,8 +33,9 @@ const REFRESH_MS = 500;
 /** Rows of the frame: title border, separator, footer border, blank row. */
 const CHROME_ROWS = 4;
 
-/** `close` dismisses the overlay; anything else keeps it open. */
-type OverlayAction = "close" | undefined;
+/** `close` dismisses the overlay, `select` moves the selection, and
+ * anything else keeps it open as it is. */
+type OverlayAction = "close" | { select: string } | undefined;
 
 /** What the overlay shows and does; items are re-read every render. */
 export interface OverlaySpec<T> {
@@ -52,7 +53,7 @@ export interface OverlaySpec<T> {
   headerLine: (item: T, color: Colorize) => string;
   /** Detail pane lines, wrapped to the pane width. */
   detail: (item: T, color: Colorize) => string[];
-  /** Handle enter or a single-letter key. */
+  /** Handle enter, space, or a single-letter key. */
   onAction: (key: string, item: T) => OverlayAction;
   /** Whether to re-render every 500 ms. */
   live?: () => boolean;
@@ -269,12 +270,15 @@ class SplitPaneOverlay<T> implements Component {
       this.select(items, index + 1);
     else if (keybindings.matches(data, "tui.select.confirm"))
       this.act("enter", items[index] as T);
+    else if (key === "space") this.act("space", items[index] as T);
     else if (/^[a-z]$/.test(key)) this.act(key, items[index] as T);
     this.tui.requestRender();
   }
 
   private act(key: string, item: T): void {
-    if (this.spec.onAction(key, item) === "close") this.close();
+    const action = this.spec.onAction(key, item);
+    if (action === "close") this.close();
+    else if (action) this.selectedKey = action.select;
   }
 
   private close(): void {

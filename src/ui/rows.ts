@@ -1,20 +1,26 @@
 /**
  * Rows of the panel and of `/agents`: graphs and standalone agents, each
  * graph followed by its agents in stages, and an agent followed by the
- * helpers it started, drawn as a tree.
+ * helpers it started, drawn as a tree. Graphs and agents with helpers fold;
+ * a `Disclosure` remembers what the user folded, shared by both views.
  */
 
 import type { AgentInfo, GraphInfo } from "../agents/types.js";
 
+interface Tree {
+  /** Tree connectors before the line. */
+  lead: string;
+  /** Agents below the row, at any depth; 0 for a leaf. */
+  below: number;
+  /** Whether the agents below show. */
+  expanded: boolean;
+  /** The row this one sits below, by key. */
+  parent?: string;
+}
+
 export type Row =
-  | {
-      kind: "graph";
-      key: string;
-      graph: GraphInfo;
-      /** Tree connectors before the line. */
-      lead: string;
-    }
-  | {
+  | ({ kind: "graph"; key: string; graph: GraphInfo } & Tree)
+  | ({
       kind: "agent";
       key: string;
       agent: AgentInfo;
@@ -24,8 +30,39 @@ export type Row =
       last: boolean;
       /** Names of the agents whose results it receives. */
       inputs: string[];
-      lead: string;
-    };
+    } & Tree);
+
+/** What the user folded and unfolded, by row key, over a default. */
+export class Disclosure {
+  private readonly state = new Map<string, boolean>();
+
+  isExpanded(key: string, fallback: boolean): boolean {
+    return this.state.get(key) ?? fallback;
+  }
+
+  set(key: string, expanded: boolean): void {
+    this.state.set(key, expanded);
+  }
+}
+
+/**
+ * Fold or unfold a row: a row with agents below it toggles, and a row
+ * without folds the row it sits below. Returns the key to select next.
+ */
+export function fold(row: Row, disclosure: Disclosure): string {
+  if (row.below > 0) {
+    disclosure.set(row.key, !row.expanded);
+    return row.key;
+  }
+  if (row.parent === undefined) return row.key;
+  disclosure.set(row.parent, false);
+  return row.parent;
+}
+
+/** `9 hidden` for a folded row, else nothing. */
+export function hiddenNote(row: Row): string | undefined {
+  return row.below > 0 && !row.expanded ? `${row.below} hidden` : undefined;
+}
 
 export interface RowSource {
   /** Candidate standalone agents. */
@@ -46,14 +83,16 @@ export type EntryOrder = (
 
 /**
  * Graphs and the agents outside them in `order`; a graph is followed by its
- * agents in stages when `expand` says so, and an agent by the graphs of
- * helpers it started. An agent whose graph is not among `graphs` stands
+ * agents in stages, and an agent by the graphs of helpers it started,
+ * unless folded. `expand` says whether a graph shows its agents unless the
+ * user chose otherwise. An agent whose graph is not among `graphs` stands
  * alone, and so does a graph whose agent isn't shown.
  */
 export function buildRows(
   source: RowSource,
   order: EntryOrder,
   expand: (graph: GraphInfo) => boolean,
+  disclosure: Disclosure = new Disclosure(),
 ): Row[] {
   const graphIds = new Set(source.graphs.map((graph) => graph.id));
   const owned = new Map<string, GraphInfo[]>();
@@ -76,10 +115,34 @@ export function buildRows(
     ...standalone.map((info) => ({ kind: "agent" as const, info })),
   ].sort((left, right) => order(left.info, right.info));
 
+  /** Agents below a graph, helpers included. */
+  const graphBelow = (graph: GraphInfo): number =>
+    graph.nodes.reduce((sum, node) => sum + 1 + agentBelow(node.agentId), 0);
+  const agentBelow = (agentId: string): number =>
+    (owned.get(agentId) ?? []).reduce(
+      (sum, graph) => sum + graphBelow(graph),
+      0,
+    );
+
   /** A graph row, then its agents, each followed by its helpers. */
-  const graphRows = (graph: GraphInfo, lead: string, indent: string): Row[] => {
-    const head: Row = { kind: "graph", key: `graph:${graph.id}`, graph, lead };
-    if (!expand(graph)) return [head];
+  const graphRows = (
+    graph: GraphInfo,
+    lead: string,
+    indent: string,
+    parent?: string,
+  ): Row[] => {
+    const key = `graph:${graph.id}`;
+    const expanded = disclosure.isExpanded(key, expand(graph));
+    const head: Row = {
+      kind: "graph",
+      key,
+      graph,
+      lead,
+      below: graphBelow(graph),
+      expanded,
+      ...(parent ? { parent } : {}),
+    };
+    if (!expanded) return [head];
     const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
     const nodes = graph.nodes.flatMap((node) => {
       const agent = source.agent(node.agentId);
@@ -98,6 +161,7 @@ export function buildRows(
           },
           `${indent}${last ? "└─ " : "├─ "}`,
           `${indent}${last ? "   " : "│  "}`,
+          key,
         );
       }),
     ];
@@ -109,16 +173,31 @@ export function buildRows(
     place: { nested: boolean; last: boolean; inputs: string[] },
     lead: string,
     indent: string,
+    parent?: string,
   ): Row[] => {
+    const key = `agent:${agent.id}`;
     const helpers = owned.get(agent.id) ?? [];
+    const expanded = disclosure.isExpanded(key, true);
+    const row: Row = {
+      kind: "agent",
+      key,
+      agent,
+      lead,
+      below: agentBelow(agent.id),
+      expanded,
+      ...(parent ? { parent } : {}),
+      ...place,
+    };
+    if (!expanded) return [row];
     return [
-      { kind: "agent", key: `agent:${agent.id}`, agent, lead, ...place },
+      row,
       ...helpers.flatMap((graph, index) => {
         const last = index === helpers.length - 1;
         return graphRows(
           graph,
           `${indent}${last ? "└─ " : "├─ "}`,
           `${indent}${last ? "   " : "│  "}`,
+          key,
         );
       }),
     ];

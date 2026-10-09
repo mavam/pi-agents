@@ -88,6 +88,8 @@ export interface AgentActivity {
   retry?: string;
   /** A compaction is running. */
   compacting?: boolean;
+  /** The agent waits for helpers it started: its graph, and progress. */
+  delegation?: { graph: string; done: number; total: number };
 }
 
 export interface AgentInfo {
@@ -110,8 +112,13 @@ export interface AgentInfo {
   activity: AgentActivity;
   /** Latest assistant result, once the agent answered. */
   result?: AgentResult;
+  /** The entry that answered the agent's task, once one did. The latest
+   * result answers the task only while it is this entry. */
+  taskAnswer?: number;
   /** The graph this agent belongs to, by graph ID. */
   graph?: string;
+  /** Whether the agent can start helper agents. */
+  delegates?: boolean;
 }
 
 /** How a graph waits for its agents: all of them, or until one fails. */
@@ -153,8 +160,10 @@ export interface GraphInfo {
   stateSince: number;
   /** Agents in stages: each after the agents it waits for. */
   nodes: GraphNode[];
-  /** Summed over the graph's agents. */
+  /** Summed over the graph's agents and the helpers they started. */
   usage: AgentUsage;
+  /** The agent that started this graph as its helpers, by agent ID. */
+  owner?: string;
 }
 
 /** How many agents a graph has. */
@@ -201,7 +210,35 @@ export interface SpawnSpec {
   instructions?: string;
   /** Whether the agent sees the ambient skill catalog. */
   ambientSkills?: boolean;
+  /** Whether the agent can start helper agents. */
+  delegate?: boolean;
 }
+
+/** What a delegating agent asks for one helper. */
+export interface HelperRequest {
+  task: string;
+  profile?: string;
+  model?: string;
+  thinking?: string;
+  tools?: string[];
+}
+
+/** Settings a helper inherits from the agent that starts it. */
+export interface HelperDefaults {
+  cwd: string;
+  model?: ModelRef;
+  thinking?: ThinkingLevel;
+}
+
+/**
+ * Resolves a helper's profile and model like the parent's spawns, with the
+ * delegating agent's settings as defaults. The session host provides it;
+ * it throws `AgentError` for what it can't resolve.
+ */
+export type HelperResolver = (
+  request: HelperRequest,
+  defaults: HelperDefaults,
+) => SpawnSpec;
 
 export type SendMode = "auto" | "followUp";
 

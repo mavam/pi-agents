@@ -10,6 +10,8 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   AgentError,
+  type HelperDefaults,
+  type HelperRequest,
   isThinkingLevel,
   type ModelRef,
   type SpawnSpec,
@@ -32,6 +34,7 @@ export interface SpawnRequest {
   thinking?: string;
   tools?: string[];
   cwd?: string;
+  delegate?: boolean;
 }
 
 export function scopeOf(ctx: ExtensionContext): Scope {
@@ -43,8 +46,10 @@ export function scopeOf(ctx: ExtensionContext): Scope {
 function resolveModel(
   pattern: string | undefined,
   ctx: ExtensionContext,
+  fallback?: ModelRef,
 ): ModelRef | undefined {
   if (pattern === undefined) {
+    if (fallback) return fallback;
     const model = ctx.model;
     return model ? { provider: model.provider, modelId: model.id } : undefined;
   }
@@ -127,15 +132,24 @@ export function profileProblem(
   return undefined;
 }
 
+/**
+ * Resolve a spawn. `defaults` replace the parent session's working
+ * directory and model, for helpers that inherit their agent's.
+ */
 export function resolveSpawn(
   request: SpawnRequest,
   ctx: ExtensionContext,
   parentThinking: string | undefined,
+  defaults: { cwd?: string; model?: ModelRef } = {},
 ): SpawnSpec {
   const scope = scopeOf(ctx);
-  const cwd = resolveCwd(ctx.cwd, request.cwd);
+  const cwd = resolveCwd(defaults.cwd ?? ctx.cwd, request.cwd);
   const profile = resolveProfile(request.profile, cwd, scope);
-  const model = resolveModel(request.model ?? profile?.model, ctx);
+  const model = resolveModel(
+    request.model ?? profile?.model,
+    ctx,
+    defaults.model,
+  );
   const thinking = request.thinking ?? profile?.thinking ?? parentThinking;
   if (thinking !== undefined && !isThinkingLevel(thinking))
     throw new AgentError(`Invalid thinking level: ${thinking}`);
@@ -145,10 +159,12 @@ export function resolveSpawn(
     cwd,
     scope,
   );
+  const delegate = request.delegate ?? profile?.delegate;
   return {
     task: request.task,
     cwd,
     ambientSkills,
+    ...(delegate ? { delegate: true } : {}),
     ...(request.name ? { name: request.name } : {}),
     ...(profile ? { profile: profile.name } : {}),
     ...(model ? { model } : {}),
@@ -156,4 +172,29 @@ export function resolveSpawn(
     ...(tools ? { tools } : {}),
     ...(instructions ? { instructions } : {}),
   };
+}
+
+/**
+ * A helper's settings: resolved like the parent's spawns, with its agent's
+ * working directory, model, and thinking level as defaults. Helpers never
+ * delegate.
+ */
+export function resolveHelper(
+  request: HelperRequest,
+  ctx: ExtensionContext,
+  defaults: HelperDefaults,
+): SpawnSpec {
+  const { delegate: _, ...spec } = resolveSpawn(
+    {
+      task: request.task,
+      ...(request.profile ? { profile: request.profile } : {}),
+      ...(request.model ? { model: request.model } : {}),
+      ...(request.thinking ? { thinking: request.thinking } : {}),
+      ...(request.tools ? { tools: request.tools } : {}),
+    },
+    ctx,
+    defaults.thinking,
+    { cwd: defaults.cwd, ...(defaults.model ? { model: defaults.model } : {}) },
+  );
+  return spec;
 }

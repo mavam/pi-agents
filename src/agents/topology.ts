@@ -1,8 +1,10 @@
 /**
- * Graph topology: stages, cycles, end nodes, and the one-line shape. Pure
- * functions over node keys and their inputs, shared by validation, tools,
- * and rendering.
+ * Graph topology: edges, stages, cycles, end nodes, and the one-line shape.
+ * Pure functions over node keys and their inputs, shared by validation,
+ * tools, and rendering.
  */
+
+import { AgentError } from "./types.js";
 
 export interface TopologyNode {
   key: string;
@@ -83,4 +85,64 @@ export function shapeLine(
         : `{${stage.map(name).join(", ")}}`,
     )
     .join(" → ");
+}
+
+/** `a`, `a and b`, or `a, b, and c`. */
+function listOf(names: readonly string[]): string {
+  if (names.length <= 2) return names.join(" and ");
+  return `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
+}
+
+/**
+ * The order of a graph in words, stage by stage: `Runs map, then api and
+ * tests at once, then merge.` Undefined for a graph without edges, which
+ * runs everything at once.
+ */
+export function orderSentence(
+  nodes: readonly TopologyNode[],
+  name: (key: string) => string = (key) => key,
+): string | undefined {
+  const all = stages(nodes);
+  if (all.length < 2) return undefined;
+  const parts = all.map((stage) =>
+    stage.length === 1
+      ? name(stage[0] as string)
+      : `${listOf(stage.map(name))} at once`,
+  );
+  return `Runs ${parts.join(", then ")}.`;
+}
+
+/**
+ * Each node's inputs as node indexes, from the names in `after`, validated:
+ * they name nodes of the same graph, not the node itself, and form no cycle.
+ */
+export function resolveEdges(
+  nodes: ReadonlyArray<{ name: string; after?: readonly string[] }>,
+): number[][] {
+  const index = new Map(nodes.map((node, at) => [node.name, at]));
+  const inputs = nodes.map((node, at) =>
+    [...new Set((node.after ?? []).map((ref) => ref.trim()))]
+      .filter(Boolean)
+      .map((ref) => {
+        const found = index.get(ref);
+        if (found === undefined)
+          throw new AgentError(
+            `${node.name} waits for ${ref}, which is not an agent of this graph. Name the agents that others wait for.`,
+          );
+        if (found === at)
+          throw new AgentError(`${node.name} cannot wait for itself`);
+        return found;
+      }),
+  );
+  const cycle = findCycle(
+    nodes.map((node, at) => ({
+      key: node.name,
+      inputs: (inputs[at] ?? []).map((input) => nodes[input]?.name ?? ""),
+    })),
+  );
+  if (cycle)
+    throw new AgentError(
+      `The agents wait for each other in a cycle: ${cycle.join(" → ")}`,
+    );
+  return inputs;
 }

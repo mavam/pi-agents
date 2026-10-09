@@ -42,6 +42,12 @@ import {
 import { ExecutionEnvs } from "../host/env.js";
 import { DEFAULT_AGENT_TOOLS, TOOLS_EXTENSION } from "../host/tools.js";
 import {
+  createDelegationExtension,
+  DELEGATE_TOOL,
+  DELEGATION_LIMITS,
+  type DelegationLimits,
+} from "./delegation.js";
+import {
   ASSISTANT_KIND,
   activityOf,
   addPartialUsage,
@@ -61,6 +67,7 @@ import {
   NODE_TASK,
   type NodeResult,
   NodeTask,
+  nodeRequestId,
 } from "./graphs.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
 import {
@@ -73,7 +80,7 @@ import {
   type ParentRequest,
   requestId,
 } from "./records.js";
-import { endNodes, findCycle, stages } from "./topology.js";
+import { endNodes, resolveEdges, stages } from "./topology.js";
 import {
   type AgentDelivery,
   AgentError,
@@ -84,6 +91,7 @@ import {
   type GraphNode,
   type GraphPolicy,
   type GraphSpec,
+  type HelperResolver,
   isThinkingLevel,
   type NodeOutcome,
   type PendingDelivery,
@@ -107,6 +115,11 @@ export interface AgentServiceOptions {
   extensions: Extension[];
   settings?: HarnessSettings;
   onReport?: (error: unknown) => void;
+  /** Resolves the profiles and models of helpers; without it, helpers use
+   * the delegating agent's model or an exact `provider/id`. */
+  resolveHelper?: HelperResolver;
+  /** Tests only: tighter delegation limits. */
+  delegationLimits?: Partial<DelegationLimits>;
 }
 
 export interface WaitOutcome {
@@ -148,6 +161,30 @@ function contextFor(signal: AbortSignal | undefined): Context {
   return signal ? withAbortSignal(signal, CONTEXT) : CONTEXT;
 }
 
+/** Helpers without a session host: the agent's model, or an exact
+ * `provider/id`, and no profiles. */
+const resolveHelperPlainly: HelperResolver = (request, defaults) => {
+  if (request.profile)
+    throw new AgentError(`Unknown profile "${request.profile}"`);
+  let model = defaults.model;
+  if (request.model) {
+    const [provider, ...rest] = request.model.split("/");
+    if (!provider || rest.length === 0)
+      throw new AgentError(`Unknown model ${request.model}`);
+    model = { provider, modelId: rest.join("/") };
+  }
+  const thinking = request.thinking ?? defaults.thinking;
+  if (thinking !== undefined && !isThinkingLevel(thinking))
+    throw new AgentError(`Invalid thinking level: ${thinking}`);
+  return {
+    task: request.task,
+    cwd: defaults.cwd,
+    ...(model ? { model } : {}),
+    ...(thinking ? { thinking } : {}),
+    ...(request.tools ? { tools: request.tools } : {}),
+  };
+};
+
 export class AgentService {
   private records: Record<string, AgentRecord> = {};
   private graphRecords: Record<string, GraphRecord> = {};
@@ -166,6 +203,9 @@ export class AgentService {
   >();
   /** Answer entries of graph agents' tasks; entries never change. */
   private readonly answers = new Map<number, EntryRecord>();
+  /** Per agent, the entry that answered its task, or null when the task
+   * ended without an answer; settled submissions never change. */
+  private readonly taskAnswers = new Map<string, number | null>();
   private readonly waiters = new Map<string, number>();
   private readonly graphWaiters = new Map<string, number>();
   /** Checks run after every refresh, for waits on graphs and nodes. */
@@ -182,6 +222,7 @@ export class AgentService {
     private readonly harness: Harness,
     private readonly registry: Registry,
     private readonly envs: ExecutionEnvs,
+    private readonly delegation: Extension,
   ) {}
 
   static async open(options: AgentServiceOptions): Promise<AgentService> {
@@ -189,6 +230,12 @@ export class AgentService {
     for (const extension of options.extensions) registry.install(extension);
     // Graph tasks resolve from the registry; agents never select them.
     registry.install(createGraphsExtension());
+    // Only delegating agents select delegation; see `delegatingAgent`.
+    const delegation = createDelegationExtension({
+      resolve: options.resolveHelper ?? resolveHelperPlainly,
+      limits: { ...DELEGATION_LIMITS, ...options.delegationLimits },
+    });
+    registry.install(delegation);
     const envs = new ExecutionEnvs(options.cwd);
     const harness = await Harness.open(
       options.storage,
@@ -201,7 +248,7 @@ export class AgentService {
       },
       CONTEXT,
     );
-    const service = new AgentService(harness, registry, envs);
+    const service = new AgentService(harness, registry, envs, delegation);
     try {
       await service.start();
     } catch (error) {
@@ -397,7 +444,7 @@ export class AgentService {
         ownership: { kind: "ownerless" },
         agent: {
           cwd: spec.cwd,
-          tools,
+          ...this.capabilities(tools, spec.delegate),
           ...(spec.model ? { model: spec.model } : {}),
           ...(spec.thinking ? { thinkingLevel: spec.thinking } : {}),
           ...(spec.instructions ? { instructions: spec.instructions } : {}),
@@ -420,6 +467,7 @@ export class AgentService {
             nextRequest: 2,
             requests: { [first]: request },
             delivered: [],
+            ...(spec.delegate ? { delegate: true } : {}),
           };
         },
       },
@@ -465,7 +513,9 @@ export class AgentService {
       name: planned.agents[index] as string,
       ...this.prepare(agent),
     }));
-    const inputs = this.resolveEdges(nodes);
+    const inputs = resolveEdges(
+      nodes.map((node) => ({ name: node.name, after: node.spec.after })),
+    );
     const policy: GraphPolicy = spec.failFast ? "failFast" : "allSettled";
     const createdAt = Date.now();
     const host = await this.hostConversation();
@@ -496,7 +546,7 @@ export class AgentService {
         const { spec: agent } = node;
         await configure(tx, conversation.id, {
           cwd: agent.cwd,
-          tools: node.tools,
+          ...this.capabilities(node.tools, agent.delegate),
           ...(agent.model ? { model: agent.model } : {}),
           ...(agent.thinking ? { thinkingLevel: agent.thinking } : {}),
           ...(agent.instructions ? { instructions: agent.instructions } : {}),
@@ -518,6 +568,7 @@ export class AgentService {
           requests: {},
           delivered: [],
           graph: String(graph),
+          ...(node.spec.delegate ? { delegate: true } : {}),
         };
       });
       (await tx.doc(GraphsDoc)).graphs[String(graph)] = {
@@ -536,39 +587,6 @@ export class AgentService {
     }, CONTEXT);
     await this.refresh(created.agents);
     return this.requireGraph(created.id);
-  }
-
-  /** Each node's inputs as node indexes, validated: known, not itself, no
-   * cycles. */
-  private resolveEdges(
-    nodes: ReadonlyArray<{ name: string; spec: { after?: string[] } }>,
-  ): number[][] {
-    const index = new Map(nodes.map((node, at) => [node.name, at]));
-    const inputs = nodes.map((node, at) =>
-      [...new Set((node.spec.after ?? []).map((ref) => ref.trim()))]
-        .filter(Boolean)
-        .map((ref) => {
-          const found = index.get(ref);
-          if (found === undefined)
-            throw new AgentError(
-              `${node.name} waits for ${ref}, which is not an agent of this graph. Name the agents that others wait for.`,
-            );
-          if (found === at)
-            throw new AgentError(`${node.name} cannot wait for itself`);
-          return found;
-        }),
-    );
-    const cycle = findCycle(
-      nodes.map((node, at) => ({
-        key: node.name,
-        inputs: (inputs[at] ?? []).map((input) => nodes[input]?.name ?? ""),
-      })),
-    );
-    if (cycle)
-      throw new AgentError(
-        `The agents wait for each other in a cycle: ${cycle.join(" → ")}`,
-      );
-    return inputs;
   }
 
   /** Message an agent on behalf of the parent model. */
@@ -625,7 +643,16 @@ export class AgentService {
       CONTEXT,
     );
     await conversation?.abort(CONTEXT);
-    await this.refresh([info.id]);
+    await this.refresh(this.withHelpers([info.id]));
+  }
+
+  /** The agents and the helpers they started. */
+  private withHelpers(ids: string[]): string[] {
+    const all = new Set(ids);
+    for (const graph of Object.values(this.graphRecords))
+      if (graph.owner && all.has(graph.owner.agent))
+        for (const node of graph.nodes) all.add(node.agent);
+    return [...all];
   }
 
   /**
@@ -677,7 +704,9 @@ export class AgentService {
     }
     // Agents may work beyond their task, for example on a user's message.
     for (const node of info.nodes) await this.stopAgent(node.agentId);
-    await this.refresh([]);
+    await this.refresh(
+      this.withHelpers(info.nodes.map((node) => node.agentId)),
+    );
   }
 
   /**
@@ -916,6 +945,24 @@ export class AgentService {
     return this.host;
   }
 
+  /**
+   * The tools and extensions of a new agent. A delegating agent also selects
+   * the delegation extension and its tool, so only it can start helpers.
+   */
+  private capabilities(
+    tools: ToolRegistration[],
+    delegate: boolean | undefined,
+  ): { tools: ToolRegistration[]; extensions?: { add: Extension[] } } {
+    if (!delegate) return { tools };
+    const tool = this.delegation.tools?.find(
+      (each) => each.name === DELEGATE_TOOL,
+    );
+    return {
+      tools: tool ? [...tools, tool] : tools,
+      extensions: { add: [this.delegation] },
+    };
+  }
+
   private resolveTools(names: string[] | undefined): ToolRegistration[] {
     const available = this.registry
       .snapshot()
@@ -1146,6 +1193,7 @@ export class AgentService {
       for (const [id, rids] of drops)
         if (rids.length > 0) await this.dropRequests(id, rids);
       if (stopped.length > 0) await this.clearPending(stopped);
+      await this.closeEndedHelpers();
       for (const check of [...this.checks]) check();
     });
     this.refreshChain = run.catch(() => {});
@@ -1161,6 +1209,50 @@ export class AgentService {
     }, CONTEXT);
     const outcomes = this.settled.get(agentId);
     for (const rid of rids) outcomes?.delete(rid);
+  }
+
+  /**
+   * Helpers leave the panel once the call that started them ended: their
+   * result reached the agent, or the agent was interrupted. Storage keeps
+   * them, and `/agents` shows them.
+   */
+  private async closeEndedHelpers(): Promise<void> {
+    const ended: string[] = [];
+    for (const [id, graph] of Object.entries(this.graphRecords)) {
+      if (!graph.owner || graph.closed) continue;
+      if (
+        (await this.isFinished(Number(id))) &&
+        (await this.isFinished(graph.owner.tool))
+      )
+        ended.push(id);
+    }
+    if (ended.length === 0) return;
+    await this.harness.commit(async (tx) => {
+      const graphs = (await tx.doc(GraphsDoc)).graphs;
+      const agents = (await tx.doc(AgentsDoc)).agents;
+      for (const id of ended) {
+        const graph = graphs[id];
+        if (!graph) continue;
+        graph.closed = true;
+        for (const node of graph.nodes) {
+          const record = agents[node.agent];
+          if (record && Object.keys(record.requests).length === 0)
+            record.closed = true;
+        }
+      }
+    }, CONTEXT);
+    this.graphRecords = await this.loadGraphs();
+    this.records = await this.loadRecords();
+    for (const id of ended) {
+      const info = this.graphInfos.get(id);
+      if (info) info.closed = true;
+      for (const node of this.graphRecords[id]?.nodes ?? []) {
+        const agent = this.infos.get(node.agent);
+        const record = this.records[node.agent];
+        if (agent && record) agent.closed = record.closed;
+      }
+    }
+    this.emit();
   }
 
   /** A stopped graph delivers nothing. */
@@ -1205,6 +1297,7 @@ export class AgentService {
     if (outcomes.size > 0) this.settled.set(id, outcomes);
     else this.settled.delete(id);
 
+    const taskAnswer = await this.taskAnswer(id, record);
     const result: AgentResult | undefined = resultOf(
       this.lastAssistant.get(id),
       id,
@@ -1217,7 +1310,9 @@ export class AgentService {
     const previous = this.infos.get(id);
     const now = Date.now();
     const durable = (agent ?? {}) as DurableAgentState;
-    const tools = Array.isArray(durable.tools) ? durable.tools : undefined;
+    const tools = Array.isArray(durable.tools)
+      ? durable.tools.filter((tool) => tool !== DELEGATE_TOOL)
+      : undefined;
     this.infos.set(id, {
       id,
       name: record.name,
@@ -1245,9 +1340,39 @@ export class AgentService {
       usage: addPartialUsage(summarizeUsage(usage), live),
       activity: activityOf(live),
       ...(result ? { result } : {}),
+      ...(taskAnswer !== undefined ? { taskAnswer } : {}),
       ...(record.graph ? { graph: record.graph } : {}),
+      ...(record.delegate ? { delegates: true } : {}),
     });
     return aborted;
+  }
+
+  /**
+   * The entry that answered the agent's task: the answer to the submission
+   * of its task, under `parent:1` for agents the parent started and under
+   * its node's request ID for a graph's agents.
+   */
+  private async taskAnswer(
+    agentId: string,
+    record: AgentRecord,
+  ): Promise<number | undefined> {
+    const cached = this.taskAnswers.get(agentId);
+    if (cached !== undefined) return cached ?? undefined;
+    const graph =
+      record.graph === undefined ? undefined : this.graphRecords[record.graph];
+    const node = graph?.nodes.find((each) => each.agent === agentId);
+    const rid = node ? nodeRequestId(node.task) : requestId(1);
+    const submission = await this.harness.commit(
+      (tx) => tx.submissionByRequest(conversationId(agentId), rid),
+      CONTEXT,
+    );
+    if (submission?.type !== "input") return undefined;
+    if (submission.status === "done") {
+      this.taskAnswers.set(agentId, submission.answer);
+      return submission.answer;
+    }
+    if (submission.status === "unanswered") this.taskAnswers.set(agentId, null);
+    return undefined;
   }
 
   /**
@@ -1425,8 +1550,52 @@ export class AgentService {
             return usage ? [usage] : [];
           }),
         ),
+        ...(record.owner ? { owner: record.owner.agent } : {}),
       });
     }
+    this.deriveDelegation();
     return stopped;
+  }
+
+  /**
+   * What delegation adds to the derived infos: a graph's usage includes the
+   * helpers its agents started, and an agent that waits for helpers shows
+   * their progress instead of its tool.
+   */
+  private deriveDelegation(): void {
+    const owned = new Map<string, GraphInfo[]>();
+    for (const graph of this.graphInfos.values())
+      if (graph.owner)
+        owned.set(graph.owner, [...(owned.get(graph.owner) ?? []), graph]);
+    for (const graph of this.graphInfos.values()) {
+      if (graph.owner) continue;
+      const nested = graph.nodes.flatMap(
+        (node) => owned.get(node.agentId) ?? [],
+      );
+      if (nested.length > 0)
+        graph.usage = sumUsage([
+          graph.usage,
+          ...nested.map((each) => each.usage),
+        ]);
+    }
+    for (const info of this.infos.values()) {
+      const working = (owned.get(info.id) ?? []).find(
+        (graph) => graph.state === "working",
+      );
+      const { delegation: _, ...activity } = info.activity;
+      if (!working) {
+        info.activity = activity;
+        continue;
+      }
+      if (activity.tool === DELEGATE_TOOL) delete activity.tool;
+      info.activity = {
+        ...activity,
+        delegation: {
+          graph: working.name,
+          done: working.nodes.filter((node) => node.outcome).length,
+          total: working.nodes.length,
+        },
+      };
+    }
   }
 }

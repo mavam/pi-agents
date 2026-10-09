@@ -14,10 +14,15 @@
  *   ╰─ ↑↓ move · ⏎ attach · s stop · esc ──────────────╯
  */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionContext,
+  getMarkdownTheme,
+} from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   getKeybindings,
+  Markdown,
+  type MarkdownTheme,
   matchesKey,
   parseKey,
   type TUI,
@@ -25,24 +30,109 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { type Colorize, plainColorize } from "./format.js";
+import { type Colorize, plainColorize, sanitizeLine } from "./format.js";
 import type { AgentPanel } from "./panel.js";
 
-const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
 /** Rows of the frame: title border, separator, footer border, blank row. */
 const CHROME_ROWS = 4;
 
-/** `close` dismisses the overlay; anything else keeps it open. */
-type OverlayAction = "close" | undefined;
+export type Bold = (text: string) => string;
+
+/**
+ * A line of the detail pane: text, wrapped to the pane; a divider across the
+ * pane that starts a section, like the one under the table; or Markdown such
+ * as an agent's result, rendered and indented, at most `maxLines` lines with
+ * a dim `more` line for the rest.
+ */
+export type DetailLine =
+  | string
+  | { divider: string }
+  | {
+      markdown: string;
+      indent?: number;
+      maxLines?: number;
+      more?: (hidden: number) => string;
+    };
+
+/** A rendered row of the detail pane. */
+export type PaneLine = { text: string } | { divider: string };
+
+/** Render detail lines to the pane's inner width. */
+export function renderDetail(
+  lines: readonly DetailLine[],
+  width: number,
+  color: Colorize,
+  markdownTheme: MarkdownTheme,
+): PaneLine[] {
+  return lines.flatMap((line): PaneLine[] => {
+    if (typeof line === "string")
+      return (line ? wrapTextWithAnsi(line, width) : [""]).map((text) => ({
+        text,
+      }));
+    if ("divider" in line) return [line];
+    return renderMarkdown(line, width, color, markdownTheme).map((text) => ({
+      text,
+    }));
+  });
+}
+
+function renderMarkdown(
+  line: Extract<DetailLine, { markdown: string }>,
+  width: number,
+  color: Colorize,
+  markdownTheme: MarkdownTheme,
+): string[] {
+  const indent = " ".repeat(line.indent ?? 0);
+  const rendered = new Markdown(line.markdown, 0, 0, markdownTheme)
+    .render(Math.max(1, width - indent.length))
+    // Agents write the text, so only styling survives.
+    .map((each) => `${indent}${sanitizeLine(each).trimEnd()}`);
+  while (rendered.length > 0 && rendered.at(-1)?.trim() === "") rendered.pop();
+  const max = line.maxLines ?? Number.POSITIVE_INFINITY;
+  if (rendered.length <= max) return rendered;
+  const hidden = rendered.length - max;
+  const kept = rendered.slice(0, max);
+  while (kept.length > 0 && kept.at(-1)?.trim() === "") kept.pop();
+  return [
+    ...kept,
+    color("dim", `${indent}${line.more?.(hidden) ?? `… ${hidden} more lines`}`),
+  ];
+}
+
+/**
+ * The rows of the table and the detail pane. The overlay stays under about
+ * 80% of the terminal, so some conversation stays visible, with a floor
+ * that keeps it usable. The table gets up to half of it and the detail pane
+ * the rest; the detail pane keeps the most rows it showed, so the table
+ * doesn't move while the selection changes.
+ */
+export function paneLayout(
+  terminalRows: number,
+  items: number,
+): { tableRows: number; detailRows: number } {
+  const height = Math.max(
+    8,
+    Math.min(terminalRows - 6, Math.floor(terminalRows * 0.8)),
+  );
+  const available = Math.max(2, height - CHROME_ROWS);
+  const tableRows = Math.min(items, Math.max(1, Math.ceil(available / 2)));
+  return { tableRows, detailRows: Math.max(0, available - tableRows) };
+}
+
+/** `close` dismisses the overlay, `select` moves the selection, and
+ * anything else keeps it open as it is. */
+type OverlayAction = "close" | { select: string } | undefined;
 
 /** What the overlay shows and does; items are re-read every render. */
 export interface OverlaySpec<T> {
   title: string;
   /** Shown when items() is empty. */
   emptyText: string;
-  /** Key hints embedded in the bottom border. */
-  footer: string;
+  /** Key hints embedded in the bottom border, read on every render. */
+  footer: string | (() => string);
+  /** The item to select first, by key. */
+  initialKey?: string;
   items: () => T[];
   /** Stable identity, so the selection survives reordering. */
   keyOf: (item: T) => string;
@@ -51,8 +141,8 @@ export interface OverlaySpec<T> {
   /** Metadata line embedded in the separator. */
   headerLine: (item: T, color: Colorize) => string;
   /** Detail pane lines, wrapped to the pane width. */
-  detail: (item: T, color: Colorize) => string[];
-  /** Handle enter or a single-letter key. */
+  detail: (item: T, color: Colorize, bold: Bold) => DetailLine[];
+  /** Handle enter, space, or a single-letter key. */
   onAction: (key: string, item: T) => OverlayAction;
   /** Whether to re-render every 500 ms. */
   live?: () => boolean;
@@ -65,11 +155,11 @@ function clamp(value: number, low: number, high: number): number {
 /** Window the detail lines into `rows`, marking hidden lines. Returns the
  * clamped offset and the largest offset for scrolling. */
 function windowDetail(
-  detail: string[],
+  detail: PaneLine[],
   rows: number,
   offset = 0,
   color: Colorize = plainColorize,
-): { shown: string[]; offset: number; maxOffset: number } {
+): { shown: PaneLine[]; offset: number; maxOffset: number } {
   if (rows <= 0) return { shown: [], offset: 0, maxOffset: 0 };
   if (detail.length <= rows) return { shown: detail, offset: 0, maxOffset: 0 };
   const contentRows = rows > 1 ? rows - 1 : rows;
@@ -78,15 +168,17 @@ function windowDetail(
   const below = detail.length - start - contentRows;
   const content = detail.slice(start, start + contentRows);
   if (contentRows === rows) return { shown: content, offset: start, maxOffset };
-  const marker = color(
-    "dim",
-    [
-      start > 0 ? `… ${start} earlier lines` : undefined,
-      below > 0 ? `… +${below} more lines` : undefined,
-    ]
-      .filter(Boolean)
-      .join("  "),
-  );
+  const marker = {
+    text: color(
+      "dim",
+      [
+        start > 0 ? `… ${start} earlier lines` : undefined,
+        below > 0 ? `… +${below} more lines` : undefined,
+      ]
+        .filter(Boolean)
+        .join("  "),
+    ),
+  };
   return {
     shown: below === 0 ? [marker, ...content] : [...content, marker],
     offset: start,
@@ -132,9 +224,12 @@ class SplitPaneOverlay<T> implements Component {
   constructor(
     private readonly tui: TUI,
     private readonly color: Colorize,
+    private readonly bold: Bold,
     private readonly spec: OverlaySpec<T>,
     private readonly done: () => void,
-  ) {}
+  ) {
+    this.selectedKey = spec.initialKey;
+  }
 
   private index(items: T[]): number {
     const index = items.findIndex(
@@ -159,6 +254,11 @@ class SplitPaneOverlay<T> implements Component {
     }
   }
 
+  private footer(): string {
+    const { footer } = this.spec;
+    return typeof footer === "string" ? footer : footer();
+  }
+
   render(width: number): string[] {
     const { color, spec } = this;
     const items = spec.items();
@@ -167,23 +267,16 @@ class SplitPaneOverlay<T> implements Component {
       return [
         edgeLine(["╭", "╮"], color("accent", spec.title), width, color),
         boxLine(color("dim", spec.emptyText), width, color),
-        edgeLine(["╰", "╯"], color("dim", spec.footer), width, color),
+        edgeLine(["╰", "╯"], color("dim", this.footer()), width, color),
         "",
       ];
     const index = this.index(items);
     this.select(items, index);
     const item = items[index] as T;
-    // Stay under about 80% of the terminal so some conversation stays
-    // visible, with a floor that keeps the pane usable.
-    const rows = this.tui.terminal.rows;
-    const height = Math.max(8, Math.min(rows - 6, Math.floor(rows * 0.8)));
-    const available = Math.max(2, height - CHROME_ROWS);
-    const tableRows = Math.min(
+    const { tableRows, detailRows } = paneLayout(
+      this.tui.terminal.rows,
       items.length,
-      MAX_TABLE_ROWS,
-      Math.max(1, Math.ceil(available / 2)),
     );
-    const detailRows = Math.max(0, available - tableRows);
 
     const lines = [
       edgeLine(
@@ -214,9 +307,12 @@ class SplitPaneOverlay<T> implements Component {
       this.detailOffset = 0;
     }
     const inner = Math.max(1, width - 4);
-    const detail = spec
-      .detail(item, color)
-      .flatMap((line) => (line ? wrapTextWithAnsi(line, inner) : [""]));
+    const detail = renderDetail(
+      spec.detail(item, color, this.bold),
+      inner,
+      color,
+      getMarkdownTheme(),
+    );
     const { shown, offset, maxOffset } = windowDetail(
       detail,
       detailRows,
@@ -230,11 +326,17 @@ class SplitPaneOverlay<T> implements Component {
       0,
       detailRows,
     );
-    for (const line of shown) lines.push(boxLine(line, width, color));
+    for (const line of shown)
+      lines.push(
+        "divider" in line
+          ? edgeLine(["├", "┤"], line.divider, width, color)
+          : boxLine(line.text, width, color),
+      );
     for (let i = shown.length; i < this.detailFloor; i++)
       lines.push(boxLine("", width, color));
 
-    const hints = maxOffset > 0 ? `⇧↑↓ scroll · ${spec.footer}` : spec.footer;
+    const footer = this.footer();
+    const hints = maxOffset > 0 ? `⇧↑↓ scroll · ${footer}` : footer;
     lines.push(edgeLine(["╰", "╯"], color("dim", hints), width, color), "");
     return lines;
   }
@@ -269,12 +371,15 @@ class SplitPaneOverlay<T> implements Component {
       this.select(items, index + 1);
     else if (keybindings.matches(data, "tui.select.confirm"))
       this.act("enter", items[index] as T);
+    else if (key === "space" || key === "tab") this.act(key, items[index] as T);
     else if (/^[a-z]$/.test(key)) this.act(key, items[index] as T);
     this.tui.requestRender();
   }
 
   private act(key: string, item: T): void {
-    if (this.spec.onAction(key, item) === "close") this.close();
+    const action = this.spec.onAction(key, item);
+    if (action === "close") this.close();
+    else if (action) this.selectedKey = action.select;
   }
 
   private close(): void {
@@ -302,7 +407,13 @@ export async function openOverlay<T>(
   try {
     await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
       const color: Colorize = (name, text) => theme.fg(name, text);
-      return new SplitPaneOverlay(tui, color, spec, () => done(undefined));
+      return new SplitPaneOverlay(
+        tui,
+        color,
+        (text) => theme.bold(text),
+        spec,
+        () => done(undefined),
+      );
     });
   } finally {
     panel?.setSuppressed(false);

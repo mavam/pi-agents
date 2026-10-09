@@ -1,6 +1,6 @@
 {
   "name": "pi-agents",
-  "description": "Durable, named agents for pi, built on pi-durable.",
+  "description": "Durable, named agents for Pi: delegate tasks, compose agents into graphs, and watch them work.",
   "version": "0.23.1",
   "type": "module",
   "files": [
@@ -32,11 +32,11 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "format": "bunx @biomejs/biome format --write src tests",
-    "format:check": "bunx @biomejs/biome format src tests",
-    "lint": "bunx @biomejs/biome lint src tests",
-    "lint:fix": "bunx @biomejs/biome lint --write src tests",
-    "biome:check": "bunx @biomejs/biome check src tests",
+    "format": "bunx @biomejs/biome format --write src tests demo/provider.ts",
+    "format:check": "bunx @biomejs/biome format src tests demo/provider.ts",
+    "lint": "bunx @biomejs/biome lint src tests demo/provider.ts",
+    "lint:fix": "bunx @biomejs/biome lint --write src tests demo/provider.ts",
+    "biome:check": "bunx @biomejs/biome check src tests demo/provider.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "check": "bun run typecheck && bun run test && bun run biome:check"

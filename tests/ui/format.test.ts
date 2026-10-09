@@ -13,7 +13,14 @@ import {
   sanitizeLine,
 } from "../../src/ui/format.js";
 import { panelCompare, panelOrder } from "../../src/ui/panel.js";
-import { attachTarget, buildRows, connector } from "../../src/ui/rows.js";
+import {
+  attachTarget,
+  buildRows,
+  connector,
+  Disclosure,
+  fold,
+  hiddenNote,
+} from "../../src/ui/rows.js";
 
 function agent(overrides: Partial<AgentInfo>): AgentInfo {
   return {
@@ -220,6 +227,208 @@ describe("formatting", () => {
       "agent:12",
       "agent:13",
     ]);
+  });
+
+  test("helpers draw under the agent that started them", () => {
+    const agents = [
+      agent({ id: "1", name: "lead", graph: "10", state: "working" }),
+      agent({ id: "2", name: "other", graph: "10" }),
+      agent({ id: "3", name: "lead.a", graph: "20" }),
+      agent({ id: "4", name: "lead.b", graph: "20" }),
+      agent({ id: "5", name: "solo", createdAt: 9 }),
+      agent({ id: "6", name: "solo.x", graph: "30" }),
+    ];
+    const top = graph({
+      id: "10",
+      nodes: [
+        { agentId: "1", name: "lead", inputs: [], end: true },
+        { agentId: "2", name: "other", inputs: [], end: true },
+      ],
+    });
+    const helpers = graph({
+      id: "20",
+      name: "lead.helpers",
+      owner: "1",
+      nodes: [
+        { agentId: "3", name: "lead.a", inputs: [], end: false },
+        { agentId: "4", name: "lead.b", inputs: ["3"], end: true },
+      ],
+    });
+    const solo = graph({
+      id: "30",
+      name: "solo.helpers",
+      owner: "5",
+      createdAt: 9,
+      nodes: [{ agentId: "6", name: "solo.x", inputs: [], end: true }],
+    });
+    const rows = buildRows(
+      {
+        agents,
+        graphs: [top, helpers, solo],
+        agent: (id) => agents.find((each) => each.id === id),
+      },
+      panelCompare,
+      () => true,
+    );
+    expect(rows.map((row) => `${connector(row)}${row.key}`)).toEqual([
+      "graph:10",
+      "├─ agent:1",
+      "│  └─ graph:20",
+      "│     ├─ agent:3",
+      "│     └─ agent:4",
+      "└─ agent:2",
+      "agent:5",
+      "└─ graph:30",
+      "   └─ agent:6",
+    ]);
+  });
+
+  test("space folds graphs and helpers, from any row below them", () => {
+    const agents = [
+      agent({ id: "1", name: "lead", graph: "10", state: "working" }),
+      agent({ id: "2", name: "other", graph: "10" }),
+      agent({ id: "3", name: "lead.a", graph: "20" }),
+      agent({ id: "4", name: "lead.b", graph: "20" }),
+    ];
+    const graphs = [
+      graph({
+        id: "10",
+        nodes: [
+          { agentId: "1", name: "lead", inputs: [], end: true },
+          { agentId: "2", name: "other", inputs: [], end: true },
+        ],
+      }),
+      graph({
+        id: "20",
+        name: "lead.helpers",
+        owner: "1",
+        nodes: [
+          { agentId: "3", name: "lead.a", inputs: [], end: true },
+          { agentId: "4", name: "lead.b", inputs: [], end: true },
+        ],
+      }),
+    ];
+    const disclosure = new Disclosure();
+    const rows = () =>
+      buildRows(
+        {
+          agents,
+          graphs,
+          agent: (id) => agents.find((each) => each.id === id),
+        },
+        panelCompare,
+        () => true,
+        disclosure,
+      );
+    const keys = () => rows().map((row) => row.key);
+    const row = (key: string) => {
+      const found = rows().find((each) => each.key === key);
+      if (!found) throw new Error(`no row ${key}`);
+      return found;
+    };
+    expect(row("graph:10").below).toBe(4);
+    expect(row("agent:1").below).toBe(2);
+
+    // Space on a helper folds the helpers' graph and selects it.
+    expect(fold(row("agent:3"), disclosure)).toBe("graph:20");
+    expect(keys()).toEqual(["graph:10", "agent:1", "graph:20", "agent:2"]);
+    expect(hiddenNote(row("graph:20"))).toBe("2 hidden");
+
+    // Space on a folded row unfolds it.
+    expect(fold(row("graph:20"), disclosure)).toBe("graph:20");
+    expect(keys()).toHaveLength(6);
+
+    // An agent with helpers folds them; a graph folds everything below it.
+    fold(row("agent:1"), disclosure);
+    expect(keys()).toEqual(["graph:10", "agent:1", "agent:2"]);
+    fold(row("graph:10"), disclosure);
+    expect(keys()).toEqual(["graph:10"]);
+    expect(hiddenNote(row("graph:10"))).toBe("4 hidden");
+
+    // The user's choice wins over the default, also for finished graphs.
+    const finished = buildRows(
+      { agents, graphs, agent: (id) => agents.find((each) => each.id === id) },
+      panelCompare,
+      () => false,
+      disclosure,
+    );
+    expect(finished.map((each) => each.key)).toEqual(["graph:10"]);
+    fold(row("graph:10"), disclosure);
+    expect(
+      buildRows(
+        {
+          agents,
+          graphs,
+          agent: (id) => agents.find((each) => each.id === id),
+        },
+        panelCompare,
+        () => false,
+        disclosure,
+      ).map((each) => each.key),
+    ).toEqual(["graph:10", "agent:1", "agent:2"]);
+  });
+
+  test("helpers drop their agent's name below it", () => {
+    const agents = [
+      agent({ id: "1", name: "lead", state: "working" }),
+      agent({ id: "3", name: "lead.a", graph: "20" }),
+      agent({ id: "4", name: "lead.merge", graph: "20" }),
+    ];
+    const helpers = graph({
+      id: "20",
+      name: "lead.helpers",
+      owner: "1",
+      nodes: [
+        { agentId: "3", name: "lead.a", inputs: [], end: false },
+        { agentId: "4", name: "lead.merge", inputs: ["3"], end: true },
+      ],
+    });
+    const labels = (shown: typeof agents) =>
+      buildRows(
+        {
+          agents: shown,
+          graphs: [helpers],
+          agent: (id) => agents.find((each) => each.id === id),
+        },
+        panelCompare,
+        () => true,
+      ).map((row) =>
+        row.kind === "agent" && row.inputs.length > 0
+          ? `${row.label} ← ${row.inputs.join(", ")}`
+          : row.label,
+      );
+    expect(labels(agents)).toEqual(["lead", "helpers", "a", "merge ← a"]);
+    // Without its agent, the graph keeps the name that says whose it is.
+    expect(labels(agents.slice(1))).toEqual(["lead.helpers", "a", "merge ← a"]);
+    expect(
+      formatAgentLine(
+        agent({
+          name: "lead",
+          state: "working",
+          lastActivityAt: 1_000,
+          activity: {
+            delegation: { graph: "lead.helpers", done: 1, total: 2 },
+          },
+        }),
+        2_000,
+      ),
+    ).toBe("◉ lead · terra · 2s · delegating · helpers 1/2");
+  });
+
+  test("an agent that waits for helpers shows their progress", () => {
+    expect(
+      formatAgentLine(
+        agent({
+          state: "working",
+          lastActivityAt: 1_000,
+          stateSince: 0,
+          activity: {
+            delegation: { graph: "lead.helpers", done: 1, total: 3 },
+          },
+        }),
+        2_000,
+      ),
+    ).toBe("◉ reviewer · terra · 2s · delegating · lead.helpers 1/3");
   });
 
   test("footer counts states", () => {

@@ -11,7 +11,11 @@ import type {
   Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  truncateToWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import { type Static, type TSchema, Type } from "typebox";
 import type { AgentService } from "../agents/service.js";
 import { shapeLine } from "../agents/topology.js";
@@ -29,6 +33,7 @@ import {
   type Colorize,
   formatAgentLine,
   formatGraphLine,
+  formatStartedLine,
   graphShape,
   oneLine,
 } from "../ui/format.js";
@@ -46,6 +51,8 @@ const PROGRESS_MS = 1_000;
 
 interface AgentToolDetails {
   at: number;
+  /** The call started work and reports what it started, not its state. */
+  started?: boolean;
   agents: AgentInfo[];
   graphs?: GraphInfo[];
   timedOut?: string[];
@@ -80,9 +87,12 @@ function describeGraph(service: AgentService, graph: GraphInfo): string {
 }
 
 function statusLine(service: AgentService, info: AgentInfo): string {
-  const state = info.activity.tool
-    ? `${info.state}, using ${info.activity.tool}`
-    : info.state;
+  const delegation = info.activity.delegation;
+  const state = delegation
+    ? `${info.state}, waiting for its helpers ${delegation.graph} (${delegation.done}/${delegation.total} done)`
+    : info.activity.tool
+      ? `${info.state}, using ${info.activity.tool}`
+      : info.state;
   const graph = info.graph ? service.getGraph(info.graph) : undefined;
   return `${info.name} (${state}${graph ? `, in graph ${graph.name}` : ""}): ${oneLine(info.task, 120)}`;
 }
@@ -165,16 +175,25 @@ export function formatPairs(pairs: Record<string, unknown> = {}): string {
  */
 export class FitLines implements Component {
   constructor(
-    private readonly text: string,
+    /** The text, or how to build it when it renders. */
+    private readonly text: string | (() => string),
     private readonly wrap: boolean,
   ) {}
 
   render(width: number): string[] {
-    if (width <= 0 || !this.text) return [];
-    if (this.wrap) return new Text(this.text, 0, 0).render(width);
-    return this.text
-      .split("\n")
-      .map((line) => truncateToWidth(line, width, "…"));
+    const text = typeof this.text === "string" ? this.text : this.text();
+    if (width <= 0 || !text) return [];
+    if (!this.wrap)
+      return text.split("\n").map((line) => truncateToWidth(line, width, "…"));
+    // A wrapped line continues under its own indentation.
+    return text.split("\n").flatMap((line) => {
+      const indent = line.match(/^ */)?.[0] ?? "";
+      const rest = line.slice(indent.length);
+      if (!rest) return [""];
+      return wrapTextWithAnsi(rest, Math.max(1, width - indent.length)).map(
+        (part) => `${indent}${part}`,
+      );
+    });
   }
 
   invalidate(): void {
@@ -182,33 +201,82 @@ export class FitLines implements Component {
   }
 }
 
-/** Title line, a dim line of explicit arguments, then the body. */
+/** What a call started, drawn right below its title. */
+export interface StartedView {
+  /** Appended to the title, such as ` · graph of 3`. */
+  suffix?: string;
+  lines: string[];
+}
+
+/** A started graph as a tree; a started agent needs nothing beyond the call. */
+export function startedView(
+  details: AgentToolDetails,
+  color: Colorize,
+): StartedView | undefined {
+  const graph = details.graphs?.[0];
+  if (!graph) return undefined;
+  const byId = new Map(details.agents.map((info) => [info.id, info]));
+  const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
+  return {
+    suffix: color("dim", ` · graph of ${graph.nodes.length}`),
+    lines: graph.nodes.flatMap((node, index) => {
+      const info = byId.get(node.agentId);
+      if (!info) return [];
+      const lead = index === graph.nodes.length - 1 ? "└─ " : "├─ ";
+      return [
+        `${color("dim", lead)}${formatStartedLine(
+          info,
+          color,
+          node.inputs.map((input) => names.get(input) ?? input),
+        )}`,
+      ];
+    }),
+  };
+}
+
+/**
+ * A call: its title, what it started right below, then a dim line of the
+ * explicit arguments and the body, indented. Expanded, the body shows in
+ * full, set off from what started by a blank line.
+ */
 export function formatCall(
   label: string,
   view: CallView,
   expanded: boolean,
   color: Colorize,
   bold: (text: string) => string = (text) => text,
+  started?: StartedView,
 ): string {
-  const lines = [`${color("accent", AGENT_ICON)} ${bold(label)} ${view.title}`];
+  const lines = [
+    `${color("accent", AGENT_ICON)} ${bold(label)} ${view.title}${started?.suffix ?? ""}`,
+    ...(started?.lines ?? []),
+  ];
+  const rest: string[] = [];
   const pairs = formatPairs(view.pairs);
-  if (pairs) lines.push(color("dim", `  ${pairs}`));
-  if (view.body)
-    lines.push(
-      color(
-        "muted",
-        expanded
-          ? view.body
-              .split("\n")
-              .map((line) => `  ${line}`)
-              .join("\n")
-          : `  ${view.collapsed ?? view.body.replace(/\s+/g, " ").trim()}`,
-      ),
-    );
-  return lines.join("\n");
+  if (pairs) rest.push(`  ${color("dim", pairs)}`);
+  if (view.body) {
+    if (expanded)
+      rest.push(
+        ...view.body
+          .split("\n")
+          .map((line) => (line ? `  ${color("muted", line)}` : "")),
+      );
+    else
+      rest.push(
+        `  ${color("muted", view.collapsed ?? view.body.replace(/\s+/g, " ").trim())}`,
+      );
+  }
+  if (expanded && rest.length > 0 && (started?.lines.length ?? 0) > 0)
+    lines.push("");
+  return [...lines, ...rest].join("\n");
 }
 
-function renderDetails(
+/**
+ * The agents and graphs a call reports on, with their states. A call that
+ * started work renders nothing here: its call shows what started, without
+ * states that would only describe the moment of the call.
+ */
+export function renderDetails(
   details: AgentToolDetails | undefined,
   expanded: boolean,
   color: Colorize,
@@ -257,6 +325,40 @@ function renderDetails(
   return lines.join("\n");
 }
 
+/**
+ * Models sometimes write `wait: false` for "don't wait" or quote numbers.
+ * Seconds that aren't a positive number mean no wait; numeric strings count.
+ */
+/** A number of seconds, if the value is a positive number or its string. */
+function positiveSeconds(value: unknown): number | undefined {
+  const seconds = typeof value === "string" ? Number(value) : value;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
+    ? seconds
+    : undefined;
+}
+
+/** `120s` for a call line; nothing for what prepareSeconds drops. */
+function seconds(value: unknown): string | undefined {
+  const parsed = positiveSeconds(value);
+  return parsed === undefined ? undefined : `${parsed}s`;
+}
+
+/**
+ * Models sometimes write `wait: false` for "don't wait" or quote numbers.
+ * Seconds that aren't a positive number mean no wait; numeric strings count.
+ */
+export function prepareSeconds(args: unknown): unknown {
+  if (typeof args !== "object" || args === null) return args;
+  const prepared: Record<string, unknown> = { ...args };
+  for (const key of ["wait", "timeout"]) {
+    if (!(key in prepared)) continue;
+    const parsed = positiveSeconds(prepared[key]);
+    if (parsed === undefined) delete prepared[key];
+    else prepared[key] = parsed;
+  }
+  return prepared;
+}
+
 function defineAgentTool<T extends TSchema>(
   host: SessionHost,
   spec: AgentToolSpec<T>,
@@ -266,6 +368,7 @@ function defineAgentTool<T extends TSchema>(
     label: spec.label,
     description: spec.description,
     parameters: spec.parameters,
+    prepareArguments: (args) => prepareSeconds(args) as Static<T>,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       let service: AgentService;
       try {
@@ -287,27 +390,36 @@ function defineAgentTool<T extends TSchema>(
         throw error;
       }
     },
+    // A call that started work shows what started below its title: the
+    // result stores it in the shared state, and the call reads it when it
+    // renders, after both renderers ran.
     renderCall(args, theme: Theme, context) {
       const color: Colorize = (name, value) => theme.fg(name, value);
+      const state = context.state as { started?: AgentToolDetails };
       return new FitLines(
-        formatCall(
-          spec.label,
-          spec.call(args as Static<T>),
-          context.expanded,
-          color,
-          (value) => theme.bold(value),
-        ),
+        () =>
+          formatCall(
+            spec.label,
+            spec.call(args as Static<T>),
+            context.expanded,
+            color,
+            (value) => theme.bold(value),
+            state.started ? startedView(state.started, color) : undefined,
+          ),
         context.expanded,
       );
     },
-    renderResult(result, options, theme: Theme) {
+    renderResult(result, options, theme: Theme, context) {
+      const details = result.details as AgentToolDetails | undefined;
+      if (details?.started) {
+        (context.state as { started?: AgentToolDetails }).started = details;
+        return new FitLines("", false);
+      }
       const color: Colorize = (name, value) => theme.fg(name, value);
-      const body = renderDetails(
-        result.details as AgentToolDetails | undefined,
+      return new FitLines(
+        renderDetails(details, options.expanded, color),
         options.expanded,
-        color,
       );
-      return new FitLines(body, options.expanded);
     },
   };
 }
@@ -427,6 +539,12 @@ const agentFields = {
     }),
   ),
   cwd: Type.Optional(Type.String({ description: "Working directory" })),
+  delegate: Type.Optional(
+    Type.Boolean({
+      description:
+        "Let the agent split its task among helper agents it starts and waits for",
+    }),
+  ),
 };
 
 /** The settings an agent's call line shows. */
@@ -436,6 +554,7 @@ function agentPairs(args: {
   thinking?: string;
   tools?: string[];
   cwd?: string;
+  delegate?: boolean;
 }): Record<string, unknown> {
   return {
     profile: args.profile,
@@ -443,6 +562,7 @@ function agentPairs(args: {
     thinking: args.thinking,
     tools: args.tools,
     cwd: args.cwd,
+    delegate: args.delegate,
   };
 }
 
@@ -469,7 +589,7 @@ export function registerAgentTools(
         title: args.name ?? "agent",
         pairs: {
           ...agentPairs(args),
-          wait: args.wait === undefined ? undefined : `${args.wait}s`,
+          wait: seconds(args.wait),
         },
         body: args.task,
       }),
@@ -487,7 +607,7 @@ export function registerAgentTools(
           );
         return {
           content: `Started ${info.name}.`,
-          details: { at: Date.now(), agents: [info] },
+          details: { at: Date.now(), started: true, agents: [info] },
         };
       },
     }),
@@ -537,27 +657,39 @@ export function registerAgentTools(
         const agents = args.agents ?? [];
         const label = (agent: { name?: string }, index: number) =>
           agent.name ?? `#${index + 1}`;
+        const shape = shapeLine(
+          agents.map((agent, index) => ({
+            key: label(agent, index),
+            inputs: agent.after ?? [],
+          })),
+        );
         return {
           title: args.name ?? "graph",
           pairs: {
             failFast: args.failFast,
-            wait: args.wait === undefined ? undefined : `${args.wait}s`,
+            wait: seconds(args.wait),
           },
-          body: agents
-            .map((agent, index) => {
-              const pairs = formatPairs(agentPairs(agent));
-              const after = agent.after?.length
-                ? ` ← ${agent.after.join(", ")}`
-                : "";
-              return `${label(agent, index)}${after}${pairs ? ` (${pairs})` : ""}: ${agent.task ?? ""}`;
-            })
-            .join("\n"),
-          collapsed: shapeLine(
-            agents.map((agent, index) => ({
-              key: label(agent, index),
-              inputs: agent.after ?? [],
-            })),
-          ),
+          // The shape, then one paragraph per agent.
+          body: [
+            shape,
+            agents
+              .map((agent, index) => {
+                const pairs = formatPairs(agentPairs(agent));
+                const after = agent.after?.length
+                  ? ` ← ${agent.after.join(", ")}`
+                  : "";
+                // The task keeps its own lines, indented under the agent.
+                const [first = "", ...rest] = (agent.task ?? "")
+                  .trim()
+                  .split("\n");
+                return [
+                  `${label(agent, index)}${after}${pairs ? ` (${pairs})` : ""}: ${first}`,
+                  ...rest.map((line) => (line ? `  ${line}` : "")),
+                ].join("\n");
+              })
+              .join("\n\n"),
+          ].join("\n"),
+          collapsed: shape,
         };
       },
       async execute(service, params, ctx, signal, onUpdate) {
@@ -583,6 +715,7 @@ export function registerAgentTools(
           content: `Started graph ${graph.name}: ${graphShape(graph)}.`,
           details: {
             at: Date.now(),
+            started: true,
             graphs: [graph],
             agents: withNodes(service, [graph], []),
           },
@@ -612,7 +745,7 @@ export function registerAgentTools(
         title: args.name ?? "",
         pairs: {
           followUp: args.followUp,
-          wait: args.wait === undefined ? undefined : `${args.wait}s`,
+          wait: seconds(args.wait),
         },
         body: args.message,
       }),
@@ -641,7 +774,7 @@ export function registerAgentTools(
             : "Sent to";
         return {
           content: `${verb} ${info.name}.`,
-          details: { at: Date.now(), agents: [info] },
+          details: { at: Date.now(), started: true, agents: [info] },
         };
       },
     }),
@@ -669,7 +802,7 @@ export function registerAgentTools(
       call: (args) => ({
         title: (args.names ?? []).join(", "),
         pairs: {
-          timeout: args.timeout === undefined ? undefined : `${args.timeout}s`,
+          timeout: seconds(args.timeout),
         },
       }),
       execute: (service, params, _ctx, signal, onUpdate) =>

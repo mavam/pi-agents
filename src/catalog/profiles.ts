@@ -28,6 +28,8 @@ export interface Profile {
   skills?: string[];
   /** Tool allowlist; absent selects the default tools. */
   tools?: string[];
+  /** Whether agents of this profile can start helper agents. */
+  delegate?: boolean;
   /** The Markdown body, appended to the agent's system prompt. */
   instructions: string;
   source: Source;
@@ -52,6 +54,7 @@ const ALLOWED_FRONTMATTER_KEYS = new Set([
   "thinking",
   "skills",
   "tools",
+  "delegate",
 ]);
 
 function toErrorMessage(error: unknown): string {
@@ -115,6 +118,9 @@ export function parseProfileFile(
   if (skills && "error" in skills) return skills.error;
   const tools = parseList(frontmatter.tools, "tools");
   if (tools && "error" in tools) return tools.error;
+  const delegate = frontmatter.delegate;
+  if (delegate !== undefined && typeof delegate !== "boolean")
+    return "Invalid 'delegate' (must be true or false)";
 
   return {
     name: name.trim(),
@@ -125,6 +131,7 @@ export function parseProfileFile(
     ...(thinking !== undefined ? { thinking } : {}),
     ...(skills ? { skills } : {}),
     ...(tools ? { tools } : {}),
+    ...(delegate !== undefined ? { delegate } : {}),
     instructions: body.trim(),
     source,
     filePath,

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   endNodes,
   findCycle,
+  orderSentence,
   shapeLine,
   stages,
 } from "../../src/agents/topology.js";
@@ -25,6 +26,36 @@ describe("topology", () => {
     const flat = [node("a"), node("b")];
     expect(shapeLine(flat)).toBe("{a, b}");
     expect(endNodes(flat)).toEqual(["a", "b"]);
+  });
+
+  test("the order reads as a sentence", () => {
+    expect(
+      orderSentence([
+        node("plan"),
+        node("build", "plan"),
+        node("review", "build"),
+      ]),
+    ).toBe("Runs plan, then build, then review.");
+    expect(
+      orderSentence([
+        node("map"),
+        node("api", "map"),
+        node("tests", "map"),
+        node("merge", "api", "tests"),
+      ]),
+    ).toBe("Runs map, then api and tests at once, then merge.");
+    expect(
+      orderSentence(
+        [
+          node("x.a"),
+          node("x.b"),
+          node("x.c"),
+          node("x.m", "x.a", "x.b", "x.c"),
+        ],
+        (key) => key.slice(2),
+      ),
+    ).toBe("Runs a, b, and c at once, then m.");
+    expect(orderSentence([node("a"), node("b")])).toBeUndefined();
   });
 
   test("cycles are found with their path", () => {

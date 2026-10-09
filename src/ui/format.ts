@@ -94,6 +94,8 @@ function activityText(info: AgentInfo, now: number): string | undefined {
     return `no activity for ${formatElapsed(silent)}`;
   const { activity } = info;
   if (activity.retry) return `retrying: ${activity.retry}`;
+  if (activity.delegation)
+    return `delegating · ${shortName(activity.delegation.graph, info.name)} ${activity.delegation.done}/${activity.delegation.total}`;
   if (activity.compacting) return "compacting";
   if (activity.tool) return `Using ${activity.tool}`;
   return activity.summary;
@@ -131,6 +133,16 @@ export function formatAgentLine(
   ]
     .filter((part): part is string => part !== undefined)
     .join(dot);
+}
+
+/**
+ * A helper's name without its agent's: `agents-review.derive` reads as
+ * `derive` below `agents-review`. Other names stay as they are.
+ */
+export function shortName(name: string, owner: string | undefined): string {
+  return owner !== undefined && name.startsWith(`${owner}.`)
+    ? name.slice(owner.length + 1)
+    : name;
 }
 
 /** `1 failed, 2 stopped`: how many of a finished graph's agents did not
@@ -186,6 +198,24 @@ export function formatGraphLine(
   ]
     .filter((part): part is string => part !== undefined)
     .join(dot);
+}
+
+/**
+ * What a call started, without the state it had in that moment, which goes
+ * stale in the transcript: `report ← review, docs · explorer · luna`.
+ */
+export function formatStartedLine(
+  info: Pick<AgentInfo, "name" | "profile" | "model">,
+  color: Colorize = plainColorize,
+  inputs: readonly string[] = [],
+): string {
+  return [
+    `${info.name}${inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : ""}`,
+    info.profile ? color("dim", info.profile) : undefined,
+    color("dim", shortModel(info)),
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(color("dim", " · "));
 }
 
 /**

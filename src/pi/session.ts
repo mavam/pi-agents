@@ -21,6 +21,7 @@ import { resolveModels } from "../host/models.js";
 import { createPromptExtension } from "../host/prompt.js";
 import { openStorage, type Storage } from "../host/storage.js";
 import { createToolsExtension } from "../host/tools.js";
+import { resolveHelper } from "./spawn.js";
 
 function sessionDirectory(sessionId: string): string {
   return path.join(getAgentDir(), "pi-agents", "sessions", sessionId);
@@ -127,6 +128,11 @@ export class SessionHost {
           }),
         ],
         onReport: (error) => this.report(error),
+        resolveHelper: (request, defaults) => {
+          const current = this.ctx;
+          if (!current) throw new AgentError("Pi isn't ready for helpers yet");
+          return resolveHelper(request, current, defaults);
+        },
       });
       this.service = service;
       this.lock = lock;

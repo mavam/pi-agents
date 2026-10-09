@@ -9,6 +9,8 @@ Agents run inside your Pi process on
 checkpoints every step. When you resume a session, interrupted agents continue
 where they stopped.
 
+<img src="demo/agents.gif" width="840" alt="Pi starts an audit graph on three models whose reviewers delegate one helper per file, shows the live tree and the merged findings, browses the results in /agents, and spawns three agents that tell jokes">
+
 ## 🚀 Installation
 
 ```sh
@@ -33,6 +35,11 @@ Start a graph: three agents review src/run, src/ui, and src/host, and a
 fourth merges their findings into one list of issues.
 ```
 
+```text
+Start an agent that may delegate: it finds every module under src, has one
+helper review each, and returns one merged review.
+```
+
 Pi starts agents only when you ask for delegation. An agent's result is its
 final message. Results of agents that Pi doesn't wait for arrive later as
 messages in your conversation. In a graph, agents pass their results to each
@@ -44,7 +51,8 @@ that finished hours ago, and keep talking to it like a regular Pi session.
 ### Architecture
 
 Agents run inside your Pi process. Pi-agents keeps one pi-durable harness per
-Pi session; each agent is a conversation in that harness:
+Pi session. Each agent is a conversation in that harness, and each graph a
+task that starts its agents and passes their results along:
 
 ```text
 ╭─ Pi process ─────────────────────────────────────────────────────╮
@@ -63,10 +71,14 @@ Pi session; each agent is a conversation in that harness:
 │  ╭──────────────┴─────────────────────────────────────────────╮  │
 │  │  pi-durable harness                                        │  │
 │  │                                                            │  │
-│  │   ╭─────────────╮   ╭─────────────╮   ╭─────────────╮      │  │
-│  │   │ ◉ agent     │   │ ◉ agent     │   │ ● agent     │  …   │  │
-│  │   ╰─────────────╯   ╰─────────────╯   ╰─────────────╯      │  │
-│  │   one conversation per agent                               │  │
+│  │   ◉ agent     ╭─ graph ─────────────────────────╮          │  │
+│  │               │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │          │  │
+│  │   ● agent     │        └─▶ ◉ ui ───┘            │          │  │
+│  │               │            └─ ◉ ◉ ◉ helpers     │          │  │
+│  │   …           ╰─────────────────────────────────╯          │  │
+│  │                                                            │  │
+│  │   agents are conversations; a graph is a task that starts  │  │
+│  │   them in order and passes their results on                │  │
 │  ╰─────────────────────────────┬──────────────────────────────╯  │
 ╰────────────────────────────────┼─────────────────────────────────╯
                                  │ checkpoint every step
@@ -76,11 +88,11 @@ Pi session; each agent is a conversation in that harness:
                    ╰───────────────────────────╯
 ```
 
-A graph is a task in the same harness that starts its agents in order and
-hands results along, so stopping a graph reaches all of its agents. Because
-pi-durable checkpoints every step, a resumed session continues where its
-agents and graphs stopped. Agents use your Pi logins and models, so they need no
-separate setup.
+A graph owns its agents, so stopping a graph reaches all of them. An agent
+that delegates starts its helpers as a graph of its own, owned by the call
+that waits for them. Because pi-durable checkpoints every step, a resumed
+session continues where its agents and graphs stopped. Agents use your Pi
+logins and models, so they need no separate setup.
 
 ### Glossary
 
@@ -91,6 +103,7 @@ separate setup.
 | Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done. |
 | Result | The agent's final message after a task or message. |
 | Graph | Agents that work together: some in parallel, some after others, receiving their results. Pi gets one message at the end. |
+| Helper | An agent that another agent started for part of its task. Its result goes to that agent, not to Pi. |
 | Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
 | Attach | Open an agent's conversation to watch it and talk to it. |
 | Stop | End an agent or graph and remove it from the panel. Agents end on their own once their answer reaches Pi. Messaging an agent that ended starts it again. |
@@ -112,7 +125,8 @@ interrupted if one was interrupted or stopped, and idle otherwise.
 
 Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, and
 `ls`, along with your context files such as `AGENTS.md` and your skills. They
-can't use MCP servers, tools from other extensions, or other agents.
+can't use MCP servers or tools from other extensions, and they start other
+agents only when you let them delegate.
 
 ### Watch and talk to agents
 
@@ -134,12 +148,15 @@ finished, and `←` names the agents whose results an agent receives:
 An agent leaves the panel once its answer reaches Pi, and a graph once its
 result does. Failed and interrupted agents stay until you or Pi stop them.
 
-Press ← in an empty editor or Ctrl+Q to focus the panel. Then:
+Press ← in an empty editor or Ctrl+Q to focus the panel. When no agents are
+open, they open `/agents` instead. Then:
 
 | Key | Action |
 | --- | --- |
 | ↑ ↓ | Select an agent or graph. |
+| Space | Fold or unfold a graph, or an agent's helpers. On a row inside one, fold what it sits in. |
 | ⏎ | Attach to the agent, or to a graph's first agent. |
+| Tab | Open `/agents` at the same row. Tab there returns to the panel while agents are open. |
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
 | Esc | Return to the editor. |
 
@@ -204,11 +221,48 @@ smaller: edges carry final messages, and there are no references, schemas,
 loops, or conditions. For repeated rounds, such as review and fix, Pi can
 message the agents again.
 
+### Agents that delegate
+
+An agent that may delegate splits its own task while it works: it starts
+helper agents, waits for them, and continues with their results. This covers
+work whose shape only shows up on the way, such as one helper per file the
+agent finds. Ask Pi for it, or set `delegate: true` in a profile.
+
+Helpers form a graph like the ones Pi starts, with the same edges, so a
+helper can merge the others' results. Their results go to the agent that
+started them, never to Pi, and only that agent's final answer reports back.
+The panel draws the helpers below their agent, which shows their progress:
+
+```text
+◉ mapper · haiku · 17s · delegating · helpers 1/4
+└─ ◉ helpers · graph 1/4 · 10s · 13.0k
+   ├─ ● models · haiku · 3.1k
+   ├─ ◉ paths · haiku · 10s
+   ├─ ◉ skills · haiku · 10s
+   └─ ○ merge ← models, paths, skills · haiku
+```
+
+Helpers leave the panel once their agent has their results; `/agents` keeps
+them, and you can attach to them like any agent. A helper's full name starts
+with its agent's, such as `mapper.models`; the tree leaves that part out
+below the agent, and the divider over its details in `/agents` shows it.
+
+- Helpers run on their agent's model, thinking level, and working directory
+  unless the agent picks others, and get only tools their agent has.
+- Helpers can't delegate themselves.
+- Esc on the agent stops its helpers too, and so does stopping a graph the
+  agent belongs to. Stopping only the helpers lets the agent go on with what
+  they finished.
+- While an agent waits for its helpers, a message you send it waits until
+  they finish. Press Esc to stop them instead.
+- One call starts at most 12 helpers, an agent at most 24 in total, and at
+  most 16 helpers work at once in a session.
+
 ### Commands
 
 | Command | Action |
 | --- | --- |
-| `/agents` | Browse all agents and graphs, including ended ones, with their tasks and latest results. Attach to or stop them. |
+| `/agents` | Browse all agents and graphs, including ended ones, with their tasks and latest results. Attach to, fold, or stop them. |
 | `/agent <name>` | Attach to an agent. |
 
 ### Tools
@@ -217,7 +271,7 @@ Pi uses these tools to work with agents:
 
 | Tool | Purpose |
 | --- | --- |
-| `agent_spawn` | Start an agent on a task, optionally waiting for its result. |
+| `agent_spawn` | Start an agent on a task, optionally waiting for its result, and optionally letting it delegate. |
 | `agent_spawn_graph` | Start a graph of agents, optionally waiting for its result. |
 | `agent_send` | Message an agent: prompt, steer, or queue a follow-up. |
 | `agent_wait` | Block until agents or graphs answer and return their results. |
@@ -244,8 +298,8 @@ Agents belong to the Pi session that started them. When you quit Pi or it
 crashes, agents pause. When you resume the session, for example with `pi -c`,
 interrupted work continues and results that haven't arrived yet post into the
 conversation. A graph continues too: its agents that already finished don't
-work again, and no agent gets its task twice. A tool call that can't safely repeat reports the interruption to
-the agent instead.
+work again, and no agent gets its task twice. A tool call that can't safely
+repeat reports the interruption to the agent instead.
 
 Agents of sessions started with `--no-session` live in memory and end with
 the session.
@@ -284,6 +338,7 @@ Profile fields:
 | `thinking` | Thinking level. Defaults to the session's level. |
 | `tools` | Tool allowlist. Defaults to `read`, `bash`, `edit`, `write`. |
 | `skills` | Skills to apply. Without this field, the agent sees your skill catalog. An empty list disables skills. |
+| `delegate` | Whether agents of this profile can start helper agents. Defaults to `false`. |
 
 The Markdown body extends the agent's system prompt. Arguments that Pi passes
 to `agent_spawn` override profile settings.

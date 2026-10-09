@@ -33,7 +33,6 @@ import {
 import { type Colorize, plainColorize, sanitizeLine } from "./format.js";
 import type { AgentPanel } from "./panel.js";
 
-const MAX_TABLE_ROWS = 10;
 const REFRESH_MS = 500;
 /** Rows of the frame: title border, separator, footer border, blank row. */
 const CHROME_ROWS = 4;
@@ -99,6 +98,26 @@ function renderMarkdown(
     ...kept,
     color("dim", `${indent}${line.more?.(hidden) ?? `… ${hidden} more lines`}`),
   ];
+}
+
+/**
+ * The rows of the table and the detail pane. The overlay stays under about
+ * 80% of the terminal, so some conversation stays visible, with a floor
+ * that keeps it usable. The table gets up to half of it and the detail pane
+ * the rest; the detail pane keeps the most rows it showed, so the table
+ * doesn't move while the selection changes.
+ */
+export function paneLayout(
+  terminalRows: number,
+  items: number,
+): { tableRows: number; detailRows: number } {
+  const height = Math.max(
+    8,
+    Math.min(terminalRows - 6, Math.floor(terminalRows * 0.8)),
+  );
+  const available = Math.max(2, height - CHROME_ROWS);
+  const tableRows = Math.min(items, Math.max(1, Math.ceil(available / 2)));
+  return { tableRows, detailRows: Math.max(0, available - tableRows) };
 }
 
 /** `close` dismisses the overlay, `select` moves the selection, and
@@ -245,17 +264,10 @@ class SplitPaneOverlay<T> implements Component {
     const index = this.index(items);
     this.select(items, index);
     const item = items[index] as T;
-    // Stay under about 80% of the terminal so some conversation stays
-    // visible, with a floor that keeps the pane usable.
-    const rows = this.tui.terminal.rows;
-    const height = Math.max(8, Math.min(rows - 6, Math.floor(rows * 0.8)));
-    const available = Math.max(2, height - CHROME_ROWS);
-    const tableRows = Math.min(
+    const { tableRows, detailRows } = paneLayout(
+      this.tui.terminal.rows,
       items.length,
-      MAX_TABLE_ROWS,
-      Math.max(1, Math.ceil(available / 2)),
     );
-    const detailRows = Math.max(0, available - tableRows);
 
     const lines = [
       edgeLine(

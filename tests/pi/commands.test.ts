@@ -14,7 +14,11 @@ import {
   graphDetail,
 } from "../../src/pi/commands.js";
 import { plainColorize } from "../../src/ui/format.js";
-import { type DetailLine, renderDetail } from "../../src/ui/overlay.js";
+import {
+  type DetailLine,
+  paneLayout,
+  renderDetail,
+} from "../../src/ui/overlay.js";
 
 beforeAll(() => initTheme("dark"));
 
@@ -222,5 +226,14 @@ describe("/agents detail", () => {
         ),
       ),
     ).toEqual(["review a", "├─ Error", "boom"]);
+  });
+});
+
+describe("/agents layout", () => {
+  test("the table gets up to half the overlay, not ten rows", () => {
+    // A 60-row terminal: the overlay takes 48 rows, 44 without its borders.
+    expect(paneLayout(60, 75)).toEqual({ tableRows: 22, detailRows: 22 });
+    expect(paneLayout(60, 3)).toEqual({ tableRows: 3, detailRows: 41 });
+    expect(paneLayout(12, 75)).toEqual({ tableRows: 2, detailRows: 2 });
   });
 });

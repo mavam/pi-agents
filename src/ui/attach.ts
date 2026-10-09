@@ -62,6 +62,7 @@ import {
   type Colorize,
   fitLine,
   formatUsage,
+  QUEUED_NOTE,
   shortModel,
   statusIcon,
 } from "./format.js";
@@ -511,6 +512,8 @@ class AgentPane implements Component {
       shortModel(info),
       info.thinking,
       formatUsage(info.usage),
+      // Results wait while the user is attached, and while Pi works.
+      info.queued ? QUEUED_NOTE : undefined,
     ].filter(Boolean);
     return ` ${parts.join(" · ")} `;
   }

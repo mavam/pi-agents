@@ -129,6 +129,33 @@ describe("/agents detail", () => {
     ]);
   });
 
+  test("a graph whose result waits for Pi says so", () => {
+    const lines = plain(
+      graphDetail(
+        graph(
+          [
+            {
+              agentId: "1",
+              name: "lead.a",
+              inputs: [],
+              end: true,
+              outcome: { kind: "failed", reason: "rate limited" },
+            },
+          ],
+          { state: "failed", queued: true },
+        ),
+        lookup,
+        plainColorize,
+      ),
+    );
+    expect(lines).toEqual([
+      "The result waits until Pi's turn ends.",
+      "",
+      "✗ lead.a · sol · 2.0k",
+      "  rate limited",
+    ]);
+  });
+
   test("a graph with edges says its order without the owner's name", () => {
     const lines = plain(
       graphDetail(
@@ -214,6 +241,16 @@ describe("/agents detail", () => {
         ),
       ),
     ).toEqual(["review a", "├─ Latest result · 1m00s ago", "done"]);
+    // An answer that waits for Pi says so.
+    expect(
+      plain(
+        agentDetail(
+          agent({ result: done, taskAnswer: done.entryId, queued: true }),
+          plainColorize,
+          at,
+        ),
+      ),
+    ).toEqual(["review a", "├─ Result · 1m00s ago · result queued", "done"]);
     expect(
       plain(
         agentDetail(

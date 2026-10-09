@@ -362,11 +362,15 @@ states.
   The panel and `/agents` share what the user folded, which wins over
   folding finished graphs. While the stop confirmation is open, keys go to
   the confirmation. The glyph carries the state; working agents show how long
-  they have worked. An idle agent whose answer waits for delivery, because
-  the parent is busy, shows `●` in the accent color rather than green and
-  `result queued`; so does a finished graph whose result waits. Green means
-  the parent has the answer. `AgentInfo.queued` and `GraphInfo.queued`
-  carry this: an undelivered answered parent request, or a pending graph.
+  they have worked. Delivery waits while the parent works or the user is
+  attached, so an idle agent with an undelivered answer to a parent request
+  shows `●` in the accent color rather than green and `result queued`, as
+  does a finished graph whose result is pending; a failed one keeps its red
+  glyph and adds the note. `/agents` rows and details and the attach view's
+  header carry the note too. Glyphs elsewhere describe outcomes, not
+  delivery: a graph's agents keep their glyphs while the graph line carries
+  the note, answers to the user never deliver, and the footer counts queued
+  agents as idle. `AgentInfo.queued` and `GraphInfo.queued` hold the flag.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's
   durable conversation view with Pi's message and tool components. ⏎ prompts
   or steers, Alt+⏎ queues a follow-up, Esc interrupts, ← detaches, Shift+↑↓

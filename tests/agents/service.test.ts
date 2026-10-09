@@ -69,6 +69,9 @@ describe("AgentService", () => {
     ]);
     expect(service.pendingDeliveries()).toEqual([]);
     expect(service.list()).toEqual([]);
+    // The wait took the results, so none is queued.
+    expect(service.get("a")?.queued).toBeUndefined();
+    expect(service.get("b")?.queued).toBeUndefined();
   });
 
   test("messaging a closed agent reopens it until it answers", async () => {

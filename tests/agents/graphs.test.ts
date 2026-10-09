@@ -543,6 +543,8 @@ describe("graphs that hold their result", () => {
     const graph = service.getGraph("g");
     expect(graph?.stopped).toBe(true);
     expect(graph?.state).toBe("interrupted");
+    // A stopped graph delivers nothing, so nothing waits.
+    expect(graph?.queued).toBeUndefined();
     expect(service.get("quick")?.state).toBe("interrupted");
     expect(await service.liveTasks()).toEqual([]);
     await new Promise((resolve) => setTimeout(resolve, 100));

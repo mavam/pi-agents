@@ -146,9 +146,9 @@ finished, and `←` names the agents whose results an agent receives:
 ```
 
 An agent leaves the panel once its answer reaches Pi, and a graph once its
-result does. Pi takes results only between turns, so while Pi works, an
-agent that answered shows `●` in the accent color instead of green and says
-`result queued`:
+result does. Pi takes results only between turns and while you aren't
+attached, so until then an agent that answered Pi shows `●` in the accent
+color instead of green and says `result queued`, and so does a graph:
 
 ```text
 ● series-review · sol · 1.1m · $0.42 · result queued

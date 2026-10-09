@@ -111,8 +111,29 @@ describe("formatting", () => {
           nodes: [answered("11", "api"), answered("12", "tests")],
         }),
         0,
+        color,
       ),
-    ).toBe("● review · graph 2/2 · result queued");
+    ).toBe("<accent>● review<dim> · <dim>graph 2/2<dim> · <dim>result queued");
+    // A failed graph keeps its glyph; the note still says it waits.
+    expect(
+      formatGraphLine(
+        graph({
+          state: "failed",
+          queued: true,
+          nodes: [
+            answered("11", "api"),
+            {
+              agentId: "12",
+              name: "tests",
+              inputs: [],
+              end: true,
+              outcome: { kind: "failed", reason: "boom" },
+            },
+          ],
+        }),
+        0,
+      ),
+    ).toBe("✗ review · graph 2/2 · 1 failed · result queued");
   });
 
   test("silent working agents show a stall hint", () => {

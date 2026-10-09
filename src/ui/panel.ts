@@ -228,9 +228,9 @@ export class AgentPanel {
     const line = (row: Row) => {
       const text =
         row.kind === "graph"
-          ? formatGraphLine(row.graph, now, color)
+          ? formatGraphLine({ ...row.graph, name: row.label }, now, color)
           : formatAgentLine(
-              this.heldActivity(row.agent, now),
+              { ...this.heldActivity(row.agent, now), name: row.label },
               now,
               color,
               row.inputs,

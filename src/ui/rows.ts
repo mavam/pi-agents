@@ -6,8 +6,12 @@
  */
 
 import type { AgentInfo, GraphInfo } from "../agents/types.js";
+import { shortName } from "./format.js";
 
 interface Tree {
+  /** The name to show: a helper's without its agent's name, while it
+   * sits below that agent. */
+  label: string;
   /** Tree connectors before the line. */
   lead: string;
   /** Agents below the row, at any depth; 0 for a leaf. */
@@ -124,7 +128,10 @@ export function buildRows(
       0,
     );
 
-  /** A graph row, then its agents, each followed by its helpers. */
+  /**
+   * A graph row, then its agents, each followed by its helpers. Helpers drop
+   * their agent's name, and so does their graph below that agent.
+   */
   const graphRows = (
     graph: GraphInfo,
     lead: string,
@@ -133,10 +140,13 @@ export function buildRows(
   ): Row[] => {
     const key = `graph:${graph.id}`;
     const expanded = disclosure.isExpanded(key, expand(graph));
+    const owner = graph.owner ? source.agent(graph.owner)?.name : undefined;
+    const short = (name: string) => shortName(name, owner);
     const head: Row = {
       kind: "graph",
       key,
       graph,
+      label: parent === `agent:${graph.owner}` ? short(graph.name) : graph.name,
       lead,
       below: graphBelow(graph),
       expanded,
@@ -157,8 +167,11 @@ export function buildRows(
           {
             nested: true,
             last,
-            inputs: node.inputs.map((input) => names.get(input) ?? input),
+            inputs: node.inputs.map((input) =>
+              short(names.get(input) ?? input),
+            ),
           },
+          short(agent.name),
           `${indent}${last ? "└─ " : "├─ "}`,
           `${indent}${last ? "   " : "│  "}`,
           key,
@@ -171,6 +184,7 @@ export function buildRows(
   const agentRows = (
     agent: AgentInfo,
     place: { nested: boolean; last: boolean; inputs: string[] },
+    label: string,
     lead: string,
     indent: string,
     parent?: string,
@@ -182,6 +196,7 @@ export function buildRows(
       kind: "agent",
       key,
       agent,
+      label,
       lead,
       below: agentBelow(agent.id),
       expanded,
@@ -209,6 +224,7 @@ export function buildRows(
       : agentRows(
           entry.info,
           { nested: false, last: false, inputs: [] },
+          entry.info.name,
           "",
           "",
         ),

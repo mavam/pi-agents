@@ -114,14 +114,14 @@ describe("/agents detail", () => {
       ),
     );
     expect(lines).toEqual([
-      "● lead.a · sol · 2.0k",
+      "● a · sol · 2.0k",
       "  - High: x breaks.",
       "    Fix: guard it.",
       "",
-      "✗ lead.b · sol · 2.0k",
+      "✗ b · sol · 2.0k",
       "  rate limited",
       "",
-      "⊘ lead.c · sol · 2.0k · stopped",
+      "⊘ c · sol · 2.0k · stopped",
     ]);
   });
 
@@ -140,7 +140,7 @@ describe("/agents detail", () => {
       ),
     );
     expect(lines.slice(0, 2)).toEqual(["Runs a, then b.", ""]);
-    expect(lines[4]).toBe("● lead.b ← lead.a · sol · 2.0k");
+    expect(lines[4]).toBe("● b ← a · sol · 2.0k");
   });
 
   test("long results end in a line that says how to read the rest", () => {

@@ -211,7 +211,10 @@ delegating agent's conversation
   and returns plain data.
 - Names: helpers are `<agent>.<name>` and their graph `<agent>.<name or
   helpers>`, shortening the agent's part to fit and claimed in the creating
-  commit like all names.
+  commit like all names. The tree, the graph detail, and the agent's
+  `delegating` activity drop the agent's part while the helpers sit below
+  it; the divider in `/agents`, the attach view, and everything the parent
+  model reads keep full names, which address them.
 - Limits, fixed: 12 helpers per call, 24 per agent over its lifetime, and 16
   helpers working at once across the session. A call over a limit returns an
   error result the agent can act on; the checks run in the creating commit,

@@ -225,17 +225,18 @@ started them, never to Pi, and only that agent's final answer reports back.
 The panel draws the helpers below their agent, which shows their progress:
 
 ```text
-◉ mapper · haiku · 17s · delegating · mapper.helpers 1/4
-└─ ◉ mapper.helpers · graph 1/4 · 10s · 13.0k
-   ├─ ● mapper.models · haiku · 3.1k
-   ├─ ◉ mapper.paths · haiku · 10s
-   ├─ ◉ mapper.skills · haiku · 10s
-   └─ ○ mapper.merge ← mapper.models, mapper.paths, mapper.skills · haiku
+◉ mapper · haiku · 17s · delegating · helpers 1/4
+└─ ◉ helpers · graph 1/4 · 10s · 13.0k
+   ├─ ● models · haiku · 3.1k
+   ├─ ◉ paths · haiku · 10s
+   ├─ ◉ skills · haiku · 10s
+   └─ ○ merge ← models, paths, skills · haiku
 ```
 
 Helpers leave the panel once their agent has their results; `/agents` keeps
-them, and you can attach to them like any agent. Helper names start with
-their agent's name.
+them, and you can attach to them like any agent. A helper's full name starts
+with its agent's, such as `mapper.models`; the tree leaves that part out
+below the agent, and the divider over its details in `/agents` shows it.
 
 - Helpers run on their agent's model, thinking level, and working directory
   unless the agent picks others, and get only tools their agent has.

@@ -368,6 +368,53 @@ describe("formatting", () => {
     ).toEqual(["graph:10", "agent:1", "agent:2"]);
   });
 
+  test("helpers drop their agent's name below it", () => {
+    const agents = [
+      agent({ id: "1", name: "lead", state: "working" }),
+      agent({ id: "3", name: "lead.a", graph: "20" }),
+      agent({ id: "4", name: "lead.merge", graph: "20" }),
+    ];
+    const helpers = graph({
+      id: "20",
+      name: "lead.helpers",
+      owner: "1",
+      nodes: [
+        { agentId: "3", name: "lead.a", inputs: [], end: false },
+        { agentId: "4", name: "lead.merge", inputs: ["3"], end: true },
+      ],
+    });
+    const labels = (shown: typeof agents) =>
+      buildRows(
+        {
+          agents: shown,
+          graphs: [helpers],
+          agent: (id) => agents.find((each) => each.id === id),
+        },
+        panelCompare,
+        () => true,
+      ).map((row) =>
+        row.kind === "agent" && row.inputs.length > 0
+          ? `${row.label} ← ${row.inputs.join(", ")}`
+          : row.label,
+      );
+    expect(labels(agents)).toEqual(["lead", "helpers", "a", "merge ← a"]);
+    // Without its agent, the graph keeps the name that says whose it is.
+    expect(labels(agents.slice(1))).toEqual(["lead.helpers", "a", "merge ← a"]);
+    expect(
+      formatAgentLine(
+        agent({
+          name: "lead",
+          state: "working",
+          lastActivityAt: 1_000,
+          activity: {
+            delegation: { graph: "lead.helpers", done: 1, total: 2 },
+          },
+        }),
+        2_000,
+      ),
+    ).toBe("◉ lead · terra · 2s · delegating · helpers 1/2");
+  });
+
   test("an agent that waits for helpers shows their progress", () => {
     expect(
       formatAgentLine(

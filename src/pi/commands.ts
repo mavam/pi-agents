@@ -29,6 +29,7 @@ import {
   graphNote,
   STATE_STYLES,
   shortModel,
+  shortName,
   stateIcon,
 } from "../ui/format.js";
 import {
@@ -134,23 +135,21 @@ export function graphDetail(
   color: Colorize,
   bold: Bold = (text) => text,
 ): DetailLine[] {
-  const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
-  const lines: DetailLine[] = [];
-  // Helpers repeat their agent's name; the order reads better without it.
+  // Helpers repeat their agent's name, which the divider above shows.
   const owner = graph.owner ? lookup(graph.owner)?.name : undefined;
+  const names = new Map(
+    graph.nodes.map((node) => [node.agentId, shortName(node.name, owner)]),
+  );
+  const lines: DetailLine[] = [];
   const order = orderSentence(
     graph.nodes.map((node) => ({ key: node.agentId, inputs: node.inputs })),
-    (key) => {
-      const name = names.get(key) ?? key;
-      return owner && name.startsWith(`${owner}.`)
-        ? name.slice(owner.length + 1)
-        : name;
-    },
+    (key) => names.get(key) ?? key,
   );
   if (order) lines.push(color("dim", order), "");
   graph.nodes.forEach((node, index) => {
     const agent = lookup(node.agentId);
     const outcome = node.outcome;
+    const name = names.get(node.agentId) ?? node.name;
     const inputs = node.inputs.map((input) => names.get(input) ?? input);
     const usage = agent ? formatUsage(agent.usage) : "";
     const meta = [agent ? shortModel(agent) : undefined, usage || undefined]
@@ -163,7 +162,7 @@ export function graphDetail(
     if (index > 0) lines.push("");
     lines.push(
       [
-        `${stateIcon(nodeState(outcome, agent), color)} ${bold(node.name)}`,
+        `${stateIcon(nodeState(outcome, agent), color)} ${bold(name)}`,
         inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : "",
         meta ? color("dim", ` · ${meta}`) : "",
         word ? color("dim", ` · ${word}`) : "",
@@ -184,7 +183,7 @@ export function graphDetail(
           indent: 2,
           maxLines: DETAIL_NODE_LINES,
           more: (hidden) =>
-            `… ${hidden} more lines · select ${node.name} to read all`,
+            `… ${hidden} more lines · select ${name} to read all`,
         });
     } else if (outcome?.kind === "failed") {
       lines.push(color("error", `  ${outcome.reason}`));
@@ -194,7 +193,7 @@ export function graphDetail(
 }
 
 function rowName(row: Row): string {
-  return `${connector(row)}${row.kind === "graph" ? row.graph.name : row.agent.name}`;
+  return `${connector(row)}${row.label}`;
 }
 
 /** `~/…` for paths in the home directory. */
@@ -292,8 +291,20 @@ async function openAgentsOverlay(
       const width = Math.max(...items().map((item) => rowName(item).length), 4);
       const line =
         row.kind === "graph"
-          ? graphRow(row.graph, Date.now(), width, color, connector(row))
-          : agentRow(row.agent, Date.now(), width, color, connector(row));
+          ? graphRow(
+              { ...row.graph, name: row.label },
+              Date.now(),
+              width,
+              color,
+              connector(row),
+            )
+          : agentRow(
+              { ...row.agent, name: row.label },
+              Date.now(),
+              width,
+              color,
+              connector(row),
+            );
       const hidden = hiddenNote(row);
       return hidden ? `${line}  ${color("dim", hidden)}` : line;
     },

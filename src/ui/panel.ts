@@ -167,6 +167,11 @@ export class AgentPanel {
     this.update();
   }
 
+  /** Whether a view in the editor slot hides the panel. */
+  isSuppressed(): boolean {
+    return this.suppressed;
+  }
+
   hasRows(): boolean {
     return this.rows().length > 0;
   }

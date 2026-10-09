@@ -340,7 +340,8 @@ states.
   idle ones always shown. A graph's line shows how many of its agents
   finished, with its agents below it as a tree in stages, each with `←` and
   the agents it receives results from; unfocused, a finished graph
-  folds to its line. Left arrow from an empty editor or Ctrl+Q focuses it; ↑↓
+  folds to its line. Left arrow from an empty editor or Ctrl+Q focuses it,
+  or opens `/agents` while it's empty; ↑↓
   select, space folds a graph or an agent's helpers (on a row inside one, the
   row it sits in), ⏎ attaches (a graph: its first agent), `s` stops an agent
   or a graph, and Esc returns. A folded row says how many agents it hides.

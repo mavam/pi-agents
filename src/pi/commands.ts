@@ -364,6 +364,11 @@ async function openAgentsOverlay(
 }
 
 export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
+  deps.focus.onBrowse = (ctx) =>
+    void openAgentsOverlay(ctx, deps).catch((error) =>
+      ctx.ui.notify(errorText(error), "error"),
+    );
+
   pi.registerCommand("agents", {
     description: "Browse agents: attach to or stop them",
     handler: async (_args, ctx) => {

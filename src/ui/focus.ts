@@ -3,7 +3,7 @@
  * panel without owning a component. It intercepts raw terminal input, which
  * Pi hands to extensions before the focused component:
  *
- *   editor ── ← (empty editor) / ctrl+q ──▶ panel
+ *   editor ── ← (empty editor) / ctrl+q ──▶ panel, or /agents if it's empty
  *   panel  ── esc / → / typing ──▶ editor
  *   panel  ── ⏎ ──▶ attach view (ctx.ui.custom owns focus until it closes)
  *
@@ -65,6 +65,8 @@ export class FocusController {
   private paneOpen = false;
   /** A stop confirmation is open; its dialog owns the keys. */
   private confirming = false;
+  /** Opens `/agents`, for ← and Ctrl+Q while the panel is empty. */
+  onBrowse: ((ctx: ExtensionContext) => void) | undefined;
   /** Invoked after the attach view closes (deliver held results, etc.). */
   onPaneClosed: ((ctx: ExtensionContext) => void) | undefined;
   /** Some terminal stacks hand the same chunk to listeners twice. */
@@ -91,11 +93,20 @@ export class FocusController {
     this.ctx = undefined;
   }
 
-  /** Ctrl+Q: focus the panel, also mid-composition. */
+  /** Ctrl+Q: focus the panel, also mid-composition, or browse agents. */
   focusPanel(ctx?: ExtensionContext): void {
     if (ctx) this.ctx = ctx;
-    if (this.paneOpen || !this.panel.hasRows()) return;
-    this.panel.setFocused(true);
+    if (this.paneOpen || this.panel.isSuppressed()) return;
+    if (this.panel.hasRows()) this.panel.setFocused(true);
+    else if (this.ctx) this.browse(this.ctx);
+  }
+
+  /** Open `/agents` when there are agents to browse; whether it did. */
+  private browse(ctx: ExtensionContext): boolean {
+    const agents = this.host.current()?.list({ includeClosed: true }) ?? [];
+    if (!this.onBrowse || agents.length === 0) return false;
+    this.onBrowse(ctx);
+    return true;
   }
 
   isPaneOpen(): boolean {
@@ -125,7 +136,10 @@ export class FocusController {
 
   private handle(data: string): { consume?: boolean } | undefined {
     const ctx = this.ctx;
-    if (!ctx || this.paneOpen || this.confirming) return undefined;
+    // Another view owns the keys: the attach view, a stop confirmation, or
+    // /agents, which hides the panel.
+    if (!ctx || this.paneOpen || this.confirming || this.panel.isSuppressed())
+      return undefined;
     // The Kitty keyboard protocol reports releases separately; acting on
     // them would double every step.
     if (isKeyRelease(data)) return undefined;
@@ -149,15 +163,13 @@ export class FocusController {
     const key = parseKey(data) ?? data;
     if (!this.panel.isFocused()) {
       // Only from an empty editor, so ← keeps moving the cursor while typing.
-      if (
-        key === "left" &&
-        ctx.ui.getEditorText() === "" &&
-        this.panel.hasRows()
-      ) {
+      if (key !== "left" || ctx.ui.getEditorText() !== "") return undefined;
+      if (this.panel.hasRows()) {
         this.panel.setFocused(true);
         return { consume: true };
       }
-      return undefined;
+      // Without open agents, ← browses all of them.
+      return this.browse(ctx) ? { consume: true } : undefined;
     }
     if (keybindings.matches(data, "tui.select.cancel") || key === "right") {
       this.panel.setFocused(false);

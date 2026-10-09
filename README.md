@@ -143,7 +143,8 @@ finished, and `←` names the agents whose results an agent receives:
 An agent leaves the panel once its answer reaches Pi, and a graph once its
 result does. Failed and interrupted agents stay until you or Pi stop them.
 
-Press ← in an empty editor or Ctrl+Q to focus the panel. Then:
+Press ← in an empty editor or Ctrl+Q to focus the panel. When no agents are
+open, they open `/agents` instead. Then:
 
 | Key | Action |
 | --- | --- |

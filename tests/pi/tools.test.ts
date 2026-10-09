@@ -552,6 +552,35 @@ describe("call results", () => {
     ]);
   });
 
+  test("an error result shows its reason", () => {
+    const tools = new Map<string, AnyTool>();
+    registerAgentTools(
+      {
+        registerTool: (tool: AnyTool) => tools.set(tool.name, tool),
+        getThinkingLevel: () => undefined,
+      } as unknown as ExtensionAPI,
+      { ensure: async () => service } as unknown as SessionHost,
+    );
+    const theme = {
+      fg: (name: string, text: string) => `<${name}>${text}`,
+      bold: (text: string) => text,
+    };
+    const render = (details: unknown, isError: boolean) =>
+      tools
+        .get("agent_send")
+        ?.renderResult?.(
+          { content: [{ type: "text", text: "terminated" }], details },
+          { expanded: false, isPartial: false },
+          theme,
+          { isError, state: {} },
+        )
+        .render(80);
+    // Pi never ran the call because the model's message broke off.
+    expect(render(undefined, true)).toEqual(["<error>terminated"]);
+    // The tool threw, and Pi passes empty details.
+    expect(render({}, true)).toEqual(["<error>terminated"]);
+  });
+
   test("wrapped lines continue under their indentation", () => {
     expect(new FitLines("  one two three four", true).render(12)).toEqual([
       "  one two",

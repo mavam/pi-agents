@@ -16,6 +16,11 @@ import {
 import { AgentService } from "../agents/service.js";
 import { AgentError } from "../agents/types.js";
 import { createHarnessSettings } from "../host/env.js";
+import {
+  limitRequests,
+  RequestLimiter,
+  readRequestLimit,
+} from "../host/limit.js";
 import { acquireLock, type StorageLock } from "../host/lock.js";
 import { resolveModels } from "../host/models.js";
 import { createPromptExtension } from "../host/prompt.js";
@@ -115,9 +120,15 @@ export class SessionHost {
     try {
       const settings = SettingsManager.create(ctx.cwd, getAgentDir());
       this.skillPaths = settings.getSkillPaths();
+      const { limit, error } = readRequestLimit(settings.getSettings());
+      if (error) this.report(new Error(`${error}; requests aren't limited`));
+      const models = limitRequests(
+        await resolveModels(ctx.modelRegistry),
+        new RequestLimiter(limit),
+      );
       const service = await AgentService.open({
         storage,
-        models: await resolveModels(ctx.modelRegistry),
+        models,
         cwd: ctx.cwd,
         settings: createHarnessSettings(settings),
         extensions: [

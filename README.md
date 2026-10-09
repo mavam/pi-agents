@@ -360,6 +360,26 @@ Pi learns which names are models from your scoped models, the ones you pick
 with `/scoped-models` or `--models`. Scope the models you want agents to use,
 and Pi picks them by name: "spawn a Luna agent" runs on your scoped Luna.
 
+### Concurrent requests
+
+Agents work in parallel and each sends its own model requests. A model
+server that handles one request at a time, such as a local LLM, can fall
+behind or time out. Cap how many requests agents send at once in
+`~/.pi/agent/settings.json` or your project's `.pi/settings.json`:
+
+```json
+{
+  "piAgents": {
+    "maxConcurrentRequests": 1
+  }
+}
+```
+
+Requests over the cap wait their turn in order, and agents keep working on
+tools in the meantime. Agents, graphs, and helpers all share the cap. Your
+session's own requests don't count toward it. Without the setting, requests
+aren't limited. Restart Pi after changing it.
+
 ### Footer counters
 
 With [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) installed,

@@ -284,6 +284,18 @@ never lose one. On session resume, unacknowledged settled requests deliver.
 - Models: the parent session's model runtime, so logins and custom providers
   work.
 - Settings: compaction, retry, and queue modes come from Pi's settings.
+- Request limit: `piAgents.maxConcurrentRequests` in Pi's settings caps the
+  model requests the session's agents make at once, for model servers that
+  serve one request at a time. The Host wraps the `Models` it gives the
+  harness, whose `streamSimple` and `completeSimple` carry every generation
+  and compaction request; a request over the cap waits in a FIFO line before
+  it reaches the provider, and an abort while it waits ends it as aborted.
+  Agents, graph nodes, and helpers all go through it; tools still run in
+  parallel, and the parent session's own requests don't count. The line is
+  in memory: a resumed run asks again. Unlike the delegation limits, which
+  refuse helpers, it never refuses work: agents only wait their turn and
+  stay `working` meanwhile. Read when the Host opens; absent or invalid means
+  no limit, and an invalid value shows a warning.
 - No MCP and no extension tools yet.
 
 ## Parent tools
@@ -391,6 +403,9 @@ Delegation tests cover a fan-out with a merging helper, that helpers and
 other agents can't delegate, progress, Esc on the agent, stopping a graph
 above it, stopping only the helpers, tool and size limits, names, and a
 restart mid-delegation that starts no second set of helpers.
+Request limit tests count requests reaching the faux provider: with a limit
+of 1, streams, compactions, and spawned agents never overlap, waiting
+requests run in order, and one aborted while waiting frees its place.
 
 ## Deferred
 

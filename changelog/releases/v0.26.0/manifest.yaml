@@ -1,0 +1,9 @@
+created: 2026-10-09
+title: Structured agent results for codemode scripts
+intro: >-
+  Codemode scripts now receive agent results as structured data, so they can filter
+  and return only what matters. Pi also marks agents whose answers wait for it as
+  queued, and waits no longer report stale answers.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.25.0

@@ -142,6 +142,41 @@ describe("call results", () => {
     expect(startedView({ ...details, graphs: [] }, plain)).toBeUndefined();
   });
 
+  test("an expanded graph call keeps each task's lines", () => {
+    const tools = new Map<string, AnyTool>();
+    registerAgentTools(
+      {
+        registerTool: (tool: AnyTool) => tools.set(tool.name, tool),
+        getThinkingLevel: () => undefined,
+      } as unknown as ExtensionAPI,
+      { ensure: async () => service } as unknown as SessionHost,
+    );
+    const call = tools.get("agent_spawn_graph")?.renderCall?.(
+      {
+        name: "g",
+        agents: [
+          { name: "a", task: "Steps:\n1. read  the code\n\n2. report" },
+          { name: "b", task: "Merge.", after: ["a"] },
+        ],
+      },
+      {
+        fg: (_name: string, text: string) => text,
+        bold: (text: string) => text,
+      },
+      { expanded: true, state: {} },
+    );
+    expect(call?.render(80)).toEqual([
+      "✦ spawn graph g",
+      "  a → b",
+      "  a: Steps:",
+      "    1. read  the code",
+      "",
+      "    2. report",
+      "",
+      "  b ← a: Merge.",
+    ]);
+  });
+
   test("wrapped lines continue under their indentation", () => {
     expect(new FitLines("  one two three four", true).render(12)).toEqual([
       "  one two",

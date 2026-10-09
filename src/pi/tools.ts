@@ -678,7 +678,14 @@ export function registerAgentTools(
                 const after = agent.after?.length
                   ? ` ← ${agent.after.join(", ")}`
                   : "";
-                return `${label(agent, index)}${after}${pairs ? ` (${pairs})` : ""}: ${(agent.task ?? "").replace(/\s+/g, " ").trim()}`;
+                // The task keeps its own lines, indented under the agent.
+                const [first = "", ...rest] = (agent.task ?? "")
+                  .trim()
+                  .split("\n");
+                return [
+                  `${label(agent, index)}${after}${pairs ? ` (${pairs})` : ""}: ${first}`,
+                  ...rest.map((line) => (line ? `  ${line}` : "")),
+                ].join("\n");
               })
               .join("\n\n"),
           ].join("\n"),

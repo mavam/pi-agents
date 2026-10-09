@@ -1,0 +1,10 @@
+created: 2026-10-09
+title: Agents that delegate
+intro: >-
+  Agents can now delegate: an agent splits its own task among helper agents that it
+  starts and waits for, such as one helper per file it finds. This release also makes
+  the agent panel and /agents easier to read and navigate, with Markdown results,
+  folding, and Tab to switch between them.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.23.1

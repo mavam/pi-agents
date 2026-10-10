@@ -53,6 +53,8 @@ export type AgentReceipt = {
   model?: string;
   /** In a graph: the agents whose results it receives, by name. */
   inputs?: string[];
+  /** The task it was started with, for agents that look for others. */
+  task?: string;
   /** How it was when the call looked; absent when the call only started
    * it. */
   outcome?: NodeKind;
@@ -100,7 +102,7 @@ export function isFinished(kind: NodeKind | undefined): boolean {
 }
 
 /** An agent's or a graph's state as an outcome. */
-function stateOutcome(state: AgentState): NodeKind {
+export function stateOutcome(state: AgentState): NodeKind {
   return state === "idle" ? "answered" : state;
 }
 

@@ -15,6 +15,7 @@ import {
   type AgentExtensions,
   createAgentExtensions,
 } from "../../src/agents/extensions.js";
+import type { MessagingOptions } from "../../src/agents/messaging.js";
 import {
   type Attention,
   AttentionSignals,
@@ -43,6 +44,36 @@ export function lastUserText(
     : last.content
         .flatMap((block) => (block.type === "text" ? [block.text] : []))
         .join("");
+}
+
+/** Resolves once the request aborts: a model that never finishes on its
+ * own, so tests stop or interrupt it instead of racing it. */
+export function heldUntilAborted(
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) resolve();
+    signal?.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+/** Resolves after `ms`, or earlier once the request aborts: a model that
+ * works briefly, long enough for tests to see it working. */
+export function briefly(
+  signal: AbortSignal | undefined,
+  ms = 200,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 }
 
 /** A faux model that answers `answer(<prompt>)` for every request. */
@@ -170,6 +201,8 @@ export interface HostOptions {
   trusted?: boolean;
   skills?: SkillSource;
   delegationLimits?: Partial<DelegationLimits>;
+  /** Turns messaging between agents on. */
+  messaging?: MessagingOptions;
 }
 
 /** What a test host opened for a service: the harness and its anchor. */
@@ -192,6 +225,7 @@ export function testExtensions(options: HostOptions = {}): AgentExtensions {
     ...(options.delegationLimits
       ? { delegationLimits: options.delegationLimits }
       : {}),
+    ...(options.messaging ? { messaging: options.messaging } : {}),
   });
 }
 
@@ -213,6 +247,7 @@ export async function openService(
       anchor: harness.anchor,
       extensions,
       parent,
+      messaging: () => options.messaging !== undefined,
     });
     harness.harness.resume();
     hosts.set(service, { service, harness, extensions, parent });

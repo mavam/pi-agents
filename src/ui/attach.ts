@@ -9,7 +9,11 @@
  * view types.
  *
  * Tool calls draw with Pi's renderers for Pi's tools and with
- * `AGENT_TOOL_VIEWS` for the agents' own tools, such as `delegate_graph`.
+ * `agentToolViews` for the agents' own tools, such as `delegate_graph` and
+ * `agent_send`.
+ *
+ * Messages from other agents show as message cards, never as the user's
+ * input, and queued ones as message lines with `◷`.
  *
  * Keys: ⏎ prompts an idle agent and steers a working one, Alt+⏎ queues a
  * follow-up, Esc interrupts a working agent, ← on an empty editor detaches,
@@ -60,7 +64,11 @@ import {
 } from "@earendil-works/pi-tui";
 import { DELEGATE_TOOL } from "../agents/delegation.js";
 import type { AgentService } from "../agents/service.js";
-import { type AgentInfo, USER_MESSAGE_PREFIX } from "../agents/types.js";
+import {
+  type AgentInfo,
+  parseMessageInput,
+  USER_MESSAGE_PREFIX,
+} from "../agents/types.js";
 import {
   type Colorize,
   fitLine,
@@ -69,7 +77,14 @@ import {
   shortModel,
   statusIcon,
 } from "./format.js";
-import { AGENT_TOOL_VIEWS } from "./tool-views.js";
+import {
+  firstLine,
+  formatMessageLine,
+  type MessageStyle,
+  messageCard,
+  themeStyle,
+} from "./messages.js";
+import { agentToolViews } from "./tool-views.js";
 
 const PANE_REFRESH_MS = 250;
 const FLASH_MS = 5_000;
@@ -110,18 +125,48 @@ export function withoutUserPrefix(text: string): string {
     : text;
 }
 
-/** Queued user texts of an inbox, steering first like Pi restores them. */
+/** Queued texts of an inbox that Esc returns to the editor, steering
+ * first like Pi restores them; messages from other agents stay theirs. */
 export function queuedTexts(inbox: InboxState): string[] {
   const steer: string[] = [];
   const followUp: string[] = [];
   for (const item of inbox.items) {
     if (item.mode === "write") continue;
-    const text = withoutUserPrefix(
-      userText(item.content as UserMessage["content"]),
-    );
-    (item.mode === "steer" ? steer : followUp).push(text);
+    const raw = userText(item.content as UserMessage["content"]);
+    if (parseMessageInput(raw)) continue;
+    (item.mode === "steer" ? steer : followUp).push(withoutUserPrefix(raw));
   }
   return [...steer, ...followUp];
+}
+
+/** Queued inputs as the attach view shows them, in inbox order: messages
+ * from other agents as message lines, everything else as `↻ Queued`. */
+function queuedLines(
+  inbox: InboxState,
+  recipient: string,
+  width: number,
+  style: MessageStyle,
+): string[] {
+  const { color } = style;
+  return inbox.items.flatMap((item) => {
+    if (item.mode === "write") return [];
+    const raw = userText(item.content as UserMessage["content"]);
+    const message = parseMessageInput(raw);
+    if (message)
+      return [
+        formatMessageLine(
+          {
+            from: message.from,
+            to: recipient,
+            text: message.text,
+            status: "queued",
+          },
+          width,
+          style,
+        ),
+      ];
+    return [color("dim", `↻ Queued: ${firstLine(withoutUserPrefix(raw))}`)];
+  });
 }
 
 /** Queued messages first, then the draft, separated by blank lines. */
@@ -151,7 +196,14 @@ class ChatView {
     private readonly ui: TUI,
     private readonly cwd: string,
     private readonly theme: Theme,
-  ) {}
+    /** The agent's name, the recipient of its messages. */
+    private readonly name: () => string,
+  ) {
+    this.views = agentToolViews(name);
+  }
+
+  /** Renderers of the agent's own tools. */
+  private readonly views: ReturnType<typeof agentToolViews>;
 
   apply(view: ConversationView): void {
     const live = liveOf(view);
@@ -218,7 +270,21 @@ class ChatView {
 
   private addEntry(entry: EntryRecord): void {
     const message = entry.model?.[0];
-    if (entry.kind === "pi.user" && message?.role === "user") {
+    const input =
+      entry.kind === "pi.user" && message?.role === "user"
+        ? parseMessageInput(userText(message.content))
+        : undefined;
+    if (input) {
+      // The recipient reads the whole message, as its model does.
+      this.transcript.addChild(new Spacer(1));
+      this.transcript.addChild(
+        messageCard(
+          { from: input.from, to: this.name(), text: input.text },
+          true,
+          this.theme,
+        ),
+      );
+    } else if (entry.kind === "pi.user" && message?.role === "user") {
       this.transcript.addChild(new Spacer(1));
       this.transcript.addChild(
         new UserMessageComponent(
@@ -302,7 +368,7 @@ class ChatView {
   private renderer(toolName: string): AnyDefinition | undefined {
     let definition = this.renderers.get(toolName);
     if (definition === undefined) {
-      const views = AGENT_TOOL_VIEWS[toolName];
+      const views = this.views[toolName];
       const create = RENDERERS[toolName];
       if (views) definition = { name: toolName, ...views } as AnyDefinition;
       else if (create) definition = create(this.cwd);
@@ -381,19 +447,17 @@ function badgeBorder(
   return `${border("─".repeat(lead))}${badge(fitted)}${border("─".repeat(tail))}`;
 }
 
-/** Fit queued messages into a row budget, oldest first. */
-function formatQueuedLines(
+/** Fit queued lines into a row budget, oldest first. */
+function fitQueuedLines(
   queued: readonly string[],
   maxRows: number,
   color: Colorize,
 ): string[] {
   if (maxRows <= 0 || queued.length === 0) return [];
-  const line = (text: string) =>
-    color("dim", `↻ Queued: ${text.split("\n")[0] ?? ""}`);
-  if (queued.length <= maxRows) return queued.map(line);
+  if (queued.length <= maxRows) return [...queued];
   if (maxRows === 1)
     return [color("dim", `↻ Queued: ${queued.length} messages`)];
-  const shown = queued.slice(0, maxRows - 1).map(line);
+  const shown = queued.slice(0, maxRows - 1);
   shown.push(color("dim", `… ${queued.length - shown.length} more`));
   return shown;
 }
@@ -429,7 +493,12 @@ class AgentPane implements Component {
   ) {
     this.color = (name, text) => theme.fg(name, text);
     this.view = options.state.value;
-    this.chat = new ChatView(tui, this.info()?.cwd ?? process.cwd(), theme);
+    this.chat = new ChatView(
+      tui,
+      this.info()?.cwd ?? process.cwd(),
+      theme,
+      () => this.info()?.name ?? "",
+    );
     this.chat.apply(this.view);
     this.unsubscribe = options.state.subscribe((value) => {
       this.view = value;
@@ -595,8 +664,13 @@ class AgentPane implements Component {
     const fixed =
       editorLines.length + statusLines.length + failure.length + flash.length;
     const content = Math.max(1, budget - fixed);
-    const queued = formatQueuedLines(
-      queuedTexts(inboxOf(this.view)),
+    const queued = fitQueuedLines(
+      queuedLines(
+        inboxOf(this.view),
+        info?.name ?? "",
+        width - 1,
+        themeStyle(this.theme),
+      ),
       Math.max(0, Math.min(3, content - 3)),
       color,
     );

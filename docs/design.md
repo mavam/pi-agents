@@ -400,8 +400,10 @@ without glyphs, times, or usage, which would only describe the moment of the
 call; the panel shows the live state. That holds while a call waits, too:
 its progress carries what it started and draws no states, so the call
 doesn't repeat the panel. The result renderer stores what started in the
-renderers' shared state, and the call reads it when it draws; the outcome of
-a wait replaces it. A started agent adds nothing to its call. Expanded, a call
+renderers' shared state, and the call reads it when it draws. Every final
+result resets it, so a replay, which has no progress, draws the same: an
+outcome or an error drops what started, and a call that only started work
+sets it again. A started agent adds nothing to its call. Expanded, a call
 shows its arguments and tasks in full, one paragraph per agent, wrapped
 under their indentation. Calls that report outcomes show the agents'
 states. A failed call shows its error text in the error color instead: Pi

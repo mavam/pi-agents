@@ -465,6 +465,10 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
         if (details?.started) state.started = details;
         return new FitLines("", false);
       }
+      // A final result alone decides what its call shows, so a replay
+      // without the progress draws the same: an outcome or an error drops
+      // what started, and a call that only started work sets it again.
+      delete state.started;
       // An error carries no agent details: the tool threw, or Pi never ran
       // the call because the model's message broke off. Show why.
       if (context.isError || !details?.agents) {
@@ -481,8 +485,6 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
         state.started = details;
         return new FitLines("", false);
       }
-      // The outcome of a wait shows the agents; what started would repeat them.
-      delete state.started;
       const color: Colorize = (name, value) => theme.fg(name, value);
       return new FitLines(
         renderDetails(details, options.expanded, color),

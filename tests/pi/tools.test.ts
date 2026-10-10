@@ -78,7 +78,7 @@ async function gated(steering = new SteerWatch()) {
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback<unknown>;
     } = {},
-  ): Promise<{ text: string; output: unknown }> => {
+  ): Promise<{ text: string; details: unknown; output: unknown }> => {
     const tool = registered.get(name);
     if (!tool) throw new Error(`No tool ${name}`);
     const result = await tool.execute(
@@ -91,9 +91,48 @@ async function gated(steering = new SteerWatch()) {
     const output = result.structuredContent;
     expect([...Value.Errors(tool.outputSchema, output)], name).toEqual([]);
     const [first] = result.content;
-    return { text: first?.type === "text" ? first.text : "", output };
+    return {
+      text: first?.type === "text" ? first.text : "",
+      details: result.details,
+      output,
+    };
   };
 }
+
+const plainTheme = {
+  fg: (_name: string, text: string) => text,
+  bold: (text: string) => text,
+};
+
+/**
+ * One frame of a tool call as Pi draws it: both renderers run, sharing
+ * `state`, and the call draws after them.
+ */
+function drawFrame(
+  tool: AnyTool | undefined,
+  args: unknown,
+  state: object,
+  result?: { text?: string; details: unknown },
+  { isPartial = false, isError = false, expanded = false } = {},
+): string[] {
+  const context = { args, expanded, isError, isPartial, state };
+  const call = tool?.renderCall?.(args, plainTheme, context);
+  const drawn =
+    result &&
+    tool?.renderResult?.(
+      {
+        content: [{ type: "text", text: result.text ?? "" }],
+        details: result.details,
+      },
+      { expanded, isPartial },
+      plainTheme,
+      context,
+    );
+  return [...(call?.render(80) ?? []), ...(drawn?.render(80) ?? [])];
+}
+
+/** Whether lines show an agent's state glyph. */
+const GLYPHS = /[◉○●✗⊘⊖]/;
 
 /** Resolves once a wait reported progress, and thus listens for steers. */
 function firstUpdate(): {
@@ -449,6 +488,82 @@ describe("waiting tools", () => {
     expect(result.output).toMatchObject({ pending: ["w"] });
     expect(service?.get("w")?.state).toBe("working");
   });
+
+  test("waiting calls draw what they started, never live states", async () => {
+    const run = await gated();
+    const draw = tools(new SteerWatch());
+    /** Run a waiting call, abort it after its first progress, and draw both. */
+    const waitOnce = async (name: string, args: Record<string, unknown>) => {
+      const tool = draw.get(name);
+      const progress: unknown[] = [];
+      const abort = new AbortController();
+      const { onUpdate, started } = firstUpdate();
+      const waiting = run(name, args, {
+        signal: abort.signal,
+        onUpdate: (update) => {
+          progress.push(update.details);
+          onUpdate(update);
+        },
+      });
+      await started;
+      abort.abort();
+      const result = await waiting;
+      const state = {};
+      const partial = drawFrame(
+        tool,
+        args,
+        state,
+        { details: progress[0] },
+        { isPartial: true },
+      );
+      const expanded = drawFrame(
+        tool,
+        args,
+        state,
+        { details: progress[0] },
+        { isPartial: true, expanded: true },
+      );
+      const final = drawFrame(tool, args, state, result);
+      // A replay has no progress and draws the same.
+      expect(drawFrame(tool, args, {}, result)).toEqual(final);
+      return { tool, partial, expanded, final };
+    };
+    const args = {
+      name: "g",
+      wait: 60,
+      agents: [
+        { name: "a", task: "hold" },
+        { name: "b", task: "hold", after: ["a"] },
+      ],
+    };
+    const graph = await waitOnce("agent_spawn_graph", args);
+    const tree = ["├─ a · faux-1", "└─ b ← a · faux-1"];
+    expect(graph.partial).toEqual([
+      "✦ spawn graph g · graph of 2",
+      ...tree,
+      "  wait=60s",
+      "  a → b",
+    ]);
+    expect(graph.expanded.slice(0, 3)).toEqual([
+      "✦ spawn graph g · graph of 2",
+      ...tree,
+    ]);
+    expect(graph.expanded.join("\n")).not.toMatch(GLYPHS);
+    // Where waiting stopped, without what started.
+    expect(graph.final[0]).toBe("✦ spawn graph g");
+    expect(graph.final.join("\n")).not.toContain("graph of 2");
+    expect(graph.final).toContain("Stopped waiting");
+    expect(graph.final.join("\n")).toMatch(GLYPHS);
+    // Waits and sends started nothing: while waiting, only the call.
+    for (const [name, params] of [
+      ["agent_wait", { names: ["g"] }],
+      ["agent_send", { name: "a", message: "more", wait: 60 }],
+    ] as const) {
+      const waited = await waitOnce(name, params);
+      expect(waited.partial, name).toEqual(drawFrame(waited.tool, params, {}));
+      expect(waited.final.join("\n"), name).toMatch(GLYPHS);
+    }
+  });
 });
 
 describe("call results", () => {
@@ -627,22 +742,7 @@ describe("call results", () => {
   });
 
   test("a waiting call shows what it started, then the outcome", () => {
-    const tools = new Map<string, AnyTool>();
-    registerAgentTools(
-      {
-        registerTool: (tool: AnyTool) => tools.set(tool.name, tool),
-        getThinkingLevel: () => undefined,
-      } as unknown as ExtensionAPI,
-      {
-        ensure: async () => service,
-        skills: noSkills,
-      } as unknown as SessionHost,
-    );
-    const theme = {
-      fg: (_name: string, text: string) => text,
-      bold: (text: string) => text,
-    };
-    const tool = tools.get("agent_spawn_graph");
+    const tool = tools(new SteerWatch()).get("agent_spawn_graph");
     const args = {
       name: "audit",
       wait: 60,
@@ -652,38 +752,35 @@ describe("call results", () => {
       ],
     };
     const state = {};
-    const render = (details: unknown, isPartial: boolean) => {
-      const context = { expanded: false, isError: false, state };
-      const call = tool?.renderCall?.(args, theme, context);
-      const result = tool?.renderResult?.(
-        { content: [{ type: "text", text: "" }], details },
-        { expanded: false, isPartial },
-        theme,
-        context,
-      );
-      // The call draws after both renderers ran.
-      return [...(call?.render(80) ?? []), ...(result?.render(80) ?? [])];
-    };
+    const partial = (details: unknown) =>
+      drawFrame(tool, args, state, { details }, { isPartial: true });
     const started = { at: 5_000, started: true, graphs: [graph], agents };
-    const tree = ["├─ map · luna", "└─ report ← map · luna"];
     const waiting = [
       "✦ spawn graph audit · graph of 2",
-      ...tree,
+      "├─ map · luna",
+      "└─ report ← map · luna",
       "  wait=60s",
       "  map → report",
     ];
     // While it waits, the panel shows the live states.
-    expect(render(started, true)).toEqual(waiting);
+    expect(partial(started)).toEqual(waiting);
     // Progress without what started adds nothing.
-    expect(render({ at: 5_000, graphs: [graph], agents }, true)).toEqual(
-      waiting,
-    );
-    // The outcome replaces what started.
+    expect(partial({ at: 5_000, graphs: [graph], agents })).toEqual(waiting);
+    // The outcome replaces what started, as its replay draws it.
     const done = { ...graph, state: "idle" as const };
-    const outcome = render({ at: 5_000, graphs: [done], agents }, false);
+    const result = { details: { at: 5_000, graphs: [done], agents } };
+    const outcome = drawFrame(tool, args, state, result);
     expect(outcome[0]).toBe("✦ spawn graph audit");
     expect(outcome.join("\n")).not.toContain("graph of 2");
     expect(outcome.join("\n")).toContain("audit · graph");
+    expect(outcome).toEqual(drawFrame(tool, args, {}, result));
+    // So does an error after progress.
+    partial(started);
+    const error = { text: "boom", details: {} };
+    const failed = drawFrame(tool, args, state, error, { isError: true });
+    expect(failed[0]).toBe("✦ spawn graph audit");
+    expect(failed).toContain("boom");
+    expect(failed).toEqual(drawFrame(tool, args, {}, error, { isError: true }));
   });
 
   test("wrapped lines continue under their indentation", () => {

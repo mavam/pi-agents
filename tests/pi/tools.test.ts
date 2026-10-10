@@ -626,6 +626,66 @@ describe("call results", () => {
     expect(state.started).toBeDefined();
   });
 
+  test("a waiting call shows what it started, then the outcome", () => {
+    const tools = new Map<string, AnyTool>();
+    registerAgentTools(
+      {
+        registerTool: (tool: AnyTool) => tools.set(tool.name, tool),
+        getThinkingLevel: () => undefined,
+      } as unknown as ExtensionAPI,
+      {
+        ensure: async () => service,
+        skills: noSkills,
+      } as unknown as SessionHost,
+    );
+    const theme = {
+      fg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
+    };
+    const tool = tools.get("agent_spawn_graph");
+    const args = {
+      name: "audit",
+      wait: 60,
+      agents: [
+        { name: "map", task: "Map the code." },
+        { name: "report", task: "Write it up.", after: ["map"] },
+      ],
+    };
+    const state = {};
+    const render = (details: unknown, isPartial: boolean) => {
+      const context = { expanded: false, isError: false, state };
+      const call = tool?.renderCall?.(args, theme, context);
+      const result = tool?.renderResult?.(
+        { content: [{ type: "text", text: "" }], details },
+        { expanded: false, isPartial },
+        theme,
+        context,
+      );
+      // The call draws after both renderers ran.
+      return [...(call?.render(80) ?? []), ...(result?.render(80) ?? [])];
+    };
+    const started = { at: 5_000, started: true, graphs: [graph], agents };
+    const tree = ["├─ map · luna", "└─ report ← map · luna"];
+    const waiting = [
+      "✦ spawn graph audit · graph of 2",
+      ...tree,
+      "  wait=60s",
+      "  map → report",
+    ];
+    // While it waits, the panel shows the live states.
+    expect(render(started, true)).toEqual(waiting);
+    // Progress without what started adds nothing.
+    expect(render({ at: 5_000, graphs: [graph], agents }, true)).toEqual(
+      waiting,
+    );
+    // The outcome replaces what started.
+    const done = { ...graph, state: "idle" as const };
+    const outcome = render({ at: 5_000, graphs: [done], agents }, false);
+    expect(outcome[0]).toBe("✦ spawn graph audit");
+    expect(outcome.join("\n")).not.toContain("graph of 2");
+    expect(outcome.join("\n")).toContain("audit · graph");
+  });
+
   test("wrapped lines continue under their indentation", () => {
     expect(new FitLines("  one two three four", true).render(12)).toEqual([
       "  one two",

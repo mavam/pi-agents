@@ -395,11 +395,13 @@ then the newest alias that partially matches. Choosing models per task is left t
 with an unavailable model or unresolvable skills stay
 out of the prompt, and the UI reports them once per session. Each tool call
 renders its explicit arguments as a dim `key=value` line. A call that starts
-a graph without waiting draws the graph right below its title, with inputs
-and models but without glyphs, times, or usage, which would only describe
-the moment of the call; the panel shows the live state. The result renderer
-stores what started in the renderers' shared state, and the call reads it
-when it draws. A started agent adds nothing to its call. Expanded, a call
+a graph draws the graph right below its title, with inputs and models but
+without glyphs, times, or usage, which would only describe the moment of the
+call; the panel shows the live state. That holds while a call waits, too:
+its progress carries what it started and draws no states, so the call
+doesn't repeat the panel. The result renderer stores what started in the
+renderers' shared state, and the call reads it when it draws; the outcome of
+a wait replaces it. A started agent adds nothing to its call. Expanded, a call
 shows its arguments and tasks in full, one paragraph per agent, wrapped
 under their indentation. Calls that report outcomes show the agents'
 states. A failed call shows its error text in the error color instead: Pi

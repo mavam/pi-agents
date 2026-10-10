@@ -10,6 +10,7 @@ import {
   formatElapsed,
   formatGraphLine,
   graphShape,
+  runtime,
   sanitizeLine,
 } from "../../src/ui/format.js";
 import { panelCompare, panelOrder } from "../../src/ui/panel.js";
@@ -148,6 +149,13 @@ describe("formatting", () => {
     expect(formatElapsed(5_000)).toBe("5s");
     expect(formatElapsed(65_000)).toBe("1m05s");
     expect(formatElapsed(3_900_000)).toBe("1h05m");
+  });
+
+  test("the clock stops once an agent or graph finishes", () => {
+    const times = { createdAt: 1_000, stateSince: 61_000 };
+    expect(runtime({ ...times, state: "working" }, 600_000)).toBe(599_000);
+    expect(runtime({ ...times, state: "idle" }, 600_000)).toBe(60_000);
+    expect(runtime({ ...times, state: "interrupted" }, 900_000)).toBe(60_000);
   });
 
   test("sanitizing keeps colors and drops controls", () => {

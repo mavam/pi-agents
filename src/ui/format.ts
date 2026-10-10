@@ -70,6 +70,18 @@ export function formatElapsed(ms: number): string {
   return `${seconds}s`;
 }
 
+/**
+ * How long an agent or graph ran: from its creation until now while it works,
+ * else until its state last changed, so a finished one's clock stops. A
+ * resumed agent's clock jumps forward to include the pause.
+ */
+export function runtime(
+  item: Pick<AgentInfo, "state" | "createdAt" | "stateSince">,
+  now: number,
+): number {
+  return (item.state === "working" ? now : item.stateSince) - item.createdAt;
+}
+
 function formatTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}m`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
@@ -144,7 +156,7 @@ export function formatAgentLine(
     info.profile ? color("dim", info.profile) : undefined,
     color("dim", shortModel(info)),
     info.state === "working"
-      ? color("dim", formatElapsed(now - info.stateSince))
+      ? color("dim", formatElapsed(runtime(info, now)))
       : undefined,
     usage ? color("dim", usage) : undefined,
     activity
@@ -212,7 +224,7 @@ export function formatGraphLine(
     `${statusIcon(graph, color)} ${graph.name}`,
     color("dim", `graph ${done}/${graph.nodes.length}`),
     graph.state === "working"
-      ? color("dim", formatElapsed(now - graph.stateSince))
+      ? color("dim", formatElapsed(runtime(graph, now)))
       : undefined,
     usage ? color("dim", usage) : undefined,
     note ? color(graph.state === "failed" ? "error" : "dim", note) : undefined,

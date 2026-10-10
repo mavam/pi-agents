@@ -1547,7 +1547,15 @@ export class AgentService {
             ? previous.stateSince
             : previous
               ? now
-              : record.createdAt,
+              : state === "working"
+                ? record.createdAt
+                : // Restored finished: it ended with its last agent.
+                  Math.max(
+                    record.createdAt,
+                    ...record.nodes.map(
+                      (node) => this.infos.get(node.agent)?.stateSince ?? 0,
+                    ),
+                  ),
         nodes,
         usage: sumUsage(
           record.nodes.flatMap((node) => {

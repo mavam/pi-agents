@@ -400,6 +400,17 @@ delivery but can repeat one.
   issued it, which Pi links to its results, so a reused ID doesn't match an
   older result. Receipts survive restarts and retire once their deliveries
   are acknowledged or gone.
+- An entry in `getEntries()` shows that Pi accepted a message, not that
+  Pi wrote it: Pi adds the entry in memory before it appends it to the
+  session file, and pi-agents doesn't read that file. A failed write that
+  Pi reports through its public API fails closed: a delivery whose post
+  threw doesn't count from its entry until a post succeeds. Pi reports
+  none today; its `sendMessage` hands write errors only to its own error
+  listeners. A failure of Pi to write its own session that it doesn't
+  report is therefore outside the fault model until Pi confirms saved
+  messages (earendil-works/pi#8023). A session without a file
+  (`--no-session`) keeps its agents in memory as well, so memory is all
+  either side holds there.
 - Pi confirms neither posting nor saving, and extensions see `message_end`
   before Pi saves the message. The parent therefore checks the session's
   entries again after events, such as `message_end` once it has passed, the
@@ -660,7 +671,9 @@ under the same identity, and a wait's result counts once Pi stored the
 call's result, for nested calls through their caller's, also across a
 restart, and for a call without an ID; these run on Pi's own
 `SessionManager`, and a tool wait without an ID that crashes before Pi
-stored its result delivers again. A fake Pi that queues, runs, or defers a
+stored its result delivers again. A post whose write to a read-only session
+file fails stays pending, though Pi keeps the entry in memory, and delivers
+once when Pi can write again. A fake Pi that queues, runs, or defers a
 posted message checks that a message the triggered turn saved and one
 deferred while Pi settles post once, an abort that keeps a queued message
 posts no duplicate, and one that clears the queue leaves the result queued

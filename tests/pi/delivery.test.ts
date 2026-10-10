@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   type ExtensionAPI,
@@ -247,6 +248,43 @@ describe("delivery to Pi", () => {
 });
 
 describe("confirmed delivery to Pi", () => {
+  // Root writes read-only files anyway.
+  test.skipIf(process.getuid?.() === 0)(
+    "a post whose write fails stays pending though Pi keeps it in memory",
+    async () => {
+      // A session Pi writes to a file, which becomes read-only.
+      const manager = SessionManager.create(process.cwd(), tempDir());
+      manager.appendMessage({ role: "user", content: "hi", timestamp: 0 });
+      const file = manager.getSessionFile() as string;
+      fs.chmodSync(file, 0o444);
+      // This Pi surfaces the failed write as an error from posting.
+      const { sent, parent } = setup(
+        { idle: true, pending: false },
+        piSession(manager),
+      );
+      const current = await openService({ parent });
+      service = current;
+      await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+      await until(() => sent.length === 1);
+      const delivery = sent[0]?.details?.delivery as string;
+      expect(JSON.stringify(manager.getEntries())).toContain(delivery);
+      parent.notify();
+      await settle();
+      expect(current.get("a")?.closed).toBe(false);
+      expect(fs.readFileSync(file, "utf8")).not.toContain(delivery);
+
+      // Once Pi can write again, posting again delivers it, and the file
+      // holds it once.
+      fs.chmodSync(file, 0o644);
+      parent.notify();
+      await until(() => current.get("a")?.closed === true);
+      expect(new Set(sent.map((each) => each.details?.delivery))).toEqual(
+        new Set([delivery]),
+      );
+      expect(fs.readFileSync(file, "utf8").split(delivery)).toHaveLength(2);
+    },
+  );
+
   test("a result counts as delivered only once the session holds it", async () => {
     const state = { idle: true, pending: false, saves: false };
     const { sent, parent, session } = setup(state);

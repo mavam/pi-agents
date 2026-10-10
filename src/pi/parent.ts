@@ -123,6 +123,10 @@ export class PiParent implements Parent {
   private blocked: () => boolean = () => false;
   private readonly listeners = new Set<() => void>();
   private readonly waits = new AttentionSignals();
+  /** Deliveries whose post threw. Pi adds a message to the session in
+   * memory before it writes it, so their entries may not be on disk and
+   * don't count until a post succeeds. */
+  private readonly unsaved = new Set<string>();
 
   constructor(
     private readonly pi: ExtensionAPI,
@@ -215,10 +219,16 @@ export class PiParent implements Parent {
   ): Promise<void> {
     deliveries.forEach((delivery, index) => {
       const wake = index === deliveries.length - 1;
-      this.pi.sendMessage(
-        message(delivery, lookup),
-        wake ? { triggerTurn: true } : undefined,
-      );
+      try {
+        this.pi.sendMessage(
+          message(delivery, lookup),
+          wake ? { triggerTurn: true } : undefined,
+        );
+      } catch (error) {
+        this.unsaved.add(delivery.id);
+        throw error;
+      }
+      this.unsaved.delete(delivery.id);
     });
   }
 
@@ -230,7 +240,8 @@ export class PiParent implements Parent {
         byCall.set(call, [...(byCall.get(call) ?? []), id]);
     const found = new Set<string>();
     const take = (id: unknown) => {
-      if (typeof id === "string" && wanted.has(id)) found.add(id);
+      if (typeof id === "string" && wanted.has(id) && !this.unsaved.has(id))
+        found.add(id);
     };
     const entries = this.entries();
     const byId = new Map(entries.map((entry) => [entry.id, entry]));

@@ -1,15 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { AgentsDoc } from "../../src/agents/records.js";
-import type { AgentService } from "../../src/agents/service.js";
+import type { Storage } from "@earendil-works/pi-durable";
+import { AgentsDoc, StopsDoc } from "../../src/agents/records.js";
+import type { AgentService, StopStep } from "../../src/agents/service.js";
 import type { GraphSpec, SpawnSpec } from "../../src/agents/types.js";
 import {
   closeService,
   createFaux,
   createGatedFaux,
   hostOf,
+  jsonlStorage,
   MODEL,
   openService,
+  tempDir,
   until,
 } from "./helpers.js";
 
@@ -36,10 +39,13 @@ async function open(): Promise<{ service: AgentService; prompts: string[] }> {
 }
 
 /** A service whose model holds prompts with `hold` until the test ends. */
-async function gated(): Promise<AgentService> {
+async function gated(storage?: Storage): Promise<AgentService> {
   const faux = createGatedFaux();
   releases.push(faux.release);
-  const service = await openService({ models: faux.models });
+  const service = await openService({
+    models: faux.models,
+    ...(storage ? { storage } : {}),
+  });
   services.push(service);
   return service;
 }
@@ -169,5 +175,114 @@ describe("keyed calls", () => {
     await service.send("a", "more", "auto");
     await service.wait(["a"]);
     expect(prompts).toEqual(["task", "more", "more"]);
+  });
+});
+
+/** Throws once at `step`, as if the process crashed there. */
+function crashAt(step: StopStep) {
+  let armed = true;
+  return (at: StopStep) => {
+    if (armed && at === step) {
+      armed = false;
+      throw new Error(`crash after ${step}`);
+    }
+  };
+}
+
+async function stopRecord(service: AgentService, key: string) {
+  const state = await hostOf(service).harness.harness.snapshot(
+    StopsDoc,
+    BACKGROUND_CONTEXT,
+  );
+  return state?.stops[key];
+}
+
+describe("stops across crashes", () => {
+  for (const step of ["begun", "interrupted", "closed"] as const)
+    test(`an agent's stop that crashed after ${step} finishes on start`, async () => {
+      const directory = tempDir();
+      const faux = createGatedFaux();
+      releases.push(faux.release);
+      const before = await openService({
+        storage: await jsonlStorage(directory),
+        models: faux.models,
+        stopStep: crashAt(step),
+      });
+      await before.spawn(agent("w", "hold"));
+      await until(() => before.get("w")?.state === "working");
+      await expect(before.stop("w", { call: "s1" })).rejects.toThrow("crash");
+      await closeService(before);
+
+      const after = await gated(await jsonlStorage(directory));
+      expect(after.get("w")?.closed).toBe(true);
+      expect(after.get("w")?.state).not.toBe("working");
+      expect(await after.liveTasks()).toEqual([]);
+      expect((await stopRecord(after, "s1"))?.done).toBe(true);
+      expect(await requests(after, "w")).toEqual([]);
+
+      // A replay leaves newer work alone.
+      await after.send("w", "hold on", "auto");
+      await until(() => after.get("w")?.state === "working");
+      const replay = await after.stop("w", { call: "s1" });
+      expect(replay.info.name).toBe("w");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(after.get("w")?.state).toBe("working");
+      expect(await requests(after, "w")).toHaveLength(1);
+    });
+
+  for (const step of ["begun", "graph", "interrupted", "closed"] as const)
+    test(`a graph's stop that crashed after ${step} finishes on start`, async () => {
+      const directory = tempDir();
+      const faux = createGatedFaux();
+      releases.push(faux.release);
+      const before = await openService({
+        storage: await jsonlStorage(directory),
+        models: faux.models,
+        stopStep: crashAt(step),
+      });
+      await before.spawnGraph({
+        name: "g",
+        agents: [agent("x", "hold one"), agent("y", "hold two")],
+      });
+      await until(
+        () =>
+          before.get("x")?.state === "working" &&
+          before.get("y")?.state === "working",
+      );
+      await expect(before.stop("g", { call: "s1" })).rejects.toThrow("crash");
+      await closeService(before);
+
+      const after = await gated(await jsonlStorage(directory));
+      expect(after.getGraph("g")?.stopped).toBe(true);
+      expect(after.getGraph("g")?.state).toBe("interrupted");
+      for (const name of ["x", "y"]) {
+        expect(after.get(name)?.state).toBe("interrupted");
+        expect(after.get(name)?.closed).toBe(true);
+      }
+      expect(await after.liveTasks()).toEqual([]);
+      expect((await stopRecord(after, "s1"))?.done).toBe(true);
+
+      await after.prompt("x", "hold here", "auto");
+      await until(() => after.get("x")?.state === "working");
+      await after.stop("g", { call: "s1" });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(after.get("x")?.state).toBe("working");
+    });
+
+  test("a stop's receipt never expires", async () => {
+    const { service, prompts } = await open();
+    await service.spawn(agent("w", "task"));
+    await service.wait(["w"]);
+    // More stops than any bound would keep.
+    for (let index = 0; index < 20; index++) {
+      await service.send("w", `more ${index}`, "auto");
+      await service.wait(["w"]);
+      await service.stop("w", { call: `s${index}` });
+    }
+    await service.send("w", "last", "auto");
+    await service.stop("w", { call: "s0" });
+    await service.wait(["w"]);
+    expect(prompts.at(-1)).toBe("last");
+    expect(service.get("w")?.result?.text).toBe("done: last");
   });
 });

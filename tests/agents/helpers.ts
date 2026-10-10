@@ -21,7 +21,7 @@ import {
   type Handover,
   type Parent,
 } from "../../src/agents/parent.js";
-import { AgentService } from "../../src/agents/service.js";
+import { AgentService, type StopStep } from "../../src/agents/service.js";
 import type {
   HelperResolver,
   PendingDelivery,
@@ -199,6 +199,8 @@ export interface HostOptions {
   trusted?: boolean;
   skills?: SkillSource;
   delegationLimits?: Partial<DelegationLimits>;
+  /** Called at each step of a stop; throwing there models a crash. */
+  stopStep?: (step: StopStep) => void;
 }
 
 /** What a test host opened for a service: the harness and its anchor. */
@@ -242,6 +244,7 @@ export async function openService(
       anchor: harness.anchor,
       extensions,
       parent,
+      ...(options.stopStep ? { stopStep: options.stopStep } : {}),
     });
     hosts.set(service, { service, harness, extensions, parent });
     return service;

@@ -16,8 +16,8 @@
  * input, and queued ones as message lines with `◷`.
  *
  * Keys: ⏎ prompts an idle agent and steers a working one, Alt+⏎ queues a
- * follow-up, Esc interrupts a working agent, ← on an empty editor detaches,
- * and Shift+↑↓ and Shift+PgUp/PgDn scroll.
+ * follow-up, Esc interrupts a working agent, ← or Ctrl+D on an empty editor
+ * detaches, and Shift+↑↓ and Shift+PgUp/PgDn scroll.
  */
 
 import type { AttachedReplicatedState } from "@earendil-works/chord";
@@ -521,6 +521,8 @@ class AgentPane implements Component {
       this.chat.toggleExpanded();
       this.tui.requestRender();
     });
+    // Pi's exit key leaves the agent instead of Pi, also only while empty.
+    this.editor.onCtrlD = () => this.close();
     this.editor.onAction("app.message.followUp", () =>
       this.submit(this.editor.getText(), "followUp"),
     );

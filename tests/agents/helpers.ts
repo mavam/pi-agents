@@ -243,6 +243,7 @@ export async function openService(
       extensions,
       parent,
     });
+    harness.harness.resume();
     hosts.set(service, { service, harness, extensions, parent });
     return service;
   } catch (error) {

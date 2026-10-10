@@ -242,7 +242,10 @@ export class AgentService {
     this.report = options.onReport ?? (() => {});
   }
 
-  /** Start the service over the host's harness; it resumes unfinished work. */
+  /**
+   * Start the service over the host's harness. The host resumes the harness
+   * afterwards, so recovered work continues under the service's eyes.
+   */
   static async start(options: AgentServiceOptions): Promise<AgentService> {
     const service = new AgentService(options);
     try {
@@ -266,8 +269,6 @@ export class AgentService {
       // A request recorded before a crash may lack its submission.
       await this.flushOutbox(id);
     }
-    // Continue work that a previous process left unfinished.
-    this.harness.resume();
     await this.refresh(Object.keys(this.records));
     this.unsubscribeParent = this.parent.subscribe(() =>
       this.scheduleDelivery(),

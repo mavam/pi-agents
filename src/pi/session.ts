@@ -20,8 +20,8 @@ import type { Parent } from "../agents/parent.js";
 import { AgentService } from "../agents/service.js";
 import { AgentError } from "../agents/types.js";
 import { SkillCatalog } from "../catalog/skills.js";
-import { createHarnessSettings } from "../host/env.js";
 import { type AgentHarness, openAgentHarness } from "../host/harness.js";
+import { createHarnessSettings } from "../host/harness-setup.js";
 import {
   limitRequests,
   RequestLimiter,
@@ -121,8 +121,8 @@ export class SessionHost {
     }
     let harness: AgentHarness | undefined;
     try {
-      const settings = SettingsManager.create(ctx.cwd, getAgentDir());
-      const { limit, error } = readRequestLimit(settings.getSettings());
+      const settingsManager = SettingsManager.create(ctx.cwd, getAgentDir());
+      const { limit, error } = readRequestLimit(settingsManager.getSettings());
       if (error) this.report(new Error(`${error}; requests aren't limited`));
       const models = limitRequests(
         await resolveModels(ctx.modelRegistry),
@@ -141,7 +141,7 @@ export class SessionHost {
         models,
         cwd: ctx.cwd,
         extensions,
-        settings: createHarnessSettings(settings),
+        settings: createHarnessSettings(settingsManager),
         onReport: (error) => this.report(error),
       });
       const service = await AgentService.start({
@@ -151,6 +151,8 @@ export class SessionHost {
         parent: this.parent,
         onReport: (error) => this.report(error),
       });
+      // Work a previous process left unfinished continues now.
+      harness.harness.resume();
       this.service = service;
       this.harness = harness;
       this.lock = lock;

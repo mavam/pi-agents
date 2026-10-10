@@ -78,6 +78,7 @@ describe("hosts", () => {
       parent: new TestParent(),
     });
     cleanups.push(() => service.close());
+    harness.resume();
 
     const graph = await service.spawnGraph({
       name: "g",
@@ -164,6 +165,7 @@ describe("hosts", () => {
       parent: new TestParent(),
     });
     cleanups.push(() => service.close());
+    harness.resume();
 
     await service.spawn(agent("solo", "solo"));
     await service.spawnGraph({

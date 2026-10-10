@@ -6,15 +6,10 @@
  *
  * Pi confirms neither posting nor saving a message, and extensions see
  * `message_end` before Pi saves it. So the session holds a delivery only
- * once one of its entries, on any branch, carries the delivery's ID: a
- * result message, or the stored result of a tool call that returned it.
- *
- * Pi offers no positive evidence that it dropped a message, so a posted
- * delivery the session doesn't contain stays in flight until the next
- * start, which posts it again. Messages are posted only while Pi is idle,
- * in the same synchronous step that checks it, so Pi either saves them at
- * once or runs a turn that saves them first; while Pi settles its last run
- * it defers them instead, and saves them when their turn runs.
+ * once one of its entries, on any branch, carries it: a result message, or
+ * the stored result of a tool call that returned it. A posted delivery the
+ * session doesn't contain yet stays in flight until the next start, which
+ * posts it again.
  */
 
 import type {
@@ -123,10 +118,6 @@ export class PiParent implements Parent {
   private blocked: () => boolean = () => false;
   private readonly listeners = new Set<() => void>();
   private readonly waits = new AttentionSignals();
-  /** Deliveries whose post threw. Pi adds a message to the session in
-   * memory before it writes it, so their entries may not be on disk and
-   * don't count until a post succeeds. */
-  private readonly unsaved = new Set<string>();
 
   constructor(
     private readonly pi: ExtensionAPI,
@@ -169,7 +160,6 @@ export class PiParent implements Parent {
 
   clear(): void {
     this.ctx = undefined;
-    this.unsaved.clear();
     if (this.recheck) clearTimeout(this.recheck);
     this.recheck = undefined;
   }
@@ -218,18 +208,14 @@ export class PiParent implements Parent {
     deliveries: readonly PendingDelivery[],
     lookup: AgentLookup,
   ): Promise<void> {
+    // Posted in the same synchronous step as the core's idle check, so
+    // none lands in the queue of a run, where an abort could drop it.
     deliveries.forEach((delivery, index) => {
       const wake = index === deliveries.length - 1;
-      try {
-        this.pi.sendMessage(
-          message(delivery, lookup),
-          wake ? { triggerTurn: true } : undefined,
-        );
-      } catch (error) {
-        this.unsaved.add(delivery.id);
-        throw error;
-      }
-      this.unsaved.delete(delivery.id);
+      this.pi.sendMessage(
+        message(delivery, lookup),
+        wake ? { triggerTurn: true } : undefined,
+      );
     });
   }
 
@@ -241,8 +227,7 @@ export class PiParent implements Parent {
         byCall.set(call, [...(byCall.get(call) ?? []), id]);
     const found = new Set<string>();
     const take = (id: unknown) => {
-      if (typeof id === "string" && wanted.has(id) && !this.unsaved.has(id))
-        found.add(id);
+      if (typeof id === "string" && wanted.has(id)) found.add(id);
     };
     const entries = this.entries();
     const byId = new Map(entries.map((entry) => [entry.id, entry]));
@@ -260,7 +245,8 @@ export class PiParent implements Parent {
       const result = entry.message;
       deliveriesOf(result.details).forEach(take);
       // Pi stores no results of nested calls, such as a codemode script's,
-      // only their records in the caller's result.
+      // only their records in the caller's result. The core knows their
+      // keys only in memory, so after a restart they deliver again.
       const issuer = issuerOf(entry, result.toolCallId, byId);
       if (issuer === undefined) continue;
       if (!result.isError)

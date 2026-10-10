@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { renderToolOutputType } from "@earendil-works/pi-codemode";
 import type {
   AgentToolUpdateCallback,
@@ -8,7 +7,6 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
-import { AgentsDoc } from "../../src/agents/records.js";
 import type { AgentService } from "../../src/agents/service.js";
 import {
   type AgentInfo,
@@ -28,12 +26,9 @@ import {
 import {
   closeService,
   createGatedFaux,
-  hostOf,
-  jsonlStorage,
   MODEL,
   openService,
   parentOf,
-  tempDir,
   until,
 } from "../agents/helpers.js";
 
@@ -93,8 +88,7 @@ async function gated() {
   let calls = 0;
   /**
    * Run a tool and return its text and what a script gets, which must match
-   * the tool's output schema. Every run is a call of its own unless `id`
-   * repeats one.
+   * the tool's output schema.
    */
   return async (
     name: string,
@@ -102,13 +96,12 @@ async function gated() {
     options: {
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback<unknown>;
-      id?: string;
     } = {},
   ): Promise<{ text: string; details: unknown; output: unknown }> => {
     const tool = registered.get(name);
     if (!tool) throw new Error(`No tool ${name}`);
     const result = await tool.execute(
-      options.id ?? `call-${++calls}`,
+      `call-${++calls}`,
       params,
       options.signal,
       options.onUpdate,
@@ -408,98 +401,6 @@ describe("script output", () => {
   });
 });
 
-describe("repeated calls", () => {
-  test("a repeated call waits for what it started, not newer work", async () => {
-    const run = await gated();
-    // Each first run answers, then the name moves to newer work that holds.
-    const spawn = { task: "one", name: "w", wait: 60 };
-    await run("agent_spawn", spawn, { id: "spawn" });
-    await run("agent_stop", { name: "w" });
-    await run("agent_spawn", { task: "hold", name: "w" });
-    expect((await run("agent_spawn", spawn, { id: "spawn" })).output).toEqual({
-      kind: "agent",
-      name: "w",
-      state: "idle",
-      result: "done: one",
-    });
-
-    await run("agent_spawn", { task: "one", name: "a", wait: 60 });
-    const send = { name: "a", message: "two", wait: 60 };
-    await run("agent_send", send, { id: "send" });
-    await run("agent_stop", { name: "a" });
-    await run("agent_spawn", { task: "hold", name: "a" });
-    expect((await run("agent_send", send, { id: "send" })).output).toEqual({
-      kind: "agent",
-      name: "a",
-      state: "idle",
-      result: "done: two",
-    });
-
-    const graph = {
-      name: "g",
-      agents: [
-        { task: "one", name: "x" },
-        { task: "two", name: "y", after: ["x"] },
-      ],
-      wait: 60,
-    };
-    await run("agent_spawn_graph", graph, { id: "graph" });
-    await run("agent_stop", { name: "g" });
-    await run("agent_spawn_graph", {
-      name: "g",
-      agents: [
-        { task: "hold p", name: "p" },
-        { task: "q", name: "q", after: ["p"] },
-      ],
-    });
-    expect(
-      (await run("agent_spawn_graph", graph, { id: "graph" })).output,
-    ).toMatchObject({ kind: "graph", name: "g", state: "idle" });
-    // The newer work under the names keeps working.
-    expect(service?.get("w")?.state).toBe("working");
-    expect(service?.get("a")?.state).toBe("working");
-    expect(service?.getGraph("g")?.state).toBe("working");
-  });
-
-  test("a call with the same ID acts once", async () => {
-    const run = await gated();
-    const spawn = { task: "hold", name: "w" };
-    const first = await run("agent_spawn", spawn, { id: "spawn" });
-    const again = await run("agent_spawn", spawn, { id: "spawn" });
-    expect([again.text, again.output]).toEqual([first.text, first.output]);
-    expect(service?.list()).toHaveLength(1);
-
-    const graph = {
-      name: "g",
-      agents: [
-        { task: "hold one", name: "a" },
-        { task: "two", name: "b", after: ["a"] },
-      ],
-    };
-    await run("agent_spawn_graph", graph, { id: "graph" });
-    await run("agent_spawn_graph", graph, { id: "graph" });
-    expect(service?.graphs()).toHaveLength(1);
-
-    await run("agent_send", { name: "w", message: "more" }, { id: "send" });
-    await run("agent_send", { name: "w", message: "more" }, { id: "send" });
-    const w = service?.get("w")?.id as string;
-    const records = await hostOf(
-      service as AgentService,
-    ).harness.harness.snapshot(AgentsDoc, BACKGROUND_CONTEXT);
-    expect(Object.keys(records?.agents[w]?.requests ?? {})).toHaveLength(2);
-
-    await run("agent_stop", { name: "w" }, { id: "stop" });
-    await run("agent_send", { name: "w", message: "hold again" });
-    // The repeat reports what it stopped, which works on newer work.
-    expect(
-      await run("agent_stop", { name: "w" }, { id: "stop" }),
-    ).toMatchObject({
-      text: "Stopped w.",
-      output: { kind: "agent", name: "w", state: "working" },
-    });
-  });
-});
-
 describe("output", () => {
   const info = (result: string): AgentInfo => ({
     id: "1",
@@ -593,44 +494,6 @@ describe("output", () => {
 });
 
 describe("waiting tools", () => {
-  test("a wait without a call ID counts once Pi stored its result", async () => {
-    const directory = tempDir();
-    const before = await openService({
-      storage: await jsonlStorage(directory),
-    });
-    service = before;
-    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
-    const wait = tools().get("agent_wait") as AnyTool;
-    // The provider gave the call no ID.
-    const result = await wait.execute(
-      "",
-      { names: ["a"] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    const ids = (result.details as { deliveries?: string[] }).deliveries;
-    expect(ids).toHaveLength(1);
-    const parent = parentOf(before);
-    parent.ready = true;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    // Pi crashes before it stores the result: nothing counts as delivered.
-    expect(parent.delivered).toEqual([]);
-    expect(before.pendingDeliveries().map((each) => each.id)).toEqual(
-      ids ?? [],
-    );
-    await closeService(before);
-
-    const after = await openService({
-      storage: await jsonlStorage(directory),
-    });
-    service = after;
-    const next = parentOf(after);
-    next.ready = true;
-    await until(() => next.delivered.length === 1);
-    expect(next.delivered.map((each) => each.id)).toEqual(ids ?? []);
-  });
-
   test("a steer from the user ends a wait; the agent keeps working", async () => {
     const run = await gated();
     await run("agent_spawn", { task: "hold", name: "w" });

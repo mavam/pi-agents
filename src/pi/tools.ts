@@ -171,20 +171,14 @@ interface Returned<O> {
   output: O;
 }
 
-/** Which tool call runs: Pi's ID, and the key the service gets. */
-interface ToolCall {
-  id: string;
-  /** See `callKey`; absent when the call has no ID. */
-  key: string | undefined;
-}
-
 type Execute<T extends TSchema, O extends TSchema> = (
   service: AgentService,
   params: Static<T>,
   ctx: ExtensionContext,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
-  call: ToolCall,
+  /** The call's key (see `callKey`); absent when it has no ID. */
+  call: string | undefined,
 ) => Promise<Returned<Static<O>>>;
 
 /** How a call renders: a title, the explicit arguments, and a body. */
@@ -440,7 +434,7 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
           ctx,
           signal,
           onUpdate,
-          { id: toolCallId, key: callKey(ctx, toolCallId) },
+          callKey(ctx, toolCallId),
         );
         return {
           ...text(result.content, result.details),
@@ -520,7 +514,7 @@ async function waitWithProgress(
   timeoutSeconds: number | undefined,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
-  call: ToolCall,
+  call: string | undefined,
   started?: AgentToolDetails,
 ): Promise<Returned<WaitOutput>> {
   const snapshot = () => {
@@ -562,7 +556,7 @@ async function waitWithProgress(
         : {}),
       // The call's result carries the results and names them in its
       // details; nested calls' results aren't stored, so their key counts.
-      carrier: call.key === undefined ? {} : { call: call.key },
+      carrier: call === undefined ? {} : { call },
     });
     const content = [
       ...outcome.graphs.map((graph) => describeGraph(service, graph)),
@@ -714,11 +708,9 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
           skills: host.skills.get,
           thinking: pi.getThinkingLevel(),
         });
-        const info = await service.spawn(spec, { call: call.key });
+        const info = await service.spawn(spec);
         const started = { at: Date.now(), started: true, agents: [info] };
         if (params.wait !== undefined) {
-          // By ID: a replayed call waits for what it started, even once
-          // the name belongs to newer work.
           const waited = await waitWithProgress(
             service,
             [{ kind: "agent", id: info.id }],
@@ -821,23 +813,20 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       },
       async execute(service, params, ctx, signal, onUpdate, call) {
         const thinking = pi.getThinkingLevel();
-        const graph = await service.spawnGraph(
-          {
-            ...(params.name ? { name: params.name } : {}),
-            ...(params.failFast ? { failFast: true } : {}),
-            // Every agent resolves before any starts.
-            agents: await Promise.all(
-              params.agents.map(async (agent) => ({
-                ...(await resolveSpawn(agent, ctx, {
-                  skills: host.skills.get,
-                  thinking,
-                })),
-                ...(agent.after ? { after: agent.after } : {}),
+        const graph = await service.spawnGraph({
+          ...(params.name ? { name: params.name } : {}),
+          ...(params.failFast ? { failFast: true } : {}),
+          // Every agent resolves before any starts.
+          agents: await Promise.all(
+            params.agents.map(async (agent) => ({
+              ...(await resolveSpawn(agent, ctx, {
+                skills: host.skills.get,
+                thinking,
               })),
-            ),
-          },
-          { call: call.key },
-        );
+              ...(agent.after ? { after: agent.after } : {}),
+            })),
+          ),
+        });
         const started = {
           at: Date.now(),
           started: true,
@@ -897,7 +886,6 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
           params.name,
           params.message,
           params.followUp ? "followUp" : "auto",
-          { call: call.key },
         );
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(
@@ -1027,8 +1015,8 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       }),
       output: StopOutput,
       call: (args) => ({ title: args.name ?? "" }),
-      async execute(service, params, _ctx, _signal, _onUpdate, call) {
-        const target = await service.stop(params.name, { call: call.key });
+      async execute(service, params) {
+        const target = await service.stop(params.name);
         const output = stopOutput(target);
         if (target.kind === "graph")
           return {

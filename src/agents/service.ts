@@ -211,9 +211,9 @@ export class AgentService {
   private deliveryChain: Promise<void> = Promise.resolve();
   private deliveryQueued = false;
   /** Deliveries handed to the parent that it doesn't hold yet: posted, or
-   * returned by a parent call's wait. In memory only: after a restart, the
-   * parent decides what it holds. */
-  private readonly inFlight = new Set<string>();
+   * carried by the result of a parent call's wait. In memory only: after a
+   * restart, the parent decides what it holds. */
+  private readonly inFlight = new Map<string, "posted" | "carried">();
   /** Whether delivery asked the parent what it holds since starting. */
   private reconciled = false;
   private closed = false;
@@ -870,7 +870,7 @@ export class AgentService {
       else if (taken.length > 0) {
         // In flight until the parent holds the call's result; no longer
         // queued meanwhile.
-        for (const each of taken) this.inFlight.add(each.id);
+        for (const each of taken) this.inFlight.set(each.id, "carried");
         await this.refresh(ids);
       }
       return {
@@ -1052,7 +1052,8 @@ export class AgentService {
   private async deliverDue(): Promise<void> {
     const all = this.deliveries(true);
     const ids = new Set(all.map((each) => each.id));
-    for (const id of this.inFlight) if (!ids.has(id)) this.inFlight.delete(id);
+    for (const id of this.inFlight.keys())
+      if (!ids.has(id)) this.inFlight.delete(id);
     const due = () =>
       this.pendingDeliveries().filter((each) => !this.inFlight.has(each.id));
     // Ask the parent only when it may hold something new: results in
@@ -1067,14 +1068,9 @@ export class AgentService {
     if (ids.size === 0) return;
     const received = await this.parent.received([...ids]);
     await this.acknowledgeAll(all.filter((each) => received.has(each.id)));
-    if (!this.parent.canDeliver()) return;
-    // What the parent provably lost is due again.
-    if (this.inFlight.size > 0)
-      for (const id of await this.parent.dropped([...this.inFlight]))
-        this.inFlight.delete(id);
     const next = due();
     if (next.length === 0 || !this.parent.canDeliver()) return;
-    for (const each of next) this.inFlight.add(each.id);
+    for (const each of next) this.inFlight.set(each.id, "posted");
     try {
       await this.parent.deliver(next, this);
     } catch (error) {
@@ -1578,9 +1574,9 @@ export class AgentService {
       [...outcomes.values()].some(
         (outcome) =>
           outcome.kind === "answered" &&
-          !this.inFlight.has(
+          this.inFlight.get(
             answerDeliveryId(id, record, outcome.result.entryId),
-          ),
+          ) !== "carried",
       )
         ? { queued: true }
         : {}),
@@ -1840,7 +1836,7 @@ export class AgentService {
         ...(record.pending &&
         ended !== undefined &&
         !isStopped &&
-        !this.inFlight.has(graphDeliveryId(id, record))
+        this.inFlight.get(graphDeliveryId(id, record)) !== "carried"
           ? { queued: true }
           : {}),
       });

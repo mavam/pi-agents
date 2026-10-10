@@ -377,8 +377,8 @@ describe("confirmed delivery to Pi", () => {
  * Pi around one posted message, as `sendCustomMessage` treats it: posted
  * while Pi settles its last run, a message waits in Pi's deferred actions,
  * and Pi still looks idle; posted while `takes` is "queue", it lands in the
- * queue of a run that just started; otherwise it starts a run that saves
- * it first. The test drives runs and settling.
+ * queue of a run, which pi-agents' check rules out but the test forces;
+ * otherwise it starts a run that saves it first. The test drives runs.
  */
 function fakePi() {
   const state = {
@@ -414,33 +414,68 @@ function fakePi() {
   /** The running turn ends: Pi settles, then looks idle. */
   const settle = () => {
     state.idle = true;
-    parent.settled();
     parent.notify();
   };
   return { state, entries, sent, queued, deferred, parent, settle };
 }
 
-describe("lost deliveries", () => {
-  test("a queued delivery that Pi drops is posted again once Pi is idle", async () => {
+describe("unsaved deliveries", () => {
+  test("an abort that leaves the queue intact posts no duplicate", async () => {
     const pi = fakePi();
     pi.state.takes = "queue";
     const current = await openService({ parent: pi.parent });
     service = current;
     await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
     await until(() => pi.sent.length === 1);
-    pi.parent.notify();
+    pi.state.takes = "run";
+
+    // An abort from outside the editor ends the run but keeps the queue.
+    pi.settle();
     await settle();
     expect(pi.sent).toHaveLength(1);
+    // Until Pi saves it, the result counts as queued.
+    expect(current.get("a")?.queued).toBe(true);
 
-    // Esc clears the queue, and the run settles without the message.
-    pi.queued.length = 0;
-    pi.state.takes = "run";
-    pi.settle();
-    await until(() => pi.sent.length === 2);
-    expect(pi.sent[1]?.details?.delivery).toBe(pi.sent[0]?.details?.delivery);
+    // The next run takes the queued message and saves it.
+    pi.state.idle = false;
+    for (const message of pi.queued.splice(0))
+      pi.entries.push(messageEntry(message));
     pi.settle();
     await until(() => current.get("a")?.closed === true);
-    expect(pi.sent).toHaveLength(2);
+    expect(pi.sent).toHaveLength(1);
+  });
+
+  test("an abort that clears the queue leaves it queued until a restart", async () => {
+    const directory = tempDir();
+    const pi = fakePi();
+    pi.state.takes = "queue";
+    const before = await openService({
+      parent: pi.parent,
+      storage: await jsonlStorage(directory),
+    });
+    service = before;
+    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => pi.sent.length === 1);
+
+    // Esc clears the queue, which Pi doesn't report.
+    pi.queued.length = 0;
+    pi.settle();
+    await settle();
+    expect(pi.sent).toHaveLength(1);
+    expect(before.get("a")?.queued).toBe(true);
+    await closeService(before);
+
+    const next = fakePi();
+    const after = await openService({
+      parent: next.parent,
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+    });
+    service = after;
+    await until(() => next.sent.length === 1);
+    expect(next.sent[0]?.details?.delivery).toBe(pi.sent[0]?.details?.delivery);
+    next.settle();
+    await until(() => after.get("a")?.closed === true);
   });
 
   test("a delivery the triggered turn saved is never posted twice", async () => {
@@ -474,6 +509,7 @@ describe("lost deliveries", () => {
     pi.settle();
     await settle();
     expect(pi.sent).toHaveLength(1);
+    expect(current.get("a")?.queued).toBe(true);
 
     // Then Pi runs the deferred message, which it saves first.
     pi.state.idle = false;

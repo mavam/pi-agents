@@ -81,8 +81,6 @@ Everything the core needs from the parent goes through one interface,
 - `received(ids)`: which deliveries the parent holds durably, delivered or
   returned by one of its calls. Only these count as done (see "At least
   once").
-- `dropped(ids)`: which deliveries, handed over and not received, the
-  parent provably lost. The core hands them over again.
 - `attention()`: a signal that ends one of the parent's waits once
   something needs the parent, so it can answer while its agents keep
   working. Inside Pi a steer from the user raises it.
@@ -403,21 +401,23 @@ delivery but can repeat one.
   at the start of the turn for the one that starts it. A parent with agents
   always has a session file, because agents start from its tool calls.
 - Handed over but not yet held, a delivery is in flight: it isn't handed
-  over again and doesn't count as queued. In flight is memory only. After a
+  over again. A posted one still counts as queued until the session holds
+  it; one a waiting call carries doesn't. In flight is memory only. After a
   restart, deliveries the session already holds are acknowledged without
   posting, and the others are posted again.
-- A delivery is posted again in the same process only once it's provably
-  lost: the session can take deliveries, it isn't in the session, and Pi
-  took it into a run that settled since (`agent_settled`). That happens to
-  a message queued into a running turn that Esc clears. Right after
-  posting, Pi either runs a turn for the message, which saves it first, or
-  queues it into a running turn, and either way reports busy. While Pi
-  settles its last run, though, `sendCustomMessage` defers the message into
-  `_deferredSettledActions` and Pi still looks idle, with nothing queued and
-  nothing saved, possibly through a user's deferred prompt that runs and
-  settles a turn of its own first. A message Pi didn't report busy for is
-  therefore never posted again in the same process; Pi saves it once its
-  own turn starts, and a restart posts it if the session ended first.
+- Within one process, a delivery is posted again only on positive evidence
+  that Pi lost it, and Pi offers none. A message can't land in the queue of
+  a running turn, where an abort could drop it: the check that Pi is idle
+  and the post run in one synchronous step, and `sendCustomMessage` decides
+  synchronously from the same run flag (`isStreaming`) whether to queue.
+  Posted while idle, a message is saved at once, or starts a turn that saves
+  it before anything else. Posted while Pi settles its last run, it lands in
+  `_deferredSettledActions` while Pi looks idle with nothing queued or
+  saved, possibly behind a user's deferred prompt that runs a turn first,
+  and Pi saves it when its own turn runs. That deferred post is the
+  liveness limit: if the session ends first, or an earlier deferred action
+  throws and Pi skips the rest, the result stays in flight and shows
+  `result queued` until the session starts again, which posts it.
 - A wait by a parent call takes its results into flight; they count once
   the parent stored the call's result. A wait without a call, such as one
   whose provider gave the call no ID, counts them at once.
@@ -638,48 +638,47 @@ model's message broke off before Pi ran it.
 ## Testing
 
 Tests use pi-durable's memory storage and pi-ai's faux provider, and open
-the harness through the same host function as Pi. A host of its own, with
-an ordinary conversation as the anchor, runs the core unchanged. Restart
-tests use JSONL storage: interrupt a turn, close, reopen, and verify that
-the turn completes and its result delivers once. A session stored by
-v0.27.0 (`tests/fixtures/v0.27.0`) opens with its agents, graphs, and
-undelivered results, resumes its unfinished work on the root anchor, and
-continues its request numbering. Delivery tests run the core against a
-test parent and Pi's parent against a fake session: a delivery counts only
-once the session holds it and isn't posted again meanwhile, a restart after
-Pi saved a delivery acknowledges it without posting, a restart before
-posts it again under the same identity, and a wait's result counts once
-Pi stored the call's result, for nested calls through their caller's. A
-fake Pi that queues, runs, or defers a posted message checks that a queued
-message Esc dropped posts again once Pi is idle, while a message the
-triggered turn saved and one deferred while Pi settles post once. Events
-from a fake Pi check that a result arriving during a parent turn posts once
-the turn settled, also when another extension keeps Pi busy past
-`agent_end`, that a compaction's end retries, and that results held back by
-messages an abort left queued, or by a cancelled branch summary, post on a
-recheck.
-A host whose default selection holds a foreign extension, with a `read`
-tool, another tool, and a prompt section, gives none of it to standalone
-agents, graph agents, a delegating agent, or its helper, and the session
-of v0.27.0 keeps its agents on the default of Pi's host.
-Keyed call tests repeat a spawn, a graph spawn, a send, and a stop with the
-same key, also after the name moved to a newer agent, and check that each
-acts once, that a repeated stop leaves newer work alone, that calls without
-a key act every time, and that the session of v0.27.0 takes keyed calls.
-Graph tests cover `allSettled` with answers and failures, pipelines, merges
-with failed inputs, skipped agents, `failFast` stopping waiting agents, edge
-validation, stopping a graph, the ownership tree through the task graph,
-restarts mid-graph and mid-pipeline that repeat no finished agent and send
-no task twice, and messaging a graph's agent after the graph finished. Tool
-tests check every result scripts get against its output schema, for answers,
-interrupted and failed turns after an earlier answer, waits ended by a
-timeout, an abort, or a steer, and answered, failed, skipped, and stopped
-graphs. A faux model holds prompts until the test releases them or the
-request aborts, so these tests don't race the model.
-Delegation tests cover a fan-out with a merging helper, that helpers and
-other agents can't delegate, progress, Esc on the agent, stopping a graph
-above it, stopping only the helpers, tool and size limits, names, and a
-restart mid-delegation that starts no second set of helpers.
+the harness through the same host function as Pi. A host of its own, with an
+ordinary conversation as the anchor, runs the core unchanged. Restart tests
+use JSONL storage: interrupt a turn, close, reopen, and verify that the turn
+completes and its result delivers once. A session stored by v0.27.0
+(`tests/fixtures/v0.27.0`) opens with its agents, graphs, and undelivered
+results, resumes its unfinished work on the root anchor, and continues its
+request numbering. Delivery tests run the core against a test parent and
+Pi's parent against a fake session: a delivery counts only once the session
+holds it and isn't posted again meanwhile, a restart after Pi saved a
+delivery acknowledges it without posting, a restart before posts it again
+under the same identity, and a wait's result counts once Pi stored the
+call's result, for nested calls through their caller's. A fake Pi that
+queues, runs, or defers a posted message checks that a message the triggered
+turn saved and one deferred while Pi settles post once, an abort that keeps
+a queued message posts no duplicate, and one that clears the queue leaves
+the result queued until a restart posts it. Events from a fake Pi check that
+a result arriving during a parent turn posts once the turn settled, also
+when another extension keeps Pi busy past `agent_end`, that a compaction's
+end retries, and that results held back by messages an abort left queued, or
+by a cancelled branch summary, post on a recheck. A host whose default
+selection holds a foreign extension, with a `read` tool, another tool, and a
+prompt section, gives none of it to standalone agents, graph agents, a
+delegating agent, or its helper, and the session of v0.27.0 keeps its agents
+on the default of Pi's host. Keyed call tests repeat a spawn, a graph spawn,
+a send, and a stop with the same key, also after the name moved to a newer
+agent, and check that each acts once, that a repeated stop leaves newer work
+alone, that calls without a key act every time, and that the session of
+v0.27.0 takes keyed calls. Graph tests cover `allSettled` with answers and
+failures, pipelines, merges with failed inputs, skipped agents, `failFast`
+stopping waiting agents, edge validation, stopping a graph, the ownership
+tree through the task graph, restarts mid-graph and mid-pipeline that repeat
+no finished agent and send no task twice, and messaging a graph's agent
+after the graph finished. Tool tests check every result scripts get against
+its output schema, for answers, interrupted and failed turns after an
+earlier answer, waits ended by a timeout, an abort, or a steer, and
+answered, failed, skipped, and stopped graphs. A faux model holds prompts
+until the test releases them or the request aborts, so these tests don't
+race the model. Delegation tests cover a fan-out with a merging helper, that
+helpers and other agents can't delegate, progress, Esc on the agent,
+stopping a graph above it, stopping only the helpers, tool and size limits,
+names, and a restart mid-delegation that starts no second set of helpers.
 Request limit tests count requests reaching the faux provider: with a limit
 of 1, streams, compactions, and spawned agents never overlap, waiting
 requests run in order, and one aborted while waiting frees its place.

@@ -1067,6 +1067,11 @@ export class AgentService {
     if (ids.size === 0) return;
     const received = await this.parent.received([...ids]);
     await this.acknowledgeAll(all.filter((each) => received.has(each.id)));
+    if (!this.parent.canDeliver()) return;
+    // What the parent provably lost is due again.
+    if (this.inFlight.size > 0)
+      for (const id of await this.parent.dropped([...this.inFlight]))
+        this.inFlight.delete(id);
     const next = due();
     if (next.length === 0 || !this.parent.canDeliver()) return;
     for (const each of next) this.inFlight.add(each.id);

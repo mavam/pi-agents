@@ -97,6 +97,12 @@ export default function agentExtension(pi: ExtensionAPI): void {
     setTimeout(() => parent.notify(), 0);
   });
 
+  // A settled run saved what was posted into it, or lost it.
+  pi.on("agent_settled", () => {
+    parent.settled();
+    setTimeout(() => parent.notify(), 0);
+  });
+
   pi.on("agent_end", (_event, ctx) => {
     track(ctx);
     // At agent_end Pi may still report streaming; retry on a macrotask, once

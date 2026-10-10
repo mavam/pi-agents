@@ -284,6 +284,28 @@ describe("the parent", () => {
     expect(next.delivered.map((each) => each.id)).toEqual([delivery?.id]);
   });
 
+  test("a delivery the parent lost is handed over again", async () => {
+    const service = await open();
+    const parent = parentOf(service);
+    parent.stores = false;
+    parent.ready = true;
+    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => parent.delivered.length === 1);
+    parent.notify();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(parent.delivered).toHaveLength(1);
+
+    const [first] = parent.delivered;
+    parent.lost.add(first?.id as string);
+    parent.stores = true;
+    parent.notify();
+    await until(() => service.get("a")?.closed === true);
+    expect(parent.delivered.map((each) => each.id)).toEqual([
+      first?.id,
+      first?.id,
+    ]);
+  });
+
   test("a restart acknowledges what the parent already holds", async () => {
     const directory = tempDir();
     const service = await openService({

@@ -8,6 +8,13 @@
  * `message_end` before Pi saves it. So the session holds a delivery only
  * once one of its entries, on any branch, carries the delivery's ID: a
  * result message, or the stored result of a tool call that returned it.
+ *
+ * A posted message is lost only if Pi took it into a run and the run
+ * settled without saving it, such as a queued message that Esc cleared. A
+ * message posted while Pi settles its last run waits in Pi's deferred
+ * actions instead, possibly behind a user's prompt that runs a turn of its
+ * own first, and Pi saves it as the first message of its own turn. So it
+ * never counts as lost; only a restart posts it again.
  */
 
 import type {
@@ -91,6 +98,12 @@ export class PiParent implements Parent {
   private blocked: () => boolean = () => false;
   private readonly listeners = new Set<() => void>();
   private readonly waits = new AttentionSignals();
+  /** Posted deliveries Pi hasn't saved yet: in a run, in a run that
+   * settled since, or deferred until Pi settled. */
+  private readonly posted = new Map<
+    string,
+    "running" | "settled" | "deferred"
+  >();
   /** Per tool call, the results it returns, and the number of session
    * entries when it did, so only a later result entry counts. */
   private readonly claims = new Map<
@@ -112,11 +125,19 @@ export class PiParent implements Parent {
   clear(): void {
     this.ctx = undefined;
     this.claims.clear();
+    this.posted.clear();
   }
 
   /** Pi changed in a way that may let deliveries proceed. */
   notify(): void {
     for (const listener of [...this.listeners]) listener();
+  }
+
+  /** A run of the session settled: messages posted into it are saved by
+   * now, or lost. Call it when Pi reports `agent_settled`. */
+  settled(): void {
+    for (const [id, phase] of this.posted)
+      if (phase === "running") this.posted.set(id, "settled");
   }
 
   /** The user steered: end the session's waits, so Pi places the steer. */
@@ -146,6 +167,18 @@ export class PiParent implements Parent {
         wake ? { triggerTurn: true } : undefined,
       );
     });
+    // The last message starts a run at once, unless Pi is settling its last
+    // run and defers it: then Pi still looks idle.
+    const phase = this.isIdle() ? "deferred" : "running";
+    for (const delivery of deliveries) this.posted.set(delivery.id, phase);
+  }
+
+  private isIdle(): boolean {
+    try {
+      return this.ctx?.isIdle() ?? true;
+    } catch {
+      return true;
+    }
   }
 
   /**
@@ -187,7 +220,12 @@ export class PiParent implements Parent {
       for (const call of result.nestedCalls?.calls ?? [])
         if (call.status === "ok") takeClaim(call.id, index);
     });
+    for (const id of found) this.posted.delete(id);
     return found;
+  }
+
+  async dropped(ids: readonly string[]): Promise<ReadonlySet<string>> {
+    return new Set(ids.filter((id) => this.posted.get(id) === "settled"));
   }
 
   /** Every entry of the session, in the order Pi appended them. */

@@ -162,6 +162,13 @@ export class TestParent implements Parent {
     return new Set(ids.filter((id) => this.transcript.has(id)));
   }
 
+  /** Handed-over deliveries the parent provably lost. */
+  readonly lost = new Set<string>();
+
+  async dropped(ids: readonly string[]): Promise<ReadonlySet<string>> {
+    return new Set(ids.filter((id) => this.lost.delete(id)));
+  }
+
   /** The parent stored these results, such as with a call's result. */
   hold(ids: readonly string[]): void {
     for (const id of ids) this.transcript.add(id);

@@ -80,6 +80,8 @@ Everything the core needs from the parent goes through one interface,
 - `received(ids)`: which deliveries the parent holds durably, delivered or
   returned by one of its calls. Only these count as done (see "At least
   once").
+- `dropped(ids)`: which deliveries, handed over and not received, the
+  parent provably lost. The core hands them over again.
 - `attention()`: a signal that ends one of the parent's waits once
   something needs the parent, so it can answer while its agents keep
   working. Inside Pi a steer from the user raises it.
@@ -386,9 +388,19 @@ delivery but can repeat one.
 - Handed over but not yet held, a delivery is in flight: it isn't handed
   over again and doesn't count as queued. In flight is memory only. After a
   restart, deliveries the session already holds are acknowledged without
-  posting, and the others are posted again. A delivery Pi never saves stays
-  in flight until then; posting only while the session is idle leaves Pi no
-  queue to drop it from.
+  posting, and the others are posted again.
+- A delivery is posted again in the same process only once it's provably
+  lost: the session can take deliveries, it isn't in the session, and Pi
+  took it into a run that settled since (`agent_settled`). That happens to
+  a message queued into a running turn that Esc clears. Right after
+  posting, Pi either runs a turn for the message, which saves it first, or
+  queues it into a running turn, and either way reports busy. While Pi
+  settles its last run, though, `sendCustomMessage` defers the message into
+  `_deferredSettledActions` and Pi still looks idle, with nothing queued and
+  nothing saved, possibly through a user's deferred prompt that runs and
+  settles a turn of its own first. A message Pi didn't report busy for is
+  therefore never posted again in the same process; Pi saves it once its
+  own turn starts, and a restart posts it if the session ended first.
 - A wait by a parent call takes its results into flight; they count once
   the parent stored the call's result. A wait without a call, such as one
   whose provider gave the call no ID, counts them at once.
@@ -611,7 +623,10 @@ test parent and Pi's parent against a fake session: a delivery counts only
 once the session holds it and isn't posted again meanwhile, a restart after
 Pi saved a delivery acknowledges it without posting, a restart before
 posts it again under the same identity, and a wait's result counts once
-Pi stored the call's result, for nested calls through their caller's.
+Pi stored the call's result, for nested calls through their caller's. A
+fake Pi that queues, runs, or defers a posted message checks that a queued
+message Esc dropped posts again once Pi is idle, while a message the
+triggered turn saved and one deferred while Pi settles post once.
 Keyed call tests repeat a spawn, a graph spawn, a send, and a stop with the
 same key, also after the name moved to a newer agent, and check that each
 acts once, that a repeated stop leaves newer work alone, that calls without

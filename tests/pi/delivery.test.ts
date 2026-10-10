@@ -372,3 +372,114 @@ describe("confirmed delivery to Pi", () => {
     expect(second.sent).toEqual([]);
   });
 });
+
+/**
+ * Pi around one posted message, as `sendCustomMessage` treats it: posted
+ * while Pi settles its last run, a message waits in Pi's deferred actions,
+ * and Pi still looks idle; posted while `takes` is "queue", it lands in the
+ * queue of a run that just started; otherwise it starts a run that saves
+ * it first. The test drives runs and settling.
+ */
+function fakePi() {
+  const state = {
+    idle: true,
+    settling: false,
+    takes: "run" as "run" | "queue",
+  };
+  const entries: SessionEntry[] = [];
+  const sent: Sent[] = [];
+  const queued: Sent[] = [];
+  const deferred: Sent[] = [];
+  const pi = {
+    sendMessage: (message: Sent, options?: { triggerTurn?: boolean }) => {
+      sent.push({ ...message, ...(options ? { options } : {}) });
+      if (state.settling) deferred.push(message);
+      else if (state.takes === "queue") {
+        state.idle = false;
+        queued.push(message);
+      } else {
+        // The run saves its prompt before anything else.
+        state.idle = false;
+        entries.push(messageEntry(message));
+      }
+    },
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    isIdle: () => state.idle,
+    hasPendingMessages: () => false,
+    sessionManager: { getEntries: () => [...entries] },
+  } as unknown as ExtensionContext;
+  const parent = new PiParent(pi);
+  parent.setContext(ctx);
+  /** The running turn ends: Pi settles, then looks idle. */
+  const settle = () => {
+    state.idle = true;
+    parent.settled();
+    parent.notify();
+  };
+  return { state, entries, sent, queued, deferred, parent, settle };
+}
+
+describe("lost deliveries", () => {
+  test("a queued delivery that Pi drops is posted again once Pi is idle", async () => {
+    const pi = fakePi();
+    pi.state.takes = "queue";
+    const current = await openService({ parent: pi.parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => pi.sent.length === 1);
+    pi.parent.notify();
+    await settle();
+    expect(pi.sent).toHaveLength(1);
+
+    // Esc clears the queue, and the run settles without the message.
+    pi.queued.length = 0;
+    pi.state.takes = "run";
+    pi.settle();
+    await until(() => pi.sent.length === 2);
+    expect(pi.sent[1]?.details?.delivery).toBe(pi.sent[0]?.details?.delivery);
+    pi.settle();
+    await until(() => current.get("a")?.closed === true);
+    expect(pi.sent).toHaveLength(2);
+  });
+
+  test("a delivery the triggered turn saved is never posted twice", async () => {
+    const pi = fakePi();
+    const current = await openService({ parent: pi.parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => pi.sent.length === 1);
+    pi.settle();
+    await until(() => current.get("a")?.closed === true);
+    pi.settle();
+    await settle();
+    expect(pi.sent).toHaveLength(1);
+  });
+
+  test("a delivery deferred while Pi settles is posted once", async () => {
+    const pi = fakePi();
+    // Pi settles its last run; a user's prompt waits in its deferred actions.
+    pi.state.settling = true;
+    const current = await openService({ parent: pi.parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => pi.sent.length === 1);
+    expect(pi.deferred).toHaveLength(1);
+    // Pi looks idle with the message neither queued nor saved, even after
+    // this settle and the user's turn, which runs first and settles too.
+    pi.settle();
+    await settle();
+    pi.state.settling = false;
+    pi.state.idle = false;
+    pi.settle();
+    await settle();
+    expect(pi.sent).toHaveLength(1);
+
+    // Then Pi runs the deferred message, which it saves first.
+    pi.state.idle = false;
+    for (const message of pi.deferred) pi.entries.push(messageEntry(message));
+    pi.settle();
+    await until(() => current.get("a")?.closed === true);
+    expect(pi.sent).toHaveLength(1);
+  });
+});

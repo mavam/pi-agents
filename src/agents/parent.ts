@@ -48,6 +48,13 @@ export interface Parent {
    */
   received(ids: readonly string[]): Promise<ReadonlySet<string>>;
   /**
+   * The deliveries among `ids`, handed over and not received, that the
+   * parent provably lost, such as a queued message a user's abort cleared.
+   * The core hands them over again. A parent that can't tell returns none;
+   * a restart hands over whatever it doesn't hold.
+   */
+  dropped(ids: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
    * A signal for one of the parent's waits. It aborts once something needs
    * the parent, such as the user steering, so the wait ends and the parent
    * can answer while its agents keep working.

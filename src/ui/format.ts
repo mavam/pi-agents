@@ -71,15 +71,19 @@ export function formatElapsed(ms: number): string {
 }
 
 /**
- * How long an agent or graph ran: from its creation until now while it works,
- * else until its state last changed, so a finished one's clock stops. A
- * resumed agent's clock jumps forward to include the pause.
+ * How long an agent or graph ran: from its creation until now while it works
+ * or waits for its inputs, else until it ended, so a finished one's clock
+ * stops. A resumed agent's clock jumps forward to include the pause.
  */
 export function runtime(
-  item: Pick<AgentInfo, "state" | "createdAt" | "stateSince">,
+  item: Pick<AgentInfo, "state" | "createdAt" | "stateSince" | "endedAt">,
   now: number,
 ): number {
-  return (item.state === "working" ? now : item.stateSince) - item.createdAt;
+  const end =
+    item.state === "working" || item.state === "waiting"
+      ? now
+      : (item.endedAt ?? item.stateSince);
+  return Math.max(0, end - item.createdAt);
 }
 
 function formatTokens(count: number): string {

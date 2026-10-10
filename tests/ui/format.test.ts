@@ -156,6 +156,11 @@ describe("formatting", () => {
     expect(runtime({ ...times, state: "working" }, 600_000)).toBe(599_000);
     expect(runtime({ ...times, state: "idle" }, 600_000)).toBe(60_000);
     expect(runtime({ ...times, state: "interrupted" }, 900_000)).toBe(60_000);
+    expect(runtime({ ...times, state: "waiting" }, 600_000)).toBe(599_000);
+    // The durable end wins over when this process saw the state change.
+    expect(runtime({ ...times, state: "idle", endedAt: 31_000 }, 600_000)).toBe(
+      30_000,
+    );
   });
 
   test("sanitizing keeps colors and drops controls", () => {

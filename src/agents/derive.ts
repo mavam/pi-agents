@@ -21,6 +21,8 @@ import {
 } from "./types.js";
 
 export const ASSISTANT_KIND = "pi.assistant";
+/** The task kind that runs an agent's turns; the latest one ends a run. */
+export const GENERATION_KIND = "pi.generation";
 
 /** How the latest turn settled, as seen in this process. */
 export type TurnSettlement = "answered" | "interrupted" | "failed";

@@ -426,7 +426,8 @@ model's message broke off before Pi ran it.
   The panel and `/agents` share what the user folded, which wins over
   folding finished graphs. While the stop confirmation is open, keys go to
   the confirmation. The glyph carries the state; working agents show how long
-  they have worked. Delivery waits while the parent works or the user is
+  ago they started, idle pauses and waits for inputs included; finished rows
+  show no time. Delivery waits while the parent works or the user is
   attached, so an idle agent with an undelivered answer to a parent request
   shows `●` in the accent color rather than green and `result queued`, as
   does a finished graph whose result is pending; a failed one keeps its red
@@ -440,7 +441,12 @@ model's message broke off before Pi ran it.
   or steers, Alt+⏎ queues a follow-up, Esc interrupts, ← detaches, Shift+↑↓
   scrolls.
 - `/agents`: a table of all agents and graphs, a graph's agents below it,
-  closed ones dimmed, with details, attach, and stop. `/agent <name>`
+  closed ones dimmed, with details, attach, and stop. Each row shows how
+  long it ran: from its creation until now while it works or waits, else
+  until it ended. An agent ended when its latest generation task became
+  terminal, or with its node if it never ran; a graph when its task did.
+  These durable `endedAt` times survive restarts and later messages to a
+  graph's agents; a resumed agent's time jumps forward, pause included. `/agent <name>`
   attaches. Tasks and results in its detail pane render as Markdown. An agent's detail
   separates its task and its latest result (or error) with dividers like the
   one under the table, each naming its section: "Result" while the answer

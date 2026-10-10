@@ -25,4 +25,11 @@ describe("architecture", () => {
       ).toBe(false);
     }
   });
+
+  test("tool views draw receipts, never live agents", () => {
+    for (const file of ["ui/tool-views.ts", "agents/receipts.ts"]) {
+      const text = readFileSync(path.join(SRC, file), "utf8");
+      expect(/from "[^"]*\/service\.js"/.test(text), file).toBe(false);
+    }
+  });
 });

@@ -396,12 +396,36 @@ argument and profile models resolve like `pi --model` patterns among models
 with credentials. Profiles with an unavailable model or unresolvable skills
 stay out of the prompt, and the UI reports them once per session.
 
-Each tool call renders its explicit arguments as a dim `key=value` line. A
-call that starts a graph draws the graph below its title, with inputs and
-models but without states, which would only describe the moment of the
-call; the panel shows the live state. That holds while a call waits, too,
-so the call doesn't repeat the panel. Calls that report outcomes show the
-agents' states. A failed call shows its error text.
+### Tool rendering
+
+A result stays in the transcript, so it shows only what stays true; the
+panel is the only surface with live state. Each call stores a *receipt* in
+its result's details (`src/agents/receipts.ts`), plain data from one
+observation:
+
+- what the call started: agents and graphs with inputs and models;
+- how agents and graphs were when the call looked: answered, failed,
+  interrupted, stopped, skipped, or still working or waiting, with usage
+  and answers once finished;
+- how its wait ended: done, timed out, cut short for the parent, or
+  cancelled.
+
+No clocks, activity, or delivery markers. The deliveries a wait took stay
+beside the receipt, in the same details, for delivery bookkeeping.
+
+`src/ui/tool-views.ts` draws calls and results and never sees live agents.
+A call draws its arguments only: its title, a dim `key=value` line, and its
+body. A result draws its receipt only: progress what the call started, the
+final result how agents were, with `⊠` for what a wait gave up on, then why
+it ended, such as `Timed out`. Renderers share no state, so a call draws the
+same live, finished, and replayed. A failed call shows its error text.
+Results stored by earlier versions decode to receipts when read, and
+details no version reads show the result's text.
+
+Pi's transcript and the attach view each have a map from tool name to
+renderers, since the parent's tools and the agents' tools differ: the
+parent's tools use them through their definitions, and the attach view
+draws `delegate_graph` with its own, and Pi's tools with Pi's.
 
 ## Frontend
 

@@ -12,7 +12,8 @@ import {
   buildSystemPromptAppendix,
   profileCatalog,
 } from "../../src/pi/prompt.js";
-import { formatPairs, prepareSeconds } from "../../src/pi/tools.js";
+import { prepareSeconds } from "../../src/pi/tools.js";
+import { formatPairs } from "../../src/ui/tool-views.js";
 
 describe("system prompt appendix", () => {
   test("lists guidance and usable profiles", async () => {

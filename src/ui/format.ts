@@ -33,6 +33,10 @@ export const STATE_STYLES = {
   { icon: string; color: Parameters<Colorize>[0] }
 >;
 
+/** What a call's wait gave up on before it finished: the call's outcome
+ * for it, which stays true. */
+export const WAIT_ENDED_STYLE = { icon: "⊠", color: "warning" } as const;
+
 /** An answer that waits for the parent: idle, but not done yet. */
 export const QUEUED_STYLE = { icon: "●", color: "accent" } as const;
 
@@ -236,24 +240,6 @@ export function formatGraphLine(
   ]
     .filter((part): part is string => part !== undefined)
     .join(dot);
-}
-
-/**
- * What a call started, without the state it had in that moment, which goes
- * stale in the transcript: `report ← review, docs · explorer · luna`.
- */
-export function formatStartedLine(
-  info: Pick<AgentInfo, "name" | "profile" | "model">,
-  color: Colorize = plainColorize,
-  inputs: readonly string[] = [],
-): string {
-  return [
-    `${info.name}${inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : ""}`,
-    info.profile ? color("dim", info.profile) : undefined,
-    color("dim", shortModel(info)),
-  ]
-    .filter((part): part is string => part !== undefined)
-    .join(color("dim", " · "));
 }
 
 /**

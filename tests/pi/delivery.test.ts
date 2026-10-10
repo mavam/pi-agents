@@ -736,18 +736,24 @@ describe("delivery after a busy parent", () => {
     expect(pi.sent).toHaveLength(1);
   });
 
-  test("a compaction outside a turn ends with an event", async () => {
-    const pi = eventedPi({ idle: false, pending: false }, NEVER);
-    const current = await openService({ parent: pi.parent });
-    service = current;
-    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
-    await until(() => current.pendingDeliveries().length === 1);
-    await settle();
-    expect(pi.sent).toEqual([]);
-    pi.state.idle = true;
-    await pi.emit("session_compact");
-    await until(() => pi.sent.length === 1);
-  });
+  for (const [end, event] of [
+    ["succeeds", "session_compact"],
+    ["fails", "session_compact_failed"],
+    ["is cancelled", "session_compact_failed"],
+    ["navigates the tree", "session_tree"],
+  ] as const)
+    test(`a result that arrives while Pi compacts or summarizes posts once it ${end}`, async () => {
+      const pi = eventedPi({ idle: false, pending: false }, NEVER);
+      const current = await openService({ parent: pi.parent });
+      service = current;
+      await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+      await until(() => current.pendingDeliveries().length === 1);
+      await settle();
+      expect(pi.sent).toEqual([]);
+      pi.state.idle = true;
+      await pi.emit(event);
+      await until(() => pi.sent.length === 1);
+    });
 
   test("a cancelled branch summary, which emits nothing, delays delivery only briefly", async () => {
     const pi = eventedPi({ idle: false, pending: false }, 20);
@@ -759,5 +765,66 @@ describe("delivery after a busy parent", () => {
     expect(pi.sent).toEqual([]);
     pi.state.idle = true;
     await until(() => pi.sent.length === 1);
+  });
+});
+
+describe("outstanding deliveries", () => {
+  test("a session switch keeps a delivery Pi hadn't saved for the return", async () => {
+    const directory = tempDir();
+    const state = { idle: true, pending: false, saves: false };
+    const first = setup(state);
+    const before = await openService({
+      parent: first.parent,
+      storage: await jsonlStorage(directory),
+    });
+    service = before;
+    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => first.sent.length === 1);
+
+    // The user switches sessions, as session_shutdown does, then returns.
+    first.parent.clear();
+    await closeService(before);
+    state.saves = true;
+    first.parent.setContext(first.ctx);
+    const after = await openService({
+      parent: first.parent,
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+    });
+    service = after;
+    await until(() => first.sent.length === 2);
+    expect(first.sent[1]?.details?.delivery).toBe(
+      first.sent[0]?.details?.delivery,
+    );
+    await until(() => after.get("a")?.closed === true);
+  });
+
+  test("attaching holds new deliveries but not confirmation of sent ones", async () => {
+    const state = { idle: true, pending: false, saves: false };
+    const { sent, parent, session } = setup(state);
+    let attached = false;
+    parent.setBlocked(() => attached);
+    const current = await openService({ parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => sent.length === 1);
+
+    // The user attaches; Pi saves what it was sent meanwhile.
+    attached = true;
+    session.save(sent[0] as Sent);
+    parent.notify();
+    await until(() => current.get("a")?.closed === true);
+
+    // A result that arrives while attached waits for the view to close.
+    state.saves = true;
+    await current.spawn({ task: "b", name: "b", cwd: ".", model: MODEL });
+    await until(() => current.pendingDeliveries().length === 1);
+    parent.notify();
+    await settle();
+    expect(sent).toHaveLength(1);
+    attached = false;
+    parent.notify();
+    await until(() => current.get("b")?.closed === true);
+    expect(sent).toHaveLength(2);
   });
 });

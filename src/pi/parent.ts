@@ -169,6 +169,7 @@ export class PiParent implements Parent {
 
   clear(): void {
     this.ctx = undefined;
+    this.unsaved.clear();
     if (this.recheck) clearTimeout(this.recheck);
     this.recheck = undefined;
   }

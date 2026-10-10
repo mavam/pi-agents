@@ -693,38 +693,40 @@ deferred while Pi settles post once, an abort that keeps a queued message
 posts no duplicate, and one that clears the queue leaves the result queued
 until a restart posts it. Events from a fake Pi check that a result arriving
 during a parent turn posts once the turn settled, also when another
-extension keeps Pi busy past `agent_end`, that a compaction's end retries,
+extension keeps Pi busy past `agent_end`, that the end of a compaction,
+whether it succeeded, failed, or was cancelled, and tree navigation retry,
 and that results held back by messages an abort left queued, or by a
-cancelled branch summary, post on a recheck. A host whose default selection
-holds a foreign extension, with a `read` tool, another tool, and a prompt
-section, gives none of it to standalone agents, graph agents, a delegating
-agent, or its helper, and the session of v0.27.0 keeps its agents on the
-default of Pi's host. Keyed call tests repeat a spawn, a graph spawn, a
-send, and a stop with the same key, also after the name moved to a newer
-agent, and check that each acts once, that a repeated stop leaves newer work
-alone, that calls without a key act every time, and that the session of
-v0.27.0 takes keyed calls. A crash after every step of an agent's or a
-graph's stop, followed by a restart, finishes the stop, and replaying it
-then leaves newer work alone; a stop's receipt outlives twenty later stops.
-A replayed spawn, send, or graph spawn that waits returns what its first run
-started, while newer work holds the name. Graph tests cover `allSettled`
-with answers and failures, pipelines, merges with failed inputs, skipped
-agents, `failFast` stopping waiting agents, edge validation, stopping a
-graph, the ownership tree through the task graph, restarts mid-graph and
-mid-pipeline that repeat no finished agent and send no task twice, and
-messaging a graph's agent after the graph finished. Tool tests check every
-result scripts get against its output schema, for answers, interrupted and
-failed turns after an earlier answer, waits ended by a timeout, an abort, or
-a steer, and answered, failed, skipped, and stopped graphs. A faux model
-holds prompts until the test releases them or the request aborts, so these
-tests don't race the model. Delegation tests cover a fan-out with a merging
-helper, that helpers and other agents can't delegate, progress, Esc on the
-agent, stopping a graph above it, stopping only the helpers, tool and size
-limits, names, and a restart mid-delegation that starts no second set of
-helpers. Request limit tests count requests reaching the faux provider: with
-a limit of 1, streams, compactions, and spawned agents never overlap,
-waiting requests run in order, and one aborted while waiting frees its
-place.
+cancelled branch summary, post on a recheck. A session switch keeps a
+delivery Pi hadn't saved for the return, and attaching holds new deliveries
+but not the confirmation of sent ones. A host whose default selection holds
+a foreign extension, with a `read` tool, another tool, and a prompt section,
+gives none of it to standalone agents, graph agents, a delegating agent, or
+its helper, and the session of v0.27.0 keeps its agents on the default of
+Pi's host. Keyed call tests repeat a spawn, a graph spawn, a send, and a
+stop with the same key, also after the name moved to a newer agent, and
+check that each acts once, that a repeated stop leaves newer work alone,
+that calls without a key act every time, and that the session of v0.27.0
+takes keyed calls. A crash after every step of an agent's or a graph's stop,
+followed by a restart, finishes the stop, and replaying it then leaves newer
+work alone; a stop's receipt outlives twenty later stops. A replayed spawn,
+send, or graph spawn that waits returns what its first run started, while
+newer work holds the name. Graph tests cover `allSettled` with answers and
+failures, pipelines, merges with failed inputs, skipped agents, `failFast`
+stopping waiting agents, edge validation, stopping a graph, the ownership
+tree through the task graph, restarts mid-graph and mid-pipeline that repeat
+no finished agent and send no task twice, and messaging a graph's agent
+after the graph finished. Tool tests check every result scripts get against
+its output schema, for answers, interrupted and failed turns after an
+earlier answer, waits ended by a timeout, an abort, or a steer, and
+answered, failed, skipped, and stopped graphs. A faux model holds prompts
+until the test releases them or the request aborts, so these tests don't
+race the model. Delegation tests cover a fan-out with a merging helper, that
+helpers and other agents can't delegate, progress, Esc on the agent,
+stopping a graph above it, stopping only the helpers, tool and size limits,
+names, and a restart mid-delegation that starts no second set of helpers.
+Request limit tests count requests reaching the faux provider: with a limit
+of 1, streams, compactions, and spawned agents never overlap, waiting
+requests run in order, and one aborted while waiting frees its place.
 
 ## Deferred
 

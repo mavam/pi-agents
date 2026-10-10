@@ -23,11 +23,9 @@ import {
   discoverProfiles,
   findProfile,
   type Profile,
-  type Scope,
 } from "../catalog/profiles.js";
 import {
   type Chooser,
-  discoverSkills,
   inlineSkills,
   type SkillSource,
 } from "../catalog/skills.js";
@@ -44,18 +42,24 @@ export interface SpawnRequest {
   delegate?: boolean;
 }
 
-/** What a spawn inherits instead of the parent session's settings. */
-export interface SpawnDefaults {
+/** What a spawn draws on besides its request. */
+export interface SpawnSources {
+  /** The skills of a directory; the session's shared catalog. */
+  skills: SkillSource;
+  /** Thinking level without one in the request or profile. */
+  thinking?: string;
+  /** Working directory and model instead of the parent session's, for
+   * helpers that inherit their agent's. */
   cwd?: string;
   model?: ModelRef;
-  /** Where skills come from; defaults to reading them from disk. */
-  skills?: SkillSource;
 }
 
-export function scopeOf(ctx: ExtensionContext): Scope {
-  const trusted =
-    typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
-  return trusted ? "both" : "user";
+/** Whether the session trusts its project, which gates project profiles,
+ * skills, and context files. */
+export function isTrusted(ctx: ExtensionContext): boolean {
+  return typeof ctx.isProjectTrusted === "function"
+    ? ctx.isProjectTrusted()
+    : true;
 }
 
 function resolveModel(
@@ -91,10 +95,10 @@ function resolveCwd(base: string, requested: string | undefined): string {
 function resolveProfile(
   name: string | undefined,
   cwd: string,
-  scope: Scope,
+  trusted: boolean,
 ): Profile | undefined {
   if (name === undefined) return undefined;
-  const { profiles } = discoverProfiles(cwd, scope);
+  const { profiles } = discoverProfiles(cwd, trusted);
   const profile = findProfile(profiles, name);
   if (!profile) {
     const available = profiles.map((entry) => entry.name).join(", ") || "none";
@@ -110,11 +114,11 @@ async function skillsPrompt(
   names: readonly string[],
   chooser: Chooser,
   cwd: string,
-  scope: Scope,
+  trusted: boolean,
   source: SkillSource,
 ): Promise<{ prompt: string; missing: string[] }> {
   if (names.length === 0) return { prompt: "", missing: [] };
-  return inlineSkills(names, await source(cwd, scope !== "user"), chooser);
+  return inlineSkills(names, await source(cwd, trusted), chooser);
 }
 
 /**
@@ -126,7 +130,7 @@ async function instructionsOf(
   profile: Profile | undefined,
   requested: string[] | undefined,
   cwd: string,
-  scope: Scope,
+  trusted: boolean,
   source: SkillSource,
 ): Promise<{ instructions?: string; ambientSkills: boolean }> {
   const parts = [profile?.instructions ?? ""];
@@ -137,7 +141,7 @@ async function instructionsOf(
       names,
       chooser,
       cwd,
-      scope,
+      trusted,
       source,
     );
     if (missing.length > 0)
@@ -162,9 +166,9 @@ async function instructionsOf(
 export async function profileProblem(
   profile: Profile,
   cwd: string,
-  scope: Scope,
+  trusted: boolean,
   models: readonly Model<Api>[],
-  source: SkillSource = discoverSkills,
+  source: SkillSource,
 ): Promise<string | undefined> {
   if (profile.model && !resolveModelPattern(profile.model, models).ok)
     return `no available model matches ${profile.model}`;
@@ -173,7 +177,7 @@ export async function profileProblem(
       profile.skills ?? [],
       "user",
       cwd,
-      scope,
+      trusted,
       source,
     );
     if (missing.length > 0) return `unavailable skills: ${missing.join(", ")}`;
@@ -183,25 +187,21 @@ export async function profileProblem(
   return undefined;
 }
 
-/**
- * Resolve a spawn. `defaults` replace the parent session's working
- * directory and model, for helpers that inherit their agent's.
- */
+/** Resolve a spawn. */
 export async function resolveSpawn(
   request: SpawnRequest,
   ctx: ExtensionContext,
-  parentThinking: string | undefined,
-  defaults: SpawnDefaults = {},
+  sources: SpawnSources,
 ): Promise<SpawnSpec> {
-  const scope = scopeOf(ctx);
-  const cwd = resolveCwd(defaults.cwd ?? ctx.cwd, request.cwd);
-  const profile = resolveProfile(request.profile, cwd, scope);
+  const trusted = isTrusted(ctx);
+  const cwd = resolveCwd(sources.cwd ?? ctx.cwd, request.cwd);
+  const profile = resolveProfile(request.profile, cwd, trusted);
   const model = resolveModel(
     request.model ?? profile?.model,
     ctx,
-    defaults.model,
+    sources.model,
   );
-  const thinking = request.thinking ?? profile?.thinking ?? parentThinking;
+  const thinking = request.thinking ?? profile?.thinking ?? sources.thinking;
   if (thinking !== undefined && !isThinkingLevel(thinking))
     throw new AgentError(`Invalid thinking level: ${thinking}`);
   const tools = request.tools ?? profile?.tools;
@@ -209,8 +209,8 @@ export async function resolveSpawn(
     profile,
     request.skills,
     cwd,
-    scope,
-    defaults.skills ?? discoverSkills,
+    trusted,
+    sources.skills,
   );
   const delegate = request.delegate ?? profile?.delegate;
   return {
@@ -236,7 +236,7 @@ export async function resolveHelper(
   request: HelperRequest,
   ctx: ExtensionContext,
   defaults: HelperDefaults,
-  skills: SkillSource = discoverSkills,
+  skills: SkillSource,
 ): Promise<SpawnSpec> {
   const { delegate: _, ...spec } = await resolveSpawn(
     {
@@ -248,10 +248,10 @@ export async function resolveHelper(
       ...(request.skills ? { skills: request.skills } : {}),
     },
     ctx,
-    defaults.thinking,
     {
-      cwd: defaults.cwd,
       skills,
+      cwd: defaults.cwd,
+      ...(defaults.thinking ? { thinking: defaults.thinking } : {}),
       ...(defaults.model ? { model: defaults.model } : {}),
     },
   );

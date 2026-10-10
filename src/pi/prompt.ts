@@ -4,11 +4,7 @@
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
-import {
-  discoverProfiles,
-  type Profile,
-  type Scope,
-} from "../catalog/profiles.js";
+import { discoverProfiles, type Profile } from "../catalog/profiles.js";
 import type { SkillSource } from "../catalog/skills.js";
 import { profileProblem } from "./spawn.js";
 
@@ -22,17 +18,17 @@ function oneLine(value: string): string {
 /** Profiles that can spawn agents, and why the others cannot. */
 export async function profileCatalog(
   cwd: string,
-  scope: Scope,
+  trusted: boolean,
   models: readonly Model<Api>[],
-  skills?: SkillSource,
+  skills: SkillSource,
 ): Promise<{ profiles: Profile[]; issues: string[] }> {
-  const { profiles, diagnostics } = discoverProfiles(cwd, scope);
+  const { profiles, diagnostics } = discoverProfiles(cwd, trusted);
   const usable: Profile[] = [];
   const issues = diagnostics.map(
     (diagnostic) => `${diagnostic.filePath}: ${oneLine(diagnostic.message)}`,
   );
   for (const profile of profiles) {
-    const problem = await profileProblem(profile, cwd, scope, models, skills);
+    const problem = await profileProblem(profile, cwd, trusted, models, skills);
     if (problem) issues.push(`profile ${profile.name}: ${problem}`);
     else usable.push(profile);
   }

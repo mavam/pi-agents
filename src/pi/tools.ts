@@ -679,8 +679,9 @@ export function registerAgentTools(
         body: args.task,
       }),
       async execute(service, params, ctx, signal, onUpdate) {
-        const spec = await resolveSpawn(params, ctx, pi.getThinkingLevel(), {
+        const spec = await resolveSpawn(params, ctx, {
           skills: host.skills.get,
+          thinking: pi.getThinkingLevel(),
         });
         const info = await service.spawn(spec);
         if (params.wait !== undefined) {
@@ -791,8 +792,9 @@ export function registerAgentTools(
           // Every agent resolves before any starts.
           agents: await Promise.all(
             params.agents.map(async (agent) => ({
-              ...(await resolveSpawn(agent, ctx, thinking, {
+              ...(await resolveSpawn(agent, ctx, {
                 skills: host.skills.get,
+                thinking,
               })),
               ...(agent.after ? { after: agent.after } : {}),
             })),

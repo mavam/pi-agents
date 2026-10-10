@@ -84,11 +84,30 @@ describe("profiles", () => {
       "shared.md",
       "---\nname: shared\ndescription: project\n---\n",
     );
-    const both = discoverProfiles(project, "both").profiles;
-    expect(findProfile(both, "shared")?.description).toBe("project");
-    expect(findProfile(both, "SHARED")?.description).toBe("project");
-    const user = discoverProfiles(project, "user").profiles;
-    expect(findProfile(user, "shared")?.description).toBe("user");
+    const trusted = discoverProfiles(project, true).profiles;
+    expect(findProfile(trusted, "shared")?.description).toBe("project");
+    expect(findProfile(trusted, "SHARED")?.description).toBe("project");
+    const untrusted = discoverProfiles(project, false).profiles;
+    expect(findProfile(untrusted, "shared")?.description).toBe("user");
     fs.rmSync(path.join(getAgentDir(), "agents"), { recursive: true });
+  });
+
+  test("project profiles come from the working directory, like Pi's skills", () => {
+    const project = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pi-agents-project-"),
+    );
+    write(
+      path.join(project, ".pi", "agents"),
+      "root.md",
+      "---\nname: root\ndescription: Root\n---\n",
+    );
+    const sub = path.join(project, "sub");
+    fs.mkdirSync(sub);
+    expect(
+      findProfile(discoverProfiles(project, true).profiles, "root"),
+    ).toBeDefined();
+    expect(
+      findProfile(discoverProfiles(sub, true).profiles, "root"),
+    ).toBeUndefined();
   });
 });

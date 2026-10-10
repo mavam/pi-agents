@@ -260,7 +260,7 @@ export interface HelperDefaults {
 export type HelperResolver = (
   request: HelperRequest,
   defaults: HelperDefaults,
-) => SpawnSpec | Promise<SpawnSpec>;
+) => Promise<SpawnSpec>;
 
 export type SendMode = "auto" | "followUp";
 

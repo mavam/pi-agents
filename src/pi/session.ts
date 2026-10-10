@@ -27,7 +27,7 @@ import { resolveModels } from "../host/models.js";
 import { createPromptExtension } from "../host/prompt.js";
 import { openStorage, type Storage } from "../host/storage.js";
 import { createToolsExtension } from "../host/tools.js";
-import { resolveHelper } from "./spawn.js";
+import { isTrusted, resolveHelper } from "./spawn.js";
 
 function sessionDirectory(sessionId: string): string {
   return path.join(getAgentDir(), "pi-agents", "sessions", sessionId);
@@ -35,12 +35,6 @@ function sessionDirectory(sessionId: string): string {
 
 function isPersistent(ctx: ExtensionContext): boolean {
   return ctx.sessionManager.getSessionFile() !== undefined;
-}
-
-function isTrusted(ctx: ExtensionContext): boolean {
-  return typeof ctx.isProjectTrusted === "function"
-    ? ctx.isProjectTrusted()
-    : true;
 }
 
 export class SessionHost {

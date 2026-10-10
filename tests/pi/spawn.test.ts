@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { discoverSkills } from "../../src/catalog/skills.js";
 import { resolveHelper, resolveSpawn } from "../../src/pi/spawn.js";
 
 function skill(dir: string, name: string, frontmatter = ""): void {
@@ -68,7 +69,12 @@ function context(cwd: string, trusted = true): ExtensionContext {
 describe("resolveSpawn", () => {
   test("ad-hoc agents inherit the parent model and thinking level", async () => {
     const cwd = project();
-    expect(await resolveSpawn({ task: "x" }, context(cwd), "high")).toEqual({
+    expect(
+      await resolveSpawn({ task: "x" }, context(cwd), {
+        skills: discoverSkills,
+        thinking: "high",
+      }),
+    ).toEqual({
       task: "x",
       cwd,
       ambientSkills: true,
@@ -82,7 +88,7 @@ describe("resolveSpawn", () => {
     const spec = await resolveSpawn(
       { task: "x", profile: "checker" },
       context(cwd),
-      "high",
+      { skills: discoverSkills, thinking: "high" },
     );
     expect(spec.model).toEqual({ provider: "openai", modelId: "mini" });
     expect(spec.thinking).toBe("low");
@@ -103,7 +109,7 @@ describe("resolveSpawn", () => {
         tools: ["read", "grep"],
       },
       context(cwd),
-      "high",
+      { skills: discoverSkills, thinking: "high" },
     );
     expect(spec.model).toEqual({ provider: "openai", modelId: "big" });
     expect(spec.thinking).toBe("off");
@@ -113,19 +119,29 @@ describe("resolveSpawn", () => {
   test("reports unknown profiles, skills, models, and directories", async () => {
     const cwd = project();
     expect(
-      resolveSpawn({ task: "x", profile: "nope" }, context(cwd), undefined),
+      resolveSpawn({ task: "x", profile: "nope" }, context(cwd), {
+        skills: discoverSkills,
+      }),
     ).rejects.toThrow('Unknown profile "nope"');
     expect(
-      resolveSpawn({ task: "x", profile: "broken" }, context(cwd), undefined),
+      resolveSpawn({ task: "x", profile: "broken" }, context(cwd), {
+        skills: discoverSkills,
+      }),
     ).rejects.toThrow("missing (unknown)");
     expect(
-      resolveSpawn({ task: "x", skills: ["missing"] }, context(cwd), undefined),
+      resolveSpawn({ task: "x", skills: ["missing"] }, context(cwd), {
+        skills: discoverSkills,
+      }),
     ).rejects.toThrow("Unavailable skills: missing (unknown)");
     expect(
-      resolveSpawn({ task: "x", model: "nope" }, context(cwd), undefined),
+      resolveSpawn({ task: "x", model: "nope" }, context(cwd), {
+        skills: discoverSkills,
+      }),
     ).rejects.toThrow("No available model matches");
     expect(
-      resolveSpawn({ task: "x", cwd: "missing" }, context(cwd), undefined),
+      resolveSpawn({ task: "x", cwd: "missing" }, context(cwd), {
+        skills: discoverSkills,
+      }),
     ).rejects.toThrow("Working directory not found");
   });
 
@@ -134,7 +150,7 @@ describe("resolveSpawn", () => {
     const chosen = await resolveSpawn(
       { task: "x", skills: ["style", "lint"] },
       context(cwd),
-      undefined,
+      { skills: discoverSkills },
     );
     expect(chosen.ambientSkills).toBe(false);
     expect(chosen.instructions).toContain("Apply style.");
@@ -142,7 +158,7 @@ describe("resolveSpawn", () => {
     const replaced = await resolveSpawn(
       { task: "x", profile: "checker", skills: ["style"] },
       context(cwd),
-      undefined,
+      { skills: discoverSkills },
     );
     expect(replaced.instructions).toContain("Check things.");
     expect(replaced.instructions).toContain("Apply style.");
@@ -152,7 +168,7 @@ describe("resolveSpawn", () => {
     const none = await resolveSpawn(
       { task: "x", profile: "broken", skills: [] },
       context(cwd),
-      undefined,
+      { skills: discoverSkills },
     );
     expect(none.ambientSkills).toBe(false);
     expect(none.instructions).toBeUndefined();
@@ -161,14 +177,16 @@ describe("resolveSpawn", () => {
   test("only profiles name skills that models can't invoke", async () => {
     const cwd = project();
     expect(
-      resolveSpawn({ task: "x", skills: ["review"] }, context(cwd), undefined),
+      resolveSpawn({ task: "x", skills: ["review"] }, context(cwd), {
+        skills: discoverSkills,
+      }),
     ).rejects.toThrow(
       "review (only the user can choose it, with /skill:review or in a profile)",
     );
     const spec = await resolveSpawn(
       { task: "x", profile: "reviewer" },
       context(cwd),
-      undefined,
+      { skills: discoverSkills },
     );
     expect(spec.instructions).toContain("Apply review.");
   });
@@ -178,15 +196,13 @@ describe("resolveSpawn", () => {
     const spec = await resolveSpawn(
       { task: "x", skills: ["style"] },
       context(cwd, false),
-      undefined,
+      { skills: discoverSkills },
     );
     expect(spec.instructions).toContain("Apply style.");
     expect(
-      resolveSpawn(
-        { task: "x", skills: ["lint"] },
-        context(cwd, false),
-        undefined,
-      ),
+      resolveSpawn({ task: "x", skills: ["lint"] }, context(cwd, false), {
+        skills: discoverSkills,
+      }),
     ).rejects.toThrow("lint (unknown)");
   });
 
@@ -196,11 +212,17 @@ describe("resolveSpawn", () => {
       { task: "x", skills: ["lint"] },
       context(cwd),
       { cwd },
+      discoverSkills,
     );
     expect(spec.ambientSkills).toBe(false);
     expect(spec.instructions).toContain("Run the linter.");
     expect(
-      resolveHelper({ task: "x", skills: ["review"] }, context(cwd), { cwd }),
+      resolveHelper(
+        { task: "x", skills: ["review"] },
+        context(cwd),
+        { cwd },
+        discoverSkills,
+      ),
     ).rejects.toThrow("only the user can choose it");
   });
 });

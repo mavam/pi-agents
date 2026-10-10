@@ -12,7 +12,13 @@ import type { DelegationLimits } from "../../src/agents/delegation.js";
 import { AgentService } from "../../src/agents/service.js";
 import { createPromptExtension } from "../../src/host/prompt.js";
 import { createToolsExtension } from "../../src/host/tools.js";
-import { jsonlStorage, MODEL, tempDir, until } from "./helpers.js";
+import {
+  inheritHelper,
+  jsonlStorage,
+  MODEL,
+  tempDir,
+  until,
+} from "./helpers.js";
 
 let services: AgentService[] = [];
 
@@ -82,6 +88,7 @@ async function open(
       createToolsExtension(),
       createPromptExtension({ trusted: () => false, skills: async () => [] }),
     ],
+    resolveHelper: inheritHelper,
     ...(options.limits ? { delegationLimits: options.limits } : {}),
   });
   services.push(service);

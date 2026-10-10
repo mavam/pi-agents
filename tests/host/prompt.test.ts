@@ -11,7 +11,7 @@ import { AgentService } from "../../src/agents/service.js";
 import { discoverSkills } from "../../src/catalog/skills.js";
 import { createPromptExtension } from "../../src/host/prompt.js";
 import { createToolsExtension } from "../../src/host/tools.js";
-import { MODEL, tempDir, until } from "../agents/helpers.js";
+import { inheritHelper, MODEL, tempDir, until } from "../agents/helpers.js";
 
 let services: AgentService[] = [];
 
@@ -52,6 +52,7 @@ async function open(trusted: boolean) {
       createToolsExtension(),
       createPromptExtension({ trusted: () => trusted, skills: discoverSkills }),
     ],
+    resolveHelper: inheritHelper,
   });
   services.push(service);
   return { service, prompts };

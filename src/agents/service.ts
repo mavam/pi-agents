@@ -117,9 +117,8 @@ export interface AgentServiceOptions {
   extensions: Extension[];
   settings?: HarnessSettings;
   onReport?: (error: unknown) => void;
-  /** Resolves the profiles and models of helpers; without it, helpers use
-   * the delegating agent's model or an exact `provider/id`. */
-  resolveHelper?: HelperResolver;
+  /** Resolves the profiles, models, and skills of helpers. */
+  resolveHelper: HelperResolver;
   /** Tests only: tighter delegation limits. */
   delegationLimits?: Partial<DelegationLimits>;
 }
@@ -162,35 +161,6 @@ function isSettled(
 function contextFor(signal: AbortSignal | undefined): Context {
   return signal ? withAbortSignal(signal, CONTEXT) : CONTEXT;
 }
-
-/** Helpers without a session host: the agent's model, or an exact
- * `provider/id`, and no profiles or skills. */
-const resolveHelperPlainly: HelperResolver = (request, defaults) => {
-  if (request.profile)
-    throw new AgentError(`Unknown profile "${request.profile}"`);
-  if (request.skills?.length)
-    throw new AgentError(
-      `Unavailable skills: ${request.skills.map((name) => `${name} (unknown)`).join(", ")}`,
-    );
-  let model = defaults.model;
-  if (request.model) {
-    const [provider, ...rest] = request.model.split("/");
-    if (!provider || rest.length === 0)
-      throw new AgentError(`Unknown model ${request.model}`);
-    model = { provider, modelId: rest.join("/") };
-  }
-  const thinking = request.thinking ?? defaults.thinking;
-  if (thinking !== undefined && !isThinkingLevel(thinking))
-    throw new AgentError(`Invalid thinking level: ${thinking}`);
-  return {
-    task: request.task,
-    cwd: defaults.cwd,
-    ...(model ? { model } : {}),
-    ...(thinking ? { thinking } : {}),
-    ...(request.tools ? { tools: request.tools } : {}),
-    ...(request.skills ? { ambientSkills: false } : {}),
-  };
-};
 
 export class AgentService {
   private records: Record<string, AgentRecord> = {};
@@ -241,7 +211,7 @@ export class AgentService {
     registry.install(createGraphsExtension());
     // Only delegating agents select delegation; see `delegatingAgent`.
     const delegation = createDelegationExtension({
-      resolve: options.resolveHelper ?? resolveHelperPlainly,
+      resolve: options.resolveHelper,
       limits: { ...DELEGATION_LIMITS, ...options.delegationLimits },
     });
     registry.install(delegation);

@@ -29,7 +29,7 @@ composition: graphs of agents that pass results to each other.
 | Turn | One input and the work until its final answer | A pi-durable input submission |
 | Result | The last assistant message: text, stop reason, entry ID | The turn's assistant entry |
 | Parent request | A turn the parent model started through `spawn` or `send` | An outbox entry in the record plus a submission with the same request ID |
-| Profile | Reusable spawn defaults | `.pi/agents/*.md` and `~/.pi/agent/agents/*.md` |
+| Profile | Reusable spawn defaults | `<cwd>/.pi/agents/*.md` and `~/.pi/agent/agents/*.md` |
 | AgentService | The API for tools and UI | Wraps the Host |
 
 Agent states are derived, never stored:
@@ -206,7 +206,7 @@ delegating agent's conversation
   delegation extension, its own tools, model, thinking level, instructions,
   and working directory. Depth is therefore 2.
 - Helpers get only tools their agent has. Profiles, models, and skills
-  resolve like Pi's spawns through a `HelperResolver` the session host
+  resolve like Pi's spawns through the `HelperResolver` the session host
   provides, with the agent's model, thinking level, and working directory as
   defaults. It takes and returns plain data. A helper's skills come from its
   own profile or request, never from its agent's.
@@ -282,6 +282,10 @@ never lose one. On session resume, unacknowledged settled requests deliver.
 - System prompt: a delegation preamble, tool guidelines, context files such as
   `AGENTS.md`, skills, the working directory and date, and profile
   instructions.
+- Profiles: `.pi/agents` of the agent's working directory, the `.pi` Pi
+  reads project skills and settings from, so a project profile and the
+  project skills it names always come from the same project. Untrusted
+  projects contribute none.
 - Skills: `SkillCatalog` (`src/catalog/skills.ts`) resolves them with Pi's
   package manager and settings for the agent's directory and the project's
   trust, so agents find what Pi finds: `~/.pi/agent/skills`,

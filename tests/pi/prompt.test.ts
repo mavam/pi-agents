@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { shapeLine } from "../../src/agents/topology.js";
+import { discoverSkills } from "../../src/catalog/skills.js";
 import {
   graphContent,
   type NodeDetails,
@@ -41,7 +42,12 @@ describe("system prompt appendix", () => {
       path.join(project, ".pi", "agents", "offline.md"),
       "---\nname: offline\ndescription: Offline\nmodel: nope/x\n---\n",
     );
-    const { profiles, issues } = await profileCatalog(project, "both", models);
+    const { profiles, issues } = await profileCatalog(
+      project,
+      true,
+      models,
+      discoverSkills,
+    );
     expect(profiles.map((profile) => profile.name)).toEqual(["scout"]);
     expect(issues).toEqual([
       "profile broken: unavailable skills: missing (unknown)",

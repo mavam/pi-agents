@@ -439,7 +439,7 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
     },
     // A call that started work shows what started below its title: the
     // result stores it in the shared state, and the call reads it when it
-    // renders, after both renderers ran.
+    // renders, after both renderers ran. An outcome replaces it.
     renderCall(args, theme: Theme, context) {
       const color: Colorize = (name, value) => theme.fg(name, value);
       const state = context.state as { started?: AgentToolDetails };
@@ -457,7 +457,18 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
       );
     },
     renderResult(result, options, theme: Theme, context) {
+      const state = context.state as { started?: AgentToolDetails };
       const details = result.details as AgentToolDetails | undefined;
+      // While a call waits, the panel shows the agents' live states, so the
+      // call shows only what it started.
+      if (options.isPartial) {
+        if (details?.started) state.started = details;
+        return new FitLines("", false);
+      }
+      // A final result alone decides what its call shows, so a replay
+      // without the progress draws the same: an outcome or an error drops
+      // what started, and a call that only started work sets it again.
+      delete state.started;
       // An error carries no agent details: the tool threw, or Pi never ran
       // the call because the model's message broke off. Show why.
       if (context.isError || !details?.agents) {
@@ -471,7 +482,7 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
         );
       }
       if (details.started) {
-        (context.state as { started?: AgentToolDetails }).started = details;
+        state.started = details;
         return new FitLines("", false);
       }
       const color: Colorize = (name, value) => theme.fg(name, value);
@@ -484,8 +495,10 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
 }
 
 /**
- * Wait for agents, streaming their lines as progress. A steer from the user
- * ends the wait, so Pi can place it instead of holding it back.
+ * Wait for agents, streaming their lines as progress. Progress of a call that
+ * started work carries what it started, which the call draws while it waits.
+ * A steer from the user ends the wait, so Pi can place it instead of holding
+ * it back.
  */
 async function waitWithProgress(
   service: AgentService,
@@ -494,6 +507,7 @@ async function waitWithProgress(
   timeoutSeconds: number | undefined,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
+  started?: AgentToolDetails,
 ): Promise<Returned<WaitOutput>> {
   const snapshot = () => {
     const targets = names.flatMap((name) => service.find(name) ?? []);
@@ -517,7 +531,7 @@ async function waitWithProgress(
           ...graphs.map(graphStatusLine),
           ...agents.map((info) => statusLine(service, info)),
         ].join("\n"),
-        { at: Date.now(), agents, graphs },
+        started ?? { at: Date.now(), agents, graphs },
       ),
     );
   };
@@ -684,6 +698,7 @@ export function registerAgentTools(
           thinking: pi.getThinkingLevel(),
         });
         const info = await service.spawn(spec);
+        const started = { at: Date.now(), started: true, agents: [info] };
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(
             service,
@@ -692,12 +707,13 @@ export function registerAgentTools(
             params.wait,
             signal,
             onUpdate,
+            started,
           );
           return { ...waited, output: agentNow(service, info.id) };
         }
         return {
           content: `Started ${info.name}.`,
-          details: { at: Date.now(), started: true, agents: [info] },
+          details: started,
           output: agentNow(service, info.id),
         };
       },
@@ -800,6 +816,12 @@ export function registerAgentTools(
             })),
           ),
         });
+        const started = {
+          at: Date.now(),
+          started: true,
+          graphs: [graph],
+          agents: withNodes(service, [graph], []),
+        };
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(
             service,
@@ -808,17 +830,13 @@ export function registerAgentTools(
             params.wait,
             signal,
             onUpdate,
+            started,
           );
           return { ...waited, output: graphNow(service, graph.id) };
         }
         return {
           content: `Started graph ${graph.name}: ${graphShape(graph)}.`,
-          details: {
-            at: Date.now(),
-            started: true,
-            graphs: [graph],
-            agents: withNodes(service, [graph], []),
-          },
+          details: started,
           output: graphNow(service, graph.id),
         };
       },

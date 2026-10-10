@@ -39,6 +39,7 @@ import {
   graphShape,
   oneLine,
 } from "../ui/format.js";
+import { callKey } from "./calls.js";
 import {
   graphContent,
   graphResultDetails,
@@ -175,13 +176,20 @@ interface Returned<O> {
   output: O;
 }
 
+/** Which tool call runs: Pi's ID, and the key the service gets. */
+interface ToolCall {
+  id: string;
+  /** See `callKey`; absent when the call has no ID. */
+  key: string | undefined;
+}
+
 type Execute<T extends TSchema, O extends TSchema> = (
   service: AgentService,
   params: Static<T>,
   ctx: ExtensionContext,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
-  toolCallId: string,
+  call: ToolCall,
 ) => Promise<Returned<Static<O>>>;
 
 /** How a call renders: a title, the explicit arguments, and a body. */
@@ -437,7 +445,7 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
           ctx,
           signal,
           onUpdate,
-          toolCallId,
+          { id: toolCallId, key: callKey(ctx, toolCallId) },
         );
         return {
           ...text(result.content, result.details),
@@ -708,12 +716,12 @@ export function registerAgentTools(
         },
         body: args.task,
       }),
-      async execute(service, params, ctx, signal, onUpdate, toolCallId) {
+      async execute(service, params, ctx, signal, onUpdate, call) {
         const spec = await resolveSpawn(params, ctx, {
           skills: host.skills.get,
           thinking: pi.getThinkingLevel(),
         });
-        const info = await service.spawn(spec);
+        const info = await service.spawn(spec, { call: call.key });
         const started = { at: Date.now(), started: true, agents: [info] };
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(
@@ -722,7 +730,7 @@ export function registerAgentTools(
             params.wait,
             signal,
             onUpdate,
-            { id: toolCallId, claims },
+            { id: call.id, claims },
             started,
           );
           return { ...waited, output: agentNow(service, info.id) };
@@ -816,22 +824,25 @@ export function registerAgentTools(
           collapsed: shape,
         };
       },
-      async execute(service, params, ctx, signal, onUpdate, toolCallId) {
+      async execute(service, params, ctx, signal, onUpdate, call) {
         const thinking = pi.getThinkingLevel();
-        const graph = await service.spawnGraph({
-          ...(params.name ? { name: params.name } : {}),
-          ...(params.failFast ? { failFast: true } : {}),
-          // Every agent resolves before any starts.
-          agents: await Promise.all(
-            params.agents.map(async (agent) => ({
-              ...(await resolveSpawn(agent, ctx, {
-                skills: host.skills.get,
-                thinking,
+        const graph = await service.spawnGraph(
+          {
+            ...(params.name ? { name: params.name } : {}),
+            ...(params.failFast ? { failFast: true } : {}),
+            // Every agent resolves before any starts.
+            agents: await Promise.all(
+              params.agents.map(async (agent) => ({
+                ...(await resolveSpawn(agent, ctx, {
+                  skills: host.skills.get,
+                  thinking,
+                })),
+                ...(agent.after ? { after: agent.after } : {}),
               })),
-              ...(agent.after ? { after: agent.after } : {}),
-            })),
-          ),
-        });
+            ),
+          },
+          { call: call.key },
+        );
         const started = {
           at: Date.now(),
           started: true,
@@ -845,7 +856,7 @@ export function registerAgentTools(
             params.wait,
             signal,
             onUpdate,
-            { id: toolCallId, claims },
+            { id: call.id, claims },
             started,
           );
           return { ...waited, output: graphNow(service, graph.id) };
@@ -885,26 +896,26 @@ export function registerAgentTools(
         },
         body: args.message,
       }),
-      async execute(service, params, _ctx, signal, onUpdate, toolCallId) {
+      async execute(service, params, _ctx, signal, onUpdate, call) {
         const before = service.get(params.name);
-        await service.send(
+        const sent = await service.send(
           params.name,
           params.message,
           params.followUp ? "followUp" : "auto",
+          { call: call.key },
         );
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(
             service,
-            [params.name],
+            [sent.name],
             params.wait,
             signal,
             onUpdate,
-            { id: toolCallId, claims },
+            { id: call.id, claims },
           );
-          const info = service.get(params.name) as AgentInfo;
-          return { ...waited, output: agentNow(service, info.id) };
+          return { ...waited, output: agentNow(service, sent.id) };
         }
-        const info = service.get(params.name) as AgentInfo;
+        const info = service.get(sent.id) as AgentInfo;
         const verb =
           before?.state === "working"
             ? params.followUp
@@ -946,14 +957,14 @@ export function registerAgentTools(
           timeout: seconds(args.timeout),
         },
       }),
-      execute: (service, params, _ctx, signal, onUpdate, toolCallId) =>
+      execute: (service, params, _ctx, signal, onUpdate, call) =>
         waitWithProgress(
           service,
           params.names,
           params.timeout,
           signal,
           onUpdate,
-          { id: toolCallId, claims },
+          { id: call.id, claims },
         ),
     }),
   );
@@ -1017,8 +1028,8 @@ export function registerAgentTools(
       }),
       output: StopOutput,
       call: (args) => ({ title: args.name ?? "" }),
-      async execute(service, params) {
-        const target = await service.stop(params.name);
+      async execute(service, params, _ctx, _signal, _onUpdate, call) {
+        const target = await service.stop(params.name, { call: call.key });
         const output = stopOutput(target);
         if (target.kind === "graph")
           return {

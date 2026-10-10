@@ -74,6 +74,8 @@ import {
   type AgentRecord,
   AgentsDoc,
   answerDeliveryId,
+  callRequestId,
+  createdBy,
   DELIVERED_MEMORY,
   failureDeliveryId,
   type GraphNodeRecord,
@@ -82,6 +84,8 @@ import {
   graphDeliveryId,
   type ParentRequest,
   requestId,
+  stoppedBy,
+  withStop,
 } from "./records.js";
 import { endNodes, resolveEdges, stages } from "./topology.js";
 import {
@@ -89,6 +93,7 @@ import {
   AgentError,
   type AgentInfo,
   type AgentResult,
+  type CallOptions,
   GRAPH_SIZE,
   type GraphDelivery,
   type GraphInfo,
@@ -246,16 +251,10 @@ export class AgentService {
       this.onCommit(publication),
     );
     this.records = await this.loadRecords();
-    for (const [id, record] of Object.entries(this.records)) {
+    for (const id of Object.keys(this.records)) {
       await this.loadLastAssistant(id);
-      // Outbox: a request recorded before a crash may lack its submission.
-      for (const [rid, request] of Object.entries(record.requests)) {
-        const existing = await this.harness.commit(
-          (tx) => tx.submissionByRequest(conversationId(id), rid),
-          CONTEXT,
-        );
-        if (!existing) await this.submit(id, rid, request);
-      }
+      // A request recorded before a crash may lack its submission.
+      await this.flushOutbox(id);
     }
     // Continue work that a previous process left unfinished, graphs included.
     this.harness.resume();
@@ -417,51 +416,84 @@ export class AgentService {
 
   // --- Operations ---
 
-  async spawn(spec: SpawnSpec): Promise<AgentInfo> {
+  /**
+   * Create an agent and send it its task. A repeated call returns the agent
+   * its first run created.
+   */
+  async spawn(spec: SpawnSpec, options: CallOptions = {}): Promise<AgentInfo> {
+    const { call } = options;
+    if (call !== undefined) {
+      const state = await this.harness.snapshot(AgentsDoc, CONTEXT);
+      const repeated = createdBy(state?.agents ?? {}, call);
+      if (repeated) return this.submitted(repeated);
+    }
     // Fail early with the service's view; the commit claims for real.
     claimName(spec.name, spec.profile ?? "agent", this.takenNames(), "agent");
     const { task, tools } = this.prepare(spec);
     const first = requestId(1);
     const request: ParentRequest = { message: task, whenBusy: "followUp" };
     const createdAt = Date.now();
-    const conversation = await this.harness.createConversation(
-      {
+    const id = await this.harness.commit(async (tx) => {
+      const state = await tx.doc(AgentsDoc);
+      const graphs = await tx.doc(GraphsDoc);
+      const repeated =
+        call === undefined ? undefined : createdBy(state.agents, call);
+      if (repeated) return repeated;
+      const name = claimName(
+        spec.name,
+        spec.profile ?? "agent",
+        takenNames(state, graphs, this.workingClosed()),
+        "agent",
+      );
+      const conversation = await tx.createConversation({
         ownership: { kind: "ownerless" },
-        agent: {
-          cwd: spec.cwd,
-          ...this.capabilities(tools, spec.delegate),
-          ...(spec.model ? { model: spec.model } : {}),
-          ...(spec.thinking ? { thinkingLevel: spec.thinking } : {}),
-          ...(spec.instructions ? { instructions: spec.instructions } : {}),
-        },
-        init: async (tx, id) => {
-          const state = await tx.doc(AgentsDoc);
-          const name = claimName(
-            spec.name,
-            spec.profile ?? "agent",
-            takenNames(state, await tx.doc(GraphsDoc), this.workingClosed()),
-            "agent",
-          );
-          state.agents[String(id)] = {
-            name,
-            profile: spec.profile ?? null,
-            task,
-            createdAt,
-            closed: false,
-            ambientSkills: spec.ambientSkills ?? true,
-            nextRequest: 2,
-            requests: { [first]: request },
-            delivered: [],
-            ...(spec.delegate ? { delegate: true } : {}),
-          };
-        },
-      },
-      CONTEXT,
-    );
-    const id = String(conversation.id);
-    await this.submit(id, first, request);
-    await this.refresh([id]);
-    return this.require(id);
+      });
+      await configure(tx, conversation.id, {
+        cwd: spec.cwd,
+        ...this.capabilities(tools, spec.delegate),
+        ...(spec.model ? { model: spec.model } : {}),
+        ...(spec.thinking ? { thinkingLevel: spec.thinking } : {}),
+        ...(spec.instructions ? { instructions: spec.instructions } : {}),
+      });
+      state.agents[String(conversation.id)] = {
+        name,
+        profile: spec.profile ?? null,
+        task,
+        createdAt,
+        closed: false,
+        ambientSkills: spec.ambientSkills ?? true,
+        nextRequest: 2,
+        requests: { [first]: request },
+        delivered: [],
+        ...(spec.delegate ? { delegate: true } : {}),
+        ...(call === undefined ? {} : { call }),
+      };
+      return String(conversation.id);
+    }, CONTEXT);
+    return this.submitted(id);
+  }
+
+  /**
+   * An agent once its recorded parent requests are submitted, which a
+   * repeated call finds already done.
+   */
+  private async submitted(agentId: string): Promise<AgentInfo> {
+    await this.flushOutbox(agentId);
+    await this.refresh([agentId]);
+    return this.require(agentId);
+  }
+
+  /** Outbox: submit recorded parent requests that lack their submission. */
+  private async flushOutbox(agentId: string): Promise<void> {
+    const state = await this.harness.snapshot(AgentsDoc, CONTEXT);
+    const record = state?.agents[agentId];
+    for (const [rid, request] of Object.entries(record?.requests ?? {})) {
+      const existing = await this.harness.commit(
+        (tx) => tx.submissionByRequest(conversationId(agentId), rid),
+        CONTEXT,
+      );
+      if (!existing) await this.submit(agentId, rid, request);
+    }
   }
 
   /**
@@ -469,9 +501,23 @@ export class AgentService {
    * that lists others in `after` starts once they ended and receives their
    * results. One commit creates the graph task, a node task per agent, and
    * each agent's conversation owned by its node; the nodes then send the
-   * tasks.
+   * tasks. A repeated call returns the graph its first run created.
    */
-  async spawnGraph(spec: GraphSpec): Promise<GraphInfo> {
+  async spawnGraph(
+    spec: GraphSpec,
+    options: CallOptions = {},
+  ): Promise<GraphInfo> {
+    const { call } = options;
+    if (call !== undefined) {
+      const state = await this.harness.snapshot(GraphsDoc, CONTEXT);
+      const repeated = createdBy(state?.graphs ?? {}, call);
+      if (repeated) {
+        await this.refresh(
+          state?.graphs[repeated]?.nodes.map((node) => node.agent) ?? [],
+        );
+        return this.requireGraph(repeated);
+      }
+    }
     const count = spec.agents.length;
     if (count < GRAPH_SIZE.min || count > GRAPH_SIZE.max)
       throw new AgentError(
@@ -504,12 +550,17 @@ export class AgentService {
     const policy: GraphPolicy = spec.failFast ? "failFast" : "allSettled";
     const createdAt = Date.now();
     const created = await this.anchor.commit(async (tx) => {
+      const graphs = await tx.doc(GraphsDoc);
+      const repeated =
+        call === undefined ? undefined : createdBy(graphs.graphs, call);
+      if (repeated)
+        return {
+          id: repeated,
+          agents:
+            graphs.graphs[repeated]?.nodes.map((node) => node.agent) ?? [],
+        };
       const names = claim(
-        takenNames(
-          await tx.doc(AgentsDoc),
-          await tx.doc(GraphsDoc),
-          this.workingClosed(),
-        ),
+        takenNames(await tx.doc(AgentsDoc), graphs, this.workingClosed()),
       );
       const graph = await tx.createTask(
         GraphTask,
@@ -566,6 +617,7 @@ export class AgentService {
         })),
         closed: false,
         pending: true,
+        ...(call === undefined ? {} : { call }),
       };
       return { id: String(graph), agents };
     }, CONTEXT);
@@ -573,8 +625,23 @@ export class AgentService {
     return this.requireGraph(created.id);
   }
 
-  /** Message an agent on behalf of the parent model. */
-  async send(nameOrId: string, message: string, mode: SendMode): Promise<void> {
+  /**
+   * Message an agent on behalf of the parent model. A call's request is
+   * keyed by the call, so a repeated call returns the agent its first run
+   * messaged, wherever its name points now, without messaging it again.
+   */
+  async send(
+    nameOrId: string,
+    message: string,
+    mode: SendMode,
+    options: CallOptions = {},
+  ): Promise<AgentInfo> {
+    const keyed =
+      options.call === undefined ? undefined : callRequestId(options.call);
+    if (keyed !== undefined) {
+      const repeated = await this.requestOwner(keyed);
+      if (repeated) return this.submitted(repeated);
+    }
     const target = this.requireTarget(nameOrId);
     if (target.kind === "graph")
       throw new AgentError(
@@ -592,13 +659,26 @@ export class AgentService {
       const record = state.agents[info.id];
       if (!record) throw new AgentError(`Agent ${info.name} is missing`);
       record.closed = false;
-      const next = requestId(record.nextRequest);
-      record.nextRequest += 1;
+      const next = keyed ?? requestId(record.nextRequest);
+      if (keyed === undefined) record.nextRequest += 1;
       record.requests[next] = request;
       return next;
     }, CONTEXT);
     await this.submit(info.id, rid, request);
     await this.refresh([info.id]);
+    return this.require(info.id);
+  }
+
+  /** The agent that holds a parent request, recorded or submitted. */
+  private requestOwner(rid: string): Promise<string | undefined> {
+    return this.harness.commit(async (tx) => {
+      const state = await tx.doc(AgentsDoc);
+      for (const [id, record] of Object.entries(state.agents)) {
+        if (record.requests[rid]) return id;
+        if (await tx.submissionByRequest(conversationId(id), rid)) return id;
+      }
+      return undefined;
+    }, CONTEXT);
   }
 
   /** Message an agent on behalf of the user; results stay in the agent. */
@@ -643,19 +723,41 @@ export class AgentService {
    * End an agent or a graph. An agent's work is interrupted, its pending
    * parent requests dropped, and it closes; storage keeps its conversation,
    * and messaging it later reopens it. A graph is aborted with its agents,
-   * delivers nothing, and closes with them.
+   * delivers nothing, and closes with them. A repeated call returns what
+   * its first run stopped, wherever its name points now, without stopping
+   * newer work.
    */
-  async stop(nameOrId: string): Promise<Target> {
+  async stop(nameOrId: string, options: CallOptions = {}): Promise<Target> {
+    const { call } = options;
+    if (call !== undefined) {
+      const repeated = await this.stopOfCall(call);
+      if (repeated) return repeated;
+    }
     const target = this.requireTarget(nameOrId);
     if (target.kind === "graph") {
-      await this.stopGraph(target.info.id);
+      await this.stopGraph(target.info.id, call);
       return { kind: "graph", info: this.requireGraph(target.info.id) };
     }
-    await this.stopAgent(target.info.id);
+    await this.stopAgent(target.info.id, call);
     return { kind: "agent", info: this.require(target.info.id) };
   }
 
-  private async stopAgent(agentId: string): Promise<void> {
+  /** What a parent call stopped, from stored records. */
+  private async stopOfCall(call: string): Promise<Target | undefined> {
+    const [graphs, agents] = await Promise.all([
+      this.harness.snapshot(GraphsDoc, CONTEXT),
+      this.harness.snapshot(AgentsDoc, CONTEXT),
+    ]);
+    const graph = stoppedBy(graphs?.graphs ?? {}, call);
+    const graphInfo =
+      graph === undefined ? undefined : this.graphInfos.get(graph);
+    if (graphInfo) return { kind: "graph", info: graphInfo };
+    const agent = stoppedBy(agents?.agents ?? {}, call);
+    const info = agent === undefined ? undefined : this.infos.get(agent);
+    return info ? { kind: "agent", info } : undefined;
+  }
+
+  private async stopAgent(agentId: string, call?: string): Promise<void> {
     await this.interrupt(agentId);
     await this.harness.commit(async (tx) => {
       const state = await tx.doc(AgentsDoc);
@@ -663,12 +765,13 @@ export class AgentService {
       if (!record) return;
       record.closed = true;
       record.requests = {};
+      if (call !== undefined) record.stops = withStop(record.stops, call);
     }, CONTEXT);
     this.settled.delete(agentId);
     await this.refresh([agentId]);
   }
 
-  private async stopGraph(graphId: string): Promise<void> {
+  private async stopGraph(graphId: string, call?: string): Promise<void> {
     const info = this.requireGraph(graphId);
     const finished = await this.isFinished(Number(graphId));
     await this.harness.commit(async (tx) => {
@@ -676,6 +779,7 @@ export class AgentService {
       if (!graph) return;
       graph.pending = false;
       graph.closed = true;
+      if (call !== undefined) graph.stops = withStop(graph.stops, call);
       // A graph that holds a decided outcome can't become aborted, so the
       // record keeps the stop.
       if (!finished) graph.stopped = true;

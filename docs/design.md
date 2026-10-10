@@ -26,14 +26,14 @@ composition: graphs of agents that pass results to each other.
 | Anchor | The conversation that owns the graphs the parent starts | Chosen by the host; inside Pi the harness's root conversation, which never runs |
 | Parent | The conversation that starts agents and receives their results | `Parent`, implemented by the host; inside Pi, Pi's session |
 | Agent | A durable, named conversation | An ownerless conversation, or one a turn owns, plus an `AgentRecord` |
-| AgentRecord | Name, profile, creation time, closed flag, parent requests, graph | The session document `pi-agents.agents` |
+| AgentRecord | Name, profile, creation time, closed flag, parent requests, graph, keys of the calls that spawned and stopped it | The session document `pi-agents.agents` |
 | Graph | Named agents plus edges that carry results; reports back as one result | A graph task plus a `GraphRecord` |
-| GraphRecord | Name, policy, creation time, nodes (agent, node task, inputs), closed flag, whether the parent still expects the result | The session document `pi-agents.graphs` |
+| GraphRecord | Name, policy, creation time, nodes (agent, node task, inputs), closed flag, whether the parent still expects the result, keys of the calls that spawned and stopped it | The session document `pi-agents.graphs` |
 | Node | One graph agent's task: wait for its inputs, then one message and its answer | A node task |
 | Edge | `A → B`: B starts once A finished and receives A's final message | A node's `after` list |
 | Turn | One input and the work until its final answer | A pi-durable input submission |
 | Result | The last assistant message: text, stop reason, entry ID | The turn's assistant entry |
-| Parent request | A turn the parent model started through `spawn` or `send` | An outbox entry in the record plus a submission with the same request ID |
+| Parent request | A turn the parent model started through `spawn` or `send` | An outbox entry in the record plus a submission with the same request ID: `parent:<n>`, or `call:<key>` for a keyed send |
 | Profile | Reusable spawn defaults | `<cwd>/.pi/agents/*.md` and `~/.pi/agent/agents/*.md` |
 | AgentService | The core: the API for tools and UI | Runs on the harness and anchor the host hands it |
 
@@ -125,6 +125,33 @@ against the durable records, so agents started at once can't share a name.
   UI asks for confirmation while the agent works.
 - Agents start other agents only when they may delegate (see "Agents that
   delegate"); helpers never do.
+
+### Keyed calls
+
+Every parent call that spawns, sends, or stops passes the service its key,
+so repeating the call finds what its first run created or did instead of
+acting again, the way `delegate_graph` finds the graph its tool task owns
+and Pi's experimental `subagent` tool the conversation its task owns. Pi
+never runs a tool call twice today; a durable host that replays calls after
+a crash can declare the parent tools safe to repeat.
+
+- A spawn stores the key in what it creates (`AgentRecord.call`,
+  `GraphRecord.call`) in the creating commit. A repeat returns that agent
+  or graph, with its recorded requests submitted.
+- A send uses `call:<key>` as its request ID instead of the next
+  `parent:<n>`. A repeat finds the agent that holds the request, recorded
+  or already submitted, and messages nothing.
+- A stop records the key in what it stopped (`stops`, the latest 16) in the
+  commit that stops it. A repeat returns that agent or graph and leaves
+  newer work alone.
+- Repeats look up their key before resolving names, so a name that moved
+  to a newer agent doesn't redirect them.
+- Inside Pi the key is the tool call's ID qualified by the session entry of
+  the assistant message that issued it (`src/pi/calls.ts`): some providers
+  number calls per message, so IDs alone can repeat across messages.
+  Codemode's nested calls have IDs of their own, `<call>/<n>`.
+- The user's actions in the UI and calls without an ID pass no key and act
+  every time, and sends without a key keep numbering `parent:<n>`.
 
 ## Graphs
 
@@ -227,8 +254,10 @@ reserves it. A migration must keep the task IDs in the checkpoints (a node's
 migrate. A task whose definition is missing or older than the stored one
 stays blocked rather than lost; stopping its graph then settles it as
 `orphaned`. Documents migrate the same way through `defineDoc`'s `migrate`,
-applied on their next access. The new optional `AgentRecord.graph` field
-needed no migration.
+applied on their next access. Optional fields that earlier records lack
+needed no migration: `AgentRecord.graph`, and `call` and `stops` of both
+records. Requests of earlier versions keep their `parent:<n>` IDs, and
+sends without a key continue that numbering.
 
 ### Agents that delegate
 
@@ -583,17 +612,20 @@ once the session holds it and isn't posted again meanwhile, a restart after
 Pi saved a delivery acknowledges it without posting, a restart before
 posts it again under the same identity, and a wait's result counts once
 Pi stored the call's result, for nested calls through their caller's.
-Graph tests cover `allSettled` with
-answers and failures, pipelines, merges with failed inputs, skipped agents,
-`failFast` stopping waiting agents, edge validation, stopping a graph, the
-ownership tree through the task graph, restarts mid-graph and mid-pipeline
-that repeat no finished agent and send no task twice, and messaging a
-graph's agent after the graph finished. Tool tests check every result
-scripts get against its output schema, for answers, interrupted and failed
-turns after an earlier answer, waits ended by a timeout, an abort, or a
-steer, and answered, failed, skipped, and stopped graphs. A faux model
-holds prompts until the test releases them or the request aborts, so
-these tests don't race the model.
+Keyed call tests repeat a spawn, a graph spawn, a send, and a stop with the
+same key, also after the name moved to a newer agent, and check that each
+acts once, that a repeated stop leaves newer work alone, that calls without
+a key act every time, and that the session of v0.27.0 takes keyed calls.
+Graph tests cover `allSettled` with answers and failures, pipelines, merges
+with failed inputs, skipped agents, `failFast` stopping waiting agents, edge
+validation, stopping a graph, the ownership tree through the task graph,
+restarts mid-graph and mid-pipeline that repeat no finished agent and send
+no task twice, and messaging a graph's agent after the graph finished. Tool
+tests check every result scripts get against its output schema, for answers,
+interrupted and failed turns after an earlier answer, waits ended by a
+timeout, an abort, or a steer, and answered, failed, skipped, and stopped
+graphs. A faux model holds prompts until the test releases them or the
+request aborts, so these tests don't race the model.
 Delegation tests cover a fan-out with a merging helper, that helpers and
 other agents can't delegate, progress, Esc on the agent, stopping a graph
 above it, stopping only the helpers, tool and size limits, names, and a

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { renderToolOutputType } from "@earendil-works/pi-codemode";
 import type {
   AgentToolUpdateCallback,
@@ -7,6 +8,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
+import { AgentsDoc } from "../../src/agents/records.js";
 import type { AgentService } from "../../src/agents/service.js";
 import {
   type AgentInfo,
@@ -26,6 +28,7 @@ import {
 import {
   closeService,
   createGatedFaux,
+  hostOf,
   MODEL,
   openService,
   parentOf,
@@ -79,9 +82,11 @@ async function gated() {
   release = faux.release;
   service = await openService({ models: faux.models });
   const registered = tools();
+  let calls = 0;
   /**
    * Run a tool and return its text and what a script gets, which must match
-   * the tool's output schema.
+   * the tool's output schema. Every run is a call of its own unless `id`
+   * repeats one.
    */
   return async (
     name: string,
@@ -89,12 +94,13 @@ async function gated() {
     options: {
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback<unknown>;
+      id?: string;
     } = {},
   ): Promise<{ text: string; details: unknown; output: unknown }> => {
     const tool = registered.get(name);
     if (!tool) throw new Error(`No tool ${name}`);
     const result = await tool.execute(
-      "call",
+      options.id ?? `call-${++calls}`,
       params,
       options.signal,
       options.onUpdate,
@@ -389,6 +395,46 @@ describe("script output", () => {
           ],
         },
       ],
+    });
+  });
+});
+
+describe("repeated calls", () => {
+  test("a call with the same ID acts once", async () => {
+    const run = await gated();
+    const spawn = { task: "hold", name: "w" };
+    const first = await run("agent_spawn", spawn, { id: "spawn" });
+    const again = await run("agent_spawn", spawn, { id: "spawn" });
+    expect([again.text, again.output]).toEqual([first.text, first.output]);
+    expect(service?.list()).toHaveLength(1);
+
+    const graph = {
+      name: "g",
+      agents: [
+        { task: "hold one", name: "a" },
+        { task: "two", name: "b", after: ["a"] },
+      ],
+    };
+    await run("agent_spawn_graph", graph, { id: "graph" });
+    await run("agent_spawn_graph", graph, { id: "graph" });
+    expect(service?.graphs()).toHaveLength(1);
+
+    await run("agent_send", { name: "w", message: "more" }, { id: "send" });
+    await run("agent_send", { name: "w", message: "more" }, { id: "send" });
+    const w = service?.get("w")?.id as string;
+    const records = await hostOf(
+      service as AgentService,
+    ).harness.harness.snapshot(AgentsDoc, BACKGROUND_CONTEXT);
+    expect(Object.keys(records?.agents[w]?.requests ?? {})).toHaveLength(2);
+
+    await run("agent_stop", { name: "w" }, { id: "stop" });
+    await run("agent_send", { name: "w", message: "hold again" });
+    // The repeat reports what it stopped, which works on newer work.
+    expect(
+      await run("agent_stop", { name: "w" }, { id: "stop" }),
+    ).toMatchObject({
+      text: "Stopped w.",
+      output: { kind: "agent", name: "w", state: "working" },
     });
   });
 });

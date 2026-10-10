@@ -168,4 +168,37 @@ describe("sessions stored by earlier versions", () => {
     await until(() => service.pendingDeliveries().length === 1);
     expect(service.get("b")?.result?.text).toBe("done: once more");
   });
+
+  test("take keyed calls next to what they stored", async () => {
+    const service = await openFixture();
+    await until(() => service.pendingDeliveries().length === 5);
+    const { harness } = hostOf(service).harness;
+    const requests = async (name: string) => {
+      const id = service.get(name)?.id as string;
+      const records = await harness.snapshot(AgentsDoc, CONTEXT);
+      return Object.keys(records?.agents[id]?.requests ?? {});
+    };
+
+    // `b` still owes the answer to `parent:2`.
+    await service.send("b", "keyed", "auto", { call: "k1" });
+    await service.send("b", "keyed", "auto", { call: "k1" });
+    expect(await requests("b")).toEqual(["parent:2", "call:k1"]);
+
+    // A record without `stops` takes a keyed stop, which acts once.
+    await service.stop("a", { call: "k2" });
+    await service.send("a", "again", "auto");
+    await service.stop("a", { call: "k2" });
+    expect(service.get("a")?.closed).toBe(false);
+    expect(await requests("a")).toEqual(["parent:2"]);
+
+    const spawned = await service.spawn(
+      { name: "n", task: "new", cwd: ".", model: MODEL },
+      { call: "k3" },
+    );
+    const again = await service.spawn(
+      { name: "n", task: "new", cwd: ".", model: MODEL },
+      { call: "k3" },
+    );
+    expect(again.id).toBe(spawned.id);
+  });
 });

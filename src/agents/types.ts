@@ -270,6 +270,16 @@ export type HelperResolver = (
 
 export type SendMode = "auto" | "followUp";
 
+/** What a parent call passes when it spawns, sends, or stops. */
+export interface CallOptions {
+  /**
+   * The call's key. Repeating a call with the same key finds what its first
+   * run created or did instead of acting again. Absent for the user's
+   * actions, which act every time.
+   */
+  call?: string;
+}
+
 /** Settled parent requests that still need delivery to the parent. Several
  * requests answered by one entry deliver together. */
 export interface AgentDelivery {

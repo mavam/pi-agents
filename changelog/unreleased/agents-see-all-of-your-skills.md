@@ -3,7 +3,9 @@ title: Agents see all of your skills
 type: bugfix
 authors:
   - mavam
-created: 2026-10-10T08:00:53.411258Z
+prs:
+  - 79
+created: 2026-10-10T08:01:23.342762Z
 ---
 
 Agents now see the same skills as your Pi session. Before, they missed the

@@ -3,7 +3,9 @@ title: Choose skills for each agent
 type: feature
 authors:
   - mavam
-created: 2026-10-10T08:00:46.566647Z
+prs:
+  - 79
+created: 2026-10-10T08:01:23.60034Z
 ---
 
 Pi can now name the skills an agent gets, so you can ask for an agent that

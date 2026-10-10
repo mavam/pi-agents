@@ -14,12 +14,16 @@ composition: graphs of agents that pass results to each other.
 - The parent conversation stays primary. Agents appear as compact lines, tool
   calls, and result messages.
 - The frontend depends on `AgentService` only, never on pi-durable types.
+- The host owns the harness. The core runs on whatever harness and anchor
+  its host hands it, so it can later run inside Pi's durable session worker
+  with a different host and the same core.
 
 ## Core abstractions
 
 | Abstraction | Meaning | Backed by |
 | --- | --- | --- |
-| Host | One pi-durable `Harness` per parent Pi session | JSONL storage in `~/.pi/agent/pi-agents/<session-id>/` |
+| Host | Owns the storage, its lock, and one pi-durable `Harness` per parent Pi session | JSONL storage in `~/.pi/agent/pi-agents/sessions/<session-id>/` |
+| Anchor | The conversation that owns the graphs the parent starts | Chosen by the host; inside Pi the harness's root conversation, which never runs |
 | Agent | A durable, named conversation | An ownerless conversation, or one a turn owns, plus an `AgentRecord` |
 | AgentRecord | Name, profile, creation time, closed flag, parent requests, graph | The session document `pi-agents.agents` |
 | Graph | Named agents plus edges that carry results; reports back as one result | A graph task plus a `GraphRecord` |
@@ -30,7 +34,37 @@ composition: graphs of agents that pass results to each other.
 | Result | The last assistant message: text, stop reason, entry ID | The turn's assistant entry |
 | Parent request | A turn the parent model started through `spawn` or `send` | An outbox entry in the record plus a submission with the same request ID |
 | Profile | Reusable spawn defaults | `<cwd>/.pi/agents/*.md` and `~/.pi/agent/agents/*.md` |
-| AgentService | The API for tools and UI | Wraps the Host |
+| AgentService | The core: the API for tools and UI | Runs on the harness and anchor the host hands it |
+
+## Structure
+
+pi-agents mirrors the split of Pi's durable session worker
+(`packages/coding-agent/src/experimental/` in Pi's repository), which opens
+the store and the harness and hands harness, conversation, models, and
+settings to the parts that need them:
+
+- **Host** (`src/host`, and `SessionHost` in `src/pi/session.ts`): takes the
+  session's lock, opens its storage and the harness with pi-agents'
+  extensions installed (`openAgentHarness`), and chooses the anchor. Inside
+  Pi the anchor is the root conversation, which sessions stored by earlier
+  versions already anchor their graphs on. The host closes the harness after
+  the core.
+- **Core** (`src/agents`): `AgentService` and pi-agents' pi-durable
+  extensions. `createAgentExtensions` returns the tools, the prompt, the
+  graph tasks, and delegation; `installAgentExtensions` installs them in any
+  registry, the way the session worker installs `CodingTools` and its
+  prompt, and `agentSelection` is the default selection of agents.
+  `AgentService.start` takes the harness, the anchor, and the extensions.
+  The core never opens storage or a harness, never closes them, and never
+  assumes the root conversation.
+- **Frontend** (`src/pi`, `src/ui`): tools, commands, and views. They see
+  plain data through `AgentService`, like the session worker's presentations
+  see `AgentController` and `Transcript`; only the attach view reads a
+  conversation's view.
+
+A durable Pi would host pi-agents in its session worker: install the
+extensions in the worker's registry and pass its harness and the session's
+main conversation as the anchor.
 
 Agent states are derived, never stored:
 
@@ -105,7 +139,7 @@ Agents never select it; tasks resolve their definitions from the registry.
 ### Ownership
 
 ```text
-host conversation (the harness root; never runs)
+anchor (inside Pi the harness root; never runs)
 └─ graph task             background, owned by the conversation
    └─ node task × n       owned by the graph
       └─ agent conversation   owned by its node
@@ -118,7 +152,7 @@ Names, tools, thinking levels, and edges are validated before it: `after`
 must name agents of the same graph, an agent can't wait for itself, and the
 edges form no cycle. A graph starts whole or not at all. Then:
 
-- The graph task is a background task, so nothing on the host conversation
+- The graph task is a background task, so nothing on the anchor
   reaches it, and it never blocks idle waits of standalone agents.
 - Conversations hang below their nodes, not below the graph. `failFast` marks
   every other live node, including nodes still waiting for inputs, and the
@@ -231,8 +265,8 @@ delegating agent's conversation
 
 Parent requests use an outbox for exactly-once submission: the record stores
 the request ID and message first, then the submission follows with the same
-request ID. On open, the Host resubmits outbox entries without a submission;
-the request ID makes this idempotent.
+request ID. When the service starts, it resubmits outbox entries without a
+submission; the request ID makes this idempotent.
 
 When a parent request settles:
 
@@ -469,9 +503,14 @@ model's message broke off before Pi ran it.
 
 ## Testing
 
-Tests use pi-durable's memory storage and pi-ai's faux provider. Restart tests
-use JSONL storage: interrupt a turn, close, reopen, and verify that the turn
-completes and its result delivers once. Graph tests cover `allSettled` with
+Tests use pi-durable's memory storage and pi-ai's faux provider, and open
+the harness through the same host function as Pi. A host of its own, with
+an ordinary conversation as the anchor, runs the core unchanged. Restart
+tests use JSONL storage: interrupt a turn, close, reopen, and verify that
+the turn completes and its result delivers once. A session stored by
+v0.27.0 (`tests/fixtures/v0.27.0`) opens with its agents, graphs, and
+undelivered results, resumes its unfinished work on the root anchor, and
+continues its request numbering. Graph tests cover `allSettled` with
 answers and failures, pipelines, merges with failed inputs, skipped agents,
 `failFast` stopping waiting agents, edge validation, stopping a graph, the
 ownership tree through the task graph, restarts mid-graph and mid-pipeline

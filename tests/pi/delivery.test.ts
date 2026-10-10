@@ -7,7 +7,7 @@ import type { AgentService } from "../../src/agents/service.js";
 import { DeliveryManager } from "../../src/pi/delivery.js";
 import { GRAPH_RESULT_MESSAGE, RESULT_MESSAGE } from "../../src/pi/messages.js";
 import type { SessionHost } from "../../src/pi/session.js";
-import { MODEL, openService, until } from "../agents/helpers.js";
+import { closeService, MODEL, openService, until } from "../agents/helpers.js";
 
 interface Sent {
   customType: string;
@@ -18,7 +18,7 @@ interface Sent {
 let service: AgentService | undefined;
 
 afterEach(async () => {
-  await service?.close();
+  if (service) await closeService(service);
   service = undefined;
 });
 

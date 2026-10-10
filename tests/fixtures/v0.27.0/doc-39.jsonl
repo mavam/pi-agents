@@ -1,0 +1,1 @@
+{"format":1,"type":"record","seq":35,"ordinal":1,"payload":{"type":"document","id":39,"content":{"version":1,"kind":"base","value":{"models":{"faux/faux-1":{"input":1037,"output":3,"cacheRead":0,"cacheWrite":1037,"totalTokens":2077,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}}},"tools":{}}}}}

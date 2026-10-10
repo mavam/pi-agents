@@ -24,7 +24,12 @@ import {
   renderDetails,
   startedView,
 } from "../../src/pi/tools.js";
-import { createGatedFaux, MODEL, openService } from "../agents/helpers.js";
+import {
+  closeService,
+  createGatedFaux,
+  MODEL,
+  openService,
+} from "../agents/helpers.js";
 
 const noSkills = new SkillCatalog(async () => []);
 
@@ -34,7 +39,7 @@ let release: (() => void) | undefined;
 afterEach(async () => {
   release?.();
   release = undefined;
-  await service?.close();
+  if (service) await closeService(service);
   service = undefined;
 });
 

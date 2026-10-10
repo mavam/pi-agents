@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentService } from "../../src/agents/service.js";
 import {
+  closeService,
   createFaux,
   jsonlStorage,
   MODEL,
@@ -17,7 +18,7 @@ import {
 let services: AgentService[] = [];
 
 afterEach(async () => {
-  for (const service of services) await service.close();
+  for (const service of services) await closeService(service);
   services = [];
 });
 
@@ -245,7 +246,7 @@ describe("durability", () => {
     });
     await first.spawn({ task: "long", name: "w", cwd: ".", model: MODEL });
     await until(() => first.get("w")?.state === "working");
-    await first.close();
+    await closeService(first);
 
     const fast = createFaux();
     const second = await open({
@@ -257,7 +258,7 @@ describe("durability", () => {
     expect(delivery?.name).toBe("w");
     expect(delivery?.outcome.kind).toBe("answered");
     if (delivery) await second.acknowledge(delivery);
-    await second.close();
+    await closeService(second);
     services = services.filter((service) => service !== second);
 
     const third = await open({

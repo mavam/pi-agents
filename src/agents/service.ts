@@ -1,5 +1,10 @@
 /**
- * AgentService: the agent abstraction over one pi-durable Harness.
+ * AgentService: the agent abstraction over one pi-durable Harness, the
+ * core of pi-agents. The host opens the harness with pi-agents' extensions
+ * installed (see extensions.ts) and hands it over with the anchor, the
+ * conversation that owns the parent's graphs; the service never opens
+ * storage or a harness and never closes them.
+ *
  * Standalone agents are ownerless conversations, so aborting other work
  * never reaches them. A graph's agents are conversations owned by the node
  * tasks of the graph (see graphs.ts). The service keeps a derived
@@ -17,7 +22,6 @@ import {
   BACKGROUND_CONTEXT,
   withAbortSignal,
 } from "@earendil-works/chord/context";
-import type { Models } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
   type CommitPublication,
@@ -25,28 +29,18 @@ import {
   type ConversationId,
   type ConversationView,
   configure,
-  createRegistry,
   type AgentState as DurableAgentState,
   type EntryRecord,
   type Extension,
-  Harness,
-  type HarnessSettings,
+  type Harness,
   LiveDoc,
-  type Registry,
-  type Storage,
   type TaskId,
   type TaskOutcome,
   type ToolRegistration,
   UsageDoc,
 } from "@earendil-works/pi-durable";
-import { ExecutionEnvs } from "../host/env.js";
-import { DEFAULT_AGENT_TOOLS, TOOLS_EXTENSION } from "../host/tools.js";
-import {
-  createDelegationExtension,
-  DELEGATE_TOOL,
-  DELEGATION_LIMITS,
-  type DelegationLimits,
-} from "./delegation.js";
+import { DEFAULT_AGENT_TOOLS } from "../host/tools.js";
+import { DELEGATE_TOOL } from "./delegation.js";
 import {
   ASSISTANT_KIND,
   activityOf,
@@ -63,8 +57,8 @@ import {
   sumUsage,
   type TurnSettlement,
 } from "./derive.js";
+import type { AgentExtensions } from "./extensions.js";
 import {
-  createGraphsExtension,
   GRAPH_TASK,
   GraphTask,
   NODE_TASK,
@@ -94,7 +88,6 @@ import {
   type GraphNode,
   type GraphPolicy,
   type GraphSpec,
-  type HelperResolver,
   isThinkingLevel,
   type NodeOutcome,
   type PendingDelivery,
@@ -110,18 +103,11 @@ const CONTEXT = BACKGROUND_CONTEXT;
 const REFRESH_DELAY_MS = 50;
 
 export interface AgentServiceOptions {
-  storage: Storage;
-  models: Models;
-  /** Fallback working directory for agents without one. */
-  cwd: string;
-  /** Installed extensions; also the default selection of every agent. */
-  extensions: Extension[];
-  settings?: HarnessSettings;
-  onReport?: (error: unknown) => void;
-  /** Resolves the profiles, models, and skills of helpers. */
-  resolveHelper: HelperResolver;
-  /** Tests only: tighter delegation limits. */
-  delegationLimits?: Partial<DelegationLimits>;
+  /** The harness the host opened, with `extensions` installed. */
+  harness: Harness;
+  /** The conversation that owns the graphs the parent starts. */
+  anchor: Conversation;
+  extensions: AgentExtensions;
 }
 
 export interface WaitOutcome {
@@ -199,45 +185,26 @@ export class AgentService {
   private readonly checks = new Set<() => void>();
   private readonly listeners = new Set<() => void>();
   private readonly dirty = new Set<string>();
-  private host: Promise<Conversation> | undefined;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshChain: Promise<void> = Promise.resolve();
   private unsubscribe: (() => void) | undefined;
   private closed = false;
 
-  private constructor(
-    private readonly harness: Harness,
-    private readonly registry: Registry,
-    private readonly envs: ExecutionEnvs,
-    private readonly delegation: Extension,
-  ) {}
+  private readonly harness: Harness;
+  private readonly anchor: Conversation;
+  private readonly extensions: AgentExtensions;
 
-  static async open(options: AgentServiceOptions): Promise<AgentService> {
-    const registry = createRegistry();
-    for (const extension of options.extensions) registry.install(extension);
-    // Graph tasks resolve from the registry; agents never select them.
-    registry.install(createGraphsExtension());
-    // Only delegating agents select delegation; see `delegatingAgent`.
-    const delegation = createDelegationExtension({
-      resolve: options.resolveHelper,
-      limits: { ...DELEGATION_LIMITS, ...options.delegationLimits },
-    });
-    registry.install(delegation);
-    const envs = new ExecutionEnvs(options.cwd);
-    const harness = await Harness.open(
-      options.storage,
-      {
-        models: options.models,
-        registry,
-        settings: { ...options.settings, extensions: options.extensions },
-        env: envs.env,
-        ...(options.onReport ? { onReport: options.onReport } : {}),
-      },
-      CONTEXT,
-    );
-    const service = new AgentService(harness, registry, envs, delegation);
+  private constructor(options: AgentServiceOptions) {
+    this.harness = options.harness;
+    this.anchor = options.anchor;
+    this.extensions = options.extensions;
+  }
+
+  /** Start the service over the host's harness; it resumes unfinished work. */
+  static async start(options: AgentServiceOptions): Promise<AgentService> {
+    const service = new AgentService(options);
     try {
-      await service.start();
+      await service.initialize();
     } catch (error) {
       await service.close();
       throw error;
@@ -247,7 +214,7 @@ export class AgentService {
 
   // --- Lifecycle ---
 
-  private async start(): Promise<void> {
+  private async initialize(): Promise<void> {
     this.unsubscribe = this.harness.subscribeCommits((publication) =>
       this.onCommit(publication),
     );
@@ -268,6 +235,7 @@ export class AgentService {
     await this.refresh(Object.keys(this.records));
   }
 
+  /** Stop observing the harness; the host closes it afterwards. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -276,8 +244,6 @@ export class AgentService {
     this.listeners.clear();
     for (const check of [...this.checks]) check();
     await this.refreshChain.catch(() => {});
-    await this.harness.close(CONTEXT);
-    await this.envs.cleanup(CONTEXT);
   }
 
   // --- Observation ---
@@ -505,8 +471,7 @@ export class AgentService {
     );
     const policy: GraphPolicy = spec.failFast ? "failFast" : "allSettled";
     const createdAt = Date.now();
-    const host = await this.hostConversation();
-    const created = await host.commit(async (tx) => {
+    const created = await this.anchor.commit(async (tx) => {
       const names = claim(
         takenNames(
           await tx.doc(AgentsDoc),
@@ -926,12 +891,6 @@ export class AgentService {
     return { task, tools };
   }
 
-  /** The conversation that owns graph tasks; it never runs itself. */
-  private hostConversation(): Promise<Conversation> {
-    this.host ??= this.harness.root(CONTEXT);
-    return this.host;
-  }
-
   /**
    * The tools and extensions of a new agent. A delegating agent also selects
    * the delegation extension and its tool, so only it can start helpers.
@@ -941,21 +900,16 @@ export class AgentService {
     delegate: boolean | undefined,
   ): { tools: ToolRegistration[]; extensions?: { add: Extension[] } } {
     if (!delegate) return { tools };
-    const tool = this.delegation.tools?.find(
-      (each) => each.name === DELEGATE_TOOL,
-    );
+    const { delegation } = this.extensions;
+    const tool = delegation.tools?.find((each) => each.name === DELEGATE_TOOL);
     return {
       tools: tool ? [...tools, tool] : tools,
-      extensions: { add: [this.delegation] },
+      extensions: { add: [delegation] },
     };
   }
 
   private resolveTools(names: string[] | undefined): ToolRegistration[] {
-    const available = this.registry
-      .snapshot()
-      .tools()
-      .filter(({ extension }) => extension.name === TOOLS_EXTENSION)
-      .map(({ tool }) => tool);
+    const available = [...(this.extensions.tools.tools ?? [])];
     const wanted = names ?? [...DEFAULT_AGENT_TOOLS];
     const unknown = wanted.filter(
       (name) => !available.some((tool) => tool.name === name),

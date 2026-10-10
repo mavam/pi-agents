@@ -13,6 +13,7 @@ import type {
   SpawnSpec,
 } from "../../src/agents/types.js";
 import {
+  closeService,
   jsonlStorage,
   lastUserText,
   MODEL,
@@ -24,7 +25,7 @@ import {
 let services: AgentService[] = [];
 
 afterEach(async () => {
-  for (const service of services) await service.close();
+  for (const service of services) await closeService(service);
   services = [];
 });
 
@@ -40,7 +41,7 @@ async function reopen(
   service: AgentService,
   options: Parameters<typeof openService>[0],
 ): Promise<AgentService> {
-  await service.close();
+  await closeService(service);
   services = services.filter((each) => each !== service);
   return open(options);
 }

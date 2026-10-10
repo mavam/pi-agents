@@ -10,10 +10,15 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
+import type { DelegationLimits } from "../../src/agents/delegation.js";
+import {
+  type AgentExtensions,
+  createAgentExtensions,
+} from "../../src/agents/extensions.js";
 import { AgentService } from "../../src/agents/service.js";
 import type { HelperResolver } from "../../src/agents/types.js";
-import { createPromptExtension } from "../../src/host/prompt.js";
-import { createToolsExtension } from "../../src/host/tools.js";
+import type { SkillSource } from "../../src/catalog/skills.js";
+import { type AgentHarness, openAgentHarness } from "../../src/host/harness.js";
 
 export const MODEL = { provider: "faux", modelId: "faux-1" };
 
@@ -103,22 +108,74 @@ export const inheritHelper: HelperResolver = async (request, defaults) => ({
   ...(request.tools ? { tools: request.tools } : {}),
 });
 
+export interface HostOptions {
+  storage?: Storage;
+  models?: ReturnType<typeof createFaux>["models"];
+  /** Whether the project is trusted, and its skills. */
+  trusted?: boolean;
+  skills?: SkillSource;
+  delegationLimits?: Partial<DelegationLimits>;
+}
+
+/** What a test host opened for a service: the harness and its anchor. */
+export interface TestHost {
+  service: AgentService;
+  harness: AgentHarness;
+  extensions: AgentExtensions;
+}
+
+const hosts = new Map<AgentService, TestHost>();
+
+export function testExtensions(options: HostOptions = {}): AgentExtensions {
+  return createAgentExtensions({
+    prompt: {
+      trusted: () => options.trusted ?? false,
+      skills: options.skills ?? (async () => []),
+    },
+    resolveHelper: inheritHelper,
+    ...(options.delegationLimits
+      ? { delegationLimits: options.delegationLimits }
+      : {}),
+  });
+}
+
+/** A service on a harness that the test host opens like Pi's host does. */
 export async function openService(
-  options: {
-    storage?: Storage;
-    models?: ReturnType<typeof createFaux>["models"];
-  } = {},
+  options: HostOptions = {},
 ): Promise<AgentService> {
-  return AgentService.open({
+  const extensions = testExtensions(options);
+  const harness = await openAgentHarness({
     storage: options.storage ?? new MemoryStorage(),
     models: options.models ?? createFaux().models,
     cwd: process.cwd(),
-    extensions: [
-      createToolsExtension(),
-      createPromptExtension({ trusted: () => false, skills: async () => [] }),
-    ],
-    resolveHelper: inheritHelper,
+    extensions,
   });
+  try {
+    const service = await AgentService.start({
+      harness: harness.harness,
+      anchor: harness.anchor,
+      extensions,
+    });
+    hosts.set(service, { service, harness, extensions });
+    return service;
+  } catch (error) {
+    await harness.close();
+    throw error;
+  }
+}
+
+export function hostOf(service: AgentService): TestHost {
+  const host = hosts.get(service);
+  if (!host) throw new Error("The service has no test host");
+  return host;
+}
+
+/** Close the service, then its harness, as the host does. */
+export async function closeService(service: AgentService): Promise<void> {
+  const host = hosts.get(service);
+  hosts.delete(service);
+  await service.close();
+  await host?.harness.close();
 }
 
 export async function until(

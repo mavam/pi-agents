@@ -55,6 +55,7 @@ import {
   deriveState,
   type EndedTurn,
   endedTurnOf,
+  GENERATION_KIND,
   outcomeOf,
   resultOf,
   settlementOf,
@@ -174,11 +175,18 @@ export class AgentService {
   private readonly settlements = new Map<string, TurnSettlement>();
   /** Per agent, the latest turn when it ended without an answer. */
   private readonly endedTurns = new Map<string, EndedTurn>();
-  /** Decided outcomes of graph and node tasks, which never change, and
-   * whether the task is terminal, which a held outcome is not yet. */
+  /** Per agent, its latest generation task and when it ended, which is when
+   * the agent's latest run ended; null when it never ran. */
+  private readonly generations = new Map<
+    string,
+    { task: number; endedAt?: number } | null
+  >();
+  /** Decided outcomes of graph and node tasks, which never change, whether
+   * the task is terminal, which a held outcome is not yet, and when it
+   * became terminal. */
   private readonly outcomes = new Map<
     number,
-    { outcome: TaskOutcome<JsonValue>; terminal: boolean }
+    { outcome: TaskOutcome<JsonValue>; terminal: boolean; endedAt?: number }
   >();
   /** Answer entries of graph agents' tasks; entries never change. */
   private readonly answers = new Map<number, EntryRecord>();
@@ -1125,7 +1133,20 @@ export class AgentService {
         }
         this.touch(id, now);
       } else if (change.type === "task") {
-        if (change.value.kind === GRAPH_TASK) graphs = true;
+        if (change.value.kind === GENERATION_KIND) {
+          // Each run, however fast, ends with its latest generation.
+          const id = String(change.value.conversationId);
+          const task = Number(change.value.id);
+          const known = this.generations.get(id);
+          if (!known || task >= known.task) {
+            const { endedAt } = change.value;
+            this.generations.set(id, {
+              task,
+              ...(endedAt !== undefined ? { endedAt } : {}),
+            });
+            this.dirty.add(id);
+          }
+        } else if (change.value.kind === GRAPH_TASK) graphs = true;
         else if (change.value.kind === NODE_TASK) {
           graphs = true;
           // A node's progress changes its agent's state and that of the
@@ -1298,6 +1319,10 @@ export class AgentService {
     const ended = this.endedTurns.get(id);
     const previous = this.infos.get(id);
     const now = Date.now();
+    const endedAt =
+      state === "working" || state === "waiting"
+        ? undefined
+        : await this.agentEndedAt(id, record);
     const durable = (agent ?? {}) as DurableAgentState;
     const tools = Array.isArray(durable.tools)
       ? durable.tools.filter((tool) => tool !== DELEGATE_TOOL)
@@ -1326,6 +1351,7 @@ export class AgentService {
               : (result?.at ?? record.createdAt),
       lastActivityAt:
         this.activityAt.get(id) ?? previous?.lastActivityAt ?? record.createdAt,
+      ...(endedAt !== undefined ? { endedAt } : {}),
       usage: addPartialUsage(summarizeUsage(usage), live),
       activity: activityOf(live),
       ...(result ? { result } : {}),
@@ -1350,6 +1376,48 @@ export class AgentService {
         : {}),
     });
     return aborted;
+  }
+
+  /**
+   * When the agent's latest run ended: when its latest generation became
+   * terminal. A graph's agent that never ran ended with its node.
+   */
+  private async agentEndedAt(
+    agentId: string,
+    record: AgentRecord,
+  ): Promise<number | undefined> {
+    let latest = this.generations.get(agentId);
+    if (latest === undefined) {
+      const [task] = (
+        await this.harness.commit(
+          (tx) =>
+            tx.scanTasks(
+              {
+                conversationId: conversationId(agentId),
+                kind: GENERATION_KIND,
+                order: "descending",
+              },
+              1,
+            ),
+          CONTEXT,
+        )
+      ).items;
+      latest = task
+        ? {
+            task: Number(task.id),
+            ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
+          }
+        : null;
+      // A commit may have seen a newer generation meanwhile.
+      const known = this.generations.get(agentId);
+      if (known && (!latest || known.task > latest.task)) latest = known;
+      else this.generations.set(agentId, latest);
+    }
+    if (latest) return latest.endedAt;
+    const graph =
+      record.graph === undefined ? undefined : this.graphRecords[record.graph];
+    const node = graph?.nodes.find((each) => each.agent === agentId);
+    return node ? (await this.settledTask(node.task))?.endedAt : undefined;
   }
 
   /**
@@ -1422,7 +1490,8 @@ export class AgentService {
   private async settledTask(
     id: number,
   ): Promise<
-    { outcome: TaskOutcome<JsonValue>; terminal: boolean } | undefined
+    | { outcome: TaskOutcome<JsonValue>; terminal: boolean; endedAt?: number }
+    | undefined
   > {
     const cached = this.outcomes.get(id);
     if (cached?.terminal) return cached;
@@ -1438,6 +1507,7 @@ export class AgentService {
     const settled = {
       outcome: state.outcome as TaskOutcome<JsonValue>,
       terminal: state.status === "terminal",
+      ...(record.endedAt !== undefined ? { endedAt: record.endedAt } : {}),
     };
     this.outcomes.set(id, settled);
     return settled;
@@ -1503,9 +1573,9 @@ export class AgentService {
     const now = Date.now();
     for (const [id, record] of Object.entries(this.graphRecords)) {
       // A graph works until it is terminal, also while it holds an outcome.
-      const ended = (await this.isFinished(Number(id)))
-        ? await this.taskOutcome(Number(id))
-        : undefined;
+      const settled = await this.settledTask(Number(id));
+      const ended = settled?.terminal ? settled.outcome : undefined;
+      const endedAt = settled?.terminal ? settled.endedAt : undefined;
       const topology = record.nodes.map((node) => ({
         key: node.agent,
         inputs: node.after,
@@ -1548,6 +1618,7 @@ export class AgentService {
             : previous
               ? now
               : record.createdAt,
+        ...(endedAt !== undefined ? { endedAt } : {}),
         nodes,
         usage: sumUsage(
           record.nodes.flatMap((node) => {

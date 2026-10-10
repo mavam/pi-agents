@@ -111,6 +111,9 @@ export interface AgentInfo {
   stateSince: number;
   /** When this process last saw any progress. */
   lastActivityAt: number;
+  /** When its latest run ended, from the durable task times; absent while
+   * it works or before it ran. */
+  endedAt?: number;
   usage: AgentUsage;
   activity: AgentActivity;
   /** Latest assistant result, once the agent answered. */
@@ -176,6 +179,9 @@ export interface GraphInfo {
   createdAt: number;
   /** When this process last saw the state change. */
   stateSince: number;
+  /** When the graph's task ended, from the durable task times; absent while
+   * it works. */
+  endedAt?: number;
   /** Agents in stages: each after the agents it waits for. */
   nodes: GraphNode[];
   /** Summed over the graph's agents and the helpers they started. */

@@ -173,7 +173,7 @@ Have three reviewer agents review this branch: correctness, tests, and docs.
 
 A panel above the editor shows one line per open agent or graph, with a
 graph's agents below it as a tree. The glyph shows the state, working agents
-show how long they have worked, a graph shows how many of its agents
+show how long ago they started, a graph shows how many of its agents
 finished, and `←` names the agents whose results an agent receives:
 
 ```text
@@ -223,9 +223,12 @@ rendering. The editor then talks to the agent:
 Messages you send while attached stay between you and the agent. Their
 results don't post into the parent conversation.
 
-You can attach to any agent, not only the ones in the panel. Agents that
+You can attach to any agent, not only the ones in the panel. `/agents` shows
+how long each agent and graph ran, from its start until it last finished;
+that time stays put once it finished. Agents that
 finished or were stopped keep their whole conversation: open `/agents`, select
-one, and continue where it left off. This also works for a graph's agents
+one, and continue where it left off; its time then counts on from its start,
+pauses included. This also works for a graph's agents
 after the graph finished, and after you resume a session.
 
 ### Graphs

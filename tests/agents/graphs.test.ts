@@ -449,6 +449,8 @@ describe("graph edges", () => {
       "second: skipped",
     ]);
     expect(service.get("second")?.state).toBe("skipped");
+    // It never ran, so it ended with its node.
+    expect(service.get("second")?.endedAt).toBeDefined();
     expect(service.getGraph("chain")?.state).toBe("failed");
     await service.acknowledge(delivery);
     // Skipped agents never ran, so they close; the failed one stays.

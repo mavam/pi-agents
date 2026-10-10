@@ -28,6 +28,7 @@ import {
   formatUsage,
   graphNote,
   QUEUED_NOTE,
+  runtime,
   STATE_STYLES,
   shortModel,
   shortName,
@@ -93,7 +94,7 @@ function agentRow(
     `${color("dim", indent)}${statusIcon(agent, color)} ${isVisible(agent) ? name : color("dim", name)}`,
     color("dim", pad(agent.profile ?? "ad-hoc", 10)),
     color("dim", pad(shortModel(agent), 14)),
-    color("dim", pad(formatElapsed(now - agent.stateSince), 7)),
+    color("dim", pad(formatElapsed(runtime(agent, now)), 7)),
     rowTail(usage, agent.queued, color),
   ].join("  ");
 }
@@ -111,7 +112,7 @@ function graphRow(
     `${color("dim", indent)}${statusIcon(graph, color)} ${isGraphVisible(graph) ? name : color("dim", name)}`,
     color("dim", pad(graph.owner ? "helpers" : "graph", 10)),
     color("dim", pad(`${graph.nodes.length} agents`, 14)),
-    color("dim", pad(formatElapsed(now - graph.stateSince), 7)),
+    color("dim", pad(formatElapsed(runtime(graph, now)), 7)),
     rowTail(usage, graph.queued, color),
   ].join("  ");
 }

@@ -483,3 +483,122 @@ describe("lost deliveries", () => {
     expect(pi.sent).toHaveLength(1);
   });
 });
+
+type Handler = (event: { type: string }, ctx: unknown) => unknown;
+
+/**
+ * A Pi whose events the test emits to the handlers `listen()` registers. A
+ * posted message starts a turn, which saves it first.
+ */
+function eventedPi(
+  state: { idle: boolean; pending: boolean },
+  recheckMs: number,
+) {
+  const handlers = new Map<string, Handler[]>();
+  const entries: SessionEntry[] = [];
+  const sent: Sent[] = [];
+  const ctx = {
+    isIdle: () => state.idle,
+    hasPendingMessages: () => state.pending,
+    sessionManager: { getEntries: () => [...entries] },
+  } as unknown as ExtensionContext;
+  const pi = {
+    on: (event: string, handler: Handler) =>
+      handlers.set(event, [...(handlers.get(event) ?? []), handler]),
+    sendMessage: (message: Sent, options?: { triggerTurn?: boolean }) => {
+      sent.push({ ...message, ...(options ? { options } : {}) });
+      state.idle = false;
+      entries.push(messageEntry(message));
+    },
+  } as unknown as ExtensionAPI;
+  const parent = new PiParent(pi, { recheckMs });
+  parent.setContext(ctx);
+  parent.listen();
+  const emit = async (type: string) => {
+    for (const handler of handlers.get(type) ?? [])
+      await handler({ type }, ctx);
+  };
+  return { state, sent, parent, emit };
+}
+
+/** No recheck within a test: only events try delivery again. */
+const NEVER = 60_000;
+
+describe("delivery after a busy parent", () => {
+  test("a result that arrives during a parent turn posts once it settled", async () => {
+    const pi = eventedPi({ idle: false, pending: false }, NEVER);
+    const current = await openService({ parent: pi.parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => current.pendingDeliveries().length === 1);
+
+    // The turn ends, but another extension's agent_end handler keeps Pi
+    // busy well past a macrotask, and nothing changes in the service.
+    await pi.emit("message_end");
+    await pi.emit("agent_end");
+    await settle();
+    expect(pi.sent).toEqual([]);
+
+    // Pi turns idle only when it settles.
+    pi.state.idle = true;
+    await pi.emit("agent_settled");
+    await until(() => pi.sent.length === 1);
+
+    // The turn the result started saves it first, then runs and settles;
+    // nothing posts again.
+    await pi.emit("message_end");
+    await until(() => current.get("a")?.closed === true);
+    pi.state.idle = true;
+    await pi.emit("agent_settled");
+    await settle();
+    expect(pi.sent).toHaveLength(1);
+  });
+
+  test("a result held back by messages left queued posts once they're gone", async () => {
+    const pi = eventedPi({ idle: false, pending: false }, 20);
+    const current = await openService({ parent: pi.parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => current.pendingDeliveries().length === 1);
+
+    // An abort ends the turn but leaves the user's queued messages.
+    pi.state.idle = true;
+    pi.state.pending = true;
+    await pi.emit("agent_settled");
+    await settle();
+    expect(pi.sent).toEqual([]);
+
+    // Something clears them, and no event says so.
+    pi.state.pending = false;
+    await until(() => pi.sent.length === 1);
+    await pi.emit("message_end");
+    await until(() => current.get("a")?.closed === true);
+    await settle();
+    expect(pi.sent).toHaveLength(1);
+  });
+
+  test("a compaction outside a turn ends with an event", async () => {
+    const pi = eventedPi({ idle: false, pending: false }, NEVER);
+    const current = await openService({ parent: pi.parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => current.pendingDeliveries().length === 1);
+    await settle();
+    expect(pi.sent).toEqual([]);
+    pi.state.idle = true;
+    await pi.emit("session_compact");
+    await until(() => pi.sent.length === 1);
+  });
+
+  test("a cancelled branch summary, which emits nothing, delays delivery only briefly", async () => {
+    const pi = eventedPi({ idle: false, pending: false }, 20);
+    const current = await openService({ parent: pi.parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => current.pendingDeliveries().length === 1);
+    await settle();
+    expect(pi.sent).toEqual([]);
+    pi.state.idle = true;
+    await until(() => pi.sent.length === 1);
+  });
+});

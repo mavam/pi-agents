@@ -91,7 +91,23 @@ Everything the core needs from the parent goes through one interface,
 
 The core decides what is due and hands it over after every change of its
 own and whenever the parent changes. Inside Pi, `PiParent`
-(`src/pi/parent.ts`) implements the interface. A durable host could
+(`src/pi/parent.ts`) implements the interface, and every state that keeps
+it from taking deliveries ends with a retry. A result that arrives while
+Pi works changes nothing in the service afterwards, so these retries are
+what deliver it:
+
+| Pi can't take deliveries because | Tried again on |
+| --- | --- |
+| No session yet, or a stale one | `session_start` |
+| The user is attached to an agent | The attach view closing |
+| A run works | `agent_settled`, the first moment Pi is idle: it waits for every extension's `agent_end` handler, then checks for compaction and runs the before-settle boundary |
+| A compaction outside a run | `session_compact` or `session_compact_failed` |
+| A branch summary while navigating the tree | `session_tree`; a cancelled or failed one emits nothing, so a recheck every second |
+| Queued user messages | The run consumes them before `agent_settled`; ones an abort left queued wait for the next run or a recheck every second, since clearing them emits nothing |
+
+Each event tries once it has passed. The recheck runs only while a result
+waits for Pi. Pi's `agent_end` comes too early to deliver: Pi stays busy
+until it settles, so pi-agents doesn't listen for it. A durable host could
 deliver by submitting to the session's main conversation with the
 delivery's identity as request ID; `received` would then find the
 submission, and delivery would be exactly once.
@@ -636,7 +652,12 @@ posts it again under the same identity, and a wait's result counts once
 Pi stored the call's result, for nested calls through their caller's. A
 fake Pi that queues, runs, or defers a posted message checks that a queued
 message Esc dropped posts again once Pi is idle, while a message the
-triggered turn saved and one deferred while Pi settles post once.
+triggered turn saved and one deferred while Pi settles post once. Events
+from a fake Pi check that a result arriving during a parent turn posts once
+the turn settled, also when another extension keeps Pi busy past
+`agent_end`, that a compaction's end retries, and that results held back by
+messages an abort left queued, or by a cancelled branch summary, post on a
+recheck.
 A host whose default selection holds a foreign extension, with a `read`
 tool, another tool, and a prompt section, gives none of it to standalone
 agents, graph agents, a delegating agent, or its helper, and the session

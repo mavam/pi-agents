@@ -47,6 +47,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     return { action: "continue" };
   });
   registerAgentTools(pi, host, parent);
+  parent.listen();
   registerCommands(pi, { host, panel, focus });
   pi.registerShortcut("ctrl+q", {
     description: "Focus the pi-agents panel",
@@ -90,25 +91,6 @@ export default function agentExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_start", (_event, ctx) => track(ctx));
-
-  // Pi saves a message only after extensions saw its message_end, so look
-  // for delivered results in the session once the event has passed.
-  pi.on("message_end", () => {
-    setTimeout(() => parent.notify(), 0);
-  });
-
-  // A settled run saved what was posted into it, or lost it.
-  pi.on("agent_settled", () => {
-    parent.settled();
-    setTimeout(() => parent.notify(), 0);
-  });
-
-  pi.on("agent_end", (_event, ctx) => {
-    track(ctx);
-    // At agent_end Pi may still report streaming; retry on a macrotask, once
-    // the run has settled.
-    setTimeout(() => parent.notify(), 0);
-  });
 
   pi.on("session_shutdown", async () => {
     focus.dispose();

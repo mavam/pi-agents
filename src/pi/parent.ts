@@ -93,8 +93,13 @@ function deliveriesOf(details: unknown): unknown[] {
   return Array.isArray(deliveries) ? deliveries : [];
 }
 
+/** How often to check again while a delivery waits for Pi. */
+const RECHECK_MS = 1_000;
+
 export class PiParent implements Parent {
   private ctx: ExtensionContext | undefined;
+  private recheck: ReturnType<typeof setTimeout> | undefined;
+  private readonly recheckMs: number;
   private blocked: () => boolean = () => false;
   private readonly listeners = new Set<() => void>();
   private readonly waits = new AttentionSignals();
@@ -111,7 +116,36 @@ export class PiParent implements Parent {
     { ids: readonly string[]; after: number }
   >();
 
-  constructor(private readonly pi: ExtensionAPI) {}
+  constructor(
+    private readonly pi: ExtensionAPI,
+    options: { recheckMs?: number } = {},
+  ) {
+    this.recheckMs = options.recheckMs ?? RECHECK_MS;
+  }
+
+  /**
+   * Follow Pi's events that may let a delivery proceed or confirm one. A
+   * run ends with `agent_settled`, a compaction outside a run with
+   * `session_compact` or `session_compact_failed`, and a branch summary
+   * with `session_tree`; each checks again once the event has passed. Pi
+   * saves a message only after extensions saw its `message_end`, so that
+   * event checks for saved deliveries afterwards. A new session and the
+   * attach view closing are the host's to report.
+   */
+  listen(): void {
+    const later = () => {
+      setTimeout(() => this.notify(), 0);
+    };
+    this.pi.on("message_end", later);
+    this.pi.on("agent_settled", (_event, ctx) => {
+      this.setContext(ctx);
+      this.settled();
+      later();
+    });
+    this.pi.on("session_compact", later);
+    this.pi.on("session_compact_failed", later);
+    this.pi.on("session_tree", later);
+  }
 
   setContext(ctx: ExtensionContext): void {
     this.ctx = ctx;
@@ -126,6 +160,8 @@ export class PiParent implements Parent {
     this.ctx = undefined;
     this.claims.clear();
     this.posted.clear();
+    if (this.recheck) clearTimeout(this.recheck);
+    this.recheck = undefined;
   }
 
   /** Pi changed in a way that may let deliveries proceed. */
@@ -147,13 +183,32 @@ export class PiParent implements Parent {
 
   canDeliver(): boolean {
     const ctx = this.ctx;
+    // A new session or the attach view closing tries again.
     if (!ctx || this.blocked()) return false;
+    let ready: boolean;
     try {
-      return ctx.isIdle() && !ctx.hasPendingMessages();
+      ready = ctx.isIdle() && !ctx.hasPendingMessages();
     } catch {
       // A stale context after a session switch; the next one retries.
       return false;
     }
+    if (!ready) this.recheckLater();
+    return ready;
+  }
+
+  /**
+   * Not every state that keeps Pi busy ends with an event: a branch summary
+   * that is cancelled or fails emits nothing, and messages an abort left
+   * queued can be cleared without one. So while a delivery waits for Pi,
+   * check again now and then; the core asks only while one waits.
+   */
+  private recheckLater(): void {
+    if (this.recheck) return;
+    this.recheck = setTimeout(() => {
+      this.recheck = undefined;
+      this.notify();
+    }, this.recheckMs);
+    this.recheck.unref?.();
   }
 
   async deliver(

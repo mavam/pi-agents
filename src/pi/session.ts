@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { AgentService } from "../agents/service.js";
 import { AgentError } from "../agents/types.js";
+import { SkillCatalog } from "../catalog/skills.js";
 import { createHarnessSettings } from "../host/env.js";
 import {
   limitRequests,
@@ -26,7 +27,7 @@ import { resolveModels } from "../host/models.js";
 import { createPromptExtension } from "../host/prompt.js";
 import { openStorage, type Storage } from "../host/storage.js";
 import { createToolsExtension } from "../host/tools.js";
-import { resolveHelper } from "./spawn.js";
+import { isTrusted, resolveHelper } from "./spawn.js";
 
 function sessionDirectory(sessionId: string): string {
   return path.join(getAgentDir(), "pi-agents", "sessions", sessionId);
@@ -34,12 +35,6 @@ function sessionDirectory(sessionId: string): string {
 
 function isPersistent(ctx: ExtensionContext): boolean {
   return ctx.sessionManager.getSessionFile() !== undefined;
-}
-
-function isTrusted(ctx: ExtensionContext): boolean {
-  return typeof ctx.isProjectTrusted === "function"
-    ? ctx.isProjectTrusted()
-    : true;
 }
 
 export class SessionHost {
@@ -51,7 +46,8 @@ export class SessionHost {
   private unsubscribe: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
   private trusted = true;
-  private skillPaths: string[] = [];
+  /** The skills agents can use, shared by spawns and agent prompts. */
+  readonly skills = new SkillCatalog();
   /** Why agents are unavailable in this session, if they are. */
   unavailable: string | undefined;
 
@@ -119,7 +115,6 @@ export class SessionHost {
     }
     try {
       const settings = SettingsManager.create(ctx.cwd, getAgentDir());
-      this.skillPaths = settings.getSkillPaths();
       const { limit, error } = readRequestLimit(settings.getSettings());
       if (error) this.report(new Error(`${error}; requests aren't limited`));
       const models = limitRequests(
@@ -135,14 +130,14 @@ export class SessionHost {
           createToolsExtension(),
           createPromptExtension({
             trusted: () => this.trusted,
-            skillPaths: () => this.skillPaths,
+            skills: this.skills.get,
           }),
         ],
         onReport: (error) => this.report(error),
         resolveHelper: (request, defaults) => {
           const current = this.ctx;
           if (!current) throw new AgentError("Pi isn't ready for helpers yet");
-          return resolveHelper(request, current, defaults);
+          return resolveHelper(request, current, defaults, this.skills.get);
         },
       });
       this.service = service;

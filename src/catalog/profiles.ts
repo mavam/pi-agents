@@ -1,21 +1,19 @@
 /**
  * Agent profiles: reusable spawn defaults in Markdown files with frontmatter.
- * User profiles live in `~/.pi/agent/agents`, project profiles in the nearest
- * `.pi/agents`; project profiles win on name conflicts.
+ * User profiles live in `agents` of Pi's agent dir (`~/.pi/agent/agents`),
+ * project profiles in `.pi/agents` of the working directory, where Pi reads
+ * the project's skills and settings too. Project profiles win on name
+ * conflicts, and only trusted projects contribute any.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import {
   isThinkingLevel,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "../agents/types.js";
-import { findProjectResourceDir, userResourceDir } from "./paths.js";
-
-/** Which resource locations apply: untrusted projects use `user`. */
-export type Scope = "user" | "project" | "both";
 
 export type Source = "user" | "project";
 
@@ -167,17 +165,22 @@ function loadProfilesFromDir(dir: string, source: Source): ProfileCatalog {
   return catalog;
 }
 
-export function discoverProfiles(cwd: string, scope: Scope): ProfileCatalog {
-  const projectDir = findProjectResourceDir(cwd, "agents");
-  const empty: ProfileCatalog = { profiles: [], diagnostics: [] };
-  const user =
-    scope !== "project"
-      ? loadProfilesFromDir(userResourceDir("agents"), "user")
-      : empty;
+/**
+ * The user's and, in a trusted project, the project's profiles. A project
+ * `.pi` that is Pi's agent dir itself holds the user's profiles, not the
+ * project's.
+ */
+export function discoverProfiles(
+  cwd: string,
+  trusted: boolean,
+): ProfileCatalog {
+  const agentDir = path.resolve(getAgentDir());
+  const projectDir = path.resolve(cwd, ".pi");
+  const user = loadProfilesFromDir(path.join(agentDir, "agents"), "user");
   const project =
-    scope !== "user" && projectDir
-      ? loadProfilesFromDir(projectDir, "project")
-      : empty;
+    trusted && projectDir !== agentDir
+      ? loadProfilesFromDir(path.join(projectDir, "agents"), "project")
+      : { profiles: [], diagnostics: [] };
   const merged = new Map<string, Profile>();
   for (const profile of user.profiles) merged.set(profile.name, profile);
   for (const profile of project.profiles) merged.set(profile.name, profile);

@@ -13,7 +13,7 @@ import { DeliveryManager } from "./pi/delivery.js";
 import { registerMessageRenderers } from "./pi/messages.js";
 import { buildSystemPromptAppendix, profileCatalog } from "./pi/prompt.js";
 import { SessionHost } from "./pi/session.js";
-import { scopeOf } from "./pi/spawn.js";
+import { isTrusted } from "./pi/spawn.js";
 import { SteerWatch } from "./pi/steering.js";
 import { registerAgentTools } from "./pi/tools.js";
 import { FocusController } from "./ui/focus.js";
@@ -60,13 +60,13 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   // Profile problems are reported once per session, not on every turn.
   const reported = new Set<string>();
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     track(ctx);
-    const scope = scopeOf(ctx);
-    const { profiles, issues } = profileCatalog(
+    const { profiles, issues } = await profileCatalog(
       ctx.cwd,
-      scope,
+      isTrusted(ctx),
       ctx.modelRegistry.getAvailable(),
+      host.skills.get,
     );
     const fresh = issues.filter((issue) => !reported.has(issue));
     for (const issue of fresh) reported.add(issue);

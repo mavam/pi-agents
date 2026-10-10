@@ -8,8 +8,6 @@ import {
   formatSkillsForPrompt,
   getAgentDir,
   loadProjectContextFiles,
-  loadSkills,
-  type Skill,
 } from "@earendil-works/pi-coding-agent";
 import {
   defineExtension,
@@ -20,6 +18,7 @@ import {
 import { DELEGATE_TOOL } from "../agents/delegation.js";
 import { AgentsDoc } from "../agents/records.js";
 import { USER_MESSAGE_PREFIX } from "../agents/types.js";
+import type { SkillSource } from "../catalog/skills.js";
 import { toolPromptContribution } from "./tools.js";
 
 const PROMPT_EXTENSION = "pi-agents-prompt";
@@ -33,14 +32,11 @@ const AGENT_PREAMBLE = [
 export interface PromptOptions {
   /** Whether project-local resources (context files, project skills) load. */
   trusted: () => boolean;
-  /** Extra skill paths from Pi's settings. */
-  skillPaths: () => string[];
+  /** The skills of a directory under the given trust. */
+  skills: SkillSource;
 }
 
-interface Resources {
-  contextFiles: Array<{ path: string; content: string }>;
-  skills: Skill[];
-}
+type ContextFiles = Array<{ path: string; content: string }>;
 
 function buildRules(tools: readonly string[]): string {
   const rules: string[] = [];
@@ -74,7 +70,7 @@ function renderTools(tools: readonly string[]): string {
   return lines.length > 0 ? lines.join("\n") : "(none)";
 }
 
-function renderProjectContext(files: Resources["contextFiles"]): string {
+function renderProjectContext(files: ContextFiles): string {
   return [
     "Project-specific instructions and guidelines:",
     ...files.map(
@@ -85,27 +81,15 @@ function renderProjectContext(files: Resources["contextFiles"]): string {
 }
 
 export function createPromptExtension(options: PromptOptions): Extension {
-  // Context files and skills load once per directory and trust, like Pi at
-  // startup.
-  const cache = new Map<string, Resources>();
-  const resources = (cwd: string): Resources => {
-    const trusted = options.trusted();
-    const key = `${trusted}:${cwd}`;
-    let found = cache.get(key);
+  // Context files load once per directory, like Pi at startup.
+  // Untrusted projects contribute none.
+  const cache = new Map<string, ContextFiles>();
+  const contextFiles = (cwd: string): ContextFiles => {
+    if (!options.trusted()) return [];
+    let found = cache.get(cwd);
     if (found === undefined) {
-      const agentDir = getAgentDir();
-      found = trusted
-        ? {
-            contextFiles: loadProjectContextFiles({ cwd, agentDir }),
-            skills: loadSkills({
-              cwd,
-              agentDir,
-              skillPaths: options.skillPaths(),
-              includeDefaults: true,
-            }).skills,
-          }
-        : { contextFiles: [], skills: [] };
-      cache.set(key, found);
+      found = loadProjectContextFiles({ cwd, agentDir: getAgentDir() });
+      cache.set(cwd, found);
     }
     return found;
   };
@@ -121,7 +105,7 @@ export function createPromptExtension(options: PromptOptions): Extension {
       section("tools", (input) => renderTools(toolNames(input))),
       section("rules", (input) => buildRules(toolNames(input))),
       section("project_context", (input) => {
-        const files = resources(cwdOf(input)).contextFiles;
+        const files = contextFiles(cwdOf(input));
         return files.length > 0 ? renderProjectContext(files) : undefined;
       }),
       section("skills", async (input, context) => {
@@ -135,7 +119,11 @@ export function createPromptExtension(options: PromptOptions): Extension {
             ? "bash"
             : undefined;
         if (reader === undefined) return undefined;
-        const skills = resources(cwdOf(input)).skills;
+        // Skills that don't load leave the agent without a catalog, as
+        // they would leave Pi.
+        const skills = await options
+          .skills(cwdOf(input), options.trusted())
+          .catch(() => []);
         if (skills.length === 0) return undefined;
         return formatSkillsForPrompt(skills, reader).trim() || undefined;
       }),

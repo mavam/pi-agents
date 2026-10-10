@@ -115,6 +115,12 @@ const parameters = Type.Object({
           description: "Tool allowlist, from your own tools",
         }),
       ),
+      skills: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Skills to load in full instead of the skill catalog; [] for none",
+        }),
+      ),
     }),
     { minItems: 1, description: "One entry per helper" },
   ),
@@ -177,12 +183,12 @@ interface Planned {
 }
 
 /** Resolve and check every helper before anything starts. */
-function plan(
+async function plan(
   args: Args,
   options: DelegationOptions,
   defaults: HelperDefaults,
   own: readonly ToolRegistration[],
-): { helpers: Planned[]; inputs: number[][] } {
+): Promise<{ helpers: Planned[]; inputs: number[][] }> {
   if (args.agents.length > options.limits.perCall)
     throw new AgentError(
       `One call starts at most ${options.limits.perCall} helpers, not ${args.agents.length}`,
@@ -205,17 +211,19 @@ function plan(
         : {}),
     })),
   );
-  const helpers = args.agents.map((agent, index) => {
+  const helpers: Planned[] = [];
+  for (const [index, agent] of args.agents.entries()) {
     const name = names[index] as string;
     if (!agent.task.trim())
       throw new AgentError(`The task of helper ${name} must not be empty`);
-    const spec = options.resolve(
+    const spec = await options.resolve(
       {
         task: agent.task,
         ...(agent.profile ? { profile: agent.profile } : {}),
         ...(agent.model ? { model: agent.model } : {}),
         ...(agent.thinking ? { thinking: agent.thinking } : {}),
         ...(agent.tools ? { tools: agent.tools } : {}),
+        ...(agent.skills ? { skills: agent.skills } : {}),
       },
       defaults,
     );
@@ -233,8 +241,8 @@ function plan(
     const tools = wanted.map(
       (tool) => own.find((each) => each.name === tool) as ToolRegistration,
     );
-    return { name, spec, tools };
-  });
+    helpers.push({ name, spec, tools });
+  }
   return { helpers, inputs };
 }
 
@@ -484,9 +492,9 @@ async function execute(
     )) ?? {}) as DurableAgentState;
     const agent = await api.agent(context);
     const ownTools = agent.tools.filter((tool) => tool.name !== DELEGATE_TOOL);
-    let planned: ReturnType<typeof plan>;
+    let planned: Awaited<ReturnType<typeof plan>>;
     try {
-      planned = plan(
+      planned = await plan(
         args,
         options,
         {

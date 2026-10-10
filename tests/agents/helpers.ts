@@ -11,6 +11,7 @@ import {
 import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { AgentService } from "../../src/agents/service.js";
+import type { HelperResolver } from "../../src/agents/types.js";
 import { createPromptExtension } from "../../src/host/prompt.js";
 import { createToolsExtension } from "../../src/host/tools.js";
 
@@ -92,6 +93,16 @@ export async function jsonlStorage(directory: string): Promise<Storage> {
   return openNodeJsonlStorage(directory, BACKGROUND_CONTEXT);
 }
 
+/** Helpers inherit their agent's settings and take only a tool allowlist;
+ * the session host resolves profiles, models, and skills. */
+export const inheritHelper: HelperResolver = async (request, defaults) => ({
+  task: request.task,
+  cwd: defaults.cwd,
+  ...(defaults.model ? { model: defaults.model } : {}),
+  ...(defaults.thinking ? { thinking: defaults.thinking } : {}),
+  ...(request.tools ? { tools: request.tools } : {}),
+});
+
 export async function openService(
   options: {
     storage?: Storage;
@@ -104,8 +115,9 @@ export async function openService(
     cwd: process.cwd(),
     extensions: [
       createToolsExtension(),
-      createPromptExtension({ trusted: () => false, skillPaths: () => [] }),
+      createPromptExtension({ trusted: () => false, skills: async () => [] }),
     ],
+    resolveHelper: inheritHelper,
   });
 }
 

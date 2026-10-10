@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { shapeLine } from "../../src/agents/topology.js";
+import { discoverSkills } from "../../src/catalog/skills.js";
 import {
   graphContent,
   type NodeDetails,
@@ -21,7 +22,7 @@ import {
 } from "../../src/pi/tools.js";
 
 describe("system prompt appendix", () => {
-  test("lists guidance and usable profiles", () => {
+  test("lists guidance and usable profiles", async () => {
     const project = fs.mkdtempSync(
       path.join(os.tmpdir(), "pi-agents-project-"),
     );
@@ -41,7 +42,12 @@ describe("system prompt appendix", () => {
       path.join(project, ".pi", "agents", "offline.md"),
       "---\nname: offline\ndescription: Offline\nmodel: nope/x\n---\n",
     );
-    const { profiles, issues } = profileCatalog(project, "both", models);
+    const { profiles, issues } = await profileCatalog(
+      project,
+      true,
+      models,
+      discoverSkills,
+    );
     expect(profiles.map((profile) => profile.name)).toEqual(["scout"]);
     expect(issues).toEqual([
       "profile broken: unavailable skills: missing (unknown)",
@@ -83,6 +89,22 @@ describe("system prompt appendix", () => {
     );
     expect(buildSystemPromptAppendix([])).toBe(
       "Delegate work to agents with the agent_* tools when the user asks for it.",
+    );
+  });
+
+  test("profiles name their skills", () => {
+    const appendix = buildSystemPromptAppendix([
+      {
+        name: "reviewer",
+        description: "Reviews diffs",
+        skills: ["code-review", "unslop"],
+        instructions: "",
+        source: "user",
+        filePath: "/reviewer.md",
+      },
+    ]);
+    expect(appendix).toContain(
+      '<profile name="reviewer" skills="code-review,unslop">Reviews diffs</profile>',
     );
   });
 });

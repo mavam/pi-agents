@@ -14,7 +14,7 @@ import {
   type DelegationLimits,
 } from "../../src/agents/delegation.js";
 import type { AgentService } from "../../src/agents/service.js";
-import { AGENT_TOOL_VIEWS } from "../../src/ui/tool-views.js";
+import { agentToolViews } from "../../src/ui/tool-views.js";
 import {
   closeService,
   hostOf,
@@ -120,8 +120,8 @@ async function delegateResult(
     bold: (text: string) => text,
   };
   return (
-    AGENT_TOOL_VIEWS[DELEGATE_TOOL]
-      ?.renderResult?.(
+    agentToolViews(() => "lead")
+      [DELEGATE_TOOL]?.renderResult?.(
         message,
         { expanded: false, isPartial: false },
         // biome-ignore lint/suspicious/noExplicitAny: a plain test theme.

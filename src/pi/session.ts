@@ -29,6 +29,7 @@ import {
 } from "../host/limit.js";
 import { acquireLock, type StorageLock } from "../host/lock.js";
 import { resolveModels } from "../host/models.js";
+import { readMessaging } from "../host/settings.js";
 import { openStorage, type Storage } from "../host/storage.js";
 import { isTrusted, resolveHelper } from "./spawn.js";
 
@@ -50,6 +51,7 @@ export class SessionHost {
   private unsubscribe: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
   private trusted = true;
+  private messagingOn = false;
   /** The skills agents can use, shared by spawns and agent prompts. */
   readonly skills = new SkillCatalog();
   /** Why agents are unavailable in this session, if they are. */
@@ -79,6 +81,12 @@ export class SessionHost {
   setContext(ctx: ExtensionContext): void {
     this.ctx = ctx;
     this.trusted = isTrusted(ctx);
+  }
+
+  /** Whether agents may message each other: `piAgents.messaging`, read
+   * when the session's agents open. */
+  messaging(): boolean {
+    return this.messagingOn;
   }
 
   /** The open service, if any. */
@@ -124,6 +132,7 @@ export class SessionHost {
       const settingsManager = SettingsManager.create(ctx.cwd, getAgentDir());
       const { limit, error } = readRequestLimit(settingsManager.getSettings());
       if (error) this.report(new Error(`${error}; requests aren't limited`));
+      this.messagingOn = readMessaging(settingsManager.getSettings());
       const models = limitRequests(
         await resolveModels(ctx.modelRegistry),
         new RequestLimiter(limit),
@@ -135,6 +144,7 @@ export class SessionHost {
           if (!current) throw new AgentError("Pi isn't ready for helpers yet");
           return resolveHelper(request, current, defaults, this.skills.get);
         },
+        messaging: { enabled: () => this.messagingOn },
       });
       harness = await openAgentHarness({
         storage,
@@ -150,6 +160,7 @@ export class SessionHost {
         extensions,
         parent: this.parent,
         onReport: (error) => this.report(error),
+        messaging: () => this.messagingOn,
       });
       // Work a previous process left unfinished continues now.
       harness.harness.resume();

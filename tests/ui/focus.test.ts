@@ -31,7 +31,10 @@ function setup(state: {
   const service = {
     list: () => Array.from({ length: state.agents }),
   } as unknown as AgentService;
-  const host = { current: () => service } as unknown as SessionHost;
+  const host = {
+    current: () => service,
+    messaging: () => false,
+  } as unknown as SessionHost;
   const ctx = {
     mode: "tui",
     ui: {

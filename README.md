@@ -51,49 +51,61 @@ that finished hours ago, and keep talking to it like a regular Pi session.
 ### Architecture
 
 Agents run inside your Pi process. Pi-agents keeps one pi-durable harness per
-Pi session. Each agent is a conversation in that harness, and each graph a
-durable task, pi-durable's unit of work that survives restarts, which starts
-its agents and passes their results along:
+Pi session, with its own store next to Pi's session file:
 
 ```text
 ╭─ Pi process ─────────────────────────────────────────────────────╮
 │                                                                  │
 │  ╭──────────────────╮                    ╭────────────────────╮  │
-│  │  ◆ Pi session    │                    │  ▤ panel           │  │
-│  ╰───┬──────────▲───╯                    │  ⇄ attach view     │  │
-│      │ agent_*  │ results                │  ≡ /agents         │  │
-│      ▼          │                        ╰─────────▲──────────╯  │
-│  ╭──────────────┴───╮                              │             │
-│  │  ✦ pi-agents     ├──────────────────────────────╯             │
-│  ╰───┬──────────▲───╯                                            │
-│      │ start    │ state                                          │
-│      │ message  │ results                                        │
-│      ▼ stop     │                                                │
-│  ╭──────────────┴─────────────────────────────────────────────╮  │
-│  │  pi-durable harness                                        │  │
-│  │                                                            │  │
-│  │   ◉ agent     ╭─ graph ─────────────────────────╮          │  │
-│  │               │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │          │  │
-│  │   ● agent     │        └─▶ ◉ ui ───┘            │          │  │
-│  │               │            └─ ◉ ◉ ◉ helpers     │          │  │
-│  │   …           ╰─────────────────────────────────╯          │  │
-│  │                                                            │  │
-│  │   agents are conversations; a graph is a durable task      │  │
-│  │   that starts them in order and passes their results on    │  │
-│  ╰─────────────────────────────┬──────────────────────────────╯  │
-╰────────────────────────────────┼─────────────────────────────────╯
-                                 │ checkpoint every step
-                                 ▼
-                   ╭───────────────────────────╮
-                   │  ▤ JSONL, one per session │
-                   ╰───────────────────────────╯
+│ ╭┤  ◆ Pi session    │                    │  ▤ panel           │  │
+│ ┊╰───┬──────────▲───╯                    │  ⇄ attach view     │  │
+│ ┊    │ agent_*  │ results                │  ≡ /agents         │  │
+│ ┊    ▼          │                        │  □ /messages       │  │
+│ ┊╭──────────────┴───╮                    ╰─────────▲──────────╯  │
+│ ┊│  ✦ pi-agents     ├──────────────────────────────╯             │
+│ ┊╰───┬──────────▲───╯                                            │
+│ ┊    │ start    │ state                                          │
+│ ┊    │ message  │ results                                        │
+│ ┊    ▼ stop     │                                                │
+│ ┊╭──────────────┴─────────────────────────────────────────────╮  │
+│ ┊│  pi-durable harness                                        │  │
+│ ┊│                                                            │  │
+│ ┊│   ◉ scout ─── □ message ──▶ ● notes                        │  │
+│ ┊│                                                            │  │
+│ ┊│   ╭─ graph ─────────────────────────╮                      │  │
+│ ┊│   │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │                      │  │
+│ ┊│   │        └─▶ ◉ ui ───┘            │                      │  │
+│ ┊│   │            └─ ◉ ◉ ◉ helpers     │                      │  │
+│ ┊│   ╰─────────────────────────────────╯                      │  │
+│ ┊│                                                            │  │
+│ ┊│   agents are conversations; turns, tool calls, and graphs  │  │
+│ ┊│   are durable tasks that own what they start               │  │
+│ ┊╰─────────────────────────────┬──────────────────────────────╯  │
+╰─┬──────────────────────────────┬─────────────────────────────────╯
+  ┊ saves                        │ checkpoint every step
+  ▼                              ▼
+╭──────────────────────╮    ╭──────────────────────────────╮
+│ ▤ Pi's session file  │    │ ▤ pi-agents store, one JSONL │
+│   your conversation  │    │   per session: agents,       │
+│   and saved results  │    │   graphs, messages, tasks    │
+╰──────────────────────╯    ╰──────────────────────────────╯
 ```
 
-A graph owns its agents, so stopping a graph reaches all of them. An agent
-that delegates starts its helpers as a graph of its own, owned by the call
-that waits for them. Because pi-durable checkpoints every step, a resumed
-session continues where its agents and graphs stopped. Agents use your Pi
-logins and models, so they need no separate setup.
+Each agent is a conversation in the harness. The work on agents runs as
+durable tasks: each turn of an agent, each tool call, and each graph with one
+task per agent in it. A task owns what it starts, so stopping a graph reaches
+all of its agents, and an agent that delegates starts its helpers as a graph
+owned by the tool call that waits for them. A message from one agent to
+another is an input to the recipient's conversation, sent by the sender's
+tool call.
+
+Every step is a commit to the pi-agents store. When you resume a session,
+tasks continue where they stopped: agents that finished don't work again, and
+a call that already started something finds it instead of starting it twice.
+Results reach your conversation through Pi's session file, a separate store,
+so a result counts as delivered once Pi saved it there (see
+[Durability](#durability)). Agents use your Pi logins and models, so they
+need no separate setup.
 
 ### Glossary
 
@@ -320,6 +332,7 @@ below the agent, and the divider over its details in `/agents` shows it.
 | --- | --- |
 | `/agents` | Browse all agents and graphs, including ended ones, with their jobs and latest results. Attach to, fold, or stop them. |
 | `/agent <name>` | Attach to an agent. |
+| `/messages` | Read the messages agents sent each other, one thread per pair of agents. |
 
 ### Tools
 
@@ -375,8 +388,9 @@ conversation. A result has arrived once Pi saved it in the session, so a crash
 never loses one; a result that Pi showed but hadn't saved yet posts again, and
 after a crash, so may a result that a codemode script waited for. A graph
 continues too: its agents that already finished don't work again, and no
-agent gets its job twice. A tool call that can't safely repeat reports the
-interruption to the agent instead.
+agent gets its job twice. A message from one agent to another reaches its
+recipient once, also when Pi crashes while sending it. A tool call that
+can't safely repeat reports the interruption to the agent instead.
 
 Agents of sessions started with `--no-session` live in memory and end with
 the session.
@@ -457,6 +471,45 @@ Requests over the cap wait their turn in order, and agents keep working on
 tools in the meantime. Agents, graphs, and helpers all share the cap. Your
 session's own requests don't count toward it. Without the setting, requests
 aren't limited. Restart Pi after changing it.
+
+### Messages between agents (experimental)
+
+Let agents message each other:
+
+```json
+{
+  "piAgents": {
+    "messaging": true
+  }
+}
+```
+
+Agents started afterwards get `agent_status`, which lists the other agents
+with the jobs they were started with, and `agent_send`, which sends one of
+them a message without waiting. Like your messages, it steers a working
+recipient, so it can change what the recipient answers, unless the sender
+queues it as a follow-up. The recipient's answer stays with it. Helpers can't send or receive messages, and an agent
+you or Pi stopped refuses messages from agents until you or Pi message it.
+Restart Pi after changing the setting.
+
+Messages show in the transcript, where Pi's model doesn't see them, and in
+the panel next to the agents, or below them in terminals narrower than 120
+columns:
+
+```text
+◉ scout · sol · 40s · 8.1k  │ □ scout → notes  bun.lock is 412 KB     ✔
+● notes · terra · 2.0k      │ □ scout → notes  README.md is 18 KB     ◷
+```
+
+`◷` waits in the recipient's queue, `✔` reached its conversation, and `✘`
+was dropped from the queue because you interrupted or stopped the recipient.
+In the focused panel, ↑↓ reach the messages, ⏎ opens a message's thread, `m`
+shows or hides messages, and `v` stacks them below the agents.
+
+`/messages` lists threads, everything two agents sent each other, latest
+first, with the selected thread's messages in full below. ⏎ attaches to one
+of the two agents. In `/agents`, an agent's details list its threads, and `m`
+opens them. A session keeps its latest 1,000 messages.
 
 ### Footer counters
 

@@ -14,6 +14,7 @@ import {
   MODEL,
   openService,
   parentOf,
+  TestParent,
   tempDir,
   until,
 } from "./helpers.js";
@@ -251,6 +252,79 @@ describe("the parent", () => {
     expect(parent.delivered[0]?.name).toBe("a");
     await until(() => service.get("a")?.closed === true);
     expect(service.pendingDeliveries()).toEqual([]);
+  });
+
+  test("a delivery counts as done only once the parent holds it", async () => {
+    const directory = tempDir();
+    const service = await openService({
+      storage: await jsonlStorage(directory),
+    });
+    const parent = parentOf(service);
+    parent.stores = false;
+    parent.ready = true;
+    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => parent.delivered.length === 1);
+    const [delivery] = parent.delivered;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Handed over once, never acknowledged.
+    expect(parent.delivered).toHaveLength(1);
+    expect(service.pendingDeliveries().map((each) => each.id)).toEqual([
+      delivery?.id,
+    ]);
+    await closeService(service);
+
+    // A restart hands it over again, under the same identity.
+    const again = await open({
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+    });
+    const next = parentOf(again);
+    next.ready = true;
+    await until(() => again.get("a")?.closed === true);
+    expect(next.delivered.map((each) => each.id)).toEqual([delivery?.id]);
+  });
+
+  test("a restart acknowledges what the parent already holds", async () => {
+    const directory = tempDir();
+    const service = await openService({
+      storage: await jsonlStorage(directory),
+    });
+    const parent = parentOf(service);
+    parent.stores = false;
+    parent.ready = true;
+    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => parent.delivered.length === 1);
+    await closeService(service);
+
+    // The parent stored it before the crash, unseen by the core.
+    const transcript = new Set(parent.delivered.map((each) => each.id));
+    const next = new TestParent(transcript);
+    next.ready = true;
+    const again = await open({
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+      parent: next,
+    });
+    await until(() => again.get("a")?.closed === true);
+    expect(next.delivered).toEqual([]);
+  });
+
+  test("a call's wait takes results once the parent holds its result", async () => {
+    const service = await open();
+    const parent = parentOf(service);
+    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    const outcome = await service.wait(["a"], { call: "call-1" });
+    expect(outcome.deliveries).toHaveLength(1);
+    expect(outcome.agents[0]?.queued).toBeUndefined();
+    parent.ready = true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Taken by the wait: never handed over as a delivery, not yet done.
+    expect(parent.delivered).toEqual([]);
+    expect(service.get("a")?.closed).toBe(false);
+
+    parent.hold(outcome.deliveries);
+    await until(() => service.get("a")?.closed === true);
+    expect(parent.delivered).toEqual([]);
   });
 
   test("a wait ends when the parent is needed and consumes nothing", async () => {

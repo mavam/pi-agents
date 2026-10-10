@@ -119,12 +119,20 @@ export const inheritHelper: HelperResolver = async (request, defaults) => ({
 /**
  * A parent for tests. It takes no deliveries until `ready` is set, like a
  * parent at work, so tests can inspect pending results and acknowledge them
- * themselves.
+ * themselves. Its transcript holds what it stored, by delivery ID.
  */
 export class TestParent implements Parent {
   private isReady = false;
   /** Everything the parent was handed, in order. */
   readonly delivered: PendingDelivery[] = [];
+  /** Whether a delivery reaches the transcript once handed over; false
+   * models a parent that crashes before it stores it. */
+  stores = true;
+
+  constructor(
+    /** The deliveries the parent holds; shared to model a restart. */
+    readonly transcript = new Set<string>(),
+  ) {}
   private readonly listeners = new Set<() => void>();
   private readonly waits = new AttentionSignals();
 
@@ -144,6 +152,20 @@ export class TestParent implements Parent {
 
   async deliver(deliveries: readonly PendingDelivery[]): Promise<void> {
     this.delivered.push(...deliveries);
+    if (!this.stores) return;
+    for (const delivery of deliveries) this.transcript.add(delivery.id);
+    // Like Pi, which reports a message before it stores it.
+    setTimeout(() => this.notify(), 0);
+  }
+
+  async received(ids: readonly string[]): Promise<ReadonlySet<string>> {
+    return new Set(ids.filter((id) => this.transcript.has(id)));
+  }
+
+  /** The parent stored these results, such as with a call's result. */
+  hold(ids: readonly string[]): void {
+    for (const id of ids) this.transcript.add(id);
+    this.notify();
   }
 
   attention(): Attention {

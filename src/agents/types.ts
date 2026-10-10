@@ -274,6 +274,8 @@ export type SendMode = "auto" | "followUp";
  * requests answered by one entry deliver together. */
 export interface AgentDelivery {
   kind: "agent";
+  /** Stable identity, by which the parent recognizes the delivery. */
+  id: string;
   agentId: string;
   name: string;
   requestIds: string[];
@@ -283,6 +285,8 @@ export interface AgentDelivery {
 /** A finished graph whose result the parent still expects. */
 export interface GraphDelivery {
   kind: "graph";
+  /** Stable identity, by which the parent recognizes the delivery. */
+  id: string;
   graphId: string;
   name: string;
   nodes: Array<GraphNode & { outcome: NodeOutcome }>;

@@ -70,6 +70,15 @@ interface AgentToolDetails {
   graphs?: GraphInfo[];
   timedOut?: string[];
   message?: string;
+  /** The results the call's wait took instead of their delivery, by ID:
+   * stored with the result, they count as delivered. */
+  deliveries?: string[];
+}
+
+/** Learns which results a tool call returns, so they count as delivered
+ * once Pi stored the call's result. */
+export interface ResultClaims {
+  claim(toolCallId: string, ids: readonly string[]): void;
 }
 
 function text(content: string, details: AgentToolDetails) {
@@ -172,6 +181,7 @@ type Execute<T extends TSchema, O extends TSchema> = (
   ctx: ExtensionContext,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
+  toolCallId: string,
 ) => Promise<Returned<Static<O>>>;
 
 /** How a call renders: a title, the explicit arguments, and a body. */
@@ -413,7 +423,7 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
     parameters: spec.parameters,
     outputSchema: spec.output,
     prepareArguments: (args) => prepareSeconds(args) as Static<T>,
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       let service: AgentService;
       try {
         service = await host.ensure(ctx);
@@ -427,6 +437,7 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
           ctx,
           signal,
           onUpdate,
+          toolCallId,
         );
         return {
           ...text(result.content, result.details),
@@ -506,6 +517,7 @@ async function waitWithProgress(
   timeoutSeconds: number | undefined,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
+  call: { id: string; claims: ResultClaims | undefined },
   started?: AgentToolDetails,
 ): Promise<Returned<WaitOutput>> {
   const snapshot = () => {
@@ -542,7 +554,11 @@ async function waitWithProgress(
       ...(timeoutSeconds !== undefined
         ? { timeoutMs: timeoutSeconds * 1000 }
         : {}),
+      // The call's result carries the results; without an ID, nothing
+      // could recognize it.
+      ...(call.id ? { call: call.id } : {}),
     });
+    if (call.id) call.claims?.claim(call.id, outcome.deliveries);
     const content = [
       ...outcome.graphs.map((graph) => describeGraph(service, graph)),
       ...outcome.agents.map(describeAgent),
@@ -561,6 +577,9 @@ async function waitWithProgress(
         agents: withNodes(service, outcome.graphs, outcome.agents),
         ...(outcome.graphs.length > 0 ? { graphs: outcome.graphs } : {}),
         ...(outcome.timedOut.length > 0 ? { timedOut: outcome.timedOut } : {}),
+        ...(outcome.deliveries.length > 0
+          ? { deliveries: outcome.deliveries }
+          : {}),
       },
     };
   } catch (error) {
@@ -667,7 +686,11 @@ function describeTarget(service: AgentService, target: Target): string {
     : statusLine(service, target.info);
 }
 
-export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
+export function registerAgentTools(
+  pi: ExtensionAPI,
+  host: SessionHost,
+  claims?: ResultClaims,
+): void {
   const spawnParams = Type.Object({ ...agentFields, wait: waitParam });
   pi.registerTool(
     defineAgentTool(host, {
@@ -685,7 +708,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         },
         body: args.task,
       }),
-      async execute(service, params, ctx, signal, onUpdate) {
+      async execute(service, params, ctx, signal, onUpdate, toolCallId) {
         const spec = await resolveSpawn(params, ctx, {
           skills: host.skills.get,
           thinking: pi.getThinkingLevel(),
@@ -699,6 +722,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
             params.wait,
             signal,
             onUpdate,
+            { id: toolCallId, claims },
             started,
           );
           return { ...waited, output: agentNow(service, info.id) };
@@ -792,7 +816,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
           collapsed: shape,
         };
       },
-      async execute(service, params, ctx, signal, onUpdate) {
+      async execute(service, params, ctx, signal, onUpdate, toolCallId) {
         const thinking = pi.getThinkingLevel();
         const graph = await service.spawnGraph({
           ...(params.name ? { name: params.name } : {}),
@@ -821,6 +845,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
             params.wait,
             signal,
             onUpdate,
+            { id: toolCallId, claims },
             started,
           );
           return { ...waited, output: graphNow(service, graph.id) };
@@ -860,7 +885,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         },
         body: args.message,
       }),
-      async execute(service, params, _ctx, signal, onUpdate) {
+      async execute(service, params, _ctx, signal, onUpdate, toolCallId) {
         const before = service.get(params.name);
         await service.send(
           params.name,
@@ -874,6 +899,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
             params.wait,
             signal,
             onUpdate,
+            { id: toolCallId, claims },
           );
           const info = service.get(params.name) as AgentInfo;
           return { ...waited, output: agentNow(service, info.id) };
@@ -920,13 +946,14 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
           timeout: seconds(args.timeout),
         },
       }),
-      execute: (service, params, _ctx, signal, onUpdate) =>
+      execute: (service, params, _ctx, signal, onUpdate, toolCallId) =>
         waitWithProgress(
           service,
           params.names,
           params.timeout,
           signal,
           onUpdate,
+          { id: toolCallId, claims },
         ),
     }),
   );

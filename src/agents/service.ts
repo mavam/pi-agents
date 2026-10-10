@@ -73,10 +73,13 @@ import type { Parent } from "./parent.js";
 import {
   type AgentRecord,
   AgentsDoc,
+  answerDeliveryId,
   DELIVERED_MEMORY,
+  failureDeliveryId,
   type GraphNodeRecord,
   type GraphRecord,
   GraphsDoc,
+  graphDeliveryId,
   type ParentRequest,
   requestId,
 } from "./records.js";
@@ -87,6 +90,7 @@ import {
   type AgentInfo,
   type AgentResult,
   GRAPH_SIZE,
+  type GraphDelivery,
   type GraphInfo,
   type GraphNode,
   type GraphPolicy,
@@ -123,6 +127,8 @@ export interface WaitOutcome {
   graphs: GraphInfo[];
   /** Agents and graphs still working when the wait timed out. */
   timedOut: string[];
+  /** The results the wait took instead of their delivery, by ID. */
+  deliveries: string[];
 }
 
 function conversationId(agentId: string): ConversationId {
@@ -199,6 +205,12 @@ export class AgentService {
   private unsubscribeParent: (() => void) | undefined;
   private deliveryChain: Promise<void> = Promise.resolve();
   private deliveryQueued = false;
+  /** Deliveries handed to the parent that it doesn't hold yet: posted, or
+   * returned by a parent call's wait. In memory only: after a restart, the
+   * parent decides what it holds. */
+  private readonly inFlight = new Set<string>();
+  /** Whether delivery asked the parent what it holds since starting. */
+  private reconciled = false;
   private closed = false;
 
   private readonly harness: Harness;
@@ -683,13 +695,15 @@ export class AgentService {
 
   /**
    * Wait until the agents are idle and the graphs finished, and return
-   * them. Their results count as delivered. Aborting `signal` ends only the
-   * wait, and so does the parent's attention: either throws
-   * `WaitInterrupted`.
+   * them. The wait takes their results instead of their delivery. When
+   * `call`, a call of the parent, waits, its result carries them, so they
+   * count as delivered once the parent holds it; otherwise at once.
+   * Aborting `signal` ends only the wait, and so does the parent's
+   * attention: either throws `WaitInterrupted`.
    */
   async wait(
     names: string[],
-    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+    options: { signal?: AbortSignal; timeoutMs?: number; call?: string } = {},
   ): Promise<WaitOutcome> {
     const targets = names.map((name) => this.requireTarget(name));
     const ids = [
@@ -744,9 +758,17 @@ export class AgentService {
       if (options.signal?.aborted) throw new WaitInterrupted("cancelled");
       if (attention.signal.aborted) throw new WaitInterrupted("attention");
       await this.refresh(ids);
-      for (const id of idle) await this.consume(id);
-      for (const id of ended)
-        if (this.graphRecords[id]?.pending) await this.consumeGraph(id);
+      const taken = [
+        ...[...ended].flatMap((id) => this.graphDelivery(id) ?? []),
+        ...[...idle].flatMap((id) => this.agentDeliveries(id)),
+      ].filter((each) => !this.inFlight.has(each.id));
+      if (options.call === undefined) await this.acknowledgeAll(taken);
+      else if (taken.length > 0) {
+        // In flight until the parent holds the call's result; no longer
+        // queued meanwhile.
+        for (const each of taken) this.inFlight.add(each.id);
+        await this.refresh(ids);
+      }
       return {
         agents: ids.map((id) => this.require(id)),
         graphs: graphIds.map((id) => this.requireGraph(id)),
@@ -756,6 +778,7 @@ export class AgentService {
             .filter((id) => !ended.has(id))
             .map((id) => this.requireGraph(id)),
         ].map((info) => info.name),
+        deliveries: taken.map((each) => each.id),
       };
     } finally {
       attention.release();
@@ -826,55 +849,84 @@ export class AgentService {
    * so are agents whose graph's result is still due.
    */
   pendingDeliveries(): PendingDelivery[] {
+    return this.deliveries(false);
+  }
+
+  /** Undelivered results; `withheld` adds those a wait or a graph holds. */
+  private deliveries(withheld: boolean): PendingDelivery[] {
     const deliveries: PendingDelivery[] = [];
-    for (const [graphId, record] of Object.entries(this.graphRecords)) {
-      if (!record.pending || this.isGraphAwaited(graphId)) continue;
-      const info = this.graphInfos.get(graphId);
-      if (!info || !isSettled(info) || info.stopped) continue;
-      deliveries.push({
-        kind: "graph",
-        graphId,
-        name: info.name,
-        nodes: info.nodes,
-      });
+    for (const graphId of Object.keys(this.graphRecords)) {
+      if (!withheld && this.isGraphAwaited(graphId)) continue;
+      const delivery = this.graphDelivery(graphId);
+      if (delivery) deliveries.push(delivery);
     }
-    for (const [agentId, outcomes] of this.settled) {
-      if (this.isAwaited(agentId)) continue;
+    for (const agentId of this.settled.keys()) {
       const record = this.records[agentId];
-      if (!record || this.isHeldByGraph(record)) continue;
-      const answers = new Map<number, AgentDelivery>();
-      for (const [rid, outcome] of outcomes) {
-        if (outcome.kind === "aborted") continue;
-        if (outcome.kind === "failed") {
-          deliveries.push({
-            kind: "agent",
-            agentId,
-            name: record.name,
-            requestIds: [rid],
-            outcome,
-          });
-          continue;
-        }
-        if (record.delivered.includes(outcome.result.entryId)) continue;
-        const existing = answers.get(outcome.result.entryId);
-        if (existing) existing.requestIds.push(rid);
-        else
-          answers.set(outcome.result.entryId, {
-            kind: "agent",
-            agentId,
-            name: record.name,
-            requestIds: [rid],
-            outcome,
-          });
-      }
-      deliveries.push(...answers.values());
+      if (!record) continue;
+      if (!withheld && (this.isAwaited(agentId) || this.isHeldByGraph(record)))
+        continue;
+      deliveries.push(...this.agentDeliveries(agentId));
     }
     return deliveries;
   }
 
+  /** A finished graph's result, while the parent still expects it. */
+  private graphDelivery(graphId: string): GraphDelivery | undefined {
+    const record = this.graphRecords[graphId];
+    const info = this.graphInfos.get(graphId);
+    if (!record?.pending || !info || !isSettled(info) || info.stopped)
+      return undefined;
+    return {
+      kind: "graph",
+      id: graphDeliveryId(graphId, record),
+      graphId,
+      name: info.name,
+      nodes: info.nodes,
+    };
+  }
+
+  /** An agent's settled parent requests: one delivery per failure, and one
+   * per answer for all the requests it answered. */
+  private agentDeliveries(agentId: string): AgentDelivery[] {
+    const record = this.records[agentId];
+    const outcomes = this.settled.get(agentId);
+    if (!record || !outcomes) return [];
+    const failures: AgentDelivery[] = [];
+    const answers = new Map<number, AgentDelivery>();
+    for (const [rid, outcome] of outcomes) {
+      if (outcome.kind === "aborted") continue;
+      if (outcome.kind === "failed") {
+        failures.push({
+          kind: "agent",
+          id: failureDeliveryId(agentId, record, rid),
+          agentId,
+          name: record.name,
+          requestIds: [rid],
+          outcome,
+        });
+        continue;
+      }
+      const entryId = outcome.result.entryId;
+      if (record.delivered.includes(entryId)) continue;
+      const existing = answers.get(entryId);
+      if (existing) existing.requestIds.push(rid);
+      else
+        answers.set(entryId, {
+          kind: "agent",
+          id: answerDeliveryId(agentId, record, entryId),
+          agentId,
+          name: record.name,
+          requestIds: [rid],
+          outcome,
+        });
+    }
+    return [...failures, ...answers.values()];
+  }
+
   /**
-   * Hand due results to the parent once it can take them. Serialized; runs
-   * after every refresh, when a wait ends, and when the parent changes.
+   * Hand due results to the parent once it can take them, and acknowledge
+   * those it holds. Serialized; runs after every refresh, when a wait ends,
+   * and when the parent changes.
    */
   private scheduleDelivery(): void {
     if (this.deliveryQueued || this.closed) return;
@@ -887,29 +939,72 @@ export class AgentService {
       .catch((error) => this.report(error));
   }
 
+  /**
+   * A delivery counts as done once the parent holds it, never on handing it
+   * over: a crash in between repeats it rather than losing it. After a
+   * restart, results the parent already holds are acknowledged without
+   * handing them over again.
+   */
   private async deliverDue(): Promise<void> {
-    const due = this.pendingDeliveries();
-    if (due.length === 0 || !this.parent.canDeliver()) return;
-    await this.parent.deliver(due, this);
-    // Acknowledged after posting, so a crash in between repeats a delivery.
-    for (const delivery of due) await this.acknowledge(delivery);
+    const all = this.deliveries(true);
+    const ids = new Set(all.map((each) => each.id));
+    for (const id of this.inFlight) if (!ids.has(id)) this.inFlight.delete(id);
+    const due = () =>
+      this.pendingDeliveries().filter((each) => !this.inFlight.has(each.id));
+    // Ask the parent only when it may hold something new: results in
+    // flight, results about to go out, and, once, those of a past process.
+    if (
+      this.reconciled &&
+      this.inFlight.size === 0 &&
+      (due().length === 0 || !this.parent.canDeliver())
+    )
+      return;
+    this.reconciled = true;
+    if (ids.size === 0) return;
+    const received = await this.parent.received([...ids]);
+    await this.acknowledgeAll(all.filter((each) => received.has(each.id)));
+    const next = due();
+    if (next.length === 0 || !this.parent.canDeliver()) return;
+    for (const each of next) this.inFlight.add(each.id);
+    try {
+      await this.parent.deliver(next, this);
+    } catch (error) {
+      // Due again; the next pass first acknowledges what the parent holds.
+      for (const each of next) this.inFlight.delete(each.id);
+      throw error;
+    }
   }
 
   /** Mark a delivery done. An answered agent closes, and so does a graph. */
   async acknowledge(delivery: PendingDelivery): Promise<void> {
-    if (delivery.kind === "graph") {
-      await this.consumeGraph(delivery.graphId);
-      return;
+    await this.acknowledgeAll([delivery]);
+  }
+
+  /** Mark deliveries done, an agent's together, so it closes once an answer
+   * reached the parent and no request remains. */
+  private async acknowledgeAll(
+    deliveries: readonly PendingDelivery[],
+  ): Promise<void> {
+    const byAgent = new Map<string, AgentDelivery[]>();
+    for (const delivery of deliveries) {
+      this.inFlight.delete(delivery.id);
+      if (delivery.kind === "graph") await this.consumeGraph(delivery.graphId);
+      else
+        byAgent.set(delivery.agentId, [
+          ...(byAgent.get(delivery.agentId) ?? []),
+          delivery,
+        ]);
     }
-    const entryId =
-      delivery.outcome.kind === "answered"
-        ? delivery.outcome.result.entryId
-        : undefined;
-    await this.removeRequests(
-      delivery.agentId,
-      delivery.requestIds,
-      entryId === undefined ? [] : [entryId],
-    );
+    for (const [agentId, group] of byAgent)
+      await this.removeRequests(
+        agentId,
+        group.flatMap((delivery) => delivery.requestIds),
+        group.flatMap((delivery) =>
+          delivery.outcome.kind === "answered"
+            ? [delivery.outcome.result.entryId]
+            : [],
+        ),
+      );
   }
 
   // --- Internals ---
@@ -994,15 +1089,6 @@ export class AgentService {
       },
       CONTEXT,
     );
-  }
-
-  private async consume(agentId: string): Promise<void> {
-    const outcomes = this.settled.get(agentId);
-    if (!outcomes || outcomes.size === 0) return;
-    const entryIds = [...outcomes.values()].flatMap((outcome) =>
-      outcome.kind === "answered" ? [outcome.result.entryId] : [],
-    );
-    await this.removeRequests(agentId, [...outcomes.keys()], entryIds);
   }
 
   /**
@@ -1377,7 +1463,13 @@ export class AgentService {
       ...(record.graph ? { graph: record.graph } : {}),
       ...(record.delegate ? { delegates: true } : {}),
       ...(state === "idle" &&
-      [...outcomes.values()].some((outcome) => outcome.kind === "answered")
+      [...outcomes.values()].some(
+        (outcome) =>
+          outcome.kind === "answered" &&
+          !this.inFlight.has(
+            answerDeliveryId(id, record, outcome.result.entryId),
+          ),
+      )
         ? { queued: true }
         : {}),
     });
@@ -1633,7 +1725,10 @@ export class AgentService {
           }),
         ),
         ...(record.owner ? { owner: record.owner.agent } : {}),
-        ...(record.pending && ended !== undefined && !isStopped
+        ...(record.pending &&
+        ended !== undefined &&
+        !isStopped &&
+        !this.inFlight.has(graphDeliveryId(id, record))
           ? { queued: true }
           : {}),
       });

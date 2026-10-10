@@ -369,7 +369,9 @@ the model's response broke off before Pi could run the call.
 Agents belong to the Pi session that started them. When you quit Pi or it
 crashes, agents pause. When you resume the session, for example with `pi -c`,
 interrupted work continues and results that haven't arrived yet post into the
-conversation. A graph continues too: its agents that already finished don't
+conversation. A result has arrived once Pi saved it in the session, so a crash
+never loses one; a result that Pi showed but hadn't saved yet posts again. A
+graph continues too: its agents that already finished don't
 work again, and no agent gets its task twice. A tool call that can't safely
 repeat reports the interruption to the agent instead.
 

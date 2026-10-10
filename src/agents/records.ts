@@ -87,6 +87,35 @@ export const GraphsDoc = defineDoc<GraphsState>({
 /** How many delivered answer IDs a record remembers for deduplication. */
 export const DELIVERED_MEMORY = 64;
 
+/*
+ * The identities of deliveries to the parent, derived from stored records
+ * so they stay the same across restarts. The creation time keeps them
+ * unique across stores: a Pi session forked from another copies its
+ * messages, while its agents start over in a new store with the same IDs.
+ */
+
+export function graphDeliveryId(graphId: string, record: GraphRecord): string {
+  return `graph:${graphId}@${record.createdAt}`;
+}
+
+/** One answer, which delivers once for every request it answered. */
+export function answerDeliveryId(
+  agentId: string,
+  record: AgentRecord,
+  entryId: number,
+): string {
+  return `agent:${agentId}@${record.createdAt}:entry:${entryId}`;
+}
+
+/** One failed request. */
+export function failureDeliveryId(
+  agentId: string,
+  record: AgentRecord,
+  requestId: string,
+): string {
+  return `agent:${agentId}@${record.createdAt}:request:${requestId}`;
+}
+
 export function requestId(index: number): string {
   return `parent:${index}`;
 }

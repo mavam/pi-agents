@@ -29,6 +29,7 @@ import {
   MODEL,
   openService,
   parentOf,
+  until,
 } from "../agents/helpers.js";
 
 const noSkills = new SkillCatalog(async () => []);
@@ -56,7 +57,13 @@ function tools(): Map<string, AnyTool> {
     ensure: async () => service,
     skills: noSkills,
   } as unknown as SessionHost;
-  registerAgentTools(pi, host);
+  // Pi stores a call's result right after the call returns.
+  registerAgentTools(pi, host, {
+    claim: (_call, ids) =>
+      setTimeout(() => {
+        if (service) parentOf(service).hold(ids);
+      }, 0),
+  });
   return registered;
 }
 
@@ -224,6 +231,8 @@ describe("script output", () => {
   test("status lists open agents; answered ones need their name", async () => {
     const run = await gated();
     await run("agent_spawn", { task: "one", name: "a", wait: 60 });
+    // The answer counts as delivered once Pi stored the call's result.
+    await until(() => service?.get("a")?.closed === true);
     await run("agent_spawn", { task: "hold", name: "w" });
     const w = { kind: "agent", name: "w", state: "working" };
     expect((await run("agent_status", {})).output).toEqual({

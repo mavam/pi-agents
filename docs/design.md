@@ -77,6 +77,9 @@ Everything the core needs from the parent goes through one interface,
   attached to an agent.
 - `deliver(deliveries)`: hand results over, in order. Inside Pi each is a
   message, and the last starts a turn.
+- `received(ids)`: which deliveries the parent holds durably, delivered or
+  returned by one of its calls. Only these count as done (see "At least
+  once").
 - `attention()`: a signal that ends one of the parent's waits once
   something needs the parent, so it can answer while its agents keep
   working. Inside Pi a steer from the user raises it.
@@ -86,7 +89,9 @@ Everything the core needs from the parent goes through one interface,
 The core decides what is due and hands it over after every change of its
 own and whenever the parent changes. Inside Pi, `PiParent`
 (`src/pi/parent.ts`) implements the interface. A durable host could
-deliver by submitting to the session's main conversation instead.
+deliver by submitting to the session's main conversation with the
+delivery's identity as request ID; `received` would then find the
+submission, and delivery would be exactly once.
 
 Agent states are derived, never stored:
 
@@ -318,13 +323,52 @@ messages since. The `GraphRecord`'s `pending` flag is the outbox:
    open.
 
 Turns the user starts from the attach view never deliver into the parent.
-Delivery is acknowledged after posting, so a crash can repeat a delivery but
-never lose one. On session resume, unacknowledged settled requests deliver.
+
+### At least once
+
+Pi's session is a store of its own, so no commit spans the harness and the
+session, and delivery to the parent is at least once: a crash never loses a
+delivery but can repeat one.
+
+- Every delivery has a stable identity derived from stored records:
+  `graph:<id>@<created>` for a graph, `agent:<id>@<created>:entry:<entry>`
+  for an answer, and `agent:<id>@<created>:request:<request>` for a failed
+  request. The creation time keeps identities unique across stores: a Pi
+  session forked from another copies its messages, while its agents start
+  over in a new store with the same IDs.
+- The result message carries the identity in its details (`delivery`), and
+  a call that waits carries the identities of the results it took in its
+  result's details (`deliveries`).
+- A delivery counts as done, and the core acknowledges it in its store,
+  only once `Parent.received` reports that the parent holds it. Pi's parent
+  looks for the identity in the session's entries, on any branch: a result
+  message, or the stored result of a call that waited. Pi stores no results
+  of nested calls, such as a codemode script's, and records the calls in
+  their caller's result instead, so for those the parent remembers which
+  call returned which results and looks for a later result that records the
+  call.
+- Pi confirms neither posting nor saving, and extensions see `message_end`
+  before Pi saves the message. The parent therefore checks the session's
+  entries again after events, such as `message_end` once it has passed, the
+  end of a run, and the core's own changes. Pi saves a message synchronously
+  when it appends it: at once for a message posted to an idle session, and
+  at the start of the turn for the one that starts it. A parent with agents
+  always has a session file, because agents start from its tool calls.
+- Handed over but not yet held, a delivery is in flight: it isn't handed
+  over again and doesn't count as queued. In flight is memory only. After a
+  restart, deliveries the session already holds are acknowledged without
+  posting, and the others are posted again. A delivery Pi never saves stays
+  in flight until then; posting only while the session is idle leaves Pi no
+  queue to drop it from.
+- A wait by a parent call takes its results into flight; they count once
+  the parent stored the call's result. A wait without a call, such as one
+  whose provider gave the call no ID, counts them at once.
 
 ## Durability
 
 - Quitting or crashing Pi pauses agents. Resuming the session with `pi -c`
-  reopens the Host, resumes interrupted work, and delivers pending results.
+  reopens the Host, resumes interrupted work, and delivers pending results
+  that the session doesn't hold yet.
 - Switching sessions pauses that session's agents until the user returns.
 - A lock file gives one Pi process ownership of a session's agents. Another
   process shows a notice and runs without agents.
@@ -533,7 +577,13 @@ tests use JSONL storage: interrupt a turn, close, reopen, and verify that
 the turn completes and its result delivers once. A session stored by
 v0.27.0 (`tests/fixtures/v0.27.0`) opens with its agents, graphs, and
 undelivered results, resumes its unfinished work on the root anchor, and
-continues its request numbering. Graph tests cover `allSettled` with
+continues its request numbering. Delivery tests run the core against a
+test parent and Pi's parent against a fake session: a delivery counts only
+once the session holds it and isn't posted again meanwhile, a restart after
+Pi saved a delivery acknowledges it without posting, a restart before
+posts it again under the same identity, and a wait's result counts once
+Pi stored the call's result, for nested calls through their caller's.
+Graph tests cover `allSettled` with
 answers and failures, pipelines, merges with failed inputs, skipped agents,
 `failFast` stopping waiting agents, edge validation, stopping a graph, the
 ownership tree through the task graph, restarts mid-graph and mid-pipeline

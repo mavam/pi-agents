@@ -1,10 +1,15 @@
 /**
  * The parent: the conversation that starts agents and receives their
  * results. The core reaches it only through `Parent`, which the host
- * implements: whether it can take results now, how results reach it, and
- * when its waits must end because something needs it. Inside Pi, the parent
- * is Pi's session, and a delivery is a message posted into it. A durable
- * host could deliver by submitting to its main conversation instead.
+ * implements: whether it can take results now, how results reach it, which
+ * of them it holds, and when its waits must end because something needs it.
+ * Inside Pi, the parent is Pi's session, and a delivery is a message posted
+ * into it. A durable host could deliver by submitting to its main
+ * conversation instead.
+ *
+ * A delivery counts as done only once `received` reports it, so a crash
+ * between handing it over and the parent storing it repeats the delivery
+ * instead of losing it.
  */
 
 import type { AgentInfo, GraphInfo, PendingDelivery } from "./types.js";
@@ -29,11 +34,19 @@ export interface Parent {
    * attached to an agent.
    */
   canDeliver(): boolean;
-  /** Hand deliveries to the parent, in order; the last may start a turn. */
+  /**
+   * Hand deliveries to the parent, in order; the last may start a turn.
+   * Each carries its `id`, by which `received` recognizes it.
+   */
   deliver(
     deliveries: readonly PendingDelivery[],
     lookup: AgentLookup,
   ): Promise<void>;
+  /**
+   * The deliveries among `ids` that the parent holds durably: delivered,
+   * or returned by one of its calls whose result it stored.
+   */
+  received(ids: readonly string[]): Promise<ReadonlySet<string>>;
   /**
    * A signal for one of the parent's waits. It aborts once something needs
    * the parent, such as the user steering, so the wait ends and the parent

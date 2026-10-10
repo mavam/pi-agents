@@ -3,11 +3,17 @@
  * session is idle and no agent is attached; the last one starts a turn. A
  * steer from the user ends the session's waits for agents, because Pi
  * places a steering message only after the current tool round.
+ *
+ * Pi confirms neither posting nor saving a message, and extensions see
+ * `message_end` before Pi saves it. So the session holds a delivery only
+ * once one of its entries, on any branch, carries the delivery's ID: a
+ * result message, or the stored result of a tool call that returned it.
  */
 
 import type {
   ExtensionAPI,
   ExtensionContext,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import {
   type AgentLookup,
@@ -52,7 +58,7 @@ function message(
       customType: GRAPH_RESULT_MESSAGE,
       content: graphContent(details),
       display: true,
-      details,
+      details: { ...details, delivery: delivery.id },
     };
   }
   const details = resultDetails(delivery, lookup.get(delivery.agentId));
@@ -60,8 +66,24 @@ function message(
     customType: RESULT_MESSAGE,
     content: resultContent(details),
     display: true,
-    details,
+    details: { ...details, delivery: delivery.id },
   };
+}
+
+/** The delivery a result message carries. */
+function deliveryOf(details: unknown): unknown {
+  return typeof details === "object" && details !== null
+    ? (details as { delivery?: unknown }).delivery
+    : undefined;
+}
+
+/** The deliveries an agent tool's result carries. */
+function deliveriesOf(details: unknown): unknown[] {
+  const deliveries =
+    typeof details === "object" && details !== null
+      ? (details as { deliveries?: unknown }).deliveries
+      : undefined;
+  return Array.isArray(deliveries) ? deliveries : [];
 }
 
 export class PiParent implements Parent {
@@ -69,6 +91,12 @@ export class PiParent implements Parent {
   private blocked: () => boolean = () => false;
   private readonly listeners = new Set<() => void>();
   private readonly waits = new AttentionSignals();
+  /** Per tool call, the results it returns, and the number of session
+   * entries when it did, so only a later result entry counts. */
+  private readonly claims = new Map<
+    string,
+    { ids: readonly string[]; after: number }
+  >();
 
   constructor(private readonly pi: ExtensionAPI) {}
 
@@ -83,6 +111,7 @@ export class PiParent implements Parent {
 
   clear(): void {
     this.ctx = undefined;
+    this.claims.clear();
   }
 
   /** Pi changed in a way that may let deliveries proceed. */
@@ -117,6 +146,58 @@ export class PiParent implements Parent {
         wake ? { triggerTurn: true } : undefined,
       );
     });
+  }
+
+  /**
+   * The tool call `toolCallId` returns these results. Its stored result
+   * carries their IDs, but Pi stores no results of nested calls, such as a
+   * codemode script's; it records the calls in their caller's result. So
+   * the results also count once Pi stored a result of the call, or of a
+   * call that recorded it, after this.
+   */
+  claim(toolCallId: string, ids: readonly string[]): void {
+    if (ids.length === 0) return;
+    this.claims.set(toolCallId, { ids, after: this.entries().length });
+  }
+
+  async received(ids: readonly string[]): Promise<ReadonlySet<string>> {
+    const wanted = new Set(ids);
+    const found = new Set<string>();
+    const take = (id: unknown) => {
+      if (typeof id === "string" && wanted.has(id)) found.add(id);
+    };
+    const takeClaim = (call: string, index: number) => {
+      const claim = this.claims.get(call);
+      if (claim && index >= claim.after) claim.ids.forEach(take);
+    };
+    this.entries().forEach((entry, index) => {
+      if (entry.type === "custom_message") {
+        if (
+          entry.customType === RESULT_MESSAGE ||
+          entry.customType === GRAPH_RESULT_MESSAGE
+        )
+          take(deliveryOf(entry.details));
+        return;
+      }
+      if (entry.type !== "message" || entry.message.role !== "toolResult")
+        return;
+      const result = entry.message;
+      deliveriesOf(result.details).forEach(take);
+      if (!result.isError) takeClaim(result.toolCallId, index);
+      for (const call of result.nestedCalls?.calls ?? [])
+        if (call.status === "ok") takeClaim(call.id, index);
+    });
+    return found;
+  }
+
+  /** Every entry of the session, in the order Pi appended them. */
+  private entries(): SessionEntry[] {
+    try {
+      return this.ctx?.sessionManager.getEntries() ?? [];
+    } catch {
+      // A stale context after a session switch holds nothing.
+      return [];
+    }
   }
 
   attention(): Attention {

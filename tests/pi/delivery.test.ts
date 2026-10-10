@@ -2,15 +2,25 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentService } from "../../src/agents/service.js";
 import { GRAPH_RESULT_MESSAGE, RESULT_MESSAGE } from "../../src/pi/messages.js";
 import { PiParent } from "../../src/pi/parent.js";
-import { closeService, MODEL, openService, until } from "../agents/helpers.js";
+import {
+  closeService,
+  createFaux,
+  jsonlStorage,
+  MODEL,
+  openService,
+  tempDir,
+  until,
+} from "../agents/helpers.js";
 
 interface Sent {
   customType: string;
   content: string;
+  details?: { delivery?: string };
   options?: { triggerTurn?: boolean };
 }
 
@@ -21,22 +31,82 @@ afterEach(async () => {
   service = undefined;
 });
 
-/** A Pi parent over a fake session whose state the test controls. */
-function setup(state: { idle: boolean; pending: boolean }) {
+let nextEntry = 0;
+
+/** A session entry of a posted result message. */
+function messageEntry(message: Sent): SessionEntry {
+  return {
+    type: "custom_message",
+    id: `e${++nextEntry}`,
+    parentId: null,
+    timestamp: new Date().toISOString(),
+    customType: message.customType,
+    content: message.content,
+    display: true,
+    details: message.details,
+  };
+}
+
+/** A session entry of a tool call's stored result. */
+function toolResultEntry(
+  toolCallId: string,
+  options: { deliveries?: string[]; nested?: string[] } = {},
+): SessionEntry {
+  return {
+    type: "message",
+    id: `e${++nextEntry}`,
+    parentId: null,
+    timestamp: new Date().toISOString(),
+    message: {
+      role: "toolResult",
+      toolCallId,
+      toolName: options.nested ? "code" : "agent_wait",
+      content: [{ type: "text", text: "…" }],
+      details: options.deliveries ? { deliveries: options.deliveries } : {},
+      ...(options.nested
+        ? {
+            nestedCalls: {
+              calls: options.nested.map((id) => ({
+                id,
+                name: "agent_wait",
+                status: "ok" as const,
+              })),
+              complete: true,
+            },
+          }
+        : {}),
+      isError: false,
+      timestamp: Date.now(),
+    },
+  };
+}
+
+/**
+ * A Pi parent over a fake session whose state the test controls. Pi saves a
+ * posted message unless `saves` is false, and reports it before saving.
+ */
+function setup(
+  state: { idle: boolean; pending: boolean; saves?: boolean },
+  entries: SessionEntry[] = [],
+) {
   const sent: Sent[] = [];
+  let parent: PiParent | undefined;
   const pi = {
-    sendMessage: (
-      message: { customType: string; content: string },
-      options?: { triggerTurn?: boolean },
-    ) => sent.push({ ...message, ...(options ? { options } : {}) }),
+    sendMessage: (message: Sent, options?: { triggerTurn?: boolean }) => {
+      sent.push({ ...message, ...(options ? { options } : {}) });
+      if (state.saves === false) return;
+      entries.push(messageEntry(message));
+      setTimeout(() => parent?.notify(), 0);
+    },
   } as unknown as ExtensionAPI;
   const ctx = {
     isIdle: () => state.idle,
     hasPendingMessages: () => state.pending,
+    sessionManager: { getEntries: () => [...entries] },
   } as unknown as ExtensionContext;
-  const parent = new PiParent(pi);
+  parent = new PiParent(pi);
   parent.setContext(ctx);
-  return { sent, parent };
+  return { sent, parent, entries };
 }
 
 /** Long enough for a delivery that would happen to happen. */
@@ -146,5 +216,159 @@ describe("delivery to Pi", () => {
         "done: b",
       ].join("\n"),
     );
+  });
+});
+
+describe("confirmed delivery to Pi", () => {
+  test("a result counts as delivered only once the session holds it", async () => {
+    const state = { idle: true, pending: false, saves: false };
+    const { sent, parent, entries } = setup(state);
+    const current = await openService({ parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => sent.length === 1);
+    const delivery = sent[0]?.details?.delivery;
+    expect(delivery).toBe(current.pendingDeliveries()[0]?.id);
+
+    // Pi hasn't saved it: it stays pending, and it isn't posted again.
+    parent.notify();
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(current.pendingDeliveries()).toHaveLength(1);
+    expect(current.get("a")?.closed).toBe(false);
+
+    entries.push(messageEntry(sent[0] as Sent));
+    parent.notify();
+    await until(() => current.pendingDeliveries().length === 0);
+    expect(current.get("a")?.closed).toBe(true);
+    expect(sent).toHaveLength(1);
+  });
+
+  test("a restart after Pi saved a result doesn't post it again", async () => {
+    const directory = tempDir();
+    const first = setup({ idle: true, pending: false, saves: false });
+    const before = await openService({
+      parent: first.parent,
+      storage: await jsonlStorage(directory),
+    });
+    service = before;
+    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => first.sent.length === 1);
+    // Pi saved the message, and pi-agents crashed before it saw it.
+    await closeService(before);
+    const entries = [messageEntry(first.sent[0] as Sent)];
+
+    const second = setup({ idle: true, pending: false }, entries);
+    const after = await openService({
+      parent: second.parent,
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+    });
+    service = after;
+    await until(() => after.get("a")?.closed === true);
+    expect(after.pendingDeliveries()).toEqual([]);
+    expect(second.sent).toEqual([]);
+  });
+
+  test("a restart before Pi saved a result posts it again", async () => {
+    const directory = tempDir();
+    const first = setup({ idle: true, pending: false, saves: false });
+    const before = await openService({
+      parent: first.parent,
+      storage: await jsonlStorage(directory),
+    });
+    service = before;
+    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => first.sent.length === 1);
+    await settle();
+    // Never acknowledged: the result is still due when the process ends.
+    expect(before.pendingDeliveries()).toHaveLength(1);
+    await closeService(before);
+
+    const second = setup({ idle: true, pending: false });
+    const after = await openService({
+      parent: second.parent,
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+    });
+    service = after;
+    await until(() => second.sent.length === 1);
+    expect(second.sent[0]?.details?.delivery).toBe(
+      first.sent[0]?.details?.delivery,
+    );
+    await until(() => after.get("a")?.closed === true);
+  });
+
+  test("a wait's stored result counts as its delivery", async () => {
+    const state = { idle: false, pending: false };
+    const { sent, parent, entries } = setup(state);
+    const current = await openService({ parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    const outcome = await current.wait(["a"], { call: "toolu_1" });
+    expect(outcome.deliveries).toHaveLength(1);
+    parent.claim("toolu_1", outcome.deliveries);
+
+    // Until Pi stored the call's result, the result is neither delivered
+    // nor posted, even once the parent is idle.
+    state.idle = true;
+    parent.notify();
+    await settle();
+    expect(sent).toEqual([]);
+    expect(current.get("a")?.queued).toBeUndefined();
+    expect(current.get("a")?.closed).toBe(false);
+
+    entries.push(
+      toolResultEntry("toolu_1", { deliveries: outcome.deliveries }),
+    );
+    parent.notify();
+    await until(() => current.get("a")?.closed === true);
+    expect(sent).toEqual([]);
+  });
+
+  test("a script's wait counts once Pi stored the script's result", async () => {
+    const { sent, parent, entries } = setup({ idle: true, pending: false });
+    const current = await openService({ parent });
+    service = current;
+    // An earlier result of a call with the same ID doesn't count.
+    entries.push(toolResultEntry("toolu_2", { nested: ["toolu_2/1"] }));
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    const outcome = await current.wait(["a"], { call: "toolu_2/1" });
+    parent.claim("toolu_2/1", outcome.deliveries);
+    parent.notify();
+    await settle();
+    expect(current.get("a")?.closed).toBe(false);
+
+    // Pi stores no nested results; it records the calls in the caller's.
+    entries.push(toolResultEntry("toolu_2", { nested: ["toolu_2/1"] }));
+    parent.notify();
+    await until(() => current.get("a")?.closed === true);
+    expect(sent).toEqual([]);
+  });
+
+  test("a restart after Pi stored a wait's result doesn't post it", async () => {
+    const directory = tempDir();
+    const first = setup({ idle: false, pending: false });
+    const before = await openService({
+      parent: first.parent,
+      storage: await jsonlStorage(directory),
+    });
+    service = before;
+    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    const outcome = await before.wait(["a"], { call: "toolu_3" });
+    await closeService(before);
+    const entries = [
+      toolResultEntry("toolu_3", { deliveries: outcome.deliveries }),
+    ];
+
+    const second = setup({ idle: true, pending: false }, entries);
+    const after = await openService({
+      parent: second.parent,
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+    });
+    service = after;
+    await until(() => after.get("a")?.closed === true);
+    expect(second.sent).toEqual([]);
   });
 });

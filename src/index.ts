@@ -46,7 +46,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     if (event.streamingBehavior === "steer") parent.steer();
     return { action: "continue" };
   });
-  registerAgentTools(pi, host);
+  registerAgentTools(pi, host, parent);
   registerCommands(pi, { host, panel, focus });
   pi.registerShortcut("ctrl+q", {
     description: "Focus the pi-agents panel",
@@ -90,6 +90,12 @@ export default function agentExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_start", (_event, ctx) => track(ctx));
+
+  // Pi saves a message only after extensions saw its message_end, so look
+  // for delivered results in the session once the event has passed.
+  pi.on("message_end", () => {
+    setTimeout(() => parent.notify(), 0);
+  });
 
   pi.on("agent_end", (_event, ctx) => {
     track(ctx);

@@ -295,3 +295,13 @@ export type PendingDelivery = AgentDelivery | GraphDelivery;
 export const USER_MESSAGE_PREFIX = "[user] ";
 
 export class AgentError extends Error {}
+
+/** A wait that ended before its agents answered: its caller cancelled it,
+ * or something needs the parent, such as the user steering. */
+export class WaitInterrupted extends AgentError {
+  constructor(readonly reason: "cancelled" | "attention") {
+    super(
+      reason === "cancelled" ? "Wait cancelled" : "Wait ended for the parent",
+    );
+  }
+}

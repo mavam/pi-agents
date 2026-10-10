@@ -24,6 +24,7 @@ composition: graphs of agents that pass results to each other.
 | --- | --- | --- |
 | Host | Owns the storage, its lock, and one pi-durable `Harness` per parent Pi session | JSONL storage in `~/.pi/agent/pi-agents/sessions/<session-id>/` |
 | Anchor | The conversation that owns the graphs the parent starts | Chosen by the host; inside Pi the harness's root conversation, which never runs |
+| Parent | The conversation that starts agents and receives their results | `Parent`, implemented by the host; inside Pi, Pi's session |
 | Agent | A durable, named conversation | An ownerless conversation, or one a turn owns, plus an `AgentRecord` |
 | AgentRecord | Name, profile, creation time, closed flag, parent requests, graph | The session document `pi-agents.agents` |
 | Graph | Named agents plus edges that carry results; reports back as one result | A graph task plus a `GraphRecord` |
@@ -54,9 +55,9 @@ settings to the parts that need them:
   graph tasks, and delegation; `installAgentExtensions` installs them in any
   registry, the way the session worker installs `CodingTools` and its
   prompt, and `agentSelection` is the default selection of agents.
-  `AgentService.start` takes the harness, the anchor, and the extensions.
-  The core never opens storage or a harness, never closes them, and never
-  assumes the root conversation.
+  `AgentService.start` takes the harness, the anchor, the extensions, and
+  the parent. The core never opens storage or a harness, never closes them,
+  and never assumes the root conversation.
 - **Frontend** (`src/pi`, `src/ui`): tools, commands, and views. They see
   plain data through `AgentService`, like the session worker's presentations
   see `AgentController` and `Transcript`; only the attach view reads a
@@ -65,6 +66,27 @@ settings to the parts that need them:
 A durable Pi would host pi-agents in its session worker: install the
 extensions in the worker's registry and pass its harness and the session's
 main conversation as the anchor.
+
+### The parent
+
+Everything the core needs from the parent goes through one interface,
+`Parent` (`src/agents/parent.ts`), which the host implements:
+
+- `canDeliver()`: whether the parent takes results now. Pi's session takes
+  them while it's idle, holds no queued messages, and the user isn't
+  attached to an agent.
+- `deliver(deliveries)`: hand results over, in order. Inside Pi each is a
+  message, and the last starts a turn.
+- `attention()`: a signal that ends one of the parent's waits once
+  something needs the parent, so it can answer while its agents keep
+  working. Inside Pi a steer from the user raises it.
+- `subscribe(listener)`: changes that may let delivery proceed, such as
+  the end of a turn or the attach view closing.
+
+The core decides what is due and hands it over after every change of its
+own and whenever the parent changes. Inside Pi, `PiParent`
+(`src/pi/parent.ts`) implements the interface. A durable host could
+deliver by submitting to the session's main conversation instead.
 
 Agent states are derived, never stored:
 
@@ -414,8 +436,9 @@ validation.
 
 Pi places a user's steering message only after the current tool round. A
 wait would therefore hold a steer back until the agents answer, so a steer
-ends every running wait at once; the agents keep working and their results
-arrive as messages. Follow-ups don't end waits.
+raises the parent's attention, which ends every running wait at once; the
+agents keep working and their results arrive as messages. Follow-ups don't
+end waits.
 
 The system prompt adds one line of guidance, the usable profiles, and the
 user's scoped models (`ctx.scopedModels`, from `/scoped-models` or `--models`)

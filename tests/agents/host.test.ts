@@ -23,6 +23,7 @@ import {
   jsonlStorage,
   MODEL,
   openService,
+  TestParent,
   tempDir,
   testExtensions,
   until,
@@ -59,7 +60,12 @@ describe("hosts", () => {
       { ownership: { kind: "ownerless" } },
       CONTEXT,
     );
-    const service = await AgentService.start({ harness, anchor, extensions });
+    const service = await AgentService.start({
+      harness,
+      anchor,
+      extensions,
+      parent: new TestParent(),
+    });
     cleanups.push(() => service.close());
 
     const graph = await service.spawnGraph({

@@ -16,7 +16,6 @@ import {
 import { SkillCatalog } from "../../src/catalog/skills.js";
 import { agentOutput, graphOutput } from "../../src/pi/output.js";
 import type { SessionHost } from "../../src/pi/session.js";
-import { SteerWatch } from "../../src/pi/steering.js";
 import {
   FitLines,
   formatCall,
@@ -29,6 +28,7 @@ import {
   createGatedFaux,
   MODEL,
   openService,
+  parentOf,
 } from "../agents/helpers.js";
 
 const noSkills = new SkillCatalog(async () => []);
@@ -46,7 +46,7 @@ afterEach(async () => {
 // biome-ignore lint/suspicious/noExplicitAny: tool parameters vary.
 type AnyTool = ToolDefinition<any, any>;
 
-function tools(steering: SteerWatch): Map<string, AnyTool> {
+function tools(): Map<string, AnyTool> {
   const registered = new Map<string, AnyTool>();
   const pi = {
     registerTool: (tool: AnyTool) => registered.set(tool.name, tool),
@@ -56,7 +56,7 @@ function tools(steering: SteerWatch): Map<string, AnyTool> {
     ensure: async () => service,
     skills: noSkills,
   } as unknown as SessionHost;
-  registerAgentTools(pi, host, steering);
+  registerAgentTools(pi, host);
   return registered;
 }
 
@@ -67,11 +67,11 @@ const ctx = {
 } as unknown as ExtensionContext;
 
 /** Agent tools over a service whose model holds prompts with `hold`. */
-async function gated(steering = new SteerWatch()) {
+async function gated() {
   const faux = createGatedFaux();
   release = faux.release;
   service = await openService({ models: faux.models });
-  const registered = tools(steering);
+  const registered = tools();
   /**
    * Run a tool and return its text and what a script gets, which must match
    * the tool's output schema.
@@ -153,7 +153,7 @@ function firstUpdate(): {
 
 describe("script output", () => {
   test("every agent tool declares the output scripts get", () => {
-    const registered = tools(new SteerWatch());
+    const registered = tools();
     for (const tool of registered.values())
       expect(tool.outputSchema, tool.name).toBeDefined();
     const stop = registered.get("agent_stop");
@@ -239,8 +239,7 @@ describe("script output", () => {
   });
 
   test("waits that end early return the state and what is pending", async () => {
-    const steering = new SteerWatch();
-    const run = await gated(steering);
+    const run = await gated();
     const w = { kind: "agent", name: "w", state: "working" };
     // A timeout.
     expect(
@@ -269,7 +268,7 @@ describe("script output", () => {
       { onUpdate: steered.onUpdate },
     );
     await steered.started;
-    steering.steer();
+    parentOf(service as AgentService).attend();
     expect((await sending).output).toEqual(w);
     expect(
       (await run("agent_send", { name: "w", message: "more" })).output,
@@ -479,13 +478,12 @@ describe("output", () => {
 
 describe("waiting tools", () => {
   test("a steer from the user ends a wait; the agent keeps working", async () => {
-    const steering = new SteerWatch();
-    const run = await gated(steering);
+    const run = await gated();
     await run("agent_spawn", { task: "hold", name: "w" });
     const { onUpdate, started } = firstUpdate();
     const waiting = run("agent_wait", { names: ["w"] }, { onUpdate });
     await started;
-    steering.steer();
+    parentOf(service as AgentService).attend();
     const result = await waiting;
     expect(result.text).toBe(
       "Stopped waiting because the user sent a message. The agents keep working; their results arrive as messages.",
@@ -496,7 +494,7 @@ describe("waiting tools", () => {
 
   test("waiting calls draw what they started, never live states", async () => {
     const run = await gated();
-    const draw = tools(new SteerWatch());
+    const draw = tools();
     /** Run a waiting call, abort it after its first progress, and draw both. */
     const waitOnce = async (name: string, args: Record<string, unknown>) => {
       const tool = draw.get(name);
@@ -747,7 +745,7 @@ describe("call results", () => {
   });
 
   test("a waiting call shows what it started, then the outcome", () => {
-    const tool = tools(new SteerWatch()).get("agent_spawn_graph");
+    const tool = tools().get("agent_spawn_graph");
     const args = {
       name: "audit",
       wait: 60,

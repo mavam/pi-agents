@@ -5,12 +5,15 @@ import {
   fauxProvider,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentService } from "../../src/agents/service.js";
+import { WaitInterrupted } from "../../src/agents/types.js";
 import {
   closeService,
   createFaux,
+  createGatedFaux,
   jsonlStorage,
   MODEL,
   openService,
+  parentOf,
   tempDir,
   until,
 } from "./helpers.js";
@@ -231,6 +234,41 @@ describe("AgentService", () => {
     await expect(
       service.spawn({ task: "x", cwd: ".", model: MODEL, tools: ["nope"] }),
     ).rejects.toThrow("Unknown tools: nope");
+  });
+});
+
+describe("the parent", () => {
+  test("results reach the parent once it takes them", async () => {
+    const service = await open();
+    const parent = parentOf(service);
+    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => service.pendingDeliveries().length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(parent.delivered).toEqual([]);
+
+    parent.ready = true;
+    await until(() => parent.delivered.length === 1);
+    expect(parent.delivered[0]?.name).toBe("a");
+    await until(() => service.get("a")?.closed === true);
+    expect(service.pendingDeliveries()).toEqual([]);
+  });
+
+  test("a wait ends when the parent is needed and consumes nothing", async () => {
+    const faux = createGatedFaux();
+    const service = await open({ models: faux.models });
+    await service.spawn({ task: "hold", name: "w", cwd: ".", model: MODEL });
+    await service.spawn({ task: "quick", name: "q", cwd: ".", model: MODEL });
+    await until(() => service.get("q")?.state === "idle");
+    const waiting = service.wait(["w", "q"]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    parentOf(service).attend();
+    const error = await waiting.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(WaitInterrupted);
+    expect((error as WaitInterrupted).reason).toBe("attention");
+    expect(service.get("w")?.state).toBe("working");
+    // The finished agent's result still arrives as a message.
+    expect(service.pendingDeliveries().map((each) => each.name)).toEqual(["q"]);
+    faux.release();
   });
 });
 

@@ -10,7 +10,9 @@
  * tasks of the graph (see graphs.ts). The service keeps a derived
  * `AgentInfo` per agent and a `GraphInfo` per graph, refreshed from commit
  * publications, and tracks parent requests and graph results until they are
- * delivered.
+ * delivered. It reaches the parent only through `Parent` (see parent.ts):
+ * it hands results over when the parent can take them, and ends the
+ * parent's waits when the parent is needed.
  */
 
 import type {
@@ -67,6 +69,7 @@ import {
   nodeRequestId,
 } from "./graphs.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
+import type { Parent } from "./parent.js";
 import {
   type AgentRecord,
   AgentsDoc,
@@ -97,6 +100,7 @@ import {
   type Target,
   type TaskNode,
   USER_MESSAGE_PREFIX,
+  WaitInterrupted,
 } from "./types.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
@@ -108,6 +112,10 @@ export interface AgentServiceOptions {
   /** The conversation that owns the graphs the parent starts. */
   anchor: Conversation;
   extensions: AgentExtensions;
+  /** The conversation that starts agents and receives their results. */
+  parent: Parent;
+  /** Receives failures of background work, such as delivery. */
+  onReport?: (error: unknown) => void;
 }
 
 export interface WaitOutcome {
@@ -188,16 +196,23 @@ export class AgentService {
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshChain: Promise<void> = Promise.resolve();
   private unsubscribe: (() => void) | undefined;
+  private unsubscribeParent: (() => void) | undefined;
+  private deliveryChain: Promise<void> = Promise.resolve();
+  private deliveryQueued = false;
   private closed = false;
 
   private readonly harness: Harness;
   private readonly anchor: Conversation;
   private readonly extensions: AgentExtensions;
+  private readonly parent: Parent;
+  private readonly report: (error: unknown) => void;
 
   private constructor(options: AgentServiceOptions) {
     this.harness = options.harness;
     this.anchor = options.anchor;
     this.extensions = options.extensions;
+    this.parent = options.parent;
+    this.report = options.onReport ?? (() => {});
   }
 
   /** Start the service over the host's harness; it resumes unfinished work. */
@@ -233,6 +248,9 @@ export class AgentService {
     // Continue work that a previous process left unfinished, graphs included.
     this.harness.resume();
     await this.refresh(Object.keys(this.records));
+    this.unsubscribeParent = this.parent.subscribe(() =>
+      this.scheduleDelivery(),
+    );
   }
 
   /** Stop observing the harness; the host closes it afterwards. */
@@ -241,9 +259,11 @@ export class AgentService {
     this.closed = true;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.unsubscribe?.();
+    this.unsubscribeParent?.();
     this.listeners.clear();
     for (const check of [...this.checks]) check();
     await this.refreshChain.catch(() => {});
+    await this.deliveryChain;
   }
 
   // --- Observation ---
@@ -664,7 +684,8 @@ export class AgentService {
   /**
    * Wait until the agents are idle and the graphs finished, and return
    * them. Their results count as delivered. Aborting `signal` ends only the
-   * wait.
+   * wait, and so does the parent's attention: either throws
+   * `WaitInterrupted`.
    */
   async wait(
     names: string[],
@@ -685,13 +706,16 @@ export class AgentService {
         ),
       ),
     ];
-    const signals = [
-      options.signal,
-      ...(options.timeoutMs !== undefined
-        ? [AbortSignal.timeout(options.timeoutMs)]
-        : []),
-    ].filter((signal): signal is AbortSignal => signal !== undefined);
-    const signal = signals.length > 0 ? AbortSignal.any(signals) : undefined;
+    const attention = this.parent.attention();
+    const signal = AbortSignal.any(
+      [
+        options.signal,
+        attention.signal,
+        ...(options.timeoutMs !== undefined
+          ? [AbortSignal.timeout(options.timeoutMs)]
+          : []),
+      ].filter((each): each is AbortSignal => each !== undefined),
+    );
     for (const id of ids) this.waiters.set(id, (this.waiters.get(id) ?? 0) + 1);
     for (const id of graphIds)
       this.graphWaiters.set(id, (this.graphWaiters.get(id) ?? 0) + 1);
@@ -717,7 +741,8 @@ export class AgentService {
           if (await this.untilSettled(id, signal)) ended.add(id);
         }),
       ]);
-      if (options.signal?.aborted) throw new AgentError("Wait cancelled");
+      if (options.signal?.aborted) throw new WaitInterrupted("cancelled");
+      if (attention.signal.aborted) throw new WaitInterrupted("attention");
       await this.refresh(ids);
       for (const id of idle) await this.consume(id);
       for (const id of ended)
@@ -733,6 +758,7 @@ export class AgentService {
         ].map((info) => info.name),
       };
     } finally {
+      attention.release();
       for (const [counts, keys] of [
         [this.waiters, ids],
         [this.graphWaiters, graphIds],
@@ -743,6 +769,8 @@ export class AgentService {
           else counts.delete(id);
         }
       this.emit();
+      // Results the wait held back are due again.
+      this.scheduleDelivery();
     }
   }
 
@@ -842,6 +870,29 @@ export class AgentService {
       deliveries.push(...answers.values());
     }
     return deliveries;
+  }
+
+  /**
+   * Hand due results to the parent once it can take them. Serialized; runs
+   * after every refresh, when a wait ends, and when the parent changes.
+   */
+  private scheduleDelivery(): void {
+    if (this.deliveryQueued || this.closed) return;
+    this.deliveryQueued = true;
+    this.deliveryChain = this.deliveryChain
+      .then(async () => {
+        this.deliveryQueued = false;
+        if (!this.closed) await this.deliverDue();
+      })
+      .catch((error) => this.report(error));
+  }
+
+  private async deliverDue(): Promise<void> {
+    const due = this.pendingDeliveries();
+    if (due.length === 0 || !this.parent.canDeliver()) return;
+    await this.parent.deliver(due, this);
+    // Acknowledged after posting, so a crash in between repeats a delivery.
+    for (const delivery of due) await this.acknowledge(delivery);
   }
 
   /** Mark a delivery done. An answered agent closes, and so does a graph. */
@@ -1158,6 +1209,7 @@ export class AgentService {
       if (stopped.length > 0) await this.clearPending(stopped);
       await this.closeEndedHelpers();
       for (const check of [...this.checks]) check();
+      this.scheduleDelivery();
     });
     this.refreshChain = run.catch(() => {});
     return run;

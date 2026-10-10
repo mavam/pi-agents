@@ -15,8 +15,16 @@ import {
   type AgentExtensions,
   createAgentExtensions,
 } from "../../src/agents/extensions.js";
+import {
+  type Attention,
+  AttentionSignals,
+  type Parent,
+} from "../../src/agents/parent.js";
 import { AgentService } from "../../src/agents/service.js";
-import type { HelperResolver } from "../../src/agents/types.js";
+import type {
+  HelperResolver,
+  PendingDelivery,
+} from "../../src/agents/types.js";
 import type { SkillSource } from "../../src/catalog/skills.js";
 import { type AgentHarness, openAgentHarness } from "../../src/host/harness.js";
 
@@ -108,9 +116,60 @@ export const inheritHelper: HelperResolver = async (request, defaults) => ({
   ...(request.tools ? { tools: request.tools } : {}),
 });
 
+/**
+ * A parent for tests. It takes no deliveries until `ready` is set, like a
+ * parent at work, so tests can inspect pending results and acknowledge them
+ * themselves.
+ */
+export class TestParent implements Parent {
+  private isReady = false;
+  /** Everything the parent was handed, in order. */
+  readonly delivered: PendingDelivery[] = [];
+  private readonly listeners = new Set<() => void>();
+  private readonly waits = new AttentionSignals();
+
+  get ready(): boolean {
+    return this.isReady;
+  }
+
+  /** Whether the parent takes deliveries; setting it lets them proceed. */
+  set ready(value: boolean) {
+    this.isReady = value;
+    this.notify();
+  }
+
+  canDeliver(): boolean {
+    return this.isReady;
+  }
+
+  async deliver(deliveries: readonly PendingDelivery[]): Promise<void> {
+    this.delivered.push(...deliveries);
+  }
+
+  attention(): Attention {
+    return this.waits.open();
+  }
+
+  /** Something needs the parent: end its waits. */
+  attend(): void {
+    this.waits.raise();
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  notify(): void {
+    for (const listener of [...this.listeners]) listener();
+  }
+}
+
 export interface HostOptions {
   storage?: Storage;
   models?: ReturnType<typeof createFaux>["models"];
+  /** The parent; a `TestParent` that takes no deliveries by default. */
+  parent?: Parent;
   /** Whether the project is trusted, and its skills. */
   trusted?: boolean;
   skills?: SkillSource;
@@ -122,6 +181,7 @@ export interface TestHost {
   service: AgentService;
   harness: AgentHarness;
   extensions: AgentExtensions;
+  parent: Parent;
 }
 
 const hosts = new Map<AgentService, TestHost>();
@@ -150,13 +210,15 @@ export async function openService(
     cwd: process.cwd(),
     extensions,
   });
+  const parent = options.parent ?? new TestParent();
   try {
     const service = await AgentService.start({
       harness: harness.harness,
       anchor: harness.anchor,
       extensions,
+      parent,
     });
-    hosts.set(service, { service, harness, extensions });
+    hosts.set(service, { service, harness, extensions, parent });
     return service;
   } catch (error) {
     await harness.close();
@@ -168,6 +230,14 @@ export function hostOf(service: AgentService): TestHost {
   const host = hosts.get(service);
   if (!host) throw new Error("The service has no test host");
   return host;
+}
+
+/** The `TestParent` of a service opened without a parent of its own. */
+export function parentOf(service: AgentService): TestParent {
+  const parent = hostOf(service).parent;
+  if (!(parent instanceof TestParent))
+    throw new Error("The service has no test parent");
+  return parent;
 }
 
 /** Close the service, then its harness, as the host does. */

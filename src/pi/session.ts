@@ -1,7 +1,7 @@
 /**
  * SessionHost: hosts the agents of the current Pi session. It owns the
- * storage, its lock, and the harness, and hands the harness and its anchor
- * to the AgentService. Storage lives in
+ * storage, its lock, and the harness, and hands the harness, its anchor,
+ * and the parent, Pi's session, to the AgentService. Storage lives in
  * `~/.pi/agent/pi-agents/sessions/<session-id>/`. A session that already
  * has agents opens at session start, so interrupted work resumes; otherwise
  * the service opens on first use. Ephemeral sessions (`--no-session`) cannot
@@ -16,6 +16,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { createAgentExtensions } from "../agents/extensions.js";
+import type { Parent } from "../agents/parent.js";
 import { AgentService } from "../agents/service.js";
 import { AgentError } from "../agents/types.js";
 import { SkillCatalog } from "../catalog/skills.js";
@@ -53,6 +54,8 @@ export class SessionHost {
   readonly skills = new SkillCatalog();
   /** Why agents are unavailable in this session, if they are. */
   unavailable: string | undefined;
+
+  constructor(private readonly parent: Parent) {}
 
   /** Session start: remember the context and resume existing agents. */
   async start(ctx: ExtensionContext): Promise<void> {
@@ -145,6 +148,8 @@ export class SessionHost {
         harness: harness.harness,
         anchor: harness.anchor,
         extensions,
+        parent: this.parent,
+        onReport: (error) => this.report(error),
       });
       this.service = service;
       this.harness = harness;

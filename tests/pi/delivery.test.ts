@@ -4,9 +4,8 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentService } from "../../src/agents/service.js";
-import { DeliveryManager } from "../../src/pi/delivery.js";
 import { GRAPH_RESULT_MESSAGE, RESULT_MESSAGE } from "../../src/pi/messages.js";
-import type { SessionHost } from "../../src/pi/session.js";
+import { PiParent } from "../../src/pi/parent.js";
 import { closeService, MODEL, openService, until } from "../agents/helpers.js";
 
 interface Sent {
@@ -22,6 +21,7 @@ afterEach(async () => {
   service = undefined;
 });
 
+/** A Pi parent over a fake session whose state the test controls. */
 function setup(state: { idle: boolean; pending: boolean }) {
   const sent: Sent[] = [];
   const pi = {
@@ -30,28 +30,37 @@ function setup(state: { idle: boolean; pending: boolean }) {
       options?: { triggerTurn?: boolean },
     ) => sent.push({ ...message, ...(options ? { options } : {}) }),
   } as unknown as ExtensionAPI;
-  const host = { current: () => service } as unknown as SessionHost;
   const ctx = {
     isIdle: () => state.idle,
     hasPendingMessages: () => state.pending,
   } as unknown as ExtensionContext;
-  return { sent, delivery: new DeliveryManager(pi, host), ctx };
+  const parent = new PiParent(pi);
+  parent.setContext(ctx);
+  return { sent, parent };
 }
 
-describe("DeliveryManager", () => {
-  test("posts results once the parent is idle and wakes it", async () => {
-    service = await openService();
-    const state = { idle: false, pending: false };
-    const { sent, delivery, ctx } = setup(state);
-    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
-    await service.spawn({ task: "b", name: "b", cwd: ".", model: MODEL });
-    await until(() => service?.pendingDeliveries().length === 2);
+/** Long enough for a delivery that would happen to happen. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 100));
+}
 
-    delivery.flush(ctx);
+describe("delivery to Pi", () => {
+  test("posts results once the parent is idle and wakes it", async () => {
+    const state = { idle: false, pending: false };
+    const { sent, parent } = setup(state);
+    const current = await openService({ parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawn({ task: "b", name: "b", cwd: ".", model: MODEL });
+    await until(() => current.pendingDeliveries().length === 2);
+
+    parent.notify();
+    await settle();
     expect(sent).toEqual([]);
 
     state.idle = true;
-    delivery.flush(ctx);
+    parent.notify();
+    await until(() => sent.length === 2);
     expect(sent.map((message) => message.customType)).toEqual([
       RESULT_MESSAGE,
       RESULT_MESSAGE,
@@ -62,43 +71,45 @@ describe("DeliveryManager", () => {
       undefined,
       true,
     ]);
-    await until(() => service?.pendingDeliveries().length === 0);
-    delivery.flush(ctx);
+    await until(() => current.pendingDeliveries().length === 0);
+    parent.notify();
+    await settle();
     expect(sent).toHaveLength(2);
   });
 
   test("holds results while blocked or while messages are pending", async () => {
-    service = await openService();
     const state = { idle: true, pending: true };
-    const { sent, delivery, ctx } = setup(state);
+    const { sent, parent } = setup(state);
     let attached = true;
-    delivery.setBlocked(() => attached);
-    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
-    await until(() => service?.pendingDeliveries().length === 1);
+    parent.setBlocked(() => attached);
+    const current = await openService({ parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => current.pendingDeliveries().length === 1);
 
-    delivery.flush(ctx);
+    parent.notify();
     state.pending = false;
-    delivery.flush(ctx);
+    parent.notify();
+    await settle();
     expect(sent).toEqual([]);
 
     attached = false;
-    delivery.flush(ctx);
-    expect(sent).toHaveLength(1);
+    parent.notify();
+    await until(() => sent.length === 1);
   });
 
   test("posts one message per graph with its end agent's answer", async () => {
-    service = await openService();
-    const state = { idle: true, pending: false };
-    const { sent, delivery, ctx } = setup(state);
-    await service.spawnGraph({
+    const { sent, parent } = setup({ idle: true, pending: false });
+    const current = await openService({ parent });
+    service = current;
+    await current.spawnGraph({
       name: "pair",
       agents: [
         { name: "a", task: "a", cwd: ".", model: MODEL },
         { name: "merge", task: "merge", cwd: ".", model: MODEL, after: ["a"] },
       ],
     });
-    await until(() => service?.pendingDeliveries().length === 1);
-    delivery.flush(ctx);
+    await until(() => sent.length === 1);
     expect(sent.map((message) => message.customType)).toEqual([
       GRAPH_RESULT_MESSAGE,
     ]);
@@ -106,25 +117,24 @@ describe("DeliveryManager", () => {
     expect(sent[0]?.content).toStartWith("Graph pair: merge answered:\n\n");
     expect(sent[0]?.content).toContain("done: merge");
     expect(sent[0]?.options?.triggerTurn).toBe(true);
-    await until(() => service?.pendingDeliveries().length === 0);
-    delivery.flush(ctx);
+    await until(() => current.getGraph("pair")?.closed === true);
+    parent.notify();
+    await settle();
     expect(sent).toHaveLength(1);
-    expect(service.getGraph("pair")?.closed).toBe(true);
   });
 
   test("a graph without edges reports every agent's answer", async () => {
-    service = await openService();
-    const state = { idle: true, pending: false };
-    const { sent, delivery, ctx } = setup(state);
-    await service.spawnGraph({
+    const { sent, parent } = setup({ idle: true, pending: false });
+    const current = await openService({ parent });
+    service = current;
+    await current.spawnGraph({
       name: "pair",
       agents: [
         { task: "a", cwd: ".", model: MODEL },
         { task: "b", cwd: ".", model: MODEL },
       ],
     });
-    await until(() => service?.pendingDeliveries().length === 1);
-    delivery.flush(ctx);
+    await until(() => sent.length === 1);
     expect(sent[0]?.content).toBe(
       [
         "Graph pair finished: 2 answered.",

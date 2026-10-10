@@ -54,7 +54,8 @@ settings to the parts that need them:
   extensions. `createAgentExtensions` returns the tools, the prompt, the
   graph tasks, and delegation; `installAgentExtensions` installs them in any
   registry, the way the session worker installs `CodingTools` and its
-  prompt, and `agentSelection` is the default selection of agents.
+  prompt, and `agentSelection` is what an agent selects (see "Agent
+  runtime").
   `AgentService.start` takes the harness, the anchor, the extensions, and
   the parent. The core never opens storage or a harness, never closes them,
   and never assumes the root conversation.
@@ -294,9 +295,9 @@ delegating agent's conversation
   select it and its tool; `AgentRecord.delegate` stores the choice, and the
   tool refuses agents whose record doesn't allow it or that are helpers.
   pi-durable copies an owner task's conversation's agent settings into the
-  conversations it owns, so every helper is configured explicitly: no
-  delegation extension, its own tools, model, thinking level, instructions,
-  and working directory. Depth is therefore 2.
+  conversations it owns, so every helper is configured explicitly: the
+  extensions of agents without delegation, its own tools, model, thinking
+  level, instructions, and working directory. Depth is therefore 2.
 - Helpers get only tools their agent has. Profiles, models, and skills
   resolve like Pi's spawns through the `HelperResolver` the session host
   provides, with the agent's model, thinking level, and working directory as
@@ -416,6 +417,15 @@ delivery but can repeat one.
 
 ## Agent runtime
 
+- Extensions: every agent names the extensions it selects when it's
+  created: pi-agents' tools and prompt, plus delegation for delegating
+  agents. Standalone agents, graph agents, and helpers never follow the
+  harness's default selection, which in Pi's durable session worker would
+  be Pi's own tools, prompt, and `subagent` tool. Agents stored by earlier
+  versions name none and keep following the default, which Pi's host sets
+  to pi-agents' tools and prompt; a host with other defaults would have to
+  select for them. Delegating agents of earlier versions stored the
+  delegation extension as an addition to that default.
 - Tools: `read`, `write`, `edit`, and `bash` from pi-durable, plus `grep`,
   `find`, and `ls` adapted from Pi's tool definitions. The default set is Pi's:
   `read`, `bash`, `edit`, `write`. Delegating agents also get
@@ -627,6 +637,10 @@ Pi stored the call's result, for nested calls through their caller's. A
 fake Pi that queues, runs, or defers a posted message checks that a queued
 message Esc dropped posts again once Pi is idle, while a message the
 triggered turn saved and one deferred while Pi settles post once.
+A host whose default selection holds a foreign extension, with a `read`
+tool, another tool, and a prompt section, gives none of it to standalone
+agents, graph agents, a delegating agent, or its helper, and the session
+of v0.27.0 keeps its agents on the default of Pi's host.
 Keyed call tests repeat a spawn, a graph spawn, a send, and a stop with the
 same key, also after the name moved to a newer agent, and check that each
 acts once, that a repeated stop leaves newer work alone, that calls without

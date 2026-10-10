@@ -59,7 +59,7 @@ import {
   sumUsage,
   type TurnSettlement,
 } from "./derive.js";
-import type { AgentExtensions } from "./extensions.js";
+import { type AgentExtensions, agentSelection } from "./extensions.js";
 import {
   GRAPH_TASK,
   GraphTask,
@@ -1147,20 +1147,23 @@ export class AgentService {
   }
 
   /**
-   * The tools and extensions of a new agent. A delegating agent also selects
-   * the delegation extension and its tool, so only it can start helpers.
+   * The tools and extensions of a new agent, named explicitly, so the
+   * harness's default selection never reaches it. A delegating agent also
+   * selects the delegation extension and its tool, so only it can start
+   * helpers.
    */
   private capabilities(
     tools: ToolRegistration[],
     delegate: boolean | undefined,
-  ): { tools: ToolRegistration[]; extensions?: { add: Extension[] } } {
-    if (!delegate) return { tools };
-    const { delegation } = this.extensions;
-    const tool = delegation.tools?.find((each) => each.name === DELEGATE_TOOL);
-    return {
-      tools: tool ? [...tools, tool] : tools,
-      extensions: { add: [delegation] },
-    };
+  ): { tools: ToolRegistration[]; extensions: Extension[] } {
+    const extensions = agentSelection(this.extensions, {
+      delegate: !!delegate,
+    });
+    if (!delegate) return { tools, extensions };
+    const tool = this.extensions.delegation.tools?.find(
+      (each) => each.name === DELEGATE_TOOL,
+    );
+    return { tools: tool ? [...tools, tool] : tools, extensions };
   }
 
   private resolveTools(names: string[] | undefined): ToolRegistration[] {

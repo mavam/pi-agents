@@ -2,14 +2,27 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai/models";
 import {
+  type FauxResponseStep,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxText,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
+import {
+  AgentDoc,
+  type ConversationId,
   createRegistry,
   defineExtension,
+  defineTool,
   Harness,
   MemoryStorage,
   ROOT_CONVERSATION_ID,
+  section,
   type TaskId,
 } from "@earendil-works/pi-durable";
+import { Type } from "typebox";
 import {
   agentSelection,
   installAgentExtensions,
@@ -21,6 +34,7 @@ import {
   createFaux,
   hostOf,
   jsonlStorage,
+  lastUserText,
   MODEL,
   openService,
   TestParent,
@@ -37,6 +51,10 @@ afterEach(async () => {
   for (const cleanup of cleanups.reverse()) await cleanup();
   cleanups = [];
 });
+
+function agent(name: string, task: string) {
+  return { name, task, cwd: ".", model: MODEL };
+}
 
 describe("hosts", () => {
   test("the core runs on the harness and anchor its host chose", async () => {
@@ -88,6 +106,107 @@ describe("hosts", () => {
     ).toBeUndefined();
   });
 
+  test("agents select pi-agents' extensions, not the host's defaults", async () => {
+    // Like Pi's session worker, the host selects its own extension by
+    // default: a `read` tool, another tool, and a prompt section.
+    const tool = (name: string) =>
+      defineTool({
+        name,
+        description: `The host's ${name}`,
+        parameters: Type.Object({}),
+        replay: "safe",
+        execute: async () => ({ content: [{ type: "text", text: name }] }),
+      });
+    const foreign = defineExtension({
+      name: "host-coding",
+      tools: [tool("read"), tool("host_tool")],
+      sections: [section("host_rules", () => "Follow the host.")],
+    });
+    // The model delegates when asked and records what each request offers.
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const offered: string[][] = [];
+    const step: FauxResponseStep = (context) => {
+      // System messages declare the request's sections and tools.
+      const systems = context.messages.filter(
+        (message) => (message.role as string) === "system",
+      ) as Array<{ sections?: object; toolsAdded?: Array<{ name: string }> }>;
+      offered.push(
+        systems.flatMap((system) => [
+          ...(system.toolsAdded ?? []).map((each) => `tool:${each.name}`),
+          ...Object.keys(system.sections ?? {}).map((key) => `section:${key}`),
+        ]),
+      );
+      const last = context.messages.at(-1);
+      if (last?.role === "toolResult")
+        return fauxAssistantMessage([fauxText("merged")]);
+      if (lastUserText(context).startsWith("delegate"))
+        return fauxAssistantMessage(
+          [
+            fauxToolCall("delegate_graph", {
+              agents: [{ name: "h", task: "help" }],
+            }),
+          ],
+          { stopReason: "toolUse" },
+        );
+      return fauxAssistantMessage("done");
+    };
+    faux.setResponses(Array.from({ length: 20 }, () => step));
+
+    const extensions = testExtensions();
+    const registry = createRegistry();
+    registry.install(foreign);
+    installAgentExtensions(registry, extensions);
+    const harness = await Harness.open(
+      new MemoryStorage(),
+      { models, registry, settings: { extensions: [foreign] } },
+      CONTEXT,
+    );
+    cleanups.push(() => harness.close(CONTEXT));
+    const service = await AgentService.start({
+      harness,
+      anchor: await harness.root(CONTEXT),
+      extensions,
+      parent: new TestParent(),
+    });
+    cleanups.push(() => service.close());
+
+    await service.spawn(agent("solo", "solo"));
+    await service.spawnGraph({
+      name: "g",
+      agents: [agent("x", "one"), { ...agent("y", "two"), after: ["x"] }],
+    });
+    await service.spawn({ ...agent("lead", "delegate"), delegate: true });
+    await service.wait(["solo", "g", "lead"]);
+    expect(service.get("lead")?.result?.text).toBe("merged");
+
+    const ours = [extensions.tools.name, extensions.prompt.name];
+    for (const [name, selected] of [
+      ["solo", ours],
+      ["x", ours],
+      ["y", ours],
+      ["lead", [...ours, extensions.delegation.name]],
+      ["lead.h", ours],
+    ] as const) {
+      const id = Number(service.get(name)?.id) as ConversationId;
+      const conversation = await harness.conversation(id, CONTEXT);
+      const resolved = await conversation?.agent(CONTEXT);
+      expect(
+        resolved?.extensions.map((each) => each.name),
+        name,
+      ).toEqual([...selected]);
+      for (const each of resolved?.tools ?? [])
+        expect(foreign.tools, `${name}: ${each.name}`).not.toContain(each);
+    }
+    expect(offered).toHaveLength(6);
+    for (const request of offered) {
+      expect(request).not.toContain("tool:host_tool");
+      expect(request).not.toContain("section:host_rules");
+      expect(request).toContain("tool:read");
+    }
+  });
+
   test("Pi's host anchors graphs on the root conversation", async () => {
     const service = await openService();
     cleanups.push(() => closeService(service));
@@ -135,6 +254,19 @@ describe("sessions stored by earlier versions", () => {
     ).toEqual(["a", "b", "x", "y", "s (closed)", "p", "q", "w"]);
     expect(service.get("s")?.result?.text).toBe("done: gamma");
     expect(service.get("b")?.result?.text).toBe("done: again");
+    // Its agents name no extensions and follow the default of Pi's host.
+    const { harness: opened } = hostOf(service).harness;
+    const a = Number(service.get("a")?.id) as ConversationId;
+    expect(
+      (await opened.snapshot(AgentDoc, a, CONTEXT))?.extensions,
+    ).toBeUndefined();
+    const resolved = await (await opened.conversation(a, CONTEXT))?.agent(
+      CONTEXT,
+    );
+    expect(resolved?.extensions.map((each) => each.name)).toEqual([
+      "pi-agents-tools",
+      "pi-agents-prompt",
+    ]);
 
     // Work that stopped at shutdown resumes; the graph on the old anchor
     // finishes and delivers.

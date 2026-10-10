@@ -2,8 +2,9 @@
  * pi-agents' behavior as pi-durable extensions, so any registry can install
  * it, the way Pi's session worker installs its coding tools and prompt. A
  * host creates them, installs them in the registry of the harness it opens,
- * selects `agentSelection` by default, and hands the harness to
- * `AgentService`.
+ * and hands the harness to `AgentService`. Every agent names the extensions
+ * it selects, so the harness's default selection, such as Pi's own tools
+ * and prompt in a session worker, never reaches agents.
  */
 
 import type { Extension, Registry } from "@earendil-works/pi-durable";
@@ -40,13 +41,16 @@ export interface AgentExtensionOptions {
 export function createAgentExtensions(
   options: AgentExtensionOptions,
 ): AgentExtensions {
+  const tools = createToolsExtension();
+  const prompt = createPromptExtension(options.prompt);
   return {
-    tools: createToolsExtension(),
-    prompt: createPromptExtension(options.prompt),
+    tools,
+    prompt,
     graphs: createGraphsExtension(),
     delegation: createDelegationExtension({
       resolve: options.resolveHelper,
       limits: { ...DELEGATION_LIMITS, ...options.delegationLimits },
+      extensions: [tools, prompt],
     }),
   };
 }
@@ -64,7 +68,19 @@ export function installAgentExtensions(
     registry.install(extension);
 }
 
-/** What agents select unless configured otherwise: their tools and prompt. */
-export function agentSelection(extensions: AgentExtensions): Extension[] {
-  return [extensions.tools, extensions.prompt];
+/**
+ * What an agent selects: its tools and prompt, and delegation when it
+ * delegates. Agents stored before they selected explicitly follow the
+ * harness's default, which Pi's host sets to the selection of an agent that
+ * doesn't delegate.
+ */
+export function agentSelection(
+  extensions: AgentExtensions,
+  options: { delegate?: boolean } = {},
+): Extension[] {
+  return [
+    extensions.tools,
+    extensions.prompt,
+    ...(options.delegate ? [extensions.delegation] : []),
+  ];
 }

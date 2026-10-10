@@ -57,6 +57,8 @@ export async function openAgentHarness(
         registry,
         settings: {
           ...options.settings,
+          // New agents name their extensions; agents stored by earlier
+          // versions name none and follow this default.
           extensions: agentSelection(options.extensions),
         },
         env: envs.env,

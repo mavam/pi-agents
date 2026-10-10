@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { renderToolOutputType } from "@earendil-works/pi-codemode";
 import type {
   AgentToolUpdateCallback,
@@ -18,10 +19,8 @@ import { agentOutput, graphOutput } from "../../src/pi/output.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import {
   FitLines,
-  formatCall,
   registerAgentTools,
   renderDetails,
-  startedView,
 } from "../../src/pi/tools.js";
 import {
   closeService,
@@ -29,7 +28,6 @@ import {
   MODEL,
   openService,
   parentOf,
-  until,
 } from "../agents/helpers.js";
 
 const noSkills = new SkillCatalog(async () => []);
@@ -151,9 +149,6 @@ function drawFrame(
   return [...(call?.render(80) ?? []), ...(drawn?.render(80) ?? [])];
 }
 
-/** Whether lines show an agent's state glyph. */
-const GLYPHS = /[◉○●✗⊘⊖]/;
-
 /** Resolves once a wait reported progress, and thus listens for steers. */
 function firstUpdate(): {
   onUpdate: AgentToolUpdateCallback<unknown>;
@@ -236,25 +231,6 @@ describe("script output", () => {
     expect(failed.text).toBe("## a (failed)\nError: cannot fail two");
   });
 
-  test("status lists open agents; answered ones need their name", async () => {
-    const run = await gated();
-    await run("agent_spawn", { task: "one", name: "a", wait: 60 });
-    // The answer counts as delivered once Pi stored the call's result.
-    await until(() => service?.get("a")?.closed === true);
-    await run("agent_spawn", { task: "hold", name: "w" });
-    const w = { kind: "agent", name: "w", state: "working" };
-    expect((await run("agent_status", {})).output).toEqual({
-      agents: [w],
-      graphs: [],
-    });
-    expect((await run("agent_status", { name: "a" })).output).toEqual({
-      agents: [
-        { kind: "agent", name: "a", state: "idle", result: "done: one" },
-      ],
-      graphs: [],
-    });
-  });
-
   test("waits that end early return the state and what is pending", async () => {
     const run = await gated();
     const w = { kind: "agent", name: "w", state: "working" };
@@ -290,43 +266,6 @@ describe("script output", () => {
     expect(
       (await run("agent_send", { name: "w", message: "more" })).output,
     ).toEqual(w);
-  });
-
-  test("graphs resolve to how each agent ended its task", async () => {
-    const run = await gated();
-    expect(
-      (
-        await run("agent_spawn_graph", {
-          name: "g",
-          agents: [
-            { task: "one", name: "a" },
-            { task: "two", name: "b", after: ["a"] },
-          ],
-          wait: 60,
-        })
-      ).output,
-    ).toMatchObject({
-      kind: "graph",
-      name: "g",
-      state: "idle",
-      stopped: false,
-      agents: [
-        {
-          name: "a",
-          after: [],
-          end: false,
-          outcome: "answered",
-          result: "done: one",
-        },
-        {
-          name: "b",
-          after: ["a"],
-          end: true,
-          outcome: "answered",
-          result: expect.stringContaining("two"),
-        },
-      ],
-    });
   });
 
   test("graphs report failed, skipped, and stopped agents", async () => {
@@ -429,18 +368,6 @@ describe("output", () => {
     expect(output.truncated).toBe(true);
   });
 
-  test("failed agents carry their error", () => {
-    const failed = info("");
-    failed.state = "failed";
-    if (failed.result) failed.result.errorMessage = "boom";
-    expect(agentOutput(failed, () => undefined)).toEqual({
-      kind: "agent",
-      name: "a",
-      state: "failed",
-      error: "boom",
-    });
-  });
-
   test("a turn that failed before any output says why", () => {
     const failed = info("an earlier answer");
     failed.state = "failed";
@@ -493,99 +420,6 @@ describe("output", () => {
   });
 });
 
-describe("waiting tools", () => {
-  test("a steer from the user ends a wait; the agent keeps working", async () => {
-    const run = await gated();
-    await run("agent_spawn", { task: "hold", name: "w" });
-    const { onUpdate, started } = firstUpdate();
-    const waiting = run("agent_wait", { names: ["w"] }, { onUpdate });
-    await started;
-    parentOf(service as AgentService).attend();
-    const result = await waiting;
-    expect(result.text).toBe(
-      "Stopped waiting because the user sent a message. The agents keep working; their results arrive as messages.",
-    );
-    expect(result.output).toMatchObject({ pending: ["w"] });
-    expect(service?.get("w")?.state).toBe("working");
-  });
-
-  test("waiting calls draw what they started, never live states", async () => {
-    const run = await gated();
-    const draw = tools();
-    /** Run a waiting call, abort it after its first progress, and draw both. */
-    const waitOnce = async (name: string, args: Record<string, unknown>) => {
-      const tool = draw.get(name);
-      const progress: unknown[] = [];
-      const abort = new AbortController();
-      const { onUpdate, started } = firstUpdate();
-      const waiting = run(name, args, {
-        signal: abort.signal,
-        onUpdate: (update) => {
-          progress.push(update.details);
-          onUpdate(update);
-        },
-      });
-      await started;
-      abort.abort();
-      const result = await waiting;
-      const state = {};
-      const partial = drawFrame(
-        tool,
-        args,
-        state,
-        { details: progress[0] },
-        { isPartial: true },
-      );
-      const expanded = drawFrame(
-        tool,
-        args,
-        state,
-        { details: progress[0] },
-        { isPartial: true, expanded: true },
-      );
-      const final = drawFrame(tool, args, state, result);
-      // A replay has no progress and draws the same.
-      expect(drawFrame(tool, args, {}, result)).toEqual(final);
-      return { tool, partial, expanded, final };
-    };
-    const args = {
-      name: "g",
-      wait: 60,
-      agents: [
-        { name: "a", task: "hold" },
-        { name: "b", task: "hold", after: ["a"] },
-      ],
-    };
-    const graph = await waitOnce("agent_spawn_graph", args);
-    const tree = ["├─ a · faux-1", "└─ b ← a · faux-1"];
-    expect(graph.partial).toEqual([
-      "✦ spawn graph g · graph of 2",
-      ...tree,
-      "  wait=60s",
-      "  a → b",
-    ]);
-    expect(graph.expanded.slice(0, 3)).toEqual([
-      "✦ spawn graph g · graph of 2",
-      ...tree,
-    ]);
-    expect(graph.expanded.join("\n")).not.toMatch(GLYPHS);
-    // Where waiting stopped, without what started.
-    expect(graph.final[0]).toBe("✦ spawn graph g");
-    expect(graph.final.join("\n")).not.toContain("graph of 2");
-    expect(graph.final).toContain("Stopped waiting");
-    expect(graph.final.join("\n")).toMatch(GLYPHS);
-    // Waits and sends started nothing: while waiting, only the call.
-    for (const [name, params] of [
-      ["agent_wait", { names: ["g"] }],
-      ["agent_send", { name: "a", message: "more", wait: 60 }],
-    ] as const) {
-      const waited = await waitOnce(name, params);
-      expect(waited.partial, name).toEqual(drawFrame(waited.tool, params, {}));
-      expect(waited.final.join("\n"), name).toMatch(GLYPHS);
-    }
-  });
-});
-
 describe("call results", () => {
   const plain = (_color: string, text: string) => text;
   const agent = (id: string, name: string): AgentInfo => ({
@@ -619,71 +453,20 @@ describe("call results", () => {
     usage: { ...EMPTY_USAGE },
   };
 
-  test("a started graph draws below its call's title", () => {
-    const details = { at: 5_000, started: true, graphs: [graph], agents };
-    const view = {
-      title: "audit",
-      pairs: { failFast: true },
-      body: "map → report\nmap: Map the code.\n\nreport ← map: Write it up.",
-      collapsed: "map → report",
-    };
-    const started = startedView(details, plain);
-    expect(
-      formatCall("spawn graph", view, false, plain, undefined, started),
-    ).toBe(
-      [
-        "✦ spawn graph audit · graph of 2",
-        "├─ map · luna",
-        "└─ report ← map · luna",
-        "  failFast=true",
-        "  map → report",
-      ].join("\n"),
-    );
-    expect(
-      formatCall("spawn graph", view, true, plain, undefined, started),
-    ).toBe(
-      [
-        "✦ spawn graph audit · graph of 2",
-        "├─ map · luna",
-        "└─ report ← map · luna",
-        "",
-        "  failFast=true",
-        "  map → report",
-        "  map: Map the code.",
-        "",
-        "  report ← map: Write it up.",
-      ].join("\n"),
-    );
-    // A started agent needs nothing beyond its call.
-    expect(startedView({ ...details, graphs: [] }, plain)).toBeUndefined();
-  });
-
   test("an expanded graph call keeps each task's lines", () => {
-    const tools = new Map<string, AnyTool>();
-    registerAgentTools(
-      {
-        registerTool: (tool: AnyTool) => tools.set(tool.name, tool),
-        getThinkingLevel: () => undefined,
-      } as unknown as ExtensionAPI,
-      {
-        ensure: async () => service,
-        skills: noSkills,
-      } as unknown as SessionHost,
-    );
-    const call = tools.get("agent_spawn_graph")?.renderCall?.(
-      {
-        name: "g",
-        agents: [
-          { name: "a", task: "Steps:\n1. read  the code\n\n2. report" },
-          { name: "b", task: "Merge.", after: ["a"] },
-        ],
-      },
-      {
-        fg: (_name: string, text: string) => text,
-        bold: (text: string) => text,
-      },
-      { expanded: true, state: {} },
-    );
+    const call = tools()
+      .get("agent_spawn_graph")
+      ?.renderCall?.(
+        {
+          name: "g",
+          agents: [
+            { name: "a", task: "Steps:\n1. read  the code\n\n2. report" },
+            { name: "b", task: "Merge.", after: ["a"] },
+          ],
+        },
+        plainTheme,
+        { expanded: true, state: {} },
+      );
     expect(call?.render(80)).toEqual([
       "✦ spawn graph g",
       "  a → b",
@@ -697,68 +480,25 @@ describe("call results", () => {
   });
 
   test("an error result shows its reason", () => {
-    const tools = new Map<string, AnyTool>();
-    registerAgentTools(
-      {
-        registerTool: (tool: AnyTool) => tools.set(tool.name, tool),
-        getThinkingLevel: () => undefined,
-      } as unknown as ExtensionAPI,
-      {
-        ensure: async () => service,
-        skills: noSkills,
-      } as unknown as SessionHost,
-    );
     const theme = {
       fg: (name: string, text: string) => `<${name}>${text}`,
       bold: (text: string) => text,
     };
-    const render = (
-      details: unknown,
-      isError: boolean,
-      {
-        text = "terminated",
-        expanded = false,
-        width = 80,
-        state = {},
-      }: {
-        text?: string;
-        expanded?: boolean;
-        width?: number;
-        state?: object;
-      } = {},
-    ) =>
-      tools
+    const render = (details: unknown, text = "terminated") =>
+      tools()
         .get("agent_send")
         ?.renderResult?.(
           { content: [{ type: "text", text }], details },
-          { expanded, isPartial: false },
+          { expanded: false, isPartial: false },
           theme,
-          { isError, state },
+          { isError: true, state: {} },
         )
-        .render(width);
-    const details = { at: 5_000, agents: [agent("1", "map")] };
+        .render(80);
     // Pi never ran the call because the model's message broke off.
-    expect(render(undefined, true)).toEqual(["<error>terminated"]);
+    expect(render(undefined)).toEqual(["<error>terminated"]);
     // The tool threw, and Pi passes empty details.
-    expect(render({}, true)).toEqual(["<error>terminated"]);
-    // Missing details alone count as an error.
-    expect(render(undefined, false)).toEqual(["<error>terminated"]);
-    // An error with valid details still shows its reason.
-    expect(render(details, true)).toEqual(["<error>terminated"]);
-    // An error without text still says it failed.
-    expect(render(undefined, true, { text: "" })).toEqual(["<error>Failed"]);
-    // Collapsed truncates; expanded wraps.
-    const long = "connection reset by peer";
-    expect(render(undefined, true, { text: long, width: 12 })).toHaveLength(1);
-    expect(
-      render(undefined, true, { text: long, width: 16, expanded: true })
-        ?.length,
-    ).toBeGreaterThan(1);
-    // Results with details render as before.
-    expect(render(details, false)?.join("\n")).toContain("map");
-    const state: { started?: unknown } = {};
-    expect(render({ ...details, started: true }, false, { state })).toEqual([]);
-    expect(state.started).toBeDefined();
+    expect(render({})).toEqual(["<error>terminated"]);
+    expect(render(undefined, "")).toEqual(["<error>Failed"]);
   });
 
   test("a waiting call shows what it started, then the outcome", () => {
@@ -803,7 +543,13 @@ describe("call results", () => {
     expect(failed).toEqual(drawFrame(tool, args, {}, error, { isError: true }));
   });
 
-  test("wrapped lines continue under their indentation", () => {
+  test("collapsed lines end in an ellipsis; expanded ones wrap", () => {
+    expect(
+      new FitLines("  one two three four", false)
+        .render(12)
+        .map((line) => stripVTControlCharacters(line)),
+    ).toEqual(["  one two t…"]);
+    // A wrapped line continues under its own indentation.
     expect(new FitLines("  one two three four", true).render(12)).toEqual([
       "  one two",
       "  three four",

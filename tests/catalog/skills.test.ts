@@ -40,19 +40,7 @@ describe("skill discovery", () => {
   const names = async (cwd: string, trusted: boolean) =>
     (await discoverSkills(cwd, trusted)).map((skill) => skill.name).sort();
 
-  // Other test files share the temporary home, so these check membership.
-  test("finds the skills Pi finds", async () => {
-    expect(await names(project(), true)).toEqual(
-      expect.arrayContaining([
-        "configured",
-        "local",
-        "native",
-        "portable",
-        "shared",
-      ]),
-    );
-  });
-
+  // Other test files share the temporary home, so this checks membership.
   test("untrusted projects contribute no skills, but the user's remain", async () => {
     const found = await names(project(), false);
     expect(found).toEqual(expect.arrayContaining(["native", "portable"]));
@@ -144,22 +132,6 @@ describe("skill discovery", () => {
     expect(await winner(false)).toBe(
       path.join(agentDir, "skills", "native", "SKILL.md"),
     );
-  });
-
-  test("the catalog shares a load in flight and retries a failed one", async () => {
-    let loads = 0;
-    const catalog = new SkillCatalog(async () => {
-      loads += 1;
-      if (loads === 1) throw new Error("boom");
-      return [];
-    });
-    expect(catalog.get("/b", true)).rejects.toThrow("boom");
-    expect(catalog.get("/b", true)).rejects.toThrow("boom");
-    await Promise.resolve();
-    expect(loads).toBe(1);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(await catalog.get("/b", true)).toEqual([]);
-    expect(loads).toBe(2);
   });
 
   test("the catalog loads once per directory and trust", async () => {

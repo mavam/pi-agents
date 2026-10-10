@@ -22,10 +22,7 @@ import {
   type Parent,
 } from "../../src/agents/parent.js";
 import { AgentService } from "../../src/agents/service.js";
-import type {
-  HelperResolver,
-  PendingDelivery,
-} from "../../src/agents/types.js";
+import type { HelperResolver } from "../../src/agents/types.js";
 import type { SkillSource } from "../../src/catalog/skills.js";
 import { type AgentHarness, openAgentHarness } from "../../src/host/harness.js";
 
@@ -118,46 +115,20 @@ export const inheritHelper: HelperResolver = async (request, defaults) => ({
 });
 
 /**
- * A parent for tests. It takes no deliveries until `ready` is set, like a
- * parent at work, so tests can inspect pending results and acknowledge them
- * themselves. Its transcript holds what it stored, by delivery ID.
+ * A parent for tests that never takes deliveries, like a parent at work, so
+ * tests inspect pending results and acknowledge them themselves. It holds
+ * what `hold` gives it, such as a call's stored result.
  */
 export class TestParent implements Parent {
-  private isReady = false;
-  /** Everything the parent was handed, in order. */
-  readonly delivered: PendingDelivery[] = [];
-  /** Whether a delivery reaches the transcript once handed over; false
-   * models a parent that crashes before it stores it. */
-  stores = true;
-
-  constructor(
-    /** The deliveries the parent holds; shared to model a restart. */
-    readonly transcript = new Set<string>(),
-  ) {}
+  private readonly transcript = new Set<string>();
   private readonly listeners = new Set<() => void>();
   private readonly waits = new AttentionSignals();
 
-  get ready(): boolean {
-    return this.isReady;
-  }
-
-  /** Whether the parent takes deliveries; setting it lets them proceed. */
-  set ready(value: boolean) {
-    this.isReady = value;
-    this.notify();
-  }
-
   canDeliver(): boolean {
-    return this.isReady;
+    return false;
   }
 
-  async deliver(deliveries: readonly PendingDelivery[]): Promise<void> {
-    this.delivered.push(...deliveries);
-    if (!this.stores) return;
-    for (const delivery of deliveries) this.transcript.add(delivery.id);
-    // Like Pi, which reports a message before it stores it.
-    setTimeout(() => this.notify(), 0);
-  }
+  async deliver(): Promise<void> {}
 
   async received(handovers: readonly Handover[]): Promise<ReadonlySet<string>> {
     return new Set(
@@ -193,7 +164,7 @@ export class TestParent implements Parent {
 export interface HostOptions {
   storage?: Storage;
   models?: ReturnType<typeof createFaux>["models"];
-  /** The parent; a `TestParent` that takes no deliveries by default. */
+  /** The parent; a `TestParent` by default. */
   parent?: Parent;
   /** Whether the project is trusted, and its skills. */
   trusted?: boolean;

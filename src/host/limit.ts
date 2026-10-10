@@ -33,11 +33,6 @@ export class RequestLimiter {
 
   constructor(readonly limit: number | undefined) {}
 
-  /** Requests that hold a slot. */
-  get running(): number {
-    return this.active;
-  }
-
   /** Requests that wait for a slot. */
   get queued(): number {
     return this.waiting.length;

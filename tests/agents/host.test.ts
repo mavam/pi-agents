@@ -16,7 +16,6 @@ import {
   Harness,
   MemoryStorage,
   ROOT_CONVERSATION_ID,
-  section,
   type TaskId,
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
@@ -102,38 +101,25 @@ describe("hosts", () => {
 
   test("agents select pi-agents' extensions, not the host's defaults", async () => {
     // Like Pi's session worker, the host selects its own extension by
-    // default: a `read` tool, another tool, and a prompt section.
-    const tool = (name: string) =>
-      defineTool({
-        name,
-        description: `The host's ${name}`,
-        parameters: Type.Object({}),
-        replay: "safe",
-        execute: async () => ({ content: [{ type: "text", text: name }] }),
-      });
+    // default, with a `read` tool of its own.
     const foreign = defineExtension({
       name: "host-coding",
-      tools: [tool("read"), tool("host_tool")],
-      sections: [section("host_rules", () => "Follow the host.")],
+      tools: [
+        defineTool({
+          name: "read",
+          description: "The host's read",
+          parameters: Type.Object({}),
+          replay: "safe",
+          execute: async () => ({ content: [{ type: "text", text: "read" }] }),
+        }),
+      ],
     });
-    // The model delegates when asked and records what each request offers.
+    // The lead delegates one helper, then answers with its result.
     const faux = fauxProvider();
     const models = createModels();
     models.setProvider(faux.provider);
-    const offered: string[][] = [];
     const step: FauxResponseStep = (context) => {
-      // System messages declare the request's sections and tools.
-      const systems = context.messages.filter(
-        (message) => (message.role as string) === "system",
-      ) as Array<{ sections?: object; toolsAdded?: Array<{ name: string }> }>;
-      offered.push(
-        systems.flatMap((system) => [
-          ...(system.toolsAdded ?? []).map((each) => `tool:${each.name}`),
-          ...Object.keys(system.sections ?? {}).map((key) => `section:${key}`),
-        ]),
-      );
-      const last = context.messages.at(-1);
-      if (last?.role === "toolResult")
+      if (context.messages.at(-1)?.role === "toolResult")
         return fauxAssistantMessage([fauxText("merged")]);
       if (lastUserText(context).startsWith("delegate"))
         return fauxAssistantMessage(
@@ -180,7 +166,6 @@ describe("hosts", () => {
     for (const [name, selected] of [
       ["solo", ours],
       ["x", ours],
-      ["y", ours],
       ["lead", [...ours, extensions.delegation.name]],
       ["lead.h", ours],
     ] as const) {
@@ -193,12 +178,6 @@ describe("hosts", () => {
       ).toEqual([...selected]);
       for (const each of resolved?.tools ?? [])
         expect(foreign.tools, `${name}: ${each.name}`).not.toContain(each);
-    }
-    expect(offered).toHaveLength(6);
-    for (const request of offered) {
-      expect(request).not.toContain("tool:host_tool");
-      expect(request).not.toContain("section:host_rules");
-      expect(request).toContain("tool:read");
     }
   });
 

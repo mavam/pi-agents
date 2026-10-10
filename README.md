@@ -218,7 +218,7 @@ rendering. The editor then talks to the agent:
 | Alt+⏎ | Queue a follow-up after the current answer. |
 | Esc | Interrupt a working agent. Queued messages return to the editor. |
 | Ctrl+O | Expand or collapse tool output. |
-| ← | Detach when the editor is empty. |
+| ← or Ctrl+D | Detach when the editor is empty. |
 | Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. |
 
 Messages you send while attached stay between you and the agent. Their

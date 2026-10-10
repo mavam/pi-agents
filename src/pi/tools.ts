@@ -614,6 +614,12 @@ const agentFields = {
       description: `Tool allowlist from: ${AGENT_TOOL_NAMES.join(", ")}`,
     }),
   ),
+  skills: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Skills to load in full instead of the skill catalog; [] for none",
+    }),
+  ),
   cwd: Type.Optional(Type.String({ description: "Working directory" })),
   delegate: Type.Optional(
     Type.Boolean({
@@ -629,6 +635,7 @@ function agentPairs(args: {
   model?: string;
   thinking?: string;
   tools?: string[];
+  skills?: string[];
   cwd?: string;
   delegate?: boolean;
 }): Record<string, unknown> {
@@ -637,6 +644,7 @@ function agentPairs(args: {
     model: args.model,
     thinking: args.thinking,
     tools: args.tools,
+    skills: args.skills,
     cwd: args.cwd,
     delegate: args.delegate,
   };
@@ -671,7 +679,9 @@ export function registerAgentTools(
         body: args.task,
       }),
       async execute(service, params, ctx, signal, onUpdate) {
-        const spec = resolveSpawn(params, ctx, pi.getThinkingLevel());
+        const spec = await resolveSpawn(params, ctx, pi.getThinkingLevel(), {
+          skills: host.skills.get,
+        });
         const info = await service.spawn(spec);
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(
@@ -778,10 +788,15 @@ export function registerAgentTools(
         const graph = await service.spawnGraph({
           ...(params.name ? { name: params.name } : {}),
           ...(params.failFast ? { failFast: true } : {}),
-          agents: params.agents.map((agent) => ({
-            ...resolveSpawn(agent, ctx, thinking),
-            ...(agent.after ? { after: agent.after } : {}),
-          })),
+          // Every agent resolves before any starts.
+          agents: await Promise.all(
+            params.agents.map(async (agent) => ({
+              ...(await resolveSpawn(agent, ctx, thinking, {
+                skills: host.skills.get,
+              })),
+              ...(agent.after ? { after: agent.after } : {}),
+            })),
+          ),
         });
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(

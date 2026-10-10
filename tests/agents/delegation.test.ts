@@ -80,7 +80,7 @@ async function open(
     cwd: process.cwd(),
     extensions: [
       createToolsExtension(),
-      createPromptExtension({ trusted: () => false, skillPaths: () => [] }),
+      createPromptExtension({ trusted: () => false, skills: async () => [] }),
     ],
     ...(options.limits ? { delegationLimits: options.limits } : {}),
   });

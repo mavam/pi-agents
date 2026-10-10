@@ -205,10 +205,11 @@ delegating agent's conversation
   conversations it owns, so every helper is configured explicitly: no
   delegation extension, its own tools, model, thinking level, instructions,
   and working directory. Depth is therefore 2.
-- Helpers get only tools their agent has. Profiles and models resolve like
-  Pi's spawns through a `HelperResolver` the session host provides, with the
-  agent's model, thinking level, and working directory as defaults. It takes
-  and returns plain data.
+- Helpers get only tools their agent has. Profiles, models, and skills
+  resolve like Pi's spawns through a `HelperResolver` the session host
+  provides, with the agent's model, thinking level, and working directory as
+  defaults. It takes and returns plain data. A helper's skills come from its
+  own profile or request, never from its agent's.
 - Names: helpers are `<agent>.<name>` and their graph `<agent>.<name or
   helpers>`, shortening the agent's part to fit and claimed in the creating
   commit like all names. The tree, the graph detail, and the agent's
@@ -281,6 +282,22 @@ never lose one. On session resume, unacknowledged settled requests deliver.
 - System prompt: a delegation preamble, tool guidelines, context files such as
   `AGENTS.md`, skills, the working directory and date, and profile
   instructions.
+- Skills: `SkillCatalog` (`src/catalog/skills.ts`) resolves them with Pi's
+  package manager and settings for the agent's directory and the project's
+  trust, so agents find what Pi finds: `~/.pi/agent/skills`,
+  `~/.agents/skills`, packages, the `skills` setting with its overrides, and
+  the project's `.pi/skills` and `.agents/skills`. An untrusted project
+  contributes none, but the user's skills remain. Resolution skips packages
+  that aren't installed instead of installing them, and loads once per
+  directory and trust, like Pi at startup. An agent sees them as a catalog
+  unless a profile or the spawn names skills (`AgentRecord.ambientSkills`):
+  a named list inlines those skills in the instructions and turns the
+  catalog off, and an empty list means none. The spawn's list replaces the
+  profile's. Pi's catalog hides skills marked `disable-model-invocation`,
+  and so does the agents'. Because a model chooses the spawn's and helpers'
+  lists, those reject such skills; only the user names them, in a profile.
+  An unknown or unreadable skill fails the spawn, and a graph or helper set
+  resolves all of its agents before any starts.
 - Models: the parent session's model runtime, so logins and custom providers
   work.
 - Settings: compaction, retry, and queue modes come from Pi's settings.
@@ -302,8 +319,8 @@ never lose one. On session resume, unacknowledged settled requests deliver.
 
 | Tool | Parameters |
 | --- | --- |
-| `agent_spawn` | `task`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `cwd?`, `delegate?`, `wait?` (seconds) |
-| `agent_spawn_graph` | `name?`, `agents` (2 to 12 of `task`, `name?`, `after?`, `profile?`, `model?`, `thinking?`, `tools?`, `cwd?`, `delegate?`), `failFast?`, `wait?` (seconds) |
+| `agent_spawn` | `task`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `skills?`, `cwd?`, `delegate?`, `wait?` (seconds) |
+| `agent_spawn_graph` | `name?`, `agents` (2 to 12 of `task`, `name?`, `after?`, `profile?`, `model?`, `thinking?`, `tools?`, `skills?`, `cwd?`, `delegate?`), `failFast?`, `wait?` (seconds) |
 | `agent_send` | `name`, `message`, `followUp?`, `wait?` (seconds) |
 | `agent_wait` | `names` (agents or graphs), `timeout?` |
 | `agent_status` | `name?` (agent or graph) |
@@ -361,8 +378,9 @@ arrive as messages. Follow-ups don't end waits.
 The system prompt adds one line of guidance, the usable profiles, and the
 user's scoped models (`ctx.scopedModels`, from `/scoped-models` or `--models`)
 so the parent recognizes model names. Profiles and models are XML elements
-whose attributes carry details: a model's ID, name, context window, cost per
-million input/output tokens, and pinned thinking level. It lists no other
+whose attributes carry details: a profile's model, thinking level, tools, and
+skills, and a model's ID, name, context window, cost per million input/output
+tokens, and pinned thinking level. It lists no other
 models. The `model` argument and profile models resolve like `pi --model`
 patterns among models with credentials: exact `provider/id` or `id` first,
 then the newest alias that partially matches. Choosing models per task is left to a future model router. Profiles

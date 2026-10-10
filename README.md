@@ -124,9 +124,45 @@ shows the state of its last agents: failed if one failed or was skipped,
 interrupted if one was interrupted or stopped, and idle otherwise.
 
 Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, and
-`ls`, along with your context files such as `AGENTS.md` and your skills. They
-can't use MCP servers or tools from other extensions, and they start other
-agents only when you let them delegate.
+`ls`, along with your context files such as `AGENTS.md` and your
+[skills](#skills). They can't use MCP servers or tools from other extensions,
+and they start other agents only when you let them delegate.
+
+### Skills
+
+Agents see the same skills as your Pi session: those in `~/.pi/agent/skills`
+and `~/.agents/skills`, from packages and your settings, and the project's
+skills when you trust the project. Like Pi, an agent loads a skill when its
+task calls for it.
+
+To focus an agent, name its skills:
+
+```text
+Have an agent update the changelog with the tenzir-ship skill.
+```
+
+Pi then passes `skills` to the agent, which gets those skills in full instead
+of the whole catalog. An empty list gives it none.
+
+Skills marked `disable-model-invocation: true` stay yours: Pi doesn't see
+them, so it can't hand them to agents either. To give agents such a skill,
+name it in a [profile](#-agent-profiles). Say you run a `code-review` skill
+only with `/skill:code-review`. Create `~/.pi/agent/agents/reviewer.md`:
+
+```md
+---
+name: reviewer
+description: Reviews changes with the code-review skill
+tools: [read, bash, grep, find, ls]
+skills: [code-review]
+---
+```
+
+Then ask for reviewers:
+
+```text
+Have three reviewer agents review this branch: correctness, tests, and docs.
+```
 
 ### Watch and talk to agents
 
@@ -257,6 +293,8 @@ below the agent, and the divider over its details in `/agents` shows it.
 
 - Helpers run on their agent's model, thinking level, and working directory
   unless the agent picks others, and get only tools their agent has.
+- Helpers see your skills like any agent, and the agent can name skills for
+  them the way Pi does.
 - Helpers can't delegate themselves.
 - Esc on the agent stops its helpers too, and so does stopping a graph the
   agent belongs to. Stopping only the helpers lets the agent go on with what
@@ -363,7 +401,7 @@ Profile fields:
 | `model` | Model as `provider/id` or `id`. Defaults to the session's model. |
 | `thinking` | Thinking level. Defaults to the session's level. |
 | `tools` | Tool allowlist. Defaults to `read`, `bash`, `edit`, `write`. |
-| `skills` | Skills to apply. Without this field, the agent sees your skill catalog. An empty list disables skills. |
+| `skills` | Skills to apply in full, including those only you can invoke. Without this field, the agent sees your skill catalog. An empty list disables skills. |
 | `delegate` | Whether agents of this profile can start helper agents. Defaults to `false`. |
 
 The Markdown body extends the agent's system prompt. Arguments that Pi passes

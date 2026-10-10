@@ -3,7 +3,21 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resolveSpawn } from "../../src/pi/spawn.js";
+import { resolveHelper, resolveSpawn } from "../../src/pi/spawn.js";
+
+function skill(dir: string, name: string, frontmatter = ""): void {
+  fs.mkdirSync(path.join(dir, name), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, name, "SKILL.md"),
+    `---\nname: ${name}\ndescription: The ${name} skill\n${frontmatter}---\nApply ${name}.\n`,
+  );
+}
+
+// User skills live in ~/.agents/skills, which tests/setup.ts points at a
+// temporary home. `review` is for the user only, like a /skill: command.
+const userSkills = path.join(process.env.HOME as string, ".agents", "skills");
+skill(userSkills, "style");
+skill(userSkills, "review", "disable-model-invocation: true\n");
 
 function project(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agents-spawn-"));
@@ -21,10 +35,14 @@ function project(): string {
     path.join(dir, ".pi", "agents", "broken.md"),
     "---\nname: broken\ndescription: Broken\nskills: [missing]\n---\n",
   );
+  fs.writeFileSync(
+    path.join(dir, ".pi", "agents", "reviewer.md"),
+    "---\nname: reviewer\ndescription: Reviews\nskills: [review]\n---\nReview.\n",
+  );
   return dir;
 }
 
-function context(cwd: string): ExtensionContext {
+function context(cwd: string, trusted = true): ExtensionContext {
   const models = [
     {
       provider: "openai",
@@ -43,14 +61,14 @@ function context(cwd: string): ExtensionContext {
     cwd,
     model: { provider: "openai", id: "big" },
     modelRegistry: { getAvailable: () => models, isUsingOAuth: () => false },
-    isProjectTrusted: () => true,
+    isProjectTrusted: () => trusted,
   } as unknown as ExtensionContext;
 }
 
 describe("resolveSpawn", () => {
-  test("ad-hoc agents inherit the parent model and thinking level", () => {
+  test("ad-hoc agents inherit the parent model and thinking level", async () => {
     const cwd = project();
-    expect(resolveSpawn({ task: "x" }, context(cwd), "high")).toEqual({
+    expect(await resolveSpawn({ task: "x" }, context(cwd), "high")).toEqual({
       task: "x",
       cwd,
       ambientSkills: true,
@@ -59,9 +77,9 @@ describe("resolveSpawn", () => {
     });
   });
 
-  test("profiles supply settings, instructions, and skills", () => {
+  test("profiles supply settings, instructions, and skills", async () => {
     const cwd = project();
-    const spec = resolveSpawn(
+    const spec = await resolveSpawn(
       { task: "x", profile: "checker" },
       context(cwd),
       "high",
@@ -74,9 +92,9 @@ describe("resolveSpawn", () => {
     expect(spec.instructions).toContain("Run the linter.");
   });
 
-  test("explicit arguments override the profile", () => {
+  test("explicit arguments override the profile", async () => {
     const cwd = project();
-    const spec = resolveSpawn(
+    const spec = await resolveSpawn(
       {
         task: "x",
         profile: "checker",
@@ -92,19 +110,97 @@ describe("resolveSpawn", () => {
     expect(spec.tools).toEqual(["read", "grep"]);
   });
 
-  test("reports unknown profiles, skills, models, and directories", () => {
+  test("reports unknown profiles, skills, models, and directories", async () => {
     const cwd = project();
-    expect(() =>
+    expect(
       resolveSpawn({ task: "x", profile: "nope" }, context(cwd), undefined),
-    ).toThrow('Unknown profile "nope"');
-    expect(() =>
+    ).rejects.toThrow('Unknown profile "nope"');
+    expect(
       resolveSpawn({ task: "x", profile: "broken" }, context(cwd), undefined),
-    ).toThrow("missing (unknown)");
-    expect(() =>
+    ).rejects.toThrow("missing (unknown)");
+    expect(
+      resolveSpawn({ task: "x", skills: ["missing"] }, context(cwd), undefined),
+    ).rejects.toThrow("Unavailable skills: missing (unknown)");
+    expect(
       resolveSpawn({ task: "x", model: "nope" }, context(cwd), undefined),
-    ).toThrow("No available model matches");
-    expect(() =>
+    ).rejects.toThrow("No available model matches");
+    expect(
       resolveSpawn({ task: "x", cwd: "missing" }, context(cwd), undefined),
-    ).toThrow("Working directory not found");
+    ).rejects.toThrow("Working directory not found");
+  });
+
+  test("skills in the request replace the catalog and the profile's", async () => {
+    const cwd = project();
+    const chosen = await resolveSpawn(
+      { task: "x", skills: ["style", "lint"] },
+      context(cwd),
+      undefined,
+    );
+    expect(chosen.ambientSkills).toBe(false);
+    expect(chosen.instructions).toContain("Apply style.");
+    expect(chosen.instructions).toContain("Run the linter.");
+    const replaced = await resolveSpawn(
+      { task: "x", profile: "checker", skills: ["style"] },
+      context(cwd),
+      undefined,
+    );
+    expect(replaced.instructions).toContain("Check things.");
+    expect(replaced.instructions).toContain("Apply style.");
+    expect(replaced.instructions).not.toContain("Run the linter.");
+    // An empty list means no skills, even for a profile whose skills are
+    // missing.
+    const none = await resolveSpawn(
+      { task: "x", profile: "broken", skills: [] },
+      context(cwd),
+      undefined,
+    );
+    expect(none.ambientSkills).toBe(false);
+    expect(none.instructions).toBeUndefined();
+  });
+
+  test("only profiles name skills that models can't invoke", async () => {
+    const cwd = project();
+    expect(
+      resolveSpawn({ task: "x", skills: ["review"] }, context(cwd), undefined),
+    ).rejects.toThrow(
+      "review (only the user can choose it, with /skill:review or in a profile)",
+    );
+    const spec = await resolveSpawn(
+      { task: "x", profile: "reviewer" },
+      context(cwd),
+      undefined,
+    );
+    expect(spec.instructions).toContain("Apply review.");
+  });
+
+  test("untrusted projects keep the user's skills", async () => {
+    const cwd = project();
+    const spec = await resolveSpawn(
+      { task: "x", skills: ["style"] },
+      context(cwd, false),
+      undefined,
+    );
+    expect(spec.instructions).toContain("Apply style.");
+    expect(
+      resolveSpawn(
+        { task: "x", skills: ["lint"] },
+        context(cwd, false),
+        undefined,
+      ),
+    ).rejects.toThrow("lint (unknown)");
+  });
+
+  test("helpers choose skills like spawns", async () => {
+    const cwd = project();
+    const spec = await resolveHelper(
+      { task: "x", skills: ["lint"] },
+      context(cwd),
+      { cwd },
+    );
+    expect(spec.ambientSkills).toBe(false);
+    expect(spec.instructions).toContain("Run the linter.");
+    expect(
+      resolveHelper({ task: "x", skills: ["review"] }, context(cwd), { cwd }),
+    ).rejects.toThrow("only the user can choose it");
   });
 });

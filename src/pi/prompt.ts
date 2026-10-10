@@ -9,6 +9,7 @@ import {
   type Profile,
   type Scope,
 } from "../catalog/profiles.js";
+import type { SkillSource } from "../catalog/skills.js";
 import { profileProblem } from "./spawn.js";
 
 const GUIDANCE =
@@ -19,18 +20,19 @@ function oneLine(value: string): string {
 }
 
 /** Profiles that can spawn agents, and why the others cannot. */
-export function profileCatalog(
+export async function profileCatalog(
   cwd: string,
   scope: Scope,
   models: readonly Model<Api>[],
-): { profiles: Profile[]; issues: string[] } {
+  skills?: SkillSource,
+): Promise<{ profiles: Profile[]; issues: string[] }> {
   const { profiles, diagnostics } = discoverProfiles(cwd, scope);
   const usable: Profile[] = [];
   const issues = diagnostics.map(
     (diagnostic) => `${diagnostic.filePath}: ${oneLine(diagnostic.message)}`,
   );
   for (const profile of profiles) {
-    const problem = profileProblem(profile, cwd, scope, models);
+    const problem = await profileProblem(profile, cwd, scope, models, skills);
     if (problem) issues.push(`profile ${profile.name}: ${problem}`);
     else usable.push(profile);
   }
@@ -74,6 +76,7 @@ function buildProfilesPrompt(profiles: readonly Profile[]): string {
           model: profile.model,
           thinking: profile.thinking,
           tools: profile.tools?.join(","),
+          skills: profile.skills?.join(","),
         },
         oneLine(profile.description),
       ),

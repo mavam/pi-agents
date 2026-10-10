@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { AgentService } from "../agents/service.js";
 import { AgentError } from "../agents/types.js";
+import { SkillCatalog } from "../catalog/skills.js";
 import { createHarnessSettings } from "../host/env.js";
 import {
   limitRequests,
@@ -51,7 +52,8 @@ export class SessionHost {
   private unsubscribe: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
   private trusted = true;
-  private skillPaths: string[] = [];
+  /** The skills agents can use, shared by spawns and agent prompts. */
+  readonly skills = new SkillCatalog();
   /** Why agents are unavailable in this session, if they are. */
   unavailable: string | undefined;
 
@@ -119,7 +121,6 @@ export class SessionHost {
     }
     try {
       const settings = SettingsManager.create(ctx.cwd, getAgentDir());
-      this.skillPaths = settings.getSkillPaths();
       const { limit, error } = readRequestLimit(settings.getSettings());
       if (error) this.report(new Error(`${error}; requests aren't limited`));
       const models = limitRequests(
@@ -135,14 +136,14 @@ export class SessionHost {
           createToolsExtension(),
           createPromptExtension({
             trusted: () => this.trusted,
-            skillPaths: () => this.skillPaths,
+            skills: this.skills.get,
           }),
         ],
         onReport: (error) => this.report(error),
         resolveHelper: (request, defaults) => {
           const current = this.ctx;
           if (!current) throw new AgentError("Pi isn't ready for helpers yet");
-          return resolveHelper(request, current, defaults);
+          return resolveHelper(request, current, defaults, this.skills.get);
         },
       });
       this.service = service;

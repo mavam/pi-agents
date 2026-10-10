@@ -241,6 +241,8 @@ export interface HelperRequest {
   model?: string;
   thinking?: string;
   tools?: string[];
+  /** Skills to inline instead of the skill catalog. */
+  skills?: string[];
 }
 
 /** Settings a helper inherits from the agent that starts it. */
@@ -251,14 +253,14 @@ export interface HelperDefaults {
 }
 
 /**
- * Resolves a helper's profile and model like the parent's spawns, with the
+ * Resolves a helper's profile, model, and skills like the parent's spawns, with the
  * delegating agent's settings as defaults. The session host provides it;
  * it throws `AgentError` for what it can't resolve.
  */
 export type HelperResolver = (
   request: HelperRequest,
   defaults: HelperDefaults,
-) => SpawnSpec;
+) => SpawnSpec | Promise<SpawnSpec>;
 
 export type SendMode = "auto" | "followUp";
 

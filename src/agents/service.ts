@@ -164,10 +164,14 @@ function contextFor(signal: AbortSignal | undefined): Context {
 }
 
 /** Helpers without a session host: the agent's model, or an exact
- * `provider/id`, and no profiles. */
+ * `provider/id`, and no profiles or skills. */
 const resolveHelperPlainly: HelperResolver = (request, defaults) => {
   if (request.profile)
     throw new AgentError(`Unknown profile "${request.profile}"`);
+  if (request.skills?.length)
+    throw new AgentError(
+      `Unavailable skills: ${request.skills.map((name) => `${name} (unknown)`).join(", ")}`,
+    );
   let model = defaults.model;
   if (request.model) {
     const [provider, ...rest] = request.model.split("/");
@@ -184,6 +188,7 @@ const resolveHelperPlainly: HelperResolver = (request, defaults) => {
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),
     ...(request.tools ? { tools: request.tools } : {}),
+    ...(request.skills ? { ambientSkills: false } : {}),
   };
 };
 

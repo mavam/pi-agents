@@ -104,7 +104,7 @@ export async function openService(
     cwd: process.cwd(),
     extensions: [
       createToolsExtension(),
-      createPromptExtension({ trusted: () => false, skillPaths: () => [] }),
+      createPromptExtension({ trusted: () => false, skills: async () => [] }),
     ],
   });
 }

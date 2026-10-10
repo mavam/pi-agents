@@ -60,13 +60,14 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   // Profile problems are reported once per session, not on every turn.
   const reported = new Set<string>();
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     track(ctx);
     const scope = scopeOf(ctx);
-    const { profiles, issues } = profileCatalog(
+    const { profiles, issues } = await profileCatalog(
       ctx.cwd,
       scope,
       ctx.modelRegistry.getAvailable(),
+      host.skills.get,
     );
     const fresh = issues.filter((issue) => !reported.has(issue));
     for (const issue of fresh) reported.add(issue);

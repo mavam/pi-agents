@@ -2,6 +2,7 @@
  * Resolve a spawn request from the parent into a `SpawnSpec`: profile,
  * model, thinking level, tools, skills, and working directory. Settings
  * resolve as explicit arguments, then the profile, then the parent session.
+ * Skills a model names in a tool call must be ones a model may invoke.
  */
 
 import * as fs from "node:fs";
@@ -24,7 +25,12 @@ import {
   type Profile,
   type Scope,
 } from "../catalog/profiles.js";
-import { loadSkills } from "../catalog/skills.js";
+import {
+  type Chooser,
+  discoverSkills,
+  inlineSkills,
+  type SkillSource,
+} from "../catalog/skills.js";
 
 export interface SpawnRequest {
   task: string;
@@ -33,8 +39,17 @@ export interface SpawnRequest {
   model?: string;
   thinking?: string;
   tools?: string[];
+  skills?: string[];
   cwd?: string;
   delegate?: boolean;
+}
+
+/** What a spawn inherits instead of the parent session's settings. */
+export interface SpawnDefaults {
+  cwd?: string;
+  model?: ModelRef;
+  /** Where skills come from; defaults to reading them from disk. */
+  skills?: SkillSource;
 }
 
 export function scopeOf(ctx: ExtensionContext): Scope {
@@ -90,26 +105,53 @@ function resolveProfile(
   return profile;
 }
 
-/** Profile instructions plus the profile's skills, inlined. */
-function profileInstructions(
-  profile: Profile | undefined,
+/** Inline the named skills, or say which are missing. */
+async function skillsPrompt(
+  names: readonly string[],
+  chooser: Chooser,
   cwd: string,
   scope: Scope,
-): { instructions?: string; ambientSkills: boolean } {
-  if (!profile) return { ambientSkills: true };
-  const parts = [profile.instructions];
-  if (profile.skills !== undefined) {
-    const { prompt, missing } = loadSkills(profile.skills, cwd, scope);
+  source: SkillSource,
+): Promise<{ prompt: string; missing: string[] }> {
+  if (names.length === 0) return { prompt: "", missing: [] };
+  return inlineSkills(names, await source(cwd, scope !== "user"), chooser);
+}
+
+/**
+ * The profile body plus the inlined skills. Skills in the request replace
+ * the profile's; either list turns off the ambient catalog. The user writes
+ * profiles, so only they may name skills that models can't invoke.
+ */
+async function instructionsOf(
+  profile: Profile | undefined,
+  requested: string[] | undefined,
+  cwd: string,
+  scope: Scope,
+  source: SkillSource,
+): Promise<{ instructions?: string; ambientSkills: boolean }> {
+  const parts = [profile?.instructions ?? ""];
+  const names = requested ?? profile?.skills;
+  if (names !== undefined) {
+    const chooser = requested !== undefined ? "model" : "user";
+    const { prompt, missing } = await skillsPrompt(
+      names,
+      chooser,
+      cwd,
+      scope,
+      source,
+    );
     if (missing.length > 0)
       throw new AgentError(
-        `Profile ${profile.name} requests unavailable skills: ${missing.join(", ")}`,
+        chooser === "model"
+          ? `Unavailable skills: ${missing.join(", ")}`
+          : `Profile ${profile?.name} requests unavailable skills: ${missing.join(", ")}`,
       );
     parts.push(prompt);
   }
   const instructions = parts.filter((part) => part.trim()).join("\n\n");
   return {
     ...(instructions ? { instructions } : {}),
-    ambientSkills: profile.skills === undefined,
+    ambientSkills: names === undefined,
   };
 }
 
@@ -117,17 +159,26 @@ function profileInstructions(
  * Why a profile cannot spawn agents, if it cannot: an unknown model or a
  * skill that does not resolve.
  */
-export function profileProblem(
+export async function profileProblem(
   profile: Profile,
   cwd: string,
   scope: Scope,
   models: readonly Model<Api>[],
-): string | undefined {
+  source: SkillSource = discoverSkills,
+): Promise<string | undefined> {
   if (profile.model && !resolveModelPattern(profile.model, models).ok)
     return `no available model matches ${profile.model}`;
-  if (profile.skills && profile.skills.length > 0) {
-    const { missing } = loadSkills(profile.skills, cwd, scope);
+  try {
+    const { missing } = await skillsPrompt(
+      profile.skills ?? [],
+      "user",
+      cwd,
+      scope,
+      source,
+    );
     if (missing.length > 0) return `unavailable skills: ${missing.join(", ")}`;
+  } catch (error) {
+    return `skills don't load: ${error instanceof Error ? error.message : String(error)}`;
   }
   return undefined;
 }
@@ -136,12 +187,12 @@ export function profileProblem(
  * Resolve a spawn. `defaults` replace the parent session's working
  * directory and model, for helpers that inherit their agent's.
  */
-export function resolveSpawn(
+export async function resolveSpawn(
   request: SpawnRequest,
   ctx: ExtensionContext,
   parentThinking: string | undefined,
-  defaults: { cwd?: string; model?: ModelRef } = {},
-): SpawnSpec {
+  defaults: SpawnDefaults = {},
+): Promise<SpawnSpec> {
   const scope = scopeOf(ctx);
   const cwd = resolveCwd(defaults.cwd ?? ctx.cwd, request.cwd);
   const profile = resolveProfile(request.profile, cwd, scope);
@@ -154,10 +205,12 @@ export function resolveSpawn(
   if (thinking !== undefined && !isThinkingLevel(thinking))
     throw new AgentError(`Invalid thinking level: ${thinking}`);
   const tools = request.tools ?? profile?.tools;
-  const { instructions, ambientSkills } = profileInstructions(
+  const { instructions, ambientSkills } = await instructionsOf(
     profile,
+    request.skills,
     cwd,
     scope,
+    defaults.skills ?? discoverSkills,
   );
   const delegate = request.delegate ?? profile?.delegate;
   return {
@@ -179,22 +232,28 @@ export function resolveSpawn(
  * working directory, model, and thinking level as defaults. Helpers never
  * delegate.
  */
-export function resolveHelper(
+export async function resolveHelper(
   request: HelperRequest,
   ctx: ExtensionContext,
   defaults: HelperDefaults,
-): SpawnSpec {
-  const { delegate: _, ...spec } = resolveSpawn(
+  skills: SkillSource = discoverSkills,
+): Promise<SpawnSpec> {
+  const { delegate: _, ...spec } = await resolveSpawn(
     {
       task: request.task,
       ...(request.profile ? { profile: request.profile } : {}),
       ...(request.model ? { model: request.model } : {}),
       ...(request.thinking ? { thinking: request.thinking } : {}),
       ...(request.tools ? { tools: request.tools } : {}),
+      ...(request.skills ? { skills: request.skills } : {}),
     },
     ctx,
     defaults.thinking,
-    { cwd: defaults.cwd, ...(defaults.model ? { model: defaults.model } : {}) },
+    {
+      cwd: defaults.cwd,
+      skills,
+      ...(defaults.model ? { model: defaults.model } : {}),
+    },
   );
   return spec;
 }

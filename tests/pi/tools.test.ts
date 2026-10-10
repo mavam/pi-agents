@@ -13,6 +13,7 @@ import {
   EMPTY_USAGE,
   type GraphInfo,
 } from "../../src/agents/types.js";
+import { SkillCatalog } from "../../src/catalog/skills.js";
 import { agentOutput, graphOutput } from "../../src/pi/output.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import { SteerWatch } from "../../src/pi/steering.js";
@@ -24,6 +25,8 @@ import {
   startedView,
 } from "../../src/pi/tools.js";
 import { createGatedFaux, MODEL, openService } from "../agents/helpers.js";
+
+const noSkills = new SkillCatalog(async () => []);
 
 let service: AgentService | undefined;
 let release: (() => void) | undefined;
@@ -44,7 +47,10 @@ function tools(steering: SteerWatch): Map<string, AnyTool> {
     registerTool: (tool: AnyTool) => registered.set(tool.name, tool),
     getThinkingLevel: () => undefined,
   } as unknown as ExtensionAPI;
-  const host = { ensure: async () => service } as unknown as SessionHost;
+  const host = {
+    ensure: async () => service,
+    skills: noSkills,
+  } as unknown as SessionHost;
   registerAgentTools(pi, host, steering);
   return registered;
 }
@@ -524,7 +530,10 @@ describe("call results", () => {
         registerTool: (tool: AnyTool) => tools.set(tool.name, tool),
         getThinkingLevel: () => undefined,
       } as unknown as ExtensionAPI,
-      { ensure: async () => service } as unknown as SessionHost,
+      {
+        ensure: async () => service,
+        skills: noSkills,
+      } as unknown as SessionHost,
     );
     const call = tools.get("agent_spawn_graph")?.renderCall?.(
       {
@@ -559,7 +568,10 @@ describe("call results", () => {
         registerTool: (tool: AnyTool) => tools.set(tool.name, tool),
         getThinkingLevel: () => undefined,
       } as unknown as ExtensionAPI,
-      { ensure: async () => service } as unknown as SessionHost,
+      {
+        ensure: async () => service,
+        skills: noSkills,
+      } as unknown as SessionHost,
     );
     const theme = {
       fg: (name: string, text: string) => `<${name}>${text}`,

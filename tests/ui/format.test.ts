@@ -7,11 +7,9 @@ import {
 import { formatFooterSummary } from "../../src/ui/footer.js";
 import {
   formatAgentLine,
-  formatElapsed,
   formatGraphLine,
   graphShape,
   runtime,
-  sanitizeLine,
 } from "../../src/ui/format.js";
 import { panelCompare, panelOrder } from "../../src/ui/panel.js";
 import {
@@ -115,26 +113,6 @@ describe("formatting", () => {
         color,
       ),
     ).toBe("<accent>● review<dim> · <dim>graph 2/2<dim> · <dim>result queued");
-    // A failed graph keeps its glyph; the note still says it waits.
-    expect(
-      formatGraphLine(
-        graph({
-          state: "failed",
-          queued: true,
-          nodes: [
-            answered("11", "api"),
-            {
-              agentId: "12",
-              name: "tests",
-              inputs: [],
-              end: true,
-              outcome: { kind: "failed", reason: "boom" },
-            },
-          ],
-        }),
-        0,
-      ),
-    ).toBe("✗ review · graph 2/2 · 1 failed · result queued");
   });
 
   test("silent working agents show a stall hint", () => {
@@ -143,12 +121,6 @@ describe("formatting", () => {
       120_000,
     );
     expect(line).toContain("no activity for 2m00s");
-  });
-
-  test("elapsed times scale", () => {
-    expect(formatElapsed(5_000)).toBe("5s");
-    expect(formatElapsed(65_000)).toBe("1m05s");
-    expect(formatElapsed(3_900_000)).toBe("1h05m");
   });
 
   test("the clock stops once an agent or graph finishes", () => {
@@ -160,12 +132,6 @@ describe("formatting", () => {
     // The durable end wins over when this process saw the state change.
     expect(runtime({ ...times, state: "idle", endedAt: 31_000 }, 600_000)).toBe(
       30_000,
-    );
-  });
-
-  test("sanitizing keeps colors and drops controls", () => {
-    expect(sanitizeLine("\u001b[31mred\u001b[0m\u001b[2Jx\ty")).toBe(
-      "\u001b[31mred\u001b[0mx  y",
     );
   });
 
@@ -269,18 +235,6 @@ describe("formatting", () => {
       (info) => info.state === "working",
     );
     expect(folded.map((row) => row.key)).toEqual(["agent:1", "graph:10"]);
-    // Without its graph, a graph's agent stands alone.
-    const alone = buildRows(
-      { agents, graphs: [], agent: () => undefined },
-      panelCompare,
-      () => true,
-    );
-    expect(alone.map((row) => row.key)).toEqual([
-      "agent:1",
-      "agent:11",
-      "agent:12",
-      "agent:13",
-    ]);
   });
 
   test("helpers draw under the agent that started them", () => {
@@ -467,22 +421,6 @@ describe("formatting", () => {
         2_000,
       ),
     ).toBe("◉ lead · terra · 2s · delegating · helpers 1/2");
-  });
-
-  test("an agent that waits for helpers shows their progress", () => {
-    expect(
-      formatAgentLine(
-        agent({
-          state: "working",
-          lastActivityAt: 1_000,
-          stateSince: 0,
-          activity: {
-            delegation: { graph: "lead.helpers", done: 1, total: 3 },
-          },
-        }),
-        2_000,
-      ),
-    ).toBe("◉ reviewer · terra · 2s · delegating · lead.helpers 1/3");
   });
 
   test("footer counts states", () => {

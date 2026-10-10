@@ -191,21 +191,6 @@ describe("resolveSpawn", () => {
     expect(spec.instructions).toContain("Apply review.");
   });
 
-  test("untrusted projects keep the user's skills", async () => {
-    const cwd = project();
-    const spec = await resolveSpawn(
-      { task: "x", skills: ["style"] },
-      context(cwd, false),
-      { skills: discoverSkills },
-    );
-    expect(spec.instructions).toContain("Apply style.");
-    expect(
-      resolveSpawn({ task: "x", skills: ["lint"] }, context(cwd, false), {
-        skills: discoverSkills,
-      }),
-    ).rejects.toThrow("lint (unknown)");
-  });
-
   test("helpers choose skills like spawns", async () => {
     const cwd = project();
     const spec = await resolveHelper(

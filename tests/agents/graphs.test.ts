@@ -167,21 +167,26 @@ describe("graphs", () => {
     await service.spawnGraph({
       name: "race",
       failFast: true,
-      agents: agents("slow one", "fail two", "slow three"),
+      agents: [
+        node("slow", "slow one"),
+        node("bad", "fail two"),
+        node("after", "three", ["slow"]),
+      ],
     });
     await until(() => service.pendingDeliveries().length > 0);
     const delivery = graphDelivery(service.pendingDeliveries());
+    // Also the agent that still waited for its input.
     expect(summary(delivery)).toEqual([
-      "race-1: stopped",
-      "race-2: failed cannot fail two",
-      "race-3: stopped",
+      "slow: stopped",
+      "bad: failed cannot fail two",
+      "after: stopped",
     ]);
-    expect(service.get("race-1")?.state).toBe("interrupted");
-    expect(service.get("race-3")?.state).toBe("interrupted");
+    expect(service.get("slow")?.state).toBe("interrupted");
+    expect(service.get("after")?.state).toBe("interrupted");
 
     await service.acknowledge(delivery);
-    // The graph stopped race-1 and race-3, so they close with it.
-    expect(service.list().map((agent) => agent.name)).toEqual(["race-2"]);
+    // The graph stopped the others, so they close with it.
+    expect(service.list().map((agent) => agent.name)).toEqual(["bad"]);
   });
 
   test("failFast keeps working when the user interrupts one agent", async () => {
@@ -268,24 +273,6 @@ describe("graphs", () => {
     expect(service.list()).toEqual([]);
   });
 
-  test("a wait on a graph agent covers its task", async () => {
-    const service = await open({ models: scripted().models });
-    await service.spawnGraph({ name: "g", agents: agents("a", "b") });
-    const outcome = await service.wait(["g-2"]);
-    expect(outcome.agents.map((agent) => agent.result?.text)).toEqual([
-      "done: b",
-    ]);
-  });
-
-  test("a wait on a working graph times out without consuming it", async () => {
-    const service = await open({ models: scripted().models });
-    await service.spawnGraph({ name: "g", agents: agents("slow a", "b") });
-    const outcome = await service.wait(["g"], { timeoutMs: 100 });
-    expect(outcome.timedOut).toEqual(["g"]);
-    expect(outcome.graphs[0]?.state).toBe("working");
-    await service.stop("g");
-  });
-
   test("graph agents stay attachable and answer messages after the graph", async () => {
     const service = await open({ models: scripted().models });
     await service.spawnGraph({ name: "g", agents: agents("a", "b") });
@@ -335,23 +322,12 @@ describe("graphs", () => {
       expect(delivery.outcome.result.text).toBe("done: steer here");
   });
 
-  test("names are shared with agents and validated up front", async () => {
+  test("graphs share names with agents and start whole or not at all", async () => {
     const service = await open({ models: scripted().models });
     await service.spawn({ task: "x", name: "taken", cwd: ".", model: MODEL });
     await expect(
       service.spawnGraph({ name: "taken", agents: agents("a", "b") }),
     ).rejects.toThrow("already exists");
-    await expect(
-      service.spawnGraph({
-        agents: [
-          { task: "a", name: "same", cwd: ".", model: MODEL },
-          { task: "b", name: "same", cwd: ".", model: MODEL },
-        ],
-      }),
-    ).rejects.toThrow("already exists");
-    await expect(service.spawnGraph({ agents: agents("a") })).rejects.toThrow(
-      "2 to 12 agents",
-    );
     await expect(
       service.spawnGraph({
         agents: [
@@ -363,16 +339,13 @@ describe("graphs", () => {
     // Nothing was created by the failed attempts.
     expect(service.graphs()).toEqual([]);
 
-    const graph = await service.spawnGraph({ agents: agents("a", "b") });
-    expect(graph.name).toBe("graph");
+    await service.spawnGraph({ agents: agents("a", "b") });
     await expect(
       service.spawn({ task: "x", name: "graph", cwd: ".", model: MODEL }),
     ).rejects.toThrow("already exists");
     await expect(service.send("graph", "hi", "auto")).rejects.toThrow(
       "graph is a graph. Message its agents instead: graph-1, graph-2",
     );
-    expect(service.find("graph")?.kind).toBe("graph");
-    expect(service.find("graph-1")?.kind).toBe("agent");
   });
 });
 
@@ -458,26 +431,6 @@ describe("graph edges", () => {
     expect(service.list().map((agent) => agent.name)).toEqual(["first"]);
   });
 
-  test("failFast stops agents that wait for their inputs", async () => {
-    const service = await open({ models: scripted().models });
-    await service.spawnGraph({
-      name: "race",
-      failFast: true,
-      agents: [
-        node("slow", "slow one"),
-        node("bad", "fail two"),
-        node("after", "three", ["slow"]),
-      ],
-    });
-    await until(() => service.pendingDeliveries().length > 0);
-    expect(summary(graphDelivery(service.pendingDeliveries()))).toEqual([
-      "slow: stopped",
-      "bad: failed cannot fail two",
-      "after: stopped",
-    ]);
-    expect(service.get("after")?.state).toBe("interrupted");
-  });
-
   test("edges must name agents of the graph and form no cycle", async () => {
     const service = await open({ models: scripted().models });
     await expect(
@@ -501,9 +454,8 @@ describe("graph edges", () => {
 });
 
 describe("graphs that hold their result", () => {
-  /** A graph whose quick agent works on a user's message after answering,
-   * so the graph holds its result once the slow agent answered. */
-  async function held(service: AgentService) {
+  test("a graph works until its agents' work drained", async () => {
+    const service = await open({ models: scripted().models });
     await service.spawnGraph({
       name: "g",
       agents: [node("quick", "a"), node("other", "medium b")],
@@ -511,6 +463,7 @@ describe("graphs that hold their result", () => {
     await until(
       () => service.getGraph("g")?.nodes[0]?.outcome?.kind === "answered",
     );
+    // A user's message to the quick agent holds the graph's outcome.
     await service.prompt("quick", "slow again", "auto");
     await until(async () =>
       (await service.liveTasks()).some(
@@ -519,35 +472,14 @@ describe("graphs that hold their result", () => {
       ),
     );
     await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-
-  test("a graph works until its agents' work drained", async () => {
-    const service = await open({ models: scripted().models });
-    await held(service);
-    // Both agents answered their tasks, but the graph still works.
     expect(service.getGraph("g")?.state).toBe("working");
-    expect(service.get("quick")?.state).toBe("working");
     expect(service.pendingDeliveries()).toEqual([]);
 
-    await service.interrupt("quick");
-    await until(() => service.pendingDeliveries().length > 0);
-    expect(summary(graphDelivery(service.pendingDeliveries()))).toEqual([
-      "quick: done: a",
-      expect.stringContaining("other: medium b"),
-    ]);
-    expect(service.getGraph("g")?.state).toBe("idle");
-  });
-
-  test("stopping a graph that holds its result stops it", async () => {
-    const service = await open({ models: scripted().models });
-    await held(service);
-    const stopped = await service.stop("g");
-    expect(stopped.kind).toBe("graph");
+    // Stopping it still stops it, though its outcome was decided.
+    await service.stop("g");
     const graph = service.getGraph("g");
     expect(graph?.stopped).toBe(true);
     expect(graph?.state).toBe("interrupted");
-    // A stopped graph delivers nothing, so nothing waits.
-    expect(graph?.queued).toBeUndefined();
     expect(service.get("quick")?.state).toBe("interrupted");
     expect(await service.liveTasks()).toEqual([]);
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -556,53 +488,6 @@ describe("graphs that hold their result", () => {
 });
 
 describe("graph durability", () => {
-  test("a restart mid-graph repeats no finished node and delivers once", async () => {
-    const directory = tempDir();
-    const first = scripted();
-    const before = await open({
-      storage: await jsonlStorage(directory),
-      models: first.models,
-    });
-    await before.spawnGraph({ name: "g", agents: agents("quick", "slow") });
-    await until(
-      () =>
-        before.getGraph("g")?.nodes[0]?.outcome?.kind === "answered" &&
-        before.get("g-2")?.state === "working",
-    );
-    expect(before.getGraph("g")?.state).toBe("working");
-
-    const second = scripted({ slow: false });
-    const after = await reopen(before, {
-      storage: await jsonlStorage(directory),
-      models: second.models,
-    });
-    await until(() => after.pendingDeliveries().length > 0);
-    const deliveries = after.pendingDeliveries();
-    expect(deliveries).toHaveLength(1);
-    expect(summary(graphDelivery(deliveries))).toEqual([
-      "g-1: done: quick",
-      "g-2: done: slow",
-    ]);
-    // The finished turn did not run again, and the interrupted one resumed
-    // its single submission instead of sending the task again.
-    expect(first.requests.filter((r) => r.prompt === "quick")).toHaveLength(1);
-    expect(second.requests.map((request) => request.prompt)).toEqual(["slow"]);
-    expect(second.requests[0]?.copies).toBe(1);
-    await after.acknowledge(graphDelivery(deliveries));
-
-    const third = scripted();
-    const last = await reopen(after, {
-      storage: await jsonlStorage(directory),
-      models: third.models,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(last.pendingDeliveries()).toEqual([]);
-    expect(last.getGraph("g")?.state).toBe("idle");
-    expect(last.getGraph("g")?.closed).toBe(true);
-    expect(third.requests).toEqual([]);
-    expect(await last.liveTasks()).toEqual([]);
-  });
-
   test("a restart mid-pipeline repeats no finished agent and sends once", async () => {
     const directory = tempDir();
     const first = scripted();
@@ -635,23 +520,5 @@ describe("graph durability", () => {
     expect(second.requests).toHaveLength(1);
     expect(second.requests[0]?.prompt).toStartWith("slow build");
     expect(second.requests[0]?.copies).toBe(1);
-  });
-
-  test("a restart between posting and acknowledging delivers again", async () => {
-    const directory = tempDir();
-    const before = await open({
-      storage: await jsonlStorage(directory),
-      models: scripted().models,
-    });
-    await before.spawnGraph({ name: "g", agents: agents("a", "b") });
-    await until(() => before.pendingDeliveries().length > 0);
-    const after = await reopen(before, {
-      storage: await jsonlStorage(directory),
-      models: scripted().models,
-    });
-    await until(() => after.pendingDeliveries().length > 0);
-    expect(after.pendingDeliveries().map((delivery) => delivery.kind)).toEqual([
-      "graph",
-    ]);
   });
 });

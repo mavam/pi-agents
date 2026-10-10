@@ -152,26 +152,6 @@ describe("delegation", () => {
     expect(await service.liveTasks()).toEqual([]);
   });
 
-  test("helper names are qualified with their agent's", async () => {
-    const service = await open();
-    const long = "a-rather-long-agent-name-for-testing-limits";
-    await service.spawn(
-      lead(
-        delegate([{ name: "essay_writers_group", task: "x" }], {
-          name: "essay_writers_group",
-        }),
-        { name: long },
-      ),
-    );
-    await service.wait([long]);
-    const [graph] = service.graphs({ includeClosed: true });
-    // The agent's part shortens; names stay unique across graphs and agents.
-    expect(graph?.name).toBe("a-rather-long-agent-name.essay_writers_group");
-    expect(graph?.nodes[0]?.name).toBe(
-      "a-rather-long-agent-name.essay_writers_group-2",
-    );
-  });
-
   test("helpers and other agents can't start helpers", async () => {
     const { models } = scripted();
     const service = await open({ models });

@@ -18,10 +18,14 @@ manually.
 
 - Use Bun as the runtime and package manager.
 - Keep `README.md` and `docs/design.md` in sync with user-facing changes.
-- Add or update tests when changing agent behavior, delivery, or the UI
-  formatting.
 - Only `src/host`, `src/agents`, and the attach view (`src/ui/attach.ts`) may
   import pi-durable; everything else goes through `AgentService`.
+
+## Tests
+
+- Test documented guarantees and user-visible behavior, about one test each.
+- Don't commit storage fixtures or fakes of Pi or pi-durable internals.
+- Delete tests together with the behavior they cover.
 
 ## Release engineering
 

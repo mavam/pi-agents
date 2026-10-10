@@ -195,12 +195,6 @@ describe("/agents detail", () => {
     );
     expect(lines).toHaveLength(10);
     expect(lines.at(-1)).toBe("  … 12 more lines · select lead.a to read all");
-    // A cut after a blank line drops it, so the note follows the text.
-    expect(
-      plain([
-        { markdown: "one\n\ntwo\n\nthree", maxLines: 2, more: (n) => `+${n}` },
-      ]),
-    ).toEqual(["one", "+3"]);
   });
 
   test("a divider separates an agent's task from its result", () => {

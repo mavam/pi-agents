@@ -1,10 +1,10 @@
 /**
- * Keys of the parent's tool calls. A call that spawns, sends, or stops
- * passes its key to the service, so repeating the call finds what its first
- * run did instead of acting again. The key is Pi's tool call ID qualified
- * by the session entry of the assistant message that issued the call: some
- * providers number calls per message, so IDs alone can repeat across
- * messages and would make a new call look like a repeated one.
+ * Keys of the parent's tool calls. A call that waits names the results it
+ * took by its key, so the parent recognizes them in its stored result, or,
+ * for a nested call such as a codemode script's, in its caller's. The key
+ * is Pi's tool call ID qualified by the session entry of the assistant
+ * message that issued the call: some providers number calls per message, so
+ * IDs alone can repeat across messages and would match an older result.
  */
 
 import type {

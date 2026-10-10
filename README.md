@@ -370,10 +370,11 @@ Agents belong to the Pi session that started them. When you quit Pi or it
 crashes, agents pause. When you resume the session, for example with `pi -c`,
 interrupted work continues and results that haven't arrived yet post into the
 conversation. A result has arrived once Pi saved it in the session, so a crash
-never loses one; a result that Pi showed but hadn't saved yet posts again. A
-graph continues too: its agents that already finished don't
-work again, and no agent gets its task twice. A tool call that can't safely
-repeat reports the interruption to the agent instead.
+never loses one; a result that Pi showed but hadn't saved yet posts again, and
+after a crash, so may a result that a codemode script waited for. A graph
+continues too: its agents that already finished don't work again, and no
+agent gets its task twice. A tool call that can't safely repeat reports the
+interruption to the agent instead.
 
 Agents of sessions started with `--no-session` live in memory and end with
 the session.

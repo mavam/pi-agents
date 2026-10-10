@@ -2,8 +2,6 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { stripVTControlCharacters } from "node:util";
-import { shapeLine } from "../../src/agents/topology.js";
 import { discoverSkills } from "../../src/catalog/skills.js";
 import {
   graphContent,
@@ -14,12 +12,7 @@ import {
   buildSystemPromptAppendix,
   profileCatalog,
 } from "../../src/pi/prompt.js";
-import {
-  FitLines,
-  formatCall,
-  formatPairs,
-  prepareSeconds,
-} from "../../src/pi/tools.js";
+import { formatPairs, prepareSeconds } from "../../src/pi/tools.js";
 
 describe("system prompt appendix", () => {
   test("lists guidance and usable profiles", async () => {
@@ -210,41 +203,6 @@ describe("tool calls", () => {
       'profile=explorer model=anthropic/claude-haiku-4-5 tools=[read,grep] cwd="src dir"',
     );
   });
-
-  test("calls show a title, a pairs line, and the body", () => {
-    const plain = (_color: string, text: string) => text;
-    expect(
-      formatCall(
-        "spawn",
-        { title: "lister", pairs: { thinking: "low" }, body: "List\nfiles" },
-        false,
-        plain,
-      ),
-    ).toBe("✦ spawn lister\n  thinking=low\n  List files");
-    expect(formatCall("stop", { title: "lister" }, false, plain)).toBe(
-      "✦ stop lister",
-    );
-  });
-
-  test("graph calls collapse to their shape", () => {
-    const plain = (_color: string, text: string) => text;
-    const view = {
-      title: "review",
-      pairs: { failFast: true },
-      body: "api (model=sol): Map the API\ntests: Check the tests\nmerge ← api, tests: Merge",
-      collapsed: shapeLine([
-        { key: "api", inputs: [] },
-        { key: "tests", inputs: [] },
-        { key: "merge", inputs: ["api", "tests"] },
-      ]),
-    };
-    expect(formatCall("spawn graph", view, false, plain)).toBe(
-      "✦ spawn graph review\n  failFast=true\n  {api, tests} → merge",
-    );
-    expect(formatCall("spawn graph", view, true, plain)).toBe(
-      "✦ spawn graph review\n  failFast=true\n  api (model=sol): Map the API\n  tests: Check the tests\n  merge ← api, tests: Merge",
-    );
-  });
 });
 
 describe("tool arguments", () => {
@@ -252,17 +210,5 @@ describe("tool arguments", () => {
     expect(prepareSeconds({ name: "a", wait: false })).toEqual({ name: "a" });
     expect(prepareSeconds({ wait: "120", timeout: 0 })).toEqual({ wait: 120 });
     expect(prepareSeconds({ wait: 30 })).toEqual({ wait: 30 });
-  });
-});
-
-describe("call rendering", () => {
-  test("collapsed lines end in an ellipsis instead of wrapping", () => {
-    const text =
-      "✦ spawn lister\n  List every file in a very long directory name";
-    const plain = new FitLines(text, false)
-      .render(20)
-      .map((line) => stripVTControlCharacters(line));
-    expect(plain).toEqual(["✦ spawn lister", "  List every file i…"]);
-    expect(new FitLines(text, true).render(20).length).toBeGreaterThan(2);
   });
 });

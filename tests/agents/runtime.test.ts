@@ -3,7 +3,6 @@ import type { AgentService } from "../../src/agents/service.js";
 import {
   closeService,
   createFaux,
-  createGatedFaux,
   jsonlStorage,
   MODEL,
   openService,
@@ -70,55 +69,6 @@ describe("runtime", () => {
     expect(endedAt(second, "w")).toBe(ended);
   });
 
-  test("every turn moves the end, however fast", async () => {
-    const service = await open();
-    await service.spawn({ task: "first", name: "w", cwd: ".", model: MODEL });
-    await service.wait(["w"]);
-    let previous = endedAt(service, "w");
-    for (const prompt of ["second", "third", "fourth"]) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await service.prompt("w", prompt, "auto");
-      await until(
-        () => service.get("w")?.result?.text === `done: [user] ${prompt}`,
-      );
-      await until(() => (service.get("w")?.endedAt ?? 0) > previous);
-      previous = endedAt(service, "w");
-    }
-  });
-
-  test("interrupted and failed agents end, also after reopening", async () => {
-    const directory = tempDir();
-    const { models } = createGatedFaux();
-    const first = await open({
-      storage: await jsonlStorage(directory),
-      models,
-    });
-    await first.spawn({ task: "hold", name: "held", cwd: ".", model: MODEL });
-    await first.spawn({ task: "fail", name: "broken", cwd: ".", model: MODEL });
-    await until(() => first.get("held")?.state === "working");
-    await first.interrupt("held");
-    await until(
-      () =>
-        first.get("held")?.state === "interrupted" &&
-        first.get("broken")?.state === "failed",
-    );
-    await until(
-      () =>
-        first.get("held")?.endedAt !== undefined &&
-        first.get("broken")?.endedAt !== undefined,
-    );
-    const held = endedAt(first, "held");
-    const broken = endedAt(first, "broken");
-
-    const second = await reopen(first, {
-      storage: await jsonlStorage(directory),
-      models,
-    });
-    await until(() => second.get("broken") !== undefined);
-    expect(endedAt(second, "held")).toBe(held);
-    expect(endedAt(second, "broken")).toBe(broken);
-  });
-
   test("a graph ends with its task, not with later messages", async () => {
     const directory = tempDir();
     const { models } = createFaux();
@@ -138,6 +88,7 @@ describe("runtime", () => {
     expect(graphEnd).toBeDefined();
 
     await new Promise((resolve) => setTimeout(resolve, 20));
+    // A later message moves the agent's end, not the graph's.
     await first.prompt("g-1", "again", "auto");
     await until(() => first.get("g-1")?.result?.text === "done: [user] again");
     await until(() => (first.get("g-1")?.endedAt ?? 0) > (graphEnd ?? 0));

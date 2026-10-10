@@ -1,9 +1,11 @@
 /**
- * The host's part of running agents: open the harness over the storage,
- * with pi-agents' extensions installed, and choose the anchor, the
- * conversation that owns the graphs the parent starts. Inside Pi the anchor
- * is the harness's root conversation, which never runs; Pi's durable
- * session worker would choose the session's main conversation instead.
+ * The host's part of running agents, like the session worker's
+ * `createCodingAgentHarness`: open the harness over the storage, with
+ * pi-agents' extensions installed, and choose the anchor, the conversation
+ * that owns the graphs the parent starts. Inside Pi the anchor is the
+ * harness's root conversation, which never runs; Pi's durable session
+ * worker would choose the session's main conversation instead. The host
+ * starts the core, then resumes the harness.
  */
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -20,7 +22,7 @@ import {
   agentSelection,
   installAgentExtensions,
 } from "../agents/extensions.js";
-import { ExecutionEnvs } from "./env.js";
+import { ExecutionEnvs } from "./harness-setup.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
 

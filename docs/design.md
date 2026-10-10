@@ -78,9 +78,10 @@ Everything the core needs from the parent goes through one interface,
   attached to an agent.
 - `deliver(deliveries)`: hand results over, in order. Inside Pi each is a
   message, and the last starts a turn.
-- `received(ids)`: which deliveries the parent holds durably, delivered or
-  returned by one of its calls. Only these count as done (see "At least
-  once").
+- `received(handovers)`: which deliveries the parent holds durably,
+  delivered or carried by the stored result of one of its calls, which
+  names them or is the result of the call each handover names. Only these
+  count as done (see "At least once").
 - `attention()`: a signal that ends one of the parent's waits once
   something needs the parent, so it can answer while its agents keep
   working. Inside Pi a steer from the user raises it.
@@ -273,7 +274,8 @@ stays blocked rather than lost; stopping its graph then settles it as
 `orphaned`. Documents migrate the same way through `defineDoc`'s `migrate`,
 applied on their next access. Optional fields that earlier records lack
 needed no migration: `AgentRecord.graph`, and `call` and `stops` of both
-records. Requests of earlier versions keep their `parent:<n>` IDs, and
+records. The session document `pi-agents.receipts` (version 1) is new, and
+a store without it starts empty. Requests of earlier versions keep their `parent:<n>` IDs, and
 sends without a key continue that numbering.
 
 ### Agents that delegate
@@ -388,11 +390,16 @@ delivery but can repeat one.
 - A delivery counts as done, and the core acknowledges it in its store,
   only once `Parent.received` reports that the parent holds it. Pi's parent
   looks for the identity in the session's entries, on any branch: a result
-  message, or the stored result of a call that waited. Pi stores no results
-  of nested calls, such as a codemode script's, and records the calls in
-  their caller's result instead, so for those the parent remembers which
-  call returned which results and looks for a later result that records the
-  call.
+  message, or the stored result of a call that waited.
+- Pi stores no results of nested calls, such as a codemode script's, and
+  records the calls in their caller's result instead. So before a wait's
+  result goes to Pi, the core stores which call carries which deliveries
+  (`pi-agents.receipts`, keyed by delivery ID), and the parent also counts
+  a stored result whose call, or one of whose recorded nested calls, has
+  that key. A key qualifies the call's ID by the assistant message that
+  issued it, which Pi links to its results, so a reused ID doesn't match an
+  older result. Receipts survive restarts and retire once their deliveries
+  are acknowledged or gone.
 - Pi confirms neither posting nor saving, and extensions see `message_end`
   before Pi saves the message. The parent therefore checks the session's
   entries again after events, such as `message_end` once it has passed, the
@@ -418,9 +425,10 @@ delivery but can repeat one.
   liveness limit: if the session ends first, or an earlier deferred action
   throws and Pi skips the rest, the result stays in flight and shows
   `result queued` until the session starts again, which posts it.
-- A wait by a parent call takes its results into flight; they count once
-  the parent stored the call's result. A wait without a call, such as one
-  whose provider gave the call no ID, counts them at once.
+- Every wait by a parent tool call takes its results into flight, also when
+  the provider gave the call no ID; they count once Pi stored the call's
+  result, whose details name them. Only a caller that takes the results
+  itself, which no tool does, has them count at once.
 
 ## Durability
 
@@ -649,20 +657,23 @@ Pi's parent against a fake session: a delivery counts only once the session
 holds it and isn't posted again meanwhile, a restart after Pi saved a
 delivery acknowledges it without posting, a restart before posts it again
 under the same identity, and a wait's result counts once Pi stored the
-call's result, for nested calls through their caller's. A fake Pi that
-queues, runs, or defers a posted message checks that a message the triggered
-turn saved and one deferred while Pi settles post once, an abort that keeps
-a queued message posts no duplicate, and one that clears the queue leaves
-the result queued until a restart posts it. Events from a fake Pi check that
-a result arriving during a parent turn posts once the turn settled, also
-when another extension keeps Pi busy past `agent_end`, that a compaction's
-end retries, and that results held back by messages an abort left queued, or
-by a cancelled branch summary, post on a recheck. A host whose default
-selection holds a foreign extension, with a `read` tool, another tool, and a
-prompt section, gives none of it to standalone agents, graph agents, a
-delegating agent, or its helper, and the session of v0.27.0 keeps its agents
-on the default of Pi's host. Keyed call tests repeat a spawn, a graph spawn,
-a send, and a stop with the same key, also after the name moved to a newer
+call's result, for nested calls through their caller's, also across a
+restart, and for a call without an ID; these run on Pi's own
+`SessionManager`, and a tool wait without an ID that crashes before Pi
+stored its result delivers again. A fake Pi that queues, runs, or defers a
+posted message checks that a message the triggered turn saved and one
+deferred while Pi settles post once, an abort that keeps a queued message
+posts no duplicate, and one that clears the queue leaves the result queued
+until a restart posts it. Events from a fake Pi check that a result arriving
+during a parent turn posts once the turn settled, also when another
+extension keeps Pi busy past `agent_end`, that a compaction's end retries,
+and that results held back by messages an abort left queued, or by a
+cancelled branch summary, post on a recheck. A host whose default selection
+holds a foreign extension, with a `read` tool, another tool, and a prompt
+section, gives none of it to standalone agents, graph agents, a delegating
+agent, or its helper, and the session of v0.27.0 keeps its agents on the
+default of Pi's host. Keyed call tests repeat a spawn, a graph spawn, a
+send, and a stop with the same key, also after the name moved to a newer
 agent, and check that each acts once, that a repeated stop leaves newer work
 alone, that calls without a key act every time, and that the session of
 v0.27.0 takes keyed calls. Graph tests cover `allSettled` with answers and

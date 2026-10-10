@@ -97,6 +97,20 @@ export const GraphsDoc = defineDoc<GraphsState>({
   initial: () => ({ graphs: {} }),
 });
 
+export type ReceiptsState = {
+  /** Per delivery a parent call's result carries, the call's key: the
+   * parent recognizes the delivery by the call where the result doesn't
+   * name it, such as a nested call's, whose result isn't stored. */
+  receipts: Record<string, string>;
+};
+
+export const ReceiptsDoc = defineDoc<ReceiptsState>({
+  kind: "pi-agents.receipts",
+  version: 1,
+  scope: "session",
+  initial: () => ({ receipts: {} }),
+});
+
 /** How many delivered answer IDs a record remembers for deduplication. */
 export const DELIVERED_MEMORY = 64;
 

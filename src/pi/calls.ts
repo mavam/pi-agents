@@ -14,7 +14,7 @@ import type {
 
 /** Whether the assistant message of `entry` issued `toolCallId`, directly
  * or as the caller of a nested call such as a codemode script's. */
-function issued(entry: SessionEntry, toolCallId: string): boolean {
+export function issued(entry: SessionEntry, toolCallId: string): boolean {
   if (entry.type !== "message" || entry.message.role !== "assistant")
     return false;
   return entry.message.content.some(
@@ -22,6 +22,11 @@ function issued(entry: SessionEntry, toolCallId: string): boolean {
       block.type === "toolCall" &&
       (block.id === toolCallId || toolCallId.startsWith(`${block.id}/`)),
   );
+}
+
+/** The key of a call that the message of entry `entryId` issued. */
+export function qualify(entryId: string, toolCallId: string): string {
+  return `${entryId}/${toolCallId}`;
 }
 
 /** The key of the call `toolCallId`; none for calls without an ID. */
@@ -35,7 +40,7 @@ export function callKey(
     const session = ctx.sessionManager;
     let entry = session.getLeafEntry();
     while (entry) {
-      if (issued(entry, toolCallId)) return `${entry.id}/${toolCallId}`;
+      if (issued(entry, toolCallId)) return qualify(entry.id, toolCallId);
       entry = entry.parentId ? session.getEntry(entry.parentId) : undefined;
     }
   } catch {

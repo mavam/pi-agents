@@ -46,7 +46,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     if (event.streamingBehavior === "steer") parent.steer();
     return { action: "continue" };
   });
-  registerAgentTools(pi, host, parent);
+  registerAgentTools(pi, host);
   parent.listen();
   registerCommands(pi, { host, panel, focus });
   pi.registerShortcut("ctrl+q", {

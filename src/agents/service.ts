@@ -83,6 +83,7 @@ import {
   GraphsDoc,
   graphDeliveryId,
   type ParentRequest,
+  ReceiptsDoc,
   requestId,
   stoppedBy,
   withStop,
@@ -125,6 +126,15 @@ export interface AgentServiceOptions {
   parent: Parent;
   /** Receives failures of background work, such as delivery. */
   onReport?: (error: unknown) => void;
+}
+
+export interface WaitOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** The parent call that waits, whose result carries the results to the
+   * parent; `call` is its key, if it has one, by which the parent
+   * recognizes the result where it doesn't name the results. */
+  carrier?: { call?: string };
 }
 
 export interface WaitOutcome {
@@ -214,6 +224,9 @@ export class AgentService {
    * carried by the result of a parent call's wait. In memory only: after a
    * restart, the parent decides what it holds. */
   private readonly inFlight = new Map<string, "posted" | "carried">();
+  /** Per delivery a parent call's result carries, the call's key, as
+   * `ReceiptsDoc` stores it. */
+  private receipts: Record<string, string> = {};
   /** Whether delivery asked the parent what it holds since starting. */
   private reconciled = false;
   private closed = false;
@@ -251,6 +264,9 @@ export class AgentService {
       this.onCommit(publication),
     );
     this.records = await this.loadRecords();
+    this.receipts = {
+      ...(await this.harness.snapshot(ReceiptsDoc, CONTEXT))?.receipts,
+    };
     for (const id of Object.keys(this.records)) {
       await this.loadLastAssistant(id);
       // A request recorded before a crash may lack its submission.
@@ -799,16 +815,14 @@ export class AgentService {
 
   /**
    * Wait until the agents are idle and the graphs finished, and return
-   * them. The wait takes their results instead of their delivery. When
-   * `call`, a call of the parent, waits, its result carries them, so they
-   * count as delivered once the parent holds it; otherwise at once.
-   * Aborting `signal` ends only the wait, and so does the parent's
-   * attention: either throws `WaitInterrupted`.
+   * them. The wait takes their results instead of their delivery: when a
+   * parent call waits (`carrier`), its result carries them, so they count
+   * as delivered once the parent holds that result; otherwise the caller
+   * takes them, and they count at once. Aborting `signal` ends only the
+   * wait, and so does the parent's attention: either throws
+   * `WaitInterrupted`.
    */
-  async wait(
-    names: string[],
-    options: { signal?: AbortSignal; timeoutMs?: number; call?: string } = {},
-  ): Promise<WaitOutcome> {
+  async wait(names: string[], options: WaitOptions = {}): Promise<WaitOutcome> {
     const targets = names.map((name) => this.requireTarget(name));
     const ids = [
       ...new Set(
@@ -866,8 +880,12 @@ export class AgentService {
         ...[...ended].flatMap((id) => this.graphDelivery(id) ?? []),
         ...[...idle].flatMap((id) => this.agentDeliveries(id)),
       ].filter((each) => !this.inFlight.has(each.id));
-      if (options.call === undefined) await this.acknowledgeAll(taken);
+      if (options.carrier === undefined) await this.acknowledgeAll(taken);
       else if (taken.length > 0) {
+        // Stored before the result reaches the parent, so the parent can
+        // tell after a restart which of its calls carried what.
+        const call = options.carrier.call;
+        if (call !== undefined) await this.recordReceipts(taken, call);
         // In flight until the parent holds the call's result; no longer
         // queued meanwhile.
         for (const each of taken) this.inFlight.set(each.id, "carried");
@@ -1054,6 +1072,9 @@ export class AgentService {
     const ids = new Set(all.map((each) => each.id));
     for (const id of this.inFlight.keys())
       if (!ids.has(id)) this.inFlight.delete(id);
+    await this.retireReceipts(
+      Object.keys(this.receipts).filter((id) => !ids.has(id)),
+    );
     const due = () =>
       this.pendingDeliveries().filter((each) => !this.inFlight.has(each.id));
     // Ask the parent only when it may hold something new: results in
@@ -1066,7 +1087,12 @@ export class AgentService {
       return;
     this.reconciled = true;
     if (ids.size === 0) return;
-    const received = await this.parent.received([...ids]);
+    const received = await this.parent.received(
+      [...ids].map((id) => {
+        const call = this.receipts[id];
+        return call === undefined ? { id } : { id, call };
+      }),
+    );
     await this.acknowledgeAll(all.filter((each) => received.has(each.id)));
     const next = due();
     if (next.length === 0 || !this.parent.canDeliver()) return;
@@ -1110,6 +1136,30 @@ export class AgentService {
             : [],
         ),
       );
+    await this.retireReceipts(deliveries.map((delivery) => delivery.id));
+  }
+
+  /** Remember which call's result carries these deliveries. */
+  private async recordReceipts(
+    deliveries: readonly PendingDelivery[],
+    call: string,
+  ): Promise<void> {
+    await this.harness.commit(async (tx) => {
+      const state = await tx.doc(ReceiptsDoc);
+      for (const delivery of deliveries) state.receipts[delivery.id] = call;
+    }, CONTEXT);
+    for (const delivery of deliveries) this.receipts[delivery.id] = call;
+  }
+
+  /** Forget receipts of deliveries that are done or gone. */
+  private async retireReceipts(ids: readonly string[]): Promise<void> {
+    const retired = ids.filter((id) => this.receipts[id] !== undefined);
+    if (retired.length === 0) return;
+    await this.harness.commit(async (tx) => {
+      const state = await tx.doc(ReceiptsDoc);
+      for (const id of retired) delete state.receipts[id];
+    }, CONTEXT);
+    for (const id of retired) delete this.receipts[id];
   }
 
   // --- Internals ---

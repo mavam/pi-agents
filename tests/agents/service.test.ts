@@ -313,7 +313,9 @@ describe("the parent", () => {
     const service = await open();
     const parent = parentOf(service);
     await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
-    const outcome = await service.wait(["a"], { call: "call-1" });
+    const outcome = await service.wait(["a"], {
+      carrier: { call: "call-1" },
+    });
     expect(outcome.deliveries).toHaveLength(1);
     expect(outcome.agents[0]?.queued).toBeUndefined();
     parent.ready = true;

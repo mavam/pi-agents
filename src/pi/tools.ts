@@ -76,12 +76,6 @@ interface AgentToolDetails {
   deliveries?: string[];
 }
 
-/** Learns which results a tool call returns, so they count as delivered
- * once Pi stored the call's result. */
-export interface ResultClaims {
-  claim(toolCallId: string, ids: readonly string[]): void;
-}
-
 function text(content: string, details: AgentToolDetails) {
   return { content: [{ type: "text" as const, text: content }], details };
 }
@@ -525,7 +519,7 @@ async function waitWithProgress(
   timeoutSeconds: number | undefined,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
-  call: { id: string; claims: ResultClaims | undefined },
+  call: ToolCall,
   started?: AgentToolDetails,
 ): Promise<Returned<WaitOutput>> {
   const snapshot = () => {
@@ -562,11 +556,10 @@ async function waitWithProgress(
       ...(timeoutSeconds !== undefined
         ? { timeoutMs: timeoutSeconds * 1000 }
         : {}),
-      // The call's result carries the results; without an ID, nothing
-      // could recognize it.
-      ...(call.id ? { call: call.id } : {}),
+      // The call's result carries the results and names them in its
+      // details; nested calls' results aren't stored, so their key counts.
+      carrier: call.key === undefined ? {} : { call: call.key },
     });
-    if (call.id) call.claims?.claim(call.id, outcome.deliveries);
     const content = [
       ...outcome.graphs.map((graph) => describeGraph(service, graph)),
       ...outcome.agents.map(describeAgent),
@@ -694,11 +687,7 @@ function describeTarget(service: AgentService, target: Target): string {
     : statusLine(service, target.info);
 }
 
-export function registerAgentTools(
-  pi: ExtensionAPI,
-  host: SessionHost,
-  claims?: ResultClaims,
-): void {
+export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   const spawnParams = Type.Object({ ...agentFields, wait: waitParam });
   pi.registerTool(
     defineAgentTool(host, {
@@ -730,7 +719,7 @@ export function registerAgentTools(
             params.wait,
             signal,
             onUpdate,
-            { id: call.id, claims },
+            call,
             started,
           );
           return { ...waited, output: agentNow(service, info.id) };
@@ -856,7 +845,7 @@ export function registerAgentTools(
             params.wait,
             signal,
             onUpdate,
-            { id: call.id, claims },
+            call,
             started,
           );
           return { ...waited, output: graphNow(service, graph.id) };
@@ -911,7 +900,7 @@ export function registerAgentTools(
             params.wait,
             signal,
             onUpdate,
-            { id: call.id, claims },
+            call,
           );
           return { ...waited, output: agentNow(service, sent.id) };
         }
@@ -964,7 +953,7 @@ export function registerAgentTools(
           params.timeout,
           signal,
           onUpdate,
-          { id: call.id, claims },
+          call,
         ),
     }),
   );

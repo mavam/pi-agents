@@ -26,9 +26,11 @@ import {
   type AgentLookup,
   type Attention,
   AttentionSignals,
+  type Handover,
   type Parent,
 } from "../agents/parent.js";
 import type { PendingDelivery } from "../agents/types.js";
+import { issued, qualify } from "./calls.js";
 import {
   GRAPH_RESULT_MESSAGE,
   type GraphResultDetails,
@@ -93,6 +95,24 @@ function deliveriesOf(details: unknown): unknown[] {
   return Array.isArray(deliveries) ? deliveries : [];
 }
 
+/**
+ * The entry of the assistant message that issued the call of a tool result:
+ * the result's nearest assistant ancestor, if it issued the call.
+ */
+function issuerOf(
+  entry: SessionEntry,
+  toolCallId: string,
+  byId: ReadonlyMap<string, SessionEntry>,
+): string | undefined {
+  let current = entry.parentId ? byId.get(entry.parentId) : undefined;
+  while (current) {
+    if (current.type === "message" && current.message.role === "assistant")
+      return issued(current, toolCallId) ? current.id : undefined;
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return undefined;
+}
+
 /** How often to check again while a delivery waits for Pi. */
 const RECHECK_MS = 1_000;
 
@@ -103,12 +123,6 @@ export class PiParent implements Parent {
   private blocked: () => boolean = () => false;
   private readonly listeners = new Set<() => void>();
   private readonly waits = new AttentionSignals();
-  /** Per tool call, the results it returns, and the number of session
-   * entries when it did, so only a later result entry counts. */
-  private readonly claims = new Map<
-    string,
-    { ids: readonly string[]; after: number }
-  >();
 
   constructor(
     private readonly pi: ExtensionAPI,
@@ -151,7 +165,6 @@ export class PiParent implements Parent {
 
   clear(): void {
     this.ctx = undefined;
-    this.claims.clear();
     if (this.recheck) clearTimeout(this.recheck);
     this.recheck = undefined;
   }
@@ -209,45 +222,41 @@ export class PiParent implements Parent {
     });
   }
 
-  /**
-   * The tool call `toolCallId` returns these results. Its stored result
-   * carries their IDs, but Pi stores no results of nested calls, such as a
-   * codemode script's; it records the calls in their caller's result. So
-   * the results also count once Pi stored a result of the call, or of a
-   * call that recorded it, after this.
-   */
-  claim(toolCallId: string, ids: readonly string[]): void {
-    if (ids.length === 0) return;
-    this.claims.set(toolCallId, { ids, after: this.entries().length });
-  }
-
-  async received(ids: readonly string[]): Promise<ReadonlySet<string>> {
-    const wanted = new Set(ids);
+  async received(handovers: readonly Handover[]): Promise<ReadonlySet<string>> {
+    const wanted = new Set(handovers.map((handover) => handover.id));
+    const byCall = new Map<string, string[]>();
+    for (const { id, call } of handovers)
+      if (call !== undefined)
+        byCall.set(call, [...(byCall.get(call) ?? []), id]);
     const found = new Set<string>();
     const take = (id: unknown) => {
       if (typeof id === "string" && wanted.has(id)) found.add(id);
     };
-    const takeClaim = (call: string, index: number) => {
-      const claim = this.claims.get(call);
-      if (claim && index >= claim.after) claim.ids.forEach(take);
-    };
-    this.entries().forEach((entry, index) => {
+    const entries = this.entries();
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+    for (const entry of entries) {
       if (entry.type === "custom_message") {
         if (
           entry.customType === RESULT_MESSAGE ||
           entry.customType === GRAPH_RESULT_MESSAGE
         )
           take(deliveryOf(entry.details));
-        return;
+        continue;
       }
       if (entry.type !== "message" || entry.message.role !== "toolResult")
-        return;
+        continue;
       const result = entry.message;
       deliveriesOf(result.details).forEach(take);
-      if (!result.isError) takeClaim(result.toolCallId, index);
+      // Pi stores no results of nested calls, such as a codemode script's,
+      // only their records in the caller's result.
+      const issuer = issuerOf(entry, result.toolCallId, byId);
+      if (issuer === undefined) continue;
+      if (!result.isError)
+        byCall.get(qualify(issuer, result.toolCallId))?.forEach(take);
       for (const call of result.nestedCalls?.calls ?? [])
-        if (call.status === "ok") takeClaim(call.id, index);
-    });
+        if (call.status === "ok")
+          byCall.get(qualify(issuer, call.id))?.forEach(take);
+    }
     return found;
   }
 

@@ -14,6 +14,13 @@
 
 import type { AgentInfo, GraphInfo, PendingDelivery } from "./types.js";
 
+/** A delivery handed to the parent: its ID, and the key of the parent call
+ * whose result carried it, if one did. */
+export interface Handover {
+  id: string;
+  call?: string;
+}
+
 /** What the parent may read to word deliveries. */
 export interface AgentLookup {
   get(nameOrId: string): AgentInfo | undefined;
@@ -43,10 +50,11 @@ export interface Parent {
     lookup: AgentLookup,
   ): Promise<void>;
   /**
-   * The deliveries among `ids` that the parent holds durably: delivered,
-   * or returned by one of its calls whose result it stored.
+   * The deliveries among `handovers` that the parent holds durably, by ID:
+   * delivered, or carried by the stored result of one of its calls, which
+   * either names their IDs or is the result of their call.
    */
-  received(ids: readonly string[]): Promise<ReadonlySet<string>>;
+  received(handovers: readonly Handover[]): Promise<ReadonlySet<string>>;
   /**
    * A signal for one of the parent's waits. It aborts once something needs
    * the parent, such as the user steering, so the wait ends and the parent

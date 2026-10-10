@@ -1,15 +1,19 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  SessionEntry,
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { ReceiptsDoc } from "../../src/agents/records.js";
 import type { AgentService } from "../../src/agents/service.js";
+import { callKey } from "../../src/pi/calls.js";
 import { GRAPH_RESULT_MESSAGE, RESULT_MESSAGE } from "../../src/pi/messages.js";
 import { PiParent } from "../../src/pi/parent.js";
 import {
   closeService,
   createFaux,
+  hostOf,
   jsonlStorage,
   MODEL,
   openService,
@@ -31,63 +35,86 @@ afterEach(async () => {
   service = undefined;
 });
 
-let nextEntry = 0;
-
-/** A session entry of a posted result message. */
-function messageEntry(message: Sent): SessionEntry {
-  return {
-    type: "custom_message",
-    id: `e${++nextEntry}`,
-    parentId: null,
-    timestamp: new Date().toISOString(),
-    customType: message.customType,
-    content: message.content,
-    display: true,
-    details: message.details,
-  };
-}
-
-/** A session entry of a tool call's stored result. */
-function toolResultEntry(
-  toolCallId: string,
-  options: { deliveries?: string[]; nested?: string[] } = {},
-): SessionEntry {
-  return {
-    type: "message",
-    id: `e${++nextEntry}`,
-    parentId: null,
-    timestamp: new Date().toISOString(),
-    message: {
-      role: "toolResult",
-      toolCallId,
-      toolName: options.nested ? "code" : "agent_wait",
-      content: [{ type: "text", text: "…" }],
-      details: options.deliveries ? { deliveries: options.deliveries } : {},
-      ...(options.nested
-        ? {
-            nestedCalls: {
-              calls: options.nested.map((id) => ({
-                id,
-                name: "agent_wait",
-                status: "ok" as const,
-              })),
-              complete: true,
-            },
-          }
-        : {}),
-      isError: false,
-      timestamp: Date.now(),
-    },
-  };
-}
+const USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
 
 /**
- * A Pi parent over a fake session whose state the test controls. Pi saves a
+ * Pi's real session manager, in memory unless given one. The test appends
+ * what Pi would: saved result messages, the parent's tool calls, and their
+ * stored results.
+ */
+function piSession(manager = SessionManager.inMemory(process.cwd())) {
+  return {
+    manager,
+    /** Pi saves a posted result message. */
+    save: (message: Sent) =>
+      manager.appendCustomMessageEntry(
+        message.customType,
+        message.content,
+        true,
+        message.details,
+      ),
+    /** The parent's turn issues tool calls. */
+    issue: (...ids: string[]) =>
+      manager.appendMessage({
+        role: "assistant",
+        content: ids.map((id) => ({
+          type: "toolCall" as const,
+          id,
+          name: "agent_wait",
+          arguments: {},
+        })),
+        api: "faux",
+        provider: "faux",
+        model: "faux-1",
+        usage: USAGE,
+        stopReason: "toolUse",
+        timestamp: Date.now(),
+      }),
+    /** Pi stores a tool call's result, which records its nested calls. */
+    store: (
+      toolCallId: string,
+      options: { deliveries?: string[]; nested?: string[] } = {},
+    ) =>
+      manager.appendMessage({
+        role: "toolResult",
+        toolCallId,
+        toolName: options.nested ? "code" : "agent_wait",
+        content: [{ type: "text", text: "…" }],
+        details: options.deliveries ? { deliveries: options.deliveries } : {},
+        ...(options.nested
+          ? {
+              nestedCalls: {
+                calls: options.nested.map((id) => ({
+                  id,
+                  name: "agent_wait",
+                  status: "ok" as const,
+                })),
+                complete: true,
+              },
+            }
+          : {}),
+        isError: false,
+        timestamp: Date.now(),
+      }),
+  };
+}
+
+type PiSession = ReturnType<typeof piSession>;
+
+/**
+ * A Pi parent over a session whose state the test controls. Pi saves a
  * posted message unless `saves` is false, and reports it before saving.
  */
 function setup(
   state: { idle: boolean; pending: boolean; saves?: boolean },
-  entries: SessionEntry[] = [],
+  session: PiSession = piSession(),
 ) {
   const sent: Sent[] = [];
   let parent: PiParent | undefined;
@@ -95,18 +122,18 @@ function setup(
     sendMessage: (message: Sent, options?: { triggerTurn?: boolean }) => {
       sent.push({ ...message, ...(options ? { options } : {}) });
       if (state.saves === false) return;
-      entries.push(messageEntry(message));
+      session.save(message);
       setTimeout(() => parent?.notify(), 0);
     },
   } as unknown as ExtensionAPI;
   const ctx = {
     isIdle: () => state.idle,
     hasPendingMessages: () => state.pending,
-    sessionManager: { getEntries: () => [...entries] },
+    sessionManager: session.manager,
   } as unknown as ExtensionContext;
   parent = new PiParent(pi);
   parent.setContext(ctx);
-  return { sent, parent, entries };
+  return { sent, parent, session, ctx };
 }
 
 /** Long enough for a delivery that would happen to happen. */
@@ -222,7 +249,7 @@ describe("delivery to Pi", () => {
 describe("confirmed delivery to Pi", () => {
   test("a result counts as delivered only once the session holds it", async () => {
     const state = { idle: true, pending: false, saves: false };
-    const { sent, parent, entries } = setup(state);
+    const { sent, parent, session } = setup(state);
     const current = await openService({ parent });
     service = current;
     await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
@@ -237,7 +264,7 @@ describe("confirmed delivery to Pi", () => {
     expect(current.pendingDeliveries()).toHaveLength(1);
     expect(current.get("a")?.closed).toBe(false);
 
-    entries.push(messageEntry(sent[0] as Sent));
+    session.save(sent[0] as Sent);
     parent.notify();
     await until(() => current.pendingDeliveries().length === 0);
     expect(current.get("a")?.closed).toBe(true);
@@ -256,9 +283,9 @@ describe("confirmed delivery to Pi", () => {
     await until(() => first.sent.length === 1);
     // Pi saved the message, and pi-agents crashed before it saw it.
     await closeService(before);
-    const entries = [messageEntry(first.sent[0] as Sent)];
+    first.session.save(first.sent[0] as Sent);
 
-    const second = setup({ idle: true, pending: false }, entries);
+    const second = setup({ idle: true, pending: false }, first.session);
     const after = await openService({
       parent: second.parent,
       storage: await jsonlStorage(directory),
@@ -285,7 +312,7 @@ describe("confirmed delivery to Pi", () => {
     expect(before.pendingDeliveries()).toHaveLength(1);
     await closeService(before);
 
-    const second = setup({ idle: true, pending: false });
+    const second = setup({ idle: true, pending: false }, first.session);
     const after = await openService({
       parent: second.parent,
       storage: await jsonlStorage(directory),
@@ -301,13 +328,15 @@ describe("confirmed delivery to Pi", () => {
 
   test("a wait's stored result counts as its delivery", async () => {
     const state = { idle: false, pending: false };
-    const { sent, parent, entries } = setup(state);
+    const { sent, parent, session, ctx } = setup(state);
     const current = await openService({ parent });
     service = current;
     await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
-    const outcome = await current.wait(["a"], { call: "toolu_1" });
+    session.issue("toolu_1");
+    const outcome = await current.wait(["a"], {
+      carrier: { call: callKey(ctx, "toolu_1") },
+    });
     expect(outcome.deliveries).toHaveLength(1);
-    parent.claim("toolu_1", outcome.deliveries);
 
     // Until Pi stored the call's result, the result is neither delivered
     // nor posted, even once the parent is idle.
@@ -318,29 +347,51 @@ describe("confirmed delivery to Pi", () => {
     expect(current.get("a")?.queued).toBeUndefined();
     expect(current.get("a")?.closed).toBe(false);
 
-    entries.push(
-      toolResultEntry("toolu_1", { deliveries: outcome.deliveries }),
-    );
+    session.store("toolu_1", { deliveries: outcome.deliveries });
+    parent.notify();
+    await until(() => current.get("a")?.closed === true);
+    expect(sent).toEqual([]);
+  });
+
+  test("a wait without a call ID counts once Pi stored its result", async () => {
+    const { sent, parent, session } = setup({ idle: true, pending: false });
+    const current = await openService({ parent });
+    service = current;
+    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    session.issue("");
+    const outcome = await current.wait(["a"], { carrier: {} });
+    parent.notify();
+    await settle();
+    expect(current.get("a")?.closed).toBe(false);
+
+    // The stored result names what it carries.
+    session.store("", { deliveries: outcome.deliveries });
     parent.notify();
     await until(() => current.get("a")?.closed === true);
     expect(sent).toEqual([]);
   });
 
   test("a script's wait counts once Pi stored the script's result", async () => {
-    const { sent, parent, entries } = setup({ idle: true, pending: false });
+    const { sent, parent, session, ctx } = setup({
+      idle: true,
+      pending: false,
+    });
     const current = await openService({ parent });
     service = current;
-    // An earlier result of a call with the same ID doesn't count.
-    entries.push(toolResultEntry("toolu_2", { nested: ["toolu_2/1"] }));
+    // An earlier turn's script reused the call's ID; its result doesn't count.
+    session.issue("toolu_2");
+    session.store("toolu_2", { nested: ["toolu_2/1"] });
     await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
-    const outcome = await current.wait(["a"], { call: "toolu_2/1" });
-    parent.claim("toolu_2/1", outcome.deliveries);
+    session.issue("toolu_2");
+    await current.wait(["a"], {
+      carrier: { call: callKey(ctx, "toolu_2/1") },
+    });
     parent.notify();
     await settle();
     expect(current.get("a")?.closed).toBe(false);
 
     // Pi stores no nested results; it records the calls in the caller's.
-    entries.push(toolResultEntry("toolu_2", { nested: ["toolu_2/1"] }));
+    session.store("toolu_2", { nested: ["toolu_2/1"] });
     parent.notify();
     await until(() => current.get("a")?.closed === true);
     expect(sent).toEqual([]);
@@ -355,13 +406,14 @@ describe("confirmed delivery to Pi", () => {
     });
     service = before;
     await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
-    const outcome = await before.wait(["a"], { call: "toolu_3" });
+    first.session.issue("toolu_3");
+    const outcome = await before.wait(["a"], {
+      carrier: { call: callKey(first.ctx, "toolu_3") },
+    });
     await closeService(before);
-    const entries = [
-      toolResultEntry("toolu_3", { deliveries: outcome.deliveries }),
-    ];
+    first.session.store("toolu_3", { deliveries: outcome.deliveries });
 
-    const second = setup({ idle: true, pending: false }, entries);
+    const second = setup({ idle: true, pending: false }, first.session);
     const after = await openService({
       parent: second.parent,
       storage: await jsonlStorage(directory),
@@ -370,6 +422,40 @@ describe("confirmed delivery to Pi", () => {
     service = after;
     await until(() => after.get("a")?.closed === true);
     expect(second.sent).toEqual([]);
+  });
+
+  test("a restart after Pi stored a script's result doesn't post it", async () => {
+    const directory = tempDir();
+    const first = setup({ idle: false, pending: false });
+    const before = await openService({
+      parent: first.parent,
+      storage: await jsonlStorage(directory),
+    });
+    service = before;
+    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    first.session.issue("toolu_4");
+    await before.wait(["a"], {
+      carrier: { call: callKey(first.ctx, "toolu_4/1") },
+    });
+    // Pi stored the script's result, and pi-agents crashed before it saw it.
+    await closeService(before);
+    first.session.store("toolu_4", { nested: ["toolu_4/1"] });
+
+    const second = setup({ idle: true, pending: false }, first.session);
+    const after = await openService({
+      parent: second.parent,
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+    });
+    service = after;
+    await until(() => after.get("a")?.closed === true);
+    expect(second.sent).toEqual([]);
+    // Acknowledged, the receipt is gone.
+    const receipts = await hostOf(after).harness.harness.snapshot(
+      ReceiptsDoc,
+      BACKGROUND_CONTEXT,
+    );
+    expect(receipts?.receipts).toEqual({});
   });
 });
 
@@ -386,7 +472,7 @@ function fakePi() {
     settling: false,
     takes: "run" as "run" | "queue",
   };
-  const entries: SessionEntry[] = [];
+  const session = piSession();
   const sent: Sent[] = [];
   const queued: Sent[] = [];
   const deferred: Sent[] = [];
@@ -400,14 +486,14 @@ function fakePi() {
       } else {
         // The run saves its prompt before anything else.
         state.idle = false;
-        entries.push(messageEntry(message));
+        session.save(message);
       }
     },
   } as unknown as ExtensionAPI;
   const ctx = {
     isIdle: () => state.idle,
     hasPendingMessages: () => false,
-    sessionManager: { getEntries: () => [...entries] },
+    sessionManager: session.manager,
   } as unknown as ExtensionContext;
   const parent = new PiParent(pi);
   parent.setContext(ctx);
@@ -416,7 +502,7 @@ function fakePi() {
     state.idle = true;
     parent.notify();
   };
-  return { state, entries, sent, queued, deferred, parent, settle };
+  return { state, session, sent, queued, deferred, parent, settle };
 }
 
 describe("unsaved deliveries", () => {
@@ -438,8 +524,7 @@ describe("unsaved deliveries", () => {
 
     // The next run takes the queued message and saves it.
     pi.state.idle = false;
-    for (const message of pi.queued.splice(0))
-      pi.entries.push(messageEntry(message));
+    for (const message of pi.queued.splice(0)) pi.session.save(message);
     pi.settle();
     await until(() => current.get("a")?.closed === true);
     expect(pi.sent).toHaveLength(1);
@@ -513,7 +598,7 @@ describe("unsaved deliveries", () => {
 
     // Then Pi runs the deferred message, which it saves first.
     pi.state.idle = false;
-    for (const message of pi.deferred) pi.entries.push(messageEntry(message));
+    for (const message of pi.deferred) pi.session.save(message);
     pi.settle();
     await until(() => current.get("a")?.closed === true);
     expect(pi.sent).toHaveLength(1);
@@ -531,12 +616,12 @@ function eventedPi(
   recheckMs: number,
 ) {
   const handlers = new Map<string, Handler[]>();
-  const entries: SessionEntry[] = [];
+  const session = piSession();
   const sent: Sent[] = [];
   const ctx = {
     isIdle: () => state.idle,
     hasPendingMessages: () => state.pending,
-    sessionManager: { getEntries: () => [...entries] },
+    sessionManager: session.manager,
   } as unknown as ExtensionContext;
   const pi = {
     on: (event: string, handler: Handler) =>
@@ -544,7 +629,7 @@ function eventedPi(
     sendMessage: (message: Sent, options?: { triggerTurn?: boolean }) => {
       sent.push({ ...message, ...(options ? { options } : {}) });
       state.idle = false;
-      entries.push(messageEntry(message));
+      session.save(message);
     },
   } as unknown as ExtensionAPI;
   const parent = new PiParent(pi, { recheckMs });

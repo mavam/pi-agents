@@ -29,9 +29,11 @@ import {
   closeService,
   createGatedFaux,
   hostOf,
+  jsonlStorage,
   MODEL,
   openService,
   parentOf,
+  tempDir,
   until,
 } from "../agents/helpers.js";
 
@@ -60,13 +62,7 @@ function tools(): Map<string, AnyTool> {
     ensure: async () => service,
     skills: noSkills,
   } as unknown as SessionHost;
-  // Pi stores a call's result right after the call returns.
-  registerAgentTools(pi, host, {
-    claim: (_call, ids) =>
-      setTimeout(() => {
-        if (service) parentOf(service).hold(ids);
-      }, 0),
-  });
+  registerAgentTools(pi, host);
   return registered;
 }
 
@@ -75,6 +71,18 @@ const ctx = {
   model: { provider: MODEL.provider, id: MODEL.modelId },
   isProjectTrusted: () => false,
 } as unknown as ExtensionContext;
+
+/**
+ * Pi stores a call's result right after the call returns, details
+ * included, and the result names the deliveries a wait took.
+ */
+function storeResult(details: unknown): void {
+  const ids = (details as { deliveries?: string[] } | undefined)?.deliveries;
+  if (ids === undefined) return;
+  setTimeout(() => {
+    if (service) parentOf(service).hold(ids);
+  }, 0);
+}
 
 /** Agent tools over a service whose model holds prompts with `hold`. */
 async function gated() {
@@ -108,6 +116,7 @@ async function gated() {
     );
     const output = result.structuredContent;
     expect([...Value.Errors(tool.outputSchema, output)], name).toEqual([]);
+    storeResult(result.details);
     const [first] = result.content;
     return {
       text: first?.type === "text" ? first.text : "",
@@ -532,6 +541,44 @@ describe("output", () => {
 });
 
 describe("waiting tools", () => {
+  test("a wait without a call ID counts once Pi stored its result", async () => {
+    const directory = tempDir();
+    const before = await openService({
+      storage: await jsonlStorage(directory),
+    });
+    service = before;
+    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    const wait = tools().get("agent_wait") as AnyTool;
+    // The provider gave the call no ID.
+    const result = await wait.execute(
+      "",
+      { names: ["a"] },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const ids = (result.details as { deliveries?: string[] }).deliveries;
+    expect(ids).toHaveLength(1);
+    const parent = parentOf(before);
+    parent.ready = true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Pi crashes before it stores the result: nothing counts as delivered.
+    expect(parent.delivered).toEqual([]);
+    expect(before.pendingDeliveries().map((each) => each.id)).toEqual(
+      ids ?? [],
+    );
+    await closeService(before);
+
+    const after = await openService({
+      storage: await jsonlStorage(directory),
+    });
+    service = after;
+    const next = parentOf(after);
+    next.ready = true;
+    await until(() => next.delivered.length === 1);
+    expect(next.delivered.map((each) => each.id)).toEqual(ids ?? []);
+  });
+
   test("a steer from the user ends a wait; the agent keeps working", async () => {
     const run = await gated();
     await run("agent_spawn", { task: "hold", name: "w" });

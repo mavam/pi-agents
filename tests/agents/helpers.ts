@@ -18,6 +18,7 @@ import {
 import {
   type Attention,
   AttentionSignals,
+  type Handover,
   type Parent,
 } from "../../src/agents/parent.js";
 import { AgentService } from "../../src/agents/service.js";
@@ -158,8 +159,10 @@ export class TestParent implements Parent {
     setTimeout(() => this.notify(), 0);
   }
 
-  async received(ids: readonly string[]): Promise<ReadonlySet<string>> {
-    return new Set(ids.filter((id) => this.transcript.has(id)));
+  async received(handovers: readonly Handover[]): Promise<ReadonlySet<string>> {
+    return new Set(
+      handovers.flatMap(({ id }) => (this.transcript.has(id) ? [id] : [])),
+    );
   }
 
   /** The parent stored these results, such as with a call's result. */

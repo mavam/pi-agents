@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { AgentService } from "../../src/agents/service.js";
 import {
+  closeService,
   createFaux,
   createGatedFaux,
   jsonlStorage,
@@ -15,7 +16,7 @@ import {
 let services: AgentService[] = [];
 
 afterEach(async () => {
-  for (const service of services) await service.close();
+  for (const service of services) await closeService(service);
   services = [];
 });
 
@@ -31,7 +32,7 @@ async function reopen(
   service: AgentService,
   options: Parameters<typeof openService>[0],
 ): Promise<AgentService> {
-  await service.close();
+  await closeService(service);
   services = services.filter((each) => each !== service);
   return open(options);
 }

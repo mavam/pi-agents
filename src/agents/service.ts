@@ -1,13 +1,21 @@
 /**
- * AgentService: the agent abstraction over one pi-durable Harness.
+ * AgentService: the agent abstraction over one pi-durable Harness, the
+ * core of pi-agents. The host opens the harness with pi-agents' extensions
+ * installed (see extensions.ts) and hands it over with the anchor, the
+ * conversation that owns the parent's graphs; the service never opens
+ * storage or a harness and never closes them.
+ *
  * Standalone agents are ownerless conversations, so aborting other work
  * never reaches them. A graph's agents are conversations owned by the node
  * tasks of the graph (see graphs.ts). The service keeps a derived
  * `AgentInfo` per agent and a `GraphInfo` per graph, refreshed from commit
  * publications, and tracks parent requests and graph results until they are
- * delivered.
+ * delivered. It reaches the parent only through `Parent` (see parent.ts):
+ * it hands results over when the parent can take them, and ends the
+ * parent's waits when the parent is needed.
  */
 
+import { randomUUID } from "node:crypto";
 import type {
   AttachedReplicatedState,
   Context,
@@ -17,7 +25,6 @@ import {
   BACKGROUND_CONTEXT,
   withAbortSignal,
 } from "@earendil-works/chord/context";
-import type { Models } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
   type CommitPublication,
@@ -25,28 +32,20 @@ import {
   type ConversationId,
   type ConversationView,
   configure,
-  createRegistry,
   type AgentState as DurableAgentState,
   type EntryRecord,
   type Extension,
-  Harness,
-  type HarnessSettings,
+  type Harness,
+  InboxDoc,
   LiveDoc,
-  type Registry,
-  type Storage,
+  type SubmissionId,
   type TaskId,
   type TaskOutcome,
   type ToolRegistration,
   UsageDoc,
 } from "@earendil-works/pi-durable";
-import { ExecutionEnvs } from "../host/env.js";
-import { DEFAULT_AGENT_TOOLS, TOOLS_EXTENSION } from "../host/tools.js";
-import {
-  createDelegationExtension,
-  DELEGATE_TOOL,
-  DELEGATION_LIMITS,
-  type DelegationLimits,
-} from "./delegation.js";
+import { DEFAULT_AGENT_TOOLS } from "../host/tools.js";
+import { DELEGATE_TOOL } from "./delegation.js";
 import {
   ASSISTANT_KIND,
   activityOf,
@@ -63,8 +62,8 @@ import {
   sumUsage,
   type TurnSettlement,
 } from "./derive.js";
+import { type AgentExtensions, agentSelection } from "./extensions.js";
 import {
-  createGraphsExtension,
   GRAPH_TASK,
   GraphTask,
   NODE_TASK,
@@ -73,15 +72,26 @@ import {
   nodeRequestId,
 } from "./graphs.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
+import type { Parent } from "./parent.js";
 import {
   type AgentRecord,
   AgentsDoc,
+  answerDeliveryId,
+  callRequestId,
+  createdBy,
   DELIVERED_MEMORY,
+  failureDeliveryId,
   type GraphNodeRecord,
   type GraphRecord,
   GraphsDoc,
+  graphDeliveryId,
+  LOCAL_STOP,
   type ParentRequest,
+  ReceiptsDoc,
   requestId,
+  type StopBinding,
+  type StopOperation,
+  StopsDoc,
 } from "./records.js";
 import { endNodes, resolveEdges, stages } from "./topology.js";
 import {
@@ -89,12 +99,13 @@ import {
   AgentError,
   type AgentInfo,
   type AgentResult,
+  type CallOptions,
   GRAPH_SIZE,
+  type GraphDelivery,
   type GraphInfo,
   type GraphNode,
   type GraphPolicy,
   type GraphSpec,
-  type HelperResolver,
   isThinkingLevel,
   type NodeOutcome,
   type PendingDelivery,
@@ -102,26 +113,39 @@ import {
   type SendMode,
   type SpawnSpec,
   type Target,
+  type TargetRef,
   type TaskNode,
   USER_MESSAGE_PREFIX,
+  WaitInterrupted,
 } from "./types.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
 const REFRESH_DELAY_MS = 50;
 
 export interface AgentServiceOptions {
-  storage: Storage;
-  models: Models;
-  /** Fallback working directory for agents without one. */
-  cwd: string;
-  /** Installed extensions; also the default selection of every agent. */
-  extensions: Extension[];
-  settings?: HarnessSettings;
+  /** The harness the host opened, with `extensions` installed. */
+  harness: Harness;
+  /** The conversation that owns the graphs the parent starts. */
+  anchor: Conversation;
+  extensions: AgentExtensions;
+  /** The conversation that starts agents and receives their results. */
+  parent: Parent;
+  /** Receives failures of background work, such as delivery. */
   onReport?: (error: unknown) => void;
-  /** Resolves the profiles, models, and skills of helpers. */
-  resolveHelper: HelperResolver;
-  /** Tests only: tighter delegation limits. */
-  delegationLimits?: Partial<DelegationLimits>;
+  /** Tests only: called at each step of a stop, to inject crashes. */
+  stopStep?: (step: StopStep) => void;
+}
+
+/** The steps of a stop, after which a crash can interrupt it. */
+export type StopStep = "begun" | "graph" | "interrupted" | "closed";
+
+export interface WaitOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** The parent call that waits, whose result carries the results to the
+   * parent; `call` is its key, if it has one, by which the parent
+   * recognizes the result where it doesn't name the results. */
+  carrier?: { call?: string };
 }
 
 export interface WaitOutcome {
@@ -129,6 +153,8 @@ export interface WaitOutcome {
   graphs: GraphInfo[];
   /** Agents and graphs still working when the wait timed out. */
   timedOut: string[];
+  /** The results the wait took instead of their delivery, by ID. */
+  deliveries: string[];
 }
 
 function conversationId(agentId: string): ConversationId {
@@ -199,45 +225,44 @@ export class AgentService {
   private readonly checks = new Set<() => void>();
   private readonly listeners = new Set<() => void>();
   private readonly dirty = new Set<string>();
-  private host: Promise<Conversation> | undefined;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshChain: Promise<void> = Promise.resolve();
   private unsubscribe: (() => void) | undefined;
+  private unsubscribeParent: (() => void) | undefined;
+  private deliveryChain: Promise<void> = Promise.resolve();
+  private deliveryQueued = false;
+  /** Deliveries handed to the parent that it doesn't hold yet: posted, or
+   * carried by the result of a parent call's wait. In memory only: after a
+   * restart, the parent decides what it holds. */
+  private readonly inFlight = new Map<string, "posted" | "carried">();
+  /** Per delivery a parent call's result carries, the call's key, as
+   * `ReceiptsDoc` stores it. */
+  private receipts: Record<string, string> = {};
+  /** Whether delivery asked the parent what it holds since starting. */
+  private reconciled = false;
   private closed = false;
 
-  private constructor(
-    private readonly harness: Harness,
-    private readonly registry: Registry,
-    private readonly envs: ExecutionEnvs,
-    private readonly delegation: Extension,
-  ) {}
+  private readonly harness: Harness;
+  private readonly anchor: Conversation;
+  private readonly extensions: AgentExtensions;
+  private readonly parent: Parent;
+  private readonly report: (error: unknown) => void;
+  private readonly stopStep: ((step: StopStep) => void) | undefined;
 
-  static async open(options: AgentServiceOptions): Promise<AgentService> {
-    const registry = createRegistry();
-    for (const extension of options.extensions) registry.install(extension);
-    // Graph tasks resolve from the registry; agents never select them.
-    registry.install(createGraphsExtension());
-    // Only delegating agents select delegation; see `delegatingAgent`.
-    const delegation = createDelegationExtension({
-      resolve: options.resolveHelper,
-      limits: { ...DELEGATION_LIMITS, ...options.delegationLimits },
-    });
-    registry.install(delegation);
-    const envs = new ExecutionEnvs(options.cwd);
-    const harness = await Harness.open(
-      options.storage,
-      {
-        models: options.models,
-        registry,
-        settings: { ...options.settings, extensions: options.extensions },
-        env: envs.env,
-        ...(options.onReport ? { onReport: options.onReport } : {}),
-      },
-      CONTEXT,
-    );
-    const service = new AgentService(harness, registry, envs, delegation);
+  private constructor(options: AgentServiceOptions) {
+    this.harness = options.harness;
+    this.anchor = options.anchor;
+    this.extensions = options.extensions;
+    this.parent = options.parent;
+    this.report = options.onReport ?? (() => {});
+    this.stopStep = options.stopStep;
+  }
+
+  /** Start the service over the host's harness; it resumes unfinished work. */
+  static async start(options: AgentServiceOptions): Promise<AgentService> {
+    const service = new AgentService(options);
     try {
-      await service.start();
+      await service.initialize();
     } catch (error) {
       await service.close();
       throw error;
@@ -247,37 +272,40 @@ export class AgentService {
 
   // --- Lifecycle ---
 
-  private async start(): Promise<void> {
+  private async initialize(): Promise<void> {
     this.unsubscribe = this.harness.subscribeCommits((publication) =>
       this.onCommit(publication),
     );
     this.records = await this.loadRecords();
-    for (const [id, record] of Object.entries(this.records)) {
+    this.receipts = {
+      ...(await this.harness.snapshot(ReceiptsDoc, CONTEXT))?.receipts,
+    };
+    for (const id of Object.keys(this.records)) {
       await this.loadLastAssistant(id);
-      // Outbox: a request recorded before a crash may lack its submission.
-      for (const [rid, request] of Object.entries(record.requests)) {
-        const existing = await this.harness.commit(
-          (tx) => tx.submissionByRequest(conversationId(id), rid),
-          CONTEXT,
-        );
-        if (!existing) await this.submit(id, rid, request);
-      }
+      // A request recorded before a crash may lack its submission.
+      await this.flushOutbox(id);
     }
-    // Continue work that a previous process left unfinished, graphs included.
+    // Continue work that a previous process left unfinished, graphs and
+    // stops included.
     this.harness.resume();
+    await this.resumeStops();
     await this.refresh(Object.keys(this.records));
+    this.unsubscribeParent = this.parent.subscribe(() =>
+      this.scheduleDelivery(),
+    );
   }
 
+  /** Stop observing the harness; the host closes it afterwards. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.unsubscribe?.();
+    this.unsubscribeParent?.();
     this.listeners.clear();
     for (const check of [...this.checks]) check();
     await this.refreshChain.catch(() => {});
-    await this.harness.close(CONTEXT);
-    await this.envs.cleanup(CONTEXT);
+    await this.deliveryChain;
   }
 
   // --- Observation ---
@@ -352,9 +380,25 @@ export class AgentService {
     return undefined;
   }
 
+  /** An agent by its immutable ID, which no name can shadow. */
+  agentById(id: string): AgentInfo | undefined {
+    return this.infos.get(id);
+  }
+
+  /** A graph by its immutable ID, which no name can shadow. */
+  graphById(id: string): GraphInfo | undefined {
+    return this.graphInfos.get(id);
+  }
+
   private require(nameOrId: string): AgentInfo {
     const info = this.get(nameOrId);
     if (!info) throw new AgentError(`No agent named ${nameOrId}`);
+    return info;
+  }
+
+  private requireAgent(id: string): AgentInfo {
+    const info = this.infos.get(id);
+    if (!info) throw new AgentError(`No agent with ID ${id}`);
     return info;
   }
 
@@ -419,51 +463,84 @@ export class AgentService {
 
   // --- Operations ---
 
-  async spawn(spec: SpawnSpec): Promise<AgentInfo> {
+  /**
+   * Create an agent and send it its task. A repeated call returns the agent
+   * its first run created.
+   */
+  async spawn(spec: SpawnSpec, options: CallOptions = {}): Promise<AgentInfo> {
+    const { call } = options;
+    if (call !== undefined) {
+      const state = await this.harness.snapshot(AgentsDoc, CONTEXT);
+      const repeated = createdBy(state?.agents ?? {}, call);
+      if (repeated) return this.submitted(repeated);
+    }
     // Fail early with the service's view; the commit claims for real.
     claimName(spec.name, spec.profile ?? "agent", this.takenNames(), "agent");
     const { task, tools } = this.prepare(spec);
     const first = requestId(1);
     const request: ParentRequest = { message: task, whenBusy: "followUp" };
     const createdAt = Date.now();
-    const conversation = await this.harness.createConversation(
-      {
+    const id = await this.harness.commit(async (tx) => {
+      const state = await tx.doc(AgentsDoc);
+      const graphs = await tx.doc(GraphsDoc);
+      const repeated =
+        call === undefined ? undefined : createdBy(state.agents, call);
+      if (repeated) return repeated;
+      const name = claimName(
+        spec.name,
+        spec.profile ?? "agent",
+        takenNames(state, graphs, this.workingClosed()),
+        "agent",
+      );
+      const conversation = await tx.createConversation({
         ownership: { kind: "ownerless" },
-        agent: {
-          cwd: spec.cwd,
-          ...this.capabilities(tools, spec.delegate),
-          ...(spec.model ? { model: spec.model } : {}),
-          ...(spec.thinking ? { thinkingLevel: spec.thinking } : {}),
-          ...(spec.instructions ? { instructions: spec.instructions } : {}),
-        },
-        init: async (tx, id) => {
-          const state = await tx.doc(AgentsDoc);
-          const name = claimName(
-            spec.name,
-            spec.profile ?? "agent",
-            takenNames(state, await tx.doc(GraphsDoc), this.workingClosed()),
-            "agent",
-          );
-          state.agents[String(id)] = {
-            name,
-            profile: spec.profile ?? null,
-            task,
-            createdAt,
-            closed: false,
-            ambientSkills: spec.ambientSkills ?? true,
-            nextRequest: 2,
-            requests: { [first]: request },
-            delivered: [],
-            ...(spec.delegate ? { delegate: true } : {}),
-          };
-        },
-      },
-      CONTEXT,
-    );
-    const id = String(conversation.id);
-    await this.submit(id, first, request);
-    await this.refresh([id]);
-    return this.require(id);
+      });
+      await configure(tx, conversation.id, {
+        cwd: spec.cwd,
+        ...this.capabilities(tools, spec.delegate),
+        ...(spec.model ? { model: spec.model } : {}),
+        ...(spec.thinking ? { thinkingLevel: spec.thinking } : {}),
+        ...(spec.instructions ? { instructions: spec.instructions } : {}),
+      });
+      state.agents[String(conversation.id)] = {
+        name,
+        profile: spec.profile ?? null,
+        task,
+        createdAt,
+        closed: false,
+        ambientSkills: spec.ambientSkills ?? true,
+        nextRequest: 2,
+        requests: { [first]: request },
+        delivered: [],
+        ...(spec.delegate ? { delegate: true } : {}),
+        ...(call === undefined ? {} : { call }),
+      };
+      return String(conversation.id);
+    }, CONTEXT);
+    return this.submitted(id);
+  }
+
+  /**
+   * An agent once its recorded parent requests are submitted, which a
+   * repeated call finds already done.
+   */
+  private async submitted(agentId: string): Promise<AgentInfo> {
+    await this.flushOutbox(agentId);
+    await this.refresh([agentId]);
+    return this.requireAgent(agentId);
+  }
+
+  /** Outbox: submit recorded parent requests that lack their submission. */
+  private async flushOutbox(agentId: string): Promise<void> {
+    const state = await this.harness.snapshot(AgentsDoc, CONTEXT);
+    const record = state?.agents[agentId];
+    for (const [rid, request] of Object.entries(record?.requests ?? {})) {
+      const existing = await this.harness.commit(
+        (tx) => tx.submissionByRequest(conversationId(agentId), rid),
+        CONTEXT,
+      );
+      if (!existing) await this.submit(agentId, rid, request);
+    }
   }
 
   /**
@@ -471,9 +548,23 @@ export class AgentService {
    * that lists others in `after` starts once they ended and receives their
    * results. One commit creates the graph task, a node task per agent, and
    * each agent's conversation owned by its node; the nodes then send the
-   * tasks.
+   * tasks. A repeated call returns the graph its first run created.
    */
-  async spawnGraph(spec: GraphSpec): Promise<GraphInfo> {
+  async spawnGraph(
+    spec: GraphSpec,
+    options: CallOptions = {},
+  ): Promise<GraphInfo> {
+    const { call } = options;
+    if (call !== undefined) {
+      const state = await this.harness.snapshot(GraphsDoc, CONTEXT);
+      const repeated = createdBy(state?.graphs ?? {}, call);
+      if (repeated) {
+        await this.refresh(
+          state?.graphs[repeated]?.nodes.map((node) => node.agent) ?? [],
+        );
+        return this.requireGraph(repeated);
+      }
+    }
     const count = spec.agents.length;
     if (count < GRAPH_SIZE.min || count > GRAPH_SIZE.max)
       throw new AgentError(
@@ -505,14 +596,18 @@ export class AgentService {
     );
     const policy: GraphPolicy = spec.failFast ? "failFast" : "allSettled";
     const createdAt = Date.now();
-    const host = await this.hostConversation();
-    const created = await host.commit(async (tx) => {
+    const created = await this.anchor.commit(async (tx) => {
+      const graphs = await tx.doc(GraphsDoc);
+      const repeated =
+        call === undefined ? undefined : createdBy(graphs.graphs, call);
+      if (repeated)
+        return {
+          id: repeated,
+          agents:
+            graphs.graphs[repeated]?.nodes.map((node) => node.agent) ?? [],
+        };
       const names = claim(
-        takenNames(
-          await tx.doc(AgentsDoc),
-          await tx.doc(GraphsDoc),
-          this.workingClosed(),
-        ),
+        takenNames(await tx.doc(AgentsDoc), graphs, this.workingClosed()),
       );
       const graph = await tx.createTask(
         GraphTask,
@@ -569,6 +664,7 @@ export class AgentService {
         })),
         closed: false,
         pending: true,
+        ...(call === undefined ? {} : { call }),
       };
       return { id: String(graph), agents };
     }, CONTEXT);
@@ -576,8 +672,23 @@ export class AgentService {
     return this.requireGraph(created.id);
   }
 
-  /** Message an agent on behalf of the parent model. */
-  async send(nameOrId: string, message: string, mode: SendMode): Promise<void> {
+  /**
+   * Message an agent on behalf of the parent model. A call's request is
+   * keyed by the call, so a repeated call returns the agent its first run
+   * messaged, wherever its name points now, without messaging it again.
+   */
+  async send(
+    nameOrId: string,
+    message: string,
+    mode: SendMode,
+    options: CallOptions = {},
+  ): Promise<AgentInfo> {
+    const keyed =
+      options.call === undefined ? undefined : callRequestId(options.call);
+    if (keyed !== undefined) {
+      const repeated = await this.requestOwner(keyed);
+      if (repeated) return this.submitted(repeated);
+    }
     const target = this.requireTarget(nameOrId);
     if (target.kind === "graph")
       throw new AgentError(
@@ -595,13 +706,26 @@ export class AgentService {
       const record = state.agents[info.id];
       if (!record) throw new AgentError(`Agent ${info.name} is missing`);
       record.closed = false;
-      const next = requestId(record.nextRequest);
-      record.nextRequest += 1;
+      const next = keyed ?? requestId(record.nextRequest);
+      if (keyed === undefined) record.nextRequest += 1;
       record.requests[next] = request;
       return next;
     }, CONTEXT);
     await this.submit(info.id, rid, request);
     await this.refresh([info.id]);
+    return this.requireAgent(info.id);
+  }
+
+  /** The agent that holds a parent request, recorded or submitted. */
+  private requestOwner(rid: string): Promise<string | undefined> {
+    return this.harness.commit(async (tx) => {
+      const state = await tx.doc(AgentsDoc);
+      for (const [id, record] of Object.entries(state.agents)) {
+        if (record.requests[rid]) return id;
+        if (await tx.submissionByRequest(conversationId(id), rid)) return id;
+      }
+      return undefined;
+    }, CONTEXT);
   }
 
   /** Message an agent on behalf of the user; results stay in the agent. */
@@ -647,86 +771,199 @@ export class AgentService {
    * parent requests dropped, and it closes; storage keeps its conversation,
    * and messaging it later reopens it. A graph is aborted with its agents,
    * delivers nothing, and closes with them.
+   *
+   * A stop is an operation stored before its first effect: what it ends is
+   * bound then, its effects run from that binding, and it counts as done
+   * only once all of them finished. A stop a crash interrupted resumes when
+   * the service starts. A repeated call resumes its stop or, once done,
+   * returns what it stopped, wherever the name points now.
    */
-  async stop(nameOrId: string): Promise<Target> {
+  async stop(nameOrId: string, options: CallOptions = {}): Promise<Target> {
+    const key = options.call ?? `${LOCAL_STOP}${randomUUID()}`;
+    if (options.call !== undefined) {
+      const state = await this.harness.snapshot(StopsDoc, CONTEXT);
+      const repeated = state?.stops[key];
+      if (repeated) {
+        if (!repeated.done) await this.runStop(key, repeated);
+        return this.stopTarget(repeated);
+      }
+    }
     const target = this.requireTarget(nameOrId);
-    if (target.kind === "graph") {
-      await this.stopGraph(target.info.id);
-      return { kind: "graph", info: this.requireGraph(target.info.id) };
-    }
-    await this.stopAgent(target.info.id);
-    return { kind: "agent", info: this.require(target.info.id) };
+    const finished =
+      target.kind === "graph" &&
+      (await this.isFinished(Number(target.info.id)));
+    const operation = await this.harness.commit(async (tx) => {
+      const stops = await tx.doc(StopsDoc);
+      const repeated = stops.stops[key];
+      if (repeated)
+        return JSON.parse(JSON.stringify(repeated)) as StopOperation;
+      const agentIds =
+        target.kind === "graph"
+          ? target.info.nodes.map((node) => node.agentId)
+          : [target.info.id];
+      const agents: Record<string, StopBinding> = {};
+      for (const id of agentIds) agents[id] = await this.bindStop(tx, id);
+      const created: StopOperation = {
+        kind: target.kind,
+        target: target.info.id,
+        ...(target.kind === "graph" ? { abort: !finished } : {}),
+        agents,
+        done: false,
+      };
+      stops.stops[key] = created;
+      if (target.kind === "graph") {
+        const graph = (await tx.doc(GraphsDoc)).graphs[target.info.id];
+        if (graph) {
+          graph.pending = false;
+          graph.closed = true;
+          // A graph that holds a decided outcome can't become aborted, so
+          // the record keeps the stop.
+          if (!finished) graph.stopped = true;
+        }
+      }
+      return created;
+    }, CONTEXT);
+    await this.runStop(key, operation);
+    return this.stopTarget(operation);
   }
 
-  private async stopAgent(agentId: string): Promise<void> {
-    await this.interrupt(agentId);
-    await this.harness.commit(async (tx) => {
-      const state = await tx.doc(AgentsDoc);
-      const record = state.agents[agentId];
-      if (!record) return;
-      record.closed = true;
-      record.requests = {};
-    }, CONTEXT);
-    this.settled.delete(agentId);
-    await this.refresh([agentId]);
+  private stopTarget(operation: StopOperation): Target {
+    return operation.kind === "graph"
+      ? { kind: "graph", info: this.requireGraph(operation.target) }
+      : { kind: "agent", info: this.requireAgent(operation.target) };
   }
 
-  private async stopGraph(graphId: string): Promise<void> {
-    const info = this.requireGraph(graphId);
-    const finished = await this.isFinished(Number(graphId));
-    await this.harness.commit(async (tx) => {
-      const graph = (await tx.doc(GraphsDoc)).graphs[graphId];
-      if (!graph) return;
-      graph.pending = false;
-      graph.closed = true;
-      // A graph that holds a decided outcome can't become aborted, so the
-      // record keeps the stop.
-      if (!finished) graph.stopped = true;
-    }, CONTEXT);
-    // Aborting the graph aborts its nodes, and they their agents, bottom-up.
-    // A held graph only marks the work below it.
-    if (!finished) {
-      await this.harness.abortTask(taskId(graphId), CONTEXT);
-      await this.harness.waitForTask(taskId(graphId), CONTEXT);
+  /** What a stop ends in one agent: its current and queued inputs. */
+  private async bindStop(
+    tx: Parameters<Parameters<Harness["commit"]>[0]>[0],
+    agentId: string,
+  ): Promise<StopBinding> {
+    const cid = conversationId(agentId);
+    const live = await tx.doc(LiveDoc, cid);
+    const inbox = await tx.doc(InboxDoc, cid);
+    const record = (await tx.doc(AgentsDoc)).agents[agentId];
+    return {
+      inputs: [
+        ...(live.run?.inputs ?? []),
+        ...inbox.items.flatMap((item) =>
+          item.mode === "write" ? [] : [item.id],
+        ),
+      ],
+      requests: Object.keys(record?.requests ?? {}),
+    };
+  }
+
+  /** Run a stop's effects from its binding, then mark it done. Every
+   * effect can run again: a resumed stop repeats those it finished. */
+  private async runStop(key: string, operation: StopOperation): Promise<void> {
+    this.stopStep?.("begun");
+    if (operation.kind === "graph" && operation.abort) {
+      // Aborting the graph aborts its nodes, and they their agents.
+      await this.harness.abortTask(taskId(operation.target), CONTEXT);
+      await this.harness.waitForTask(taskId(operation.target), CONTEXT);
+      this.stopStep?.("graph");
     }
-    // Agents may work beyond their task, for example on a user's message.
-    for (const node of info.nodes) await this.stopAgent(node.agentId);
-    await this.refresh(
-      this.withHelpers(info.nodes.map((node) => node.agentId)),
-    );
+    for (const [agentId, binding] of Object.entries(operation.agents)) {
+      // Agents may work beyond their task, for example on a user's message.
+      await this.endBoundWork(agentId, binding);
+      this.stopStep?.("interrupted");
+      await this.harness.commit(async (tx) => {
+        const record = (await tx.doc(AgentsDoc)).agents[agentId];
+        if (!record) return;
+        record.closed = true;
+        for (const rid of binding.requests) delete record.requests[rid];
+      }, CONTEXT);
+      for (const rid of binding.requests)
+        this.settled.get(agentId)?.delete(rid);
+      this.stopStep?.("closed");
+    }
+    await this.harness.commit(async (tx) => {
+      const stops = await tx.doc(StopsDoc);
+      const stored = stops.stops[key];
+      if (!stored) return;
+      if (key.startsWith(LOCAL_STOP)) delete stops.stops[key];
+      else stored.done = true;
+    }, CONTEXT);
+    await this.refresh(this.withHelpers(Object.keys(operation.agents)));
+  }
+
+  /** Withdraw the bound inputs still queued and abort a run that works on
+   * one, never a run on later inputs. */
+  private async endBoundWork(
+    agentId: string,
+    binding: StopBinding,
+  ): Promise<void> {
+    const cid = conversationId(agentId);
+    const bound = new Set(binding.inputs);
+    for (const id of binding.inputs)
+      await this.harness.abortSubmission(id as SubmissionId, CONTEXT, cid);
+    for (;;) {
+      const run = (await this.harness.snapshot(LiveDoc, cid, CONTEXT))?.run;
+      if (!run?.inputs.some((input) => bound.has(input))) return;
+      await this.harness.abortTask(run.taskId, CONTEXT);
+      await this.harness.waitForTask(run.taskId, CONTEXT);
+    }
+  }
+
+  /** Finish stops a crash interrupted. */
+  private async resumeStops(): Promise<void> {
+    const state = await this.harness.snapshot(StopsDoc, CONTEXT);
+    for (const [key, operation] of Object.entries(state?.stops ?? {}))
+      if (!operation.done) await this.runStop(key, operation);
   }
 
   /**
    * Wait until the agents are idle and the graphs finished, and return
-   * them. Their results count as delivered. Aborting `signal` ends only the
-   * wait.
+   * them. The wait takes their results instead of their delivery: when a
+   * parent call waits (`carrier`), its result carries them, so they count
+   * as delivered once the parent holds that result; otherwise the caller
+   * takes them, and they count at once. Aborting `signal` ends only the
+   * wait, and so does the parent's attention: either throws
+   * `WaitInterrupted`.
    */
-  async wait(
-    names: string[],
-    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  async wait(names: string[], options: WaitOptions = {}): Promise<WaitOutcome> {
+    return this.waitFor(
+      names.map((name) => {
+        const target = this.requireTarget(name);
+        return { kind: target.kind, id: target.info.id };
+      }),
+      options,
+    );
+  }
+
+  /** `wait`, for agents and graphs by their immutable IDs, which a name
+   * that moved to newer work can't redirect. */
+  async waitFor(
+    targets: readonly TargetRef[],
+    options: WaitOptions = {},
   ): Promise<WaitOutcome> {
-    const targets = names.map((name) => this.requireTarget(name));
+    for (const target of targets)
+      if (target.kind === "agent") this.requireAgent(target.id);
+      else this.requireGraph(target.id);
     const ids = [
       ...new Set(
         targets.flatMap((target) =>
-          target.kind === "agent" ? [target.info.id] : [],
+          target.kind === "agent" ? [target.id] : [],
         ),
       ),
     ];
     const graphIds = [
       ...new Set(
         targets.flatMap((target) =>
-          target.kind === "graph" ? [target.info.id] : [],
+          target.kind === "graph" ? [target.id] : [],
         ),
       ),
     ];
-    const signals = [
-      options.signal,
-      ...(options.timeoutMs !== undefined
-        ? [AbortSignal.timeout(options.timeoutMs)]
-        : []),
-    ].filter((signal): signal is AbortSignal => signal !== undefined);
-    const signal = signals.length > 0 ? AbortSignal.any(signals) : undefined;
+    const attention = this.parent.attention();
+    const signal = AbortSignal.any(
+      [
+        options.signal,
+        attention.signal,
+        ...(options.timeoutMs !== undefined
+          ? [AbortSignal.timeout(options.timeoutMs)]
+          : []),
+      ].filter((each): each is AbortSignal => each !== undefined),
+    );
     for (const id of ids) this.waiters.set(id, (this.waiters.get(id) ?? 0) + 1);
     for (const id of graphIds)
       this.graphWaiters.set(id, (this.graphWaiters.get(id) ?? 0) + 1);
@@ -752,22 +989,39 @@ export class AgentService {
           if (await this.untilSettled(id, signal)) ended.add(id);
         }),
       ]);
-      if (options.signal?.aborted) throw new AgentError("Wait cancelled");
+      if (options.signal?.aborted) throw new WaitInterrupted("cancelled");
+      if (attention.signal.aborted) throw new WaitInterrupted("attention");
       await this.refresh(ids);
-      for (const id of idle) await this.consume(id);
-      for (const id of ended)
-        if (this.graphRecords[id]?.pending) await this.consumeGraph(id);
+      const taken = [
+        ...[...ended].flatMap((id) => this.graphDelivery(id) ?? []),
+        ...[...idle].flatMap((id) => this.agentDeliveries(id)),
+      ].filter((each) => !this.inFlight.has(each.id));
+      if (options.carrier === undefined) await this.acknowledgeAll(taken);
+      else if (taken.length > 0) {
+        // Stored before the result reaches the parent, so the parent can
+        // tell after a restart which of its calls carried what.
+        const call = options.carrier.call;
+        if (call !== undefined) await this.recordReceipts(taken, call);
+        // In flight until the parent holds the call's result; no longer
+        // queued meanwhile.
+        for (const each of taken) this.inFlight.set(each.id, "carried");
+        await this.refresh(ids);
+      }
       return {
-        agents: ids.map((id) => this.require(id)),
+        agents: ids.map((id) => this.requireAgent(id)),
         graphs: graphIds.map((id) => this.requireGraph(id)),
         timedOut: [
-          ...ids.filter((id) => !idle.has(id)).map((id) => this.require(id)),
+          ...ids
+            .filter((id) => !idle.has(id))
+            .map((id) => this.requireAgent(id)),
           ...graphIds
             .filter((id) => !ended.has(id))
             .map((id) => this.requireGraph(id)),
         ].map((info) => info.name),
+        deliveries: taken.map((each) => each.id),
       };
     } finally {
+      attention.release();
       for (const [counts, keys] of [
         [this.waiters, ids],
         [this.graphWaiters, graphIds],
@@ -778,6 +1032,8 @@ export class AgentService {
           else counts.delete(id);
         }
       this.emit();
+      // Results the wait held back are due again.
+      this.scheduleDelivery();
     }
   }
 
@@ -833,67 +1089,195 @@ export class AgentService {
    * so are agents whose graph's result is still due.
    */
   pendingDeliveries(): PendingDelivery[] {
+    return this.deliveries(false);
+  }
+
+  /** Undelivered results; `withheld` adds those a wait or a graph holds. */
+  private deliveries(withheld: boolean): PendingDelivery[] {
     const deliveries: PendingDelivery[] = [];
-    for (const [graphId, record] of Object.entries(this.graphRecords)) {
-      if (!record.pending || this.isGraphAwaited(graphId)) continue;
-      const info = this.graphInfos.get(graphId);
-      if (!info || !isSettled(info) || info.stopped) continue;
-      deliveries.push({
-        kind: "graph",
-        graphId,
-        name: info.name,
-        nodes: info.nodes,
-      });
+    for (const graphId of Object.keys(this.graphRecords)) {
+      if (!withheld && this.isGraphAwaited(graphId)) continue;
+      const delivery = this.graphDelivery(graphId);
+      if (delivery) deliveries.push(delivery);
     }
-    for (const [agentId, outcomes] of this.settled) {
-      if (this.isAwaited(agentId)) continue;
+    for (const agentId of this.settled.keys()) {
       const record = this.records[agentId];
-      if (!record || this.isHeldByGraph(record)) continue;
-      const answers = new Map<number, AgentDelivery>();
-      for (const [rid, outcome] of outcomes) {
-        if (outcome.kind === "aborted") continue;
-        if (outcome.kind === "failed") {
-          deliveries.push({
-            kind: "agent",
-            agentId,
-            name: record.name,
-            requestIds: [rid],
-            outcome,
-          });
-          continue;
-        }
-        if (record.delivered.includes(outcome.result.entryId)) continue;
-        const existing = answers.get(outcome.result.entryId);
-        if (existing) existing.requestIds.push(rid);
-        else
-          answers.set(outcome.result.entryId, {
-            kind: "agent",
-            agentId,
-            name: record.name,
-            requestIds: [rid],
-            outcome,
-          });
-      }
-      deliveries.push(...answers.values());
+      if (!record) continue;
+      if (!withheld && (this.isAwaited(agentId) || this.isHeldByGraph(record)))
+        continue;
+      deliveries.push(...this.agentDeliveries(agentId));
     }
     return deliveries;
   }
 
+  /** A finished graph's result, while the parent still expects it. */
+  private graphDelivery(graphId: string): GraphDelivery | undefined {
+    const record = this.graphRecords[graphId];
+    const info = this.graphInfos.get(graphId);
+    if (!record?.pending || !info || !isSettled(info) || info.stopped)
+      return undefined;
+    return {
+      kind: "graph",
+      id: graphDeliveryId(graphId, record),
+      graphId,
+      name: info.name,
+      nodes: info.nodes,
+    };
+  }
+
+  /** An agent's settled parent requests: one delivery per failure, and one
+   * per answer for all the requests it answered. */
+  private agentDeliveries(agentId: string): AgentDelivery[] {
+    const record = this.records[agentId];
+    const outcomes = this.settled.get(agentId);
+    if (!record || !outcomes) return [];
+    const failures: AgentDelivery[] = [];
+    const answers = new Map<number, AgentDelivery>();
+    for (const [rid, outcome] of outcomes) {
+      if (outcome.kind === "aborted") continue;
+      if (outcome.kind === "failed") {
+        failures.push({
+          kind: "agent",
+          id: failureDeliveryId(agentId, record, rid),
+          agentId,
+          name: record.name,
+          requestIds: [rid],
+          outcome,
+        });
+        continue;
+      }
+      const entryId = outcome.result.entryId;
+      if (record.delivered.includes(entryId)) continue;
+      const existing = answers.get(entryId);
+      if (existing) existing.requestIds.push(rid);
+      else
+        answers.set(entryId, {
+          kind: "agent",
+          id: answerDeliveryId(agentId, record, entryId),
+          agentId,
+          name: record.name,
+          requestIds: [rid],
+          outcome,
+        });
+    }
+    return [...failures, ...answers.values()];
+  }
+
+  /**
+   * Hand due results to the parent once it can take them, and acknowledge
+   * those it holds. Serialized; runs after every refresh, when a wait ends,
+   * and when the parent changes.
+   */
+  private scheduleDelivery(): void {
+    if (this.deliveryQueued || this.closed) return;
+    this.deliveryQueued = true;
+    this.deliveryChain = this.deliveryChain
+      .then(async () => {
+        this.deliveryQueued = false;
+        if (!this.closed) await this.deliverDue();
+      })
+      .catch((error) => this.report(error));
+  }
+
+  /**
+   * A delivery counts as done once the parent holds it, never on handing it
+   * over: a crash in between repeats it rather than losing it. After a
+   * restart, results the parent already holds are acknowledged without
+   * handing them over again.
+   */
+  private async deliverDue(): Promise<void> {
+    const all = this.deliveries(true);
+    const ids = new Set(all.map((each) => each.id));
+    for (const id of this.inFlight.keys())
+      if (!ids.has(id)) this.inFlight.delete(id);
+    await this.retireReceipts(
+      Object.keys(this.receipts).filter((id) => !ids.has(id)),
+    );
+    const due = () =>
+      this.pendingDeliveries().filter((each) => !this.inFlight.has(each.id));
+    // Ask the parent only when it may hold something new: results in
+    // flight, results about to go out, and, once, those of a past process.
+    if (
+      this.reconciled &&
+      this.inFlight.size === 0 &&
+      (due().length === 0 || !this.parent.canDeliver())
+    )
+      return;
+    this.reconciled = true;
+    if (ids.size === 0) return;
+    const received = await this.parent.received(
+      [...ids].map((id) => {
+        const call = this.receipts[id];
+        return call === undefined ? { id } : { id, call };
+      }),
+    );
+    await this.acknowledgeAll(all.filter((each) => received.has(each.id)));
+    const next = due();
+    if (next.length === 0 || !this.parent.canDeliver()) return;
+    for (const each of next) this.inFlight.set(each.id, "posted");
+    try {
+      await this.parent.deliver(next, this);
+    } catch (error) {
+      // Due again; the next pass first acknowledges what the parent holds.
+      for (const each of next) this.inFlight.delete(each.id);
+      throw error;
+    }
+  }
+
   /** Mark a delivery done. An answered agent closes, and so does a graph. */
   async acknowledge(delivery: PendingDelivery): Promise<void> {
-    if (delivery.kind === "graph") {
-      await this.consumeGraph(delivery.graphId);
-      return;
+    await this.acknowledgeAll([delivery]);
+  }
+
+  /** Mark deliveries done, an agent's together, so it closes once an answer
+   * reached the parent and no request remains. */
+  private async acknowledgeAll(
+    deliveries: readonly PendingDelivery[],
+  ): Promise<void> {
+    const byAgent = new Map<string, AgentDelivery[]>();
+    for (const delivery of deliveries) {
+      this.inFlight.delete(delivery.id);
+      if (delivery.kind === "graph") await this.consumeGraph(delivery.graphId);
+      else
+        byAgent.set(delivery.agentId, [
+          ...(byAgent.get(delivery.agentId) ?? []),
+          delivery,
+        ]);
     }
-    const entryId =
-      delivery.outcome.kind === "answered"
-        ? delivery.outcome.result.entryId
-        : undefined;
-    await this.removeRequests(
-      delivery.agentId,
-      delivery.requestIds,
-      entryId === undefined ? [] : [entryId],
-    );
+    for (const [agentId, group] of byAgent)
+      await this.removeRequests(
+        agentId,
+        group.flatMap((delivery) => delivery.requestIds),
+        group.flatMap((delivery) =>
+          delivery.outcome.kind === "answered"
+            ? [delivery.outcome.result.entryId]
+            : [],
+        ),
+      );
+    await this.retireReceipts(deliveries.map((delivery) => delivery.id));
+  }
+
+  /** Remember which call's result carries these deliveries. */
+  private async recordReceipts(
+    deliveries: readonly PendingDelivery[],
+    call: string,
+  ): Promise<void> {
+    await this.harness.commit(async (tx) => {
+      const state = await tx.doc(ReceiptsDoc);
+      for (const delivery of deliveries) state.receipts[delivery.id] = call;
+    }, CONTEXT);
+    for (const delivery of deliveries) this.receipts[delivery.id] = call;
+  }
+
+  /** Forget receipts of deliveries that are done or gone. */
+  private async retireReceipts(ids: readonly string[]): Promise<void> {
+    const retired = ids.filter((id) => this.receipts[id] !== undefined);
+    if (retired.length === 0) return;
+    await this.harness.commit(async (tx) => {
+      const state = await tx.doc(ReceiptsDoc);
+      for (const id of retired) delete state.receipts[id];
+    }, CONTEXT);
+    for (const id of retired) delete this.receipts[id];
   }
 
   // --- Internals ---
@@ -926,36 +1310,28 @@ export class AgentService {
     return { task, tools };
   }
 
-  /** The conversation that owns graph tasks; it never runs itself. */
-  private hostConversation(): Promise<Conversation> {
-    this.host ??= this.harness.root(CONTEXT);
-    return this.host;
-  }
-
   /**
-   * The tools and extensions of a new agent. A delegating agent also selects
-   * the delegation extension and its tool, so only it can start helpers.
+   * The tools and extensions of a new agent, named explicitly, so the
+   * harness's default selection never reaches it. A delegating agent also
+   * selects the delegation extension and its tool, so only it can start
+   * helpers.
    */
   private capabilities(
     tools: ToolRegistration[],
     delegate: boolean | undefined,
-  ): { tools: ToolRegistration[]; extensions?: { add: Extension[] } } {
-    if (!delegate) return { tools };
-    const tool = this.delegation.tools?.find(
+  ): { tools: ToolRegistration[]; extensions: Extension[] } {
+    const extensions = agentSelection(this.extensions, {
+      delegate: !!delegate,
+    });
+    if (!delegate) return { tools, extensions };
+    const tool = this.extensions.delegation.tools?.find(
       (each) => each.name === DELEGATE_TOOL,
     );
-    return {
-      tools: tool ? [...tools, tool] : tools,
-      extensions: { add: [this.delegation] },
-    };
+    return { tools: tool ? [...tools, tool] : tools, extensions };
   }
 
   private resolveTools(names: string[] | undefined): ToolRegistration[] {
-    const available = this.registry
-      .snapshot()
-      .tools()
-      .filter(({ extension }) => extension.name === TOOLS_EXTENSION)
-      .map(({ tool }) => tool);
+    const available = [...(this.extensions.tools.tools ?? [])];
     const wanted = names ?? [...DEFAULT_AGENT_TOOLS];
     const unknown = wanted.filter(
       (name) => !available.some((tool) => tool.name === name),
@@ -989,15 +1365,6 @@ export class AgentService {
       },
       CONTEXT,
     );
-  }
-
-  private async consume(agentId: string): Promise<void> {
-    const outcomes = this.settled.get(agentId);
-    if (!outcomes || outcomes.size === 0) return;
-    const entryIds = [...outcomes.values()].flatMap((outcome) =>
-      outcome.kind === "answered" ? [outcome.result.entryId] : [],
-    );
-    await this.removeRequests(agentId, [...outcomes.keys()], entryIds);
   }
 
   /**
@@ -1204,6 +1571,7 @@ export class AgentService {
       if (stopped.length > 0) await this.clearPending(stopped);
       await this.closeEndedHelpers();
       for (const check of [...this.checks]) check();
+      this.scheduleDelivery();
     });
     this.refreshChain = run.catch(() => {});
     return run;
@@ -1371,7 +1739,13 @@ export class AgentService {
       ...(record.graph ? { graph: record.graph } : {}),
       ...(record.delegate ? { delegates: true } : {}),
       ...(state === "idle" &&
-      [...outcomes.values()].some((outcome) => outcome.kind === "answered")
+      [...outcomes.values()].some(
+        (outcome) =>
+          outcome.kind === "answered" &&
+          this.inFlight.get(
+            answerDeliveryId(id, record, outcome.result.entryId),
+          ) !== "carried",
+      )
         ? { queued: true }
         : {}),
     });
@@ -1627,7 +2001,10 @@ export class AgentService {
           }),
         ),
         ...(record.owner ? { owner: record.owner.agent } : {}),
-        ...(record.pending && ended !== undefined && !isStopped
+        ...(record.pending &&
+        ended !== undefined &&
+        !isStopped &&
+        this.inFlight.get(graphDeliveryId(id, record)) !== "carried"
           ? { queued: true }
           : {}),
       });

@@ -6,17 +6,20 @@ import {
   fauxAssistantMessage,
   fauxProvider,
 } from "@earendil-works/pi-ai/providers/faux";
-import { MemoryStorage } from "@earendil-works/pi-durable";
-import { AgentService } from "../../src/agents/service.js";
+import type { AgentService } from "../../src/agents/service.js";
 import { discoverSkills } from "../../src/catalog/skills.js";
-import { createPromptExtension } from "../../src/host/prompt.js";
-import { createToolsExtension } from "../../src/host/tools.js";
-import { inheritHelper, MODEL, tempDir, until } from "../agents/helpers.js";
+import {
+  closeService,
+  MODEL,
+  openService,
+  tempDir,
+  until,
+} from "../agents/helpers.js";
 
 let services: AgentService[] = [];
 
 afterEach(async () => {
-  for (const service of services) await service.close();
+  for (const service of services) await closeService(service);
   services = [];
 });
 
@@ -44,15 +47,10 @@ async function open(trusted: boolean) {
       return fauxAssistantMessage("done");
     }),
   );
-  const service = await AgentService.open({
-    storage: new MemoryStorage(),
+  const service = await openService({
     models,
-    cwd: process.cwd(),
-    extensions: [
-      createToolsExtension(),
-      createPromptExtension({ trusted: () => trusted, skills: discoverSkills }),
-    ],
-    resolveHelper: inheritHelper,
+    trusted,
+    skills: discoverSkills,
   });
   services.push(service);
   return { service, prompts };

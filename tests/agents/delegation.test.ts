@@ -7,15 +7,14 @@ import {
   fauxText,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
+import type { Storage } from "@earendil-works/pi-durable";
 import type { DelegationLimits } from "../../src/agents/delegation.js";
-import { AgentService } from "../../src/agents/service.js";
-import { createPromptExtension } from "../../src/host/prompt.js";
-import { createToolsExtension } from "../../src/host/tools.js";
+import type { AgentService } from "../../src/agents/service.js";
 import {
-  inheritHelper,
+  closeService,
   jsonlStorage,
   MODEL,
+  openService,
   tempDir,
   until,
 } from "./helpers.js";
@@ -23,7 +22,7 @@ import {
 let services: AgentService[] = [];
 
 afterEach(async () => {
-  for (const service of services) await service.close();
+  for (const service of services) await closeService(service);
   services = [];
 });
 
@@ -80,15 +79,9 @@ async function open(
     limits?: Partial<DelegationLimits>;
   } = {},
 ): Promise<AgentService> {
-  const service = await AgentService.open({
-    storage: options.storage ?? new MemoryStorage(),
+  const service = await openService({
     models: options.models ?? scripted().models,
-    cwd: process.cwd(),
-    extensions: [
-      createToolsExtension(),
-      createPromptExtension({ trusted: () => false, skills: async () => [] }),
-    ],
-    resolveHelper: inheritHelper,
+    ...(options.storage ? { storage: options.storage } : {}),
     ...(options.limits ? { delegationLimits: options.limits } : {}),
   });
   services.push(service);
@@ -99,7 +92,7 @@ async function reopen(
   service: AgentService,
   options: Parameters<typeof open>[0],
 ): Promise<AgentService> {
-  await service.close();
+  await closeService(service);
   services = services.filter((each) => each !== service);
   return open(options);
 }

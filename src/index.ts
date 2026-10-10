@@ -1,7 +1,7 @@
 /**
  * pi-agents: durable, named agents for Pi, running in-process on pi-durable.
- * This entry point wires the session host, the parent tools, result
- * delivery, and the TUI surfaces.
+ * This entry point wires the session host, the parent (Pi's session), the
+ * parent tools, and the TUI surfaces.
  */
 
 import type {
@@ -9,44 +9,45 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { registerCommands } from "./pi/commands.js";
-import { DeliveryManager } from "./pi/delivery.js";
 import { registerMessageRenderers } from "./pi/messages.js";
+import { PiParent } from "./pi/parent.js";
 import { buildSystemPromptAppendix, profileCatalog } from "./pi/prompt.js";
 import { SessionHost } from "./pi/session.js";
 import { isTrusted } from "./pi/spawn.js";
-import { SteerWatch } from "./pi/steering.js";
 import { registerAgentTools } from "./pi/tools.js";
 import { FocusController } from "./ui/focus.js";
 import { FancyFooterReporter } from "./ui/footer.js";
 import { AgentPanel } from "./ui/panel.js";
 
 export default function agentExtension(pi: ExtensionAPI): void {
-  const host = new SessionHost();
+  const parent = new PiParent(pi);
+  const host = new SessionHost(parent);
   const panel = new AgentPanel(host);
   const focus = new FocusController(host, panel);
-  const delivery = new DeliveryManager(pi, host);
   const footer = new FancyFooterReporter(
     pi,
     () => host.current()?.list() ?? [],
   );
 
   // While the user is attached to an agent, nothing wakes the parent.
-  delivery.setBlocked(() => focus.isPaneOpen());
-  focus.onPaneClosed = (ctx) => delivery.flush(ctx);
+  parent.setBlocked(() => focus.isPaneOpen());
+  focus.onPaneClosed = (ctx) => {
+    parent.setContext(ctx);
+    parent.notify();
+  };
   host.subscribe(() => {
     panel.update();
     footer.update();
-    delivery.flush();
   });
 
   registerMessageRenderers(pi);
   // A steer ends waits for agents, so Pi doesn't hold it back.
-  const steering = new SteerWatch();
   pi.on("input", (event) => {
-    if (event.streamingBehavior === "steer") steering.steer();
+    if (event.streamingBehavior === "steer") parent.steer();
     return { action: "continue" };
   });
-  registerAgentTools(pi, host, steering);
+  registerAgentTools(pi, host);
+  parent.listen();
   registerCommands(pi, { host, panel, focus });
   pi.registerShortcut("ctrl+q", {
     description: "Focus the pi-agents panel",
@@ -55,7 +56,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   const track = (ctx: ExtensionContext): void => {
     host.setContext(ctx);
-    delivery.setContext(ctx);
+    parent.setContext(ctx);
   };
 
   // Profile problems are reported once per session, not on every turn.
@@ -86,22 +87,15 @@ export default function agentExtension(pi: ExtensionAPI): void {
     await host.start(ctx);
     panel.update(ctx);
     footer.update();
-    delivery.flush(ctx);
+    parent.notify();
   });
 
   pi.on("agent_start", (_event, ctx) => track(ctx));
 
-  pi.on("agent_end", (_event, ctx) => {
-    track(ctx);
-    // At agent_end Pi may still report streaming; retry on a macrotask, once
-    // the run has settled.
-    setTimeout(() => delivery.flush(ctx), 0);
-  });
-
   pi.on("session_shutdown", async () => {
     focus.dispose();
     panel.dispose();
-    delivery.clear();
+    parent.clear();
     footer.dispose();
     await host.stop();
   });

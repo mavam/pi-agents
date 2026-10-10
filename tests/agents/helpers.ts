@@ -10,10 +10,24 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
-import { AgentService } from "../../src/agents/service.js";
-import type { HelperResolver } from "../../src/agents/types.js";
-import { createPromptExtension } from "../../src/host/prompt.js";
-import { createToolsExtension } from "../../src/host/tools.js";
+import type { DelegationLimits } from "../../src/agents/delegation.js";
+import {
+  type AgentExtensions,
+  createAgentExtensions,
+} from "../../src/agents/extensions.js";
+import {
+  type Attention,
+  AttentionSignals,
+  type Handover,
+  type Parent,
+} from "../../src/agents/parent.js";
+import { AgentService, type StopStep } from "../../src/agents/service.js";
+import type {
+  HelperResolver,
+  PendingDelivery,
+} from "../../src/agents/types.js";
+import type { SkillSource } from "../../src/catalog/skills.js";
+import { type AgentHarness, openAgentHarness } from "../../src/host/harness.js";
 
 export const MODEL = { provider: "faux", modelId: "faux-1" };
 
@@ -103,22 +117,163 @@ export const inheritHelper: HelperResolver = async (request, defaults) => ({
   ...(request.tools ? { tools: request.tools } : {}),
 });
 
+/**
+ * A parent for tests. It takes no deliveries until `ready` is set, like a
+ * parent at work, so tests can inspect pending results and acknowledge them
+ * themselves. Its transcript holds what it stored, by delivery ID.
+ */
+export class TestParent implements Parent {
+  private isReady = false;
+  /** Everything the parent was handed, in order. */
+  readonly delivered: PendingDelivery[] = [];
+  /** Whether a delivery reaches the transcript once handed over; false
+   * models a parent that crashes before it stores it. */
+  stores = true;
+
+  constructor(
+    /** The deliveries the parent holds; shared to model a restart. */
+    readonly transcript = new Set<string>(),
+  ) {}
+  private readonly listeners = new Set<() => void>();
+  private readonly waits = new AttentionSignals();
+
+  get ready(): boolean {
+    return this.isReady;
+  }
+
+  /** Whether the parent takes deliveries; setting it lets them proceed. */
+  set ready(value: boolean) {
+    this.isReady = value;
+    this.notify();
+  }
+
+  canDeliver(): boolean {
+    return this.isReady;
+  }
+
+  async deliver(deliveries: readonly PendingDelivery[]): Promise<void> {
+    this.delivered.push(...deliveries);
+    if (!this.stores) return;
+    for (const delivery of deliveries) this.transcript.add(delivery.id);
+    // Like Pi, which reports a message before it stores it.
+    setTimeout(() => this.notify(), 0);
+  }
+
+  async received(handovers: readonly Handover[]): Promise<ReadonlySet<string>> {
+    return new Set(
+      handovers.flatMap(({ id }) => (this.transcript.has(id) ? [id] : [])),
+    );
+  }
+
+  /** The parent stored these results, such as with a call's result. */
+  hold(ids: readonly string[]): void {
+    for (const id of ids) this.transcript.add(id);
+    this.notify();
+  }
+
+  attention(): Attention {
+    return this.waits.open();
+  }
+
+  /** Something needs the parent: end its waits. */
+  attend(): void {
+    this.waits.raise();
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  notify(): void {
+    for (const listener of [...this.listeners]) listener();
+  }
+}
+
+export interface HostOptions {
+  storage?: Storage;
+  models?: ReturnType<typeof createFaux>["models"];
+  /** The parent; a `TestParent` that takes no deliveries by default. */
+  parent?: Parent;
+  /** Whether the project is trusted, and its skills. */
+  trusted?: boolean;
+  skills?: SkillSource;
+  delegationLimits?: Partial<DelegationLimits>;
+  /** Called at each step of a stop; throwing there models a crash. */
+  stopStep?: (step: StopStep) => void;
+}
+
+/** What a test host opened for a service: the harness and its anchor. */
+export interface TestHost {
+  service: AgentService;
+  harness: AgentHarness;
+  extensions: AgentExtensions;
+  parent: Parent;
+}
+
+const hosts = new Map<AgentService, TestHost>();
+
+export function testExtensions(options: HostOptions = {}): AgentExtensions {
+  return createAgentExtensions({
+    prompt: {
+      trusted: () => options.trusted ?? false,
+      skills: options.skills ?? (async () => []),
+    },
+    resolveHelper: inheritHelper,
+    ...(options.delegationLimits
+      ? { delegationLimits: options.delegationLimits }
+      : {}),
+  });
+}
+
+/** A service on a harness that the test host opens like Pi's host does. */
 export async function openService(
-  options: {
-    storage?: Storage;
-    models?: ReturnType<typeof createFaux>["models"];
-  } = {},
+  options: HostOptions = {},
 ): Promise<AgentService> {
-  return AgentService.open({
+  const extensions = testExtensions(options);
+  const harness = await openAgentHarness({
     storage: options.storage ?? new MemoryStorage(),
     models: options.models ?? createFaux().models,
     cwd: process.cwd(),
-    extensions: [
-      createToolsExtension(),
-      createPromptExtension({ trusted: () => false, skills: async () => [] }),
-    ],
-    resolveHelper: inheritHelper,
+    extensions,
   });
+  const parent = options.parent ?? new TestParent();
+  try {
+    const service = await AgentService.start({
+      harness: harness.harness,
+      anchor: harness.anchor,
+      extensions,
+      parent,
+      ...(options.stopStep ? { stopStep: options.stopStep } : {}),
+    });
+    hosts.set(service, { service, harness, extensions, parent });
+    return service;
+  } catch (error) {
+    await harness.close();
+    throw error;
+  }
+}
+
+export function hostOf(service: AgentService): TestHost {
+  const host = hosts.get(service);
+  if (!host) throw new Error("The service has no test host");
+  return host;
+}
+
+/** The `TestParent` of a service opened without a parent of its own. */
+export function parentOf(service: AgentService): TestParent {
+  const parent = hostOf(service).parent;
+  if (!(parent instanceof TestParent))
+    throw new Error("The service has no test parent");
+  return parent;
+}
+
+/** Close the service, then its harness, as the host does. */
+export async function closeService(service: AgentService): Promise<void> {
+  const host = hosts.get(service);
+  hosts.delete(service);
+  await service.close();
+  await host?.harness.close();
 }
 
 export async function until(

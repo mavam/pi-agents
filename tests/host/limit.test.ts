@@ -6,7 +6,13 @@ import {
   RequestLimiter,
   readRequestLimit,
 } from "../../src/host/limit.js";
-import { createFaux, MODEL, openService, until } from "../agents/helpers.js";
+import {
+  closeService,
+  createFaux,
+  MODEL,
+  openService,
+  until,
+} from "../agents/helpers.js";
 
 /** `models` that count the requests reaching the provider at once. */
 function counting(models: Models) {
@@ -196,7 +202,7 @@ describe("agents with a request limit", () => {
   let service: AgentService | undefined;
 
   afterEach(async () => {
-    await service?.close();
+    if (service) await closeService(service);
     service = undefined;
   });
 

@@ -1,9 +1,9 @@
 /**
  * Durable tasks behind agent graphs. A graph is a background task owned by
- * the host conversation; it owns one node task per agent, and each node owns
- * its agent's conversation:
+ * the anchor, the conversation the host chose for the parent's graphs; it
+ * owns one node task per agent, and each node owns its agent's conversation:
  *
- *   host conversation
+ *   anchor
  *   └─ graph task (background)
  *      └─ node task × n
  *         └─ agent conversation

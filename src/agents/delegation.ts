@@ -15,8 +15,8 @@
  *
  * Helpers are depth 2 by construction: a conversation owned by a task
  * copies the agent settings of that task's conversation, so every helper is
- * configured explicitly, without the delegation extension, and the tool
- * refuses agents whose record doesn't allow it.
+ * configured explicitly, with the extensions of agents but not delegation,
+ * and the tool refuses agents whose record doesn't allow it.
  */
 
 import type { Context, JsonValue } from "@earendil-works/chord";
@@ -135,6 +135,8 @@ type Api = ToolExecutionApi;
 export interface DelegationOptions {
   resolve: HelperResolver;
   limits: DelegationLimits;
+  /** What helpers select: the extensions of agents, without delegation. */
+  extensions: readonly Extension[];
 }
 
 function textResult(text: string, isError = false): ToolExecutionResult {
@@ -274,8 +276,9 @@ async function start(
   args: Args,
   delegator: { id: string; record: AgentRecord },
   planned: { helpers: Planned[]; inputs: number[][] },
-  limits: DelegationLimits,
+  options: DelegationOptions,
 ): Promise<{ graph: string } | { error: string }> {
+  const { limits } = options;
   return api.commit(async (tx) => {
     const graphsDoc = await tx.doc(GraphsDoc);
     const existing = startedBy(graphsDoc.graphs, api.taskId);
@@ -334,7 +337,7 @@ async function start(
       // Everything explicit: the copy of the delegating agent's settings
       // must not reach the helper, least of all the delegation tool.
       await configure(tx, conversation.id, {
-        extensions: null,
+        extensions: options.extensions,
         tools: helper.tools,
         cwd: spec.cwd,
         model: spec.model ?? null,
@@ -515,7 +518,7 @@ async function execute(
       args,
       { id, record },
       planned,
-      options.limits,
+      options,
     );
     if ("error" in started) return textResult(started.error, true);
     graphId = started.graph;

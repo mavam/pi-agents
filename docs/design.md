@@ -14,23 +14,103 @@ composition: graphs of agents that pass results to each other.
 - The parent conversation stays primary. Agents appear as compact lines, tool
   calls, and result messages.
 - The frontend depends on `AgentService` only, never on pi-durable types.
+- The host owns the harness. The core runs on whatever harness and anchor
+  its host hands it, so it can later run inside Pi's durable session worker
+  with a different host and the same core.
 
 ## Core abstractions
 
 | Abstraction | Meaning | Backed by |
 | --- | --- | --- |
-| Host | One pi-durable `Harness` per parent Pi session | JSONL storage in `~/.pi/agent/pi-agents/<session-id>/` |
+| Host | Owns the storage, its lock, and one pi-durable `Harness` per parent Pi session | JSONL storage in `~/.pi/agent/pi-agents/sessions/<session-id>/` |
+| Anchor | The conversation that owns the graphs the parent starts | Chosen by the host; inside Pi the harness's root conversation, which never runs |
+| Parent | The conversation that starts agents and receives their results | `Parent`, implemented by the host; inside Pi, Pi's session |
 | Agent | A durable, named conversation | An ownerless conversation, or one a turn owns, plus an `AgentRecord` |
-| AgentRecord | Name, profile, creation time, closed flag, parent requests, graph | The session document `pi-agents.agents` |
+| AgentRecord | Name, profile, creation time, closed flag, parent requests, graph, key of the call that spawned it | The session document `pi-agents.agents` |
 | Graph | Named agents plus edges that carry results; reports back as one result | A graph task plus a `GraphRecord` |
-| GraphRecord | Name, policy, creation time, nodes (agent, node task, inputs), closed flag, whether the parent still expects the result | The session document `pi-agents.graphs` |
+| GraphRecord | Name, policy, creation time, nodes (agent, node task, inputs), closed flag, whether the parent still expects the result, key of the call that spawned it | The session document `pi-agents.graphs` |
+| Stop | An operation that ends an agent or a graph, keyed by its call, with what it ends bound when it began and whether all of it finished | The session document `pi-agents.stops` |
 | Node | One graph agent's task: wait for its inputs, then one message and its answer | A node task |
 | Edge | `A → B`: B starts once A finished and receives A's final message | A node's `after` list |
 | Turn | One input and the work until its final answer | A pi-durable input submission |
 | Result | The last assistant message: text, stop reason, entry ID | The turn's assistant entry |
-| Parent request | A turn the parent model started through `spawn` or `send` | An outbox entry in the record plus a submission with the same request ID |
+| Parent request | A turn the parent model started through `spawn` or `send` | An outbox entry in the record plus a submission with the same request ID: `parent:<n>`, or `call:<key>` for a keyed send |
 | Profile | Reusable spawn defaults | `<cwd>/.pi/agents/*.md` and `~/.pi/agent/agents/*.md` |
-| AgentService | The API for tools and UI | Wraps the Host |
+| AgentService | The core: the API for tools and UI | Runs on the harness and anchor the host hands it |
+
+## Structure
+
+pi-agents mirrors the split of Pi's durable session worker
+(`packages/coding-agent/src/experimental/` in Pi's repository), which opens
+the store and the harness and hands harness, conversation, models, and
+settings to the parts that need them:
+
+- **Host** (`src/host`, and `SessionHost` in `src/pi/session.ts`): takes the
+  session's lock, opens its storage and the harness with pi-agents'
+  extensions installed (`openAgentHarness`), and chooses the anchor. Inside
+  Pi the anchor is the root conversation, which sessions stored by earlier
+  versions already anchor their graphs on. The host closes the harness after
+  the core.
+- **Core** (`src/agents`): `AgentService` and pi-agents' pi-durable
+  extensions. `createAgentExtensions` returns the tools, the prompt, the
+  graph tasks, and delegation; `installAgentExtensions` installs them in any
+  registry, the way the session worker installs `CodingTools` and its
+  prompt, and `agentSelection` is what an agent selects (see "Agent
+  runtime").
+  `AgentService.start` takes the harness, the anchor, the extensions, and
+  the parent. The core never opens storage or a harness, never closes them,
+  and never assumes the root conversation.
+- **Frontend** (`src/pi`, `src/ui`): tools, commands, and views. They see
+  plain data through `AgentService`, like the session worker's presentations
+  see `AgentController` and `Transcript`; only the attach view reads a
+  conversation's view.
+
+A durable Pi would host pi-agents in its session worker: install the
+extensions in the worker's registry and pass its harness and the session's
+main conversation as the anchor.
+
+### The parent
+
+Everything the core needs from the parent goes through one interface,
+`Parent` (`src/agents/parent.ts`), which the host implements:
+
+- `canDeliver()`: whether the parent takes results now. Pi's session takes
+  them while it's idle, holds no queued messages, and the user isn't
+  attached to an agent.
+- `deliver(deliveries)`: hand results over, in order. Inside Pi each is a
+  message, and the last starts a turn.
+- `received(handovers)`: which deliveries the parent holds durably,
+  delivered or carried by the stored result of one of its calls, which
+  names them or is the result of the call each handover names. Only these
+  count as done (see "At least once").
+- `attention()`: a signal that ends one of the parent's waits once
+  something needs the parent, so it can answer while its agents keep
+  working. Inside Pi a steer from the user raises it.
+- `subscribe(listener)`: changes that may let delivery proceed, such as
+  the end of a turn or the attach view closing.
+
+The core decides what is due and hands it over after every change of its
+own and whenever the parent changes. Inside Pi, `PiParent`
+(`src/pi/parent.ts`) implements the interface, and every state that keeps
+it from taking deliveries ends with a retry. A result that arrives while
+Pi works changes nothing in the service afterwards, so these retries are
+what deliver it:
+
+| Pi can't take deliveries because | Tried again on |
+| --- | --- |
+| No session yet, or a stale one | `session_start` |
+| The user is attached to an agent | The attach view closing |
+| A run works | `agent_settled`, the first moment Pi is idle: it waits for every extension's `agent_end` handler, then checks for compaction and runs the before-settle boundary |
+| A compaction outside a run | `session_compact` or `session_compact_failed` |
+| A branch summary while navigating the tree | `session_tree`; a cancelled or failed one emits nothing, so a recheck every second |
+| Queued user messages | The run consumes them before `agent_settled`; ones an abort left queued wait for the next run or a recheck every second, since clearing them emits nothing |
+
+Each event tries once it has passed. The recheck runs only while a result
+waits for Pi. Pi's `agent_end` comes too early to deliver: Pi stays busy
+until it settles, so pi-agents doesn't listen for it. A durable host could
+deliver by submitting to the session's main conversation with the
+delivery's identity as request ID; `received` would then find the
+submission, and delivery would be exactly once.
 
 Agent states are derived, never stored:
 
@@ -61,9 +141,48 @@ against the durable records, so agents started at once can't share a name.
 - `interrupt` aborts the current work; the agent stays open. Only the attach
   view's Esc interrupts.
 - `stop` interrupts, drops pending parent requests, and closes the agent. The
-  UI asks for confirmation while the agent works.
+  UI asks for confirmation while the agent works. A stop survives crashes
+  (see "Keyed calls").
 - Agents start other agents only when they may delegate (see "Agents that
   delegate"); helpers never do.
+
+### Keyed calls
+
+Every parent call that spawns, sends, or stops passes the service its key,
+so repeating the call finds what its first run created or did instead of
+acting again, the way `delegate_graph` finds the graph its tool task owns
+and Pi's experimental `subagent` tool the conversation its task owns. Pi
+never runs a tool call twice today; a durable host that replays calls after
+a crash can declare the parent tools safe to repeat.
+
+- A spawn stores the key in what it creates (`AgentRecord.call`,
+  `GraphRecord.call`) in the creating commit. A repeat returns that agent
+  or graph, with its recorded requests submitted.
+- A send uses `call:<key>` as its request ID instead of the next
+  `parent:<n>`. A repeat finds the agent that holds the request, recorded
+  or already submitted, and messages nothing.
+- A stop is an operation stored under its key (`pi-agents.stops`) before
+  its first effect. It binds what it ends then: the agent or graph, and per
+  agent the inputs it works on or has queued and the parent requests it
+  drops. Its effects run from that binding: abort the graph task, withdraw
+  the bound queued inputs, abort a run only while it works on a bound
+  input, and close the agents and drop the bound requests. It counts as
+  done only once every effect finished, and a stop a crash interrupted
+  resumes when the service starts. A repeat resumes an unfinished stop or,
+  once done, returns what it stopped and does nothing. Done stops stay for
+  good, since stops are rare; a stop without a key, such as the user's,
+  leaves once done.
+- Repeats look up their key before resolving names, so a name that moved
+  to a newer agent doesn't redirect them. A spawn, graph spawn, or send
+  that waits then waits for what it started by its immutable ID
+  (`AgentService.waitFor`), and looks agents and graphs up by ID
+  (`agentById`, `graphById`), which no name can shadow.
+- Inside Pi the key is the tool call's ID qualified by the session entry of
+  the assistant message that issued it (`src/pi/calls.ts`): some providers
+  number calls per message, so IDs alone can repeat across messages.
+  Codemode's nested calls have IDs of their own, `<call>/<n>`.
+- The user's actions in the UI and calls without an ID pass no key and act
+  every time, and sends without a key keep numbering `parent:<n>`.
 
 ## Graphs
 
@@ -105,7 +224,7 @@ Agents never select it; tasks resolve their definitions from the registry.
 ### Ownership
 
 ```text
-host conversation (the harness root; never runs)
+anchor (inside Pi the harness root; never runs)
 └─ graph task             background, owned by the conversation
    └─ node task × n       owned by the graph
       └─ agent conversation   owned by its node
@@ -118,7 +237,7 @@ Names, tools, thinking levels, and edges are validated before it: `after`
 must name agents of the same graph, an agent can't wait for itself, and the
 edges form no cycle. A graph starts whole or not at all. Then:
 
-- The graph task is a background task, so nothing on the host conversation
+- The graph task is a background task, so nothing on the anchor
   reaches it, and it never blocks idle waits of standalone agents.
 - Conversations hang below their nodes, not below the graph. `failFast` marks
   every other live node, including nodes still waiting for inputs, and the
@@ -166,8 +285,12 @@ reserves it. A migration must keep the task IDs in the checkpoints (a node's
 migrate. A task whose definition is missing or older than the stored one
 stays blocked rather than lost; stopping its graph then settles it as
 `orphaned`. Documents migrate the same way through `defineDoc`'s `migrate`,
-applied on their next access. The new optional `AgentRecord.graph` field
-needed no migration.
+applied on their next access. Optional fields that earlier records lack
+needed no migration: `AgentRecord.graph`, and `call` of both records. The
+session documents `pi-agents.receipts` and `pi-agents.stops` (version 1)
+are new, and a store without them starts empty. Requests of earlier
+versions keep their `parent:<n>` IDs, and sends without a key continue
+that numbering.
 
 ### Agents that delegate
 
@@ -202,9 +325,9 @@ delegating agent's conversation
   select it and its tool; `AgentRecord.delegate` stores the choice, and the
   tool refuses agents whose record doesn't allow it or that are helpers.
   pi-durable copies an owner task's conversation's agent settings into the
-  conversations it owns, so every helper is configured explicitly: no
-  delegation extension, its own tools, model, thinking level, instructions,
-  and working directory. Depth is therefore 2.
+  conversations it owns, so every helper is configured explicitly: the
+  extensions of agents without delegation, its own tools, model, thinking
+  level, instructions, and working directory. Depth is therefore 2.
 - Helpers get only tools their agent has. Profiles, models, and skills
   resolve like Pi's spawns through the `HelperResolver` the session host
   provides, with the agent's model, thinking level, and working directory as
@@ -231,8 +354,8 @@ delegating agent's conversation
 
 Parent requests use an outbox for exactly-once submission: the record stores
 the request ID and message first, then the submission follows with the same
-request ID. On open, the Host resubmits outbox entries without a submission;
-the request ID makes this idempotent.
+request ID. When the service starts, it resubmits outbox entries without a
+submission; the request ID makes this idempotent.
 
 When a parent request settles:
 
@@ -262,19 +385,96 @@ messages since. The `GraphRecord`'s `pending` flag is the outbox:
    open.
 
 Turns the user starts from the attach view never deliver into the parent.
-Delivery is acknowledged after posting, so a crash can repeat a delivery but
-never lose one. On session resume, unacknowledged settled requests deliver.
+
+### At least once
+
+Pi's session is a store of its own, so no commit spans the harness and the
+session, and delivery to the parent is at least once: a crash never loses a
+delivery but can repeat one.
+
+- Every delivery has a stable identity derived from stored records:
+  `graph:<id>@<created>` for a graph, `agent:<id>@<created>:entry:<entry>`
+  for an answer, and `agent:<id>@<created>:request:<request>` for a failed
+  request. The creation time keeps identities unique across stores: a Pi
+  session forked from another copies its messages, while its agents start
+  over in a new store with the same IDs.
+- The result message carries the identity in its details (`delivery`), and
+  a call that waits carries the identities of the results it took in its
+  result's details (`deliveries`).
+- A delivery counts as done, and the core acknowledges it in its store,
+  only once `Parent.received` reports that the parent holds it. Pi's parent
+  looks for the identity in the session's entries, on any branch: a result
+  message, or the stored result of a call that waited.
+- Pi stores no results of nested calls, such as a codemode script's, and
+  records the calls in their caller's result instead. So before a wait's
+  result goes to Pi, the core stores which call carries which deliveries
+  (`pi-agents.receipts`, keyed by delivery ID), and the parent also counts
+  a stored result whose call, or one of whose recorded nested calls, has
+  that key. A key qualifies the call's ID by the assistant message that
+  issued it, which Pi links to its results, so a reused ID doesn't match an
+  older result. Receipts survive restarts and retire once their deliveries
+  are acknowledged or gone.
+- An entry in `getEntries()` shows that Pi accepted a message, not that
+  Pi wrote it: Pi adds the entry in memory before it appends it to the
+  session file, and pi-agents doesn't read that file. A failed write that
+  Pi reports through its public API fails closed: a delivery whose post
+  threw doesn't count from its entry until a post succeeds. Pi reports
+  none today; its `sendMessage` hands write errors only to its own error
+  listeners. A failure of Pi to write its own session that it doesn't
+  report is therefore outside the fault model until Pi confirms saved
+  messages (earendil-works/pi#8023). A session without a file
+  (`--no-session`) keeps its agents in memory as well, so memory is all
+  either side holds there.
+- Pi confirms neither posting nor saving, and extensions see `message_end`
+  before Pi saves the message. The parent therefore checks the session's
+  entries again after events, such as `message_end` once it has passed, the
+  end of a run, and the core's own changes. Pi saves a message synchronously
+  when it appends it: at once for a message posted to an idle session, and
+  at the start of the turn for the one that starts it. A parent with agents
+  always has a session file, because agents start from its tool calls.
+- Handed over but not yet held, a delivery is in flight: it isn't handed
+  over again. A posted one still counts as queued until the session holds
+  it; one a waiting call carries doesn't. In flight is memory only. After a
+  restart, deliveries the session already holds are acknowledged without
+  posting, and the others are posted again.
+- Within one process, a delivery is posted again only on positive evidence
+  that Pi lost it, and Pi offers none. A message can't land in the queue of
+  a running turn, where an abort could drop it: the check that Pi is idle
+  and the post run in one synchronous step, and `sendCustomMessage` decides
+  synchronously from the same run flag (`isStreaming`) whether to queue.
+  Posted while idle, a message is saved at once, or starts a turn that saves
+  it before anything else. Posted while Pi settles its last run, it lands in
+  `_deferredSettledActions` while Pi looks idle with nothing queued or
+  saved, possibly behind a user's deferred prompt that runs a turn first,
+  and Pi saves it when its own turn runs. That deferred post is the
+  liveness limit: if the session ends first, or an earlier deferred action
+  throws and Pi skips the rest, the result stays in flight and shows
+  `result queued` until the session starts again, which posts it.
+- Every wait by a parent tool call takes its results into flight, also when
+  the provider gave the call no ID; they count once Pi stored the call's
+  result, whose details name them. Only a caller that takes the results
+  itself, which no tool does, has them count at once.
 
 ## Durability
 
 - Quitting or crashing Pi pauses agents. Resuming the session with `pi -c`
-  reopens the Host, resumes interrupted work, and delivers pending results.
+  reopens the Host, resumes interrupted work, and delivers pending results
+  that the session doesn't hold yet.
 - Switching sessions pauses that session's agents until the user returns.
 - A lock file gives one Pi process ownership of a session's agents. Another
   process shows a notice and runs without agents.
 
 ## Agent runtime
 
+- Extensions: every agent names the extensions it selects when it's
+  created: pi-agents' tools and prompt, plus delegation for delegating
+  agents. Standalone agents, graph agents, and helpers never follow the
+  harness's default selection, which in Pi's durable session worker would
+  be Pi's own tools, prompt, and `subagent` tool. Agents stored by earlier
+  versions name none and keep following the default, which Pi's host sets
+  to pi-agents' tools and prompt; a host with other defaults would have to
+  select for them. Delegating agents of earlier versions stored the
+  delegation extension as an addition to that default.
 - Tools: `read`, `write`, `edit`, and `bash` from pi-durable, plus `grep`,
   `find`, and `ls` adapted from Pi's tool definitions. The default set is Pi's:
   `read`, `bash`, `edit`, `write`. Delegating agents also get
@@ -380,8 +580,9 @@ validation.
 
 Pi places a user's steering message only after the current tool round. A
 wait would therefore hold a steer back until the agents answer, so a steer
-ends every running wait at once; the agents keep working and their results
-arrive as messages. Follow-ups don't end waits.
+raises the parent's attention, which ends every running wait at once; the
+agents keep working and their results arrive as messages. Follow-ups don't
+end waits.
 
 The system prompt adds one line of guidance, the usable profiles, and the
 user's scoped models (`ctx.scopedModels`, from `/scoped-models` or `--models`)
@@ -469,23 +670,57 @@ model's message broke off before Pi ran it.
 
 ## Testing
 
-Tests use pi-durable's memory storage and pi-ai's faux provider. Restart tests
+Tests use pi-durable's memory storage and pi-ai's faux provider, and open
+the harness through the same host function as Pi. A host of its own, with an
+ordinary conversation as the anchor, runs the core unchanged. Restart tests
 use JSONL storage: interrupt a turn, close, reopen, and verify that the turn
-completes and its result delivers once. Graph tests cover `allSettled` with
-answers and failures, pipelines, merges with failed inputs, skipped agents,
-`failFast` stopping waiting agents, edge validation, stopping a graph, the
-ownership tree through the task graph, restarts mid-graph and mid-pipeline
-that repeat no finished agent and send no task twice, and messaging a
-graph's agent after the graph finished. Tool tests check every result
-scripts get against its output schema, for answers, interrupted and failed
-turns after an earlier answer, waits ended by a timeout, an abort, or a
-steer, and answered, failed, skipped, and stopped graphs. A faux model
-holds prompts until the test releases them or the request aborts, so
-these tests don't race the model.
-Delegation tests cover a fan-out with a merging helper, that helpers and
-other agents can't delegate, progress, Esc on the agent, stopping a graph
-above it, stopping only the helpers, tool and size limits, names, and a
-restart mid-delegation that starts no second set of helpers.
+completes and its result delivers once. Delivery tests run the core against a test parent and
+Pi's parent against a fake session: a delivery counts only once the session
+holds it and isn't posted again meanwhile, a restart after Pi saved a
+delivery acknowledges it without posting, a restart before posts it again
+under the same identity, and a wait's result counts once Pi stored the
+call's result, for nested calls through their caller's, also across a
+restart, and for a call without an ID; these run on Pi's own
+`SessionManager`, and a tool wait without an ID that crashes before Pi
+stored its result delivers again. A post whose write to a read-only session
+file fails stays pending, though Pi keeps the entry in memory, and delivers
+once when Pi can write again. A fake Pi that queues, runs, or defers a
+posted message checks that a message the triggered turn saved and one
+deferred while Pi settles post once, an abort that keeps a queued message
+posts no duplicate, and one that clears the queue leaves the result queued
+until a restart posts it. Events from a fake Pi check that a result arriving
+during a parent turn posts once the turn settled, also when another
+extension keeps Pi busy past `agent_end`, that the end of a compaction,
+whether it succeeded, failed, or was cancelled, and tree navigation retry,
+and that results held back by messages an abort left queued, or by a
+cancelled branch summary, post on a recheck. A session switch keeps a
+delivery Pi hadn't saved for the return, and attaching holds new deliveries
+but not the confirmation of sent ones. A host whose default selection holds
+a foreign extension, with a `read` tool, another tool, and a prompt section,
+gives none of it to standalone agents, graph agents, a delegating agent, or
+its helper, and the session of v0.27.0 keeps its agents on the default of
+Pi's host. Keyed call tests repeat a spawn, a graph spawn, a send, and a
+stop with the same key, also after the name moved to a newer agent, and
+check that each acts once, that a repeated stop leaves newer work alone,
+that calls without a key act every time, and that the session of v0.27.0
+takes keyed calls. A crash after every step of an agent's or a graph's stop,
+followed by a restart, finishes the stop, and replaying it then leaves newer
+work alone; a stop's receipt outlives twenty later stops. A replayed spawn,
+send, or graph spawn that waits returns what its first run started, while
+newer work holds the name. Graph tests cover `allSettled` with answers and
+failures, pipelines, merges with failed inputs, skipped agents, `failFast`
+stopping waiting agents, edge validation, stopping a graph, the ownership
+tree through the task graph, restarts mid-graph and mid-pipeline that repeat
+no finished agent and send no task twice, and messaging a graph's agent
+after the graph finished. Tool tests check every result scripts get against
+its output schema, for answers, interrupted and failed turns after an
+earlier answer, waits ended by a timeout, an abort, or a steer, and
+answered, failed, skipped, and stopped graphs. A faux model holds prompts
+until the test releases them or the request aborts, so these tests don't
+race the model. Delegation tests cover a fan-out with a merging helper, that
+helpers and other agents can't delegate, progress, Esc on the agent,
+stopping a graph above it, stopping only the helpers, tool and size limits,
+names, and a restart mid-delegation that starts no second set of helpers.
 Request limit tests count requests reaching the faux provider: with a limit
 of 1, streams, compactions, and spawned agents never overlap, waiting
 requests run in order, and one aborted while waiting frees its place.

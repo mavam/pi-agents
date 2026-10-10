@@ -5,11 +5,16 @@ import {
   fauxProvider,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentService } from "../../src/agents/service.js";
+import { WaitInterrupted } from "../../src/agents/types.js";
 import {
+  closeService,
   createFaux,
+  createGatedFaux,
   jsonlStorage,
   MODEL,
   openService,
+  parentOf,
+  TestParent,
   tempDir,
   until,
 } from "./helpers.js";
@@ -17,7 +22,7 @@ import {
 let services: AgentService[] = [];
 
 afterEach(async () => {
-  for (const service of services) await service.close();
+  for (const service of services) await closeService(service);
   services = [];
 });
 
@@ -233,6 +238,116 @@ describe("AgentService", () => {
   });
 });
 
+describe("the parent", () => {
+  test("results reach the parent once it takes them", async () => {
+    const service = await open();
+    const parent = parentOf(service);
+    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => service.pendingDeliveries().length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(parent.delivered).toEqual([]);
+
+    parent.ready = true;
+    await until(() => parent.delivered.length === 1);
+    expect(parent.delivered[0]?.name).toBe("a");
+    await until(() => service.get("a")?.closed === true);
+    expect(service.pendingDeliveries()).toEqual([]);
+  });
+
+  test("a delivery counts as done only once the parent holds it", async () => {
+    const directory = tempDir();
+    const service = await openService({
+      storage: await jsonlStorage(directory),
+    });
+    const parent = parentOf(service);
+    parent.stores = false;
+    parent.ready = true;
+    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => parent.delivered.length === 1);
+    const [delivery] = parent.delivered;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Handed over once, never acknowledged.
+    expect(parent.delivered).toHaveLength(1);
+    expect(service.pendingDeliveries().map((each) => each.id)).toEqual([
+      delivery?.id,
+    ]);
+    await closeService(service);
+
+    // A restart hands it over again, under the same identity.
+    const again = await open({
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+    });
+    const next = parentOf(again);
+    next.ready = true;
+    await until(() => again.get("a")?.closed === true);
+    expect(next.delivered.map((each) => each.id)).toEqual([delivery?.id]);
+  });
+
+  test("a restart acknowledges what the parent already holds", async () => {
+    const directory = tempDir();
+    const service = await openService({
+      storage: await jsonlStorage(directory),
+    });
+    const parent = parentOf(service);
+    parent.stores = false;
+    parent.ready = true;
+    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await until(() => parent.delivered.length === 1);
+    await closeService(service);
+
+    // The parent stored it before the crash, unseen by the core.
+    const transcript = new Set(parent.delivered.map((each) => each.id));
+    const next = new TestParent(transcript);
+    next.ready = true;
+    const again = await open({
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+      parent: next,
+    });
+    await until(() => again.get("a")?.closed === true);
+    expect(next.delivered).toEqual([]);
+  });
+
+  test("a call's wait takes results once the parent holds its result", async () => {
+    const service = await open();
+    const parent = parentOf(service);
+    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    const outcome = await service.wait(["a"], {
+      carrier: { call: "call-1" },
+    });
+    expect(outcome.deliveries).toHaveLength(1);
+    expect(outcome.agents[0]?.queued).toBeUndefined();
+    parent.ready = true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Taken by the wait: never handed over as a delivery, not yet done.
+    expect(parent.delivered).toEqual([]);
+    expect(service.get("a")?.closed).toBe(false);
+
+    parent.hold(outcome.deliveries);
+    await until(() => service.get("a")?.closed === true);
+    expect(parent.delivered).toEqual([]);
+  });
+
+  test("a wait ends when the parent is needed and consumes nothing", async () => {
+    const faux = createGatedFaux();
+    const service = await open({ models: faux.models });
+    await service.spawn({ task: "hold", name: "w", cwd: ".", model: MODEL });
+    await service.spawn({ task: "quick", name: "q", cwd: ".", model: MODEL });
+    await until(() => service.get("q")?.state === "idle");
+    const waiting = service.wait(["w", "q"]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    parentOf(service).attend();
+    const error = await waiting.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(WaitInterrupted);
+    expect((error as WaitInterrupted).reason).toBe("attention");
+    expect(service.get("w")?.state).toBe("working");
+    // The finished agent's result still arrives as a message.
+    expect(service.pendingDeliveries().map((each) => each.name)).toEqual(["q"]);
+    faux.release();
+  });
+});
+
 describe("durability", () => {
   test("an interrupted turn resumes and delivers once after reopening", async () => {
     const directory = tempDir();
@@ -245,7 +360,7 @@ describe("durability", () => {
     });
     await first.spawn({ task: "long", name: "w", cwd: ".", model: MODEL });
     await until(() => first.get("w")?.state === "working");
-    await first.close();
+    await closeService(first);
 
     const fast = createFaux();
     const second = await open({
@@ -257,7 +372,7 @@ describe("durability", () => {
     expect(delivery?.name).toBe("w");
     expect(delivery?.outcome.kind).toBe("answered");
     if (delivery) await second.acknowledge(delivery);
-    await second.close();
+    await closeService(second);
     services = services.filter((service) => service !== second);
 
     const third = await open({

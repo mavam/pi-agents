@@ -53,6 +53,9 @@ export interface ResultDetails {
   profile?: string;
   model?: string;
   usage?: string;
+  /** The delivery this message carries; absent in messages of earlier
+   * versions. */
+  delivery?: string;
 }
 
 function isResultDetails(value: unknown): value is ResultDetails {
@@ -134,6 +137,9 @@ export interface GraphResultDetails {
   name: string;
   policy: GraphPolicy;
   nodes: NodeDetails[];
+  /** The delivery this message carries; absent in messages of earlier
+   * versions and outside messages. */
+  delivery?: string;
 }
 
 function isGraphResultDetails(value: unknown): value is GraphResultDetails {

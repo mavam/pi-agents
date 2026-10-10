@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { renderToolOutputType } from "@earendil-works/pi-codemode";
 import type {
   AgentToolUpdateCallback,
@@ -7,6 +8,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
+import { AgentsDoc } from "../../src/agents/records.js";
 import type { AgentService } from "../../src/agents/service.js";
 import {
   type AgentInfo,
@@ -16,7 +18,6 @@ import {
 import { SkillCatalog } from "../../src/catalog/skills.js";
 import { agentOutput, graphOutput } from "../../src/pi/output.js";
 import type { SessionHost } from "../../src/pi/session.js";
-import { SteerWatch } from "../../src/pi/steering.js";
 import {
   FitLines,
   formatCall,
@@ -24,7 +25,17 @@ import {
   renderDetails,
   startedView,
 } from "../../src/pi/tools.js";
-import { createGatedFaux, MODEL, openService } from "../agents/helpers.js";
+import {
+  closeService,
+  createGatedFaux,
+  hostOf,
+  jsonlStorage,
+  MODEL,
+  openService,
+  parentOf,
+  tempDir,
+  until,
+} from "../agents/helpers.js";
 
 const noSkills = new SkillCatalog(async () => []);
 
@@ -34,14 +45,14 @@ let release: (() => void) | undefined;
 afterEach(async () => {
   release?.();
   release = undefined;
-  await service?.close();
+  if (service) await closeService(service);
   service = undefined;
 });
 
 // biome-ignore lint/suspicious/noExplicitAny: tool parameters vary.
 type AnyTool = ToolDefinition<any, any>;
 
-function tools(steering: SteerWatch): Map<string, AnyTool> {
+function tools(): Map<string, AnyTool> {
   const registered = new Map<string, AnyTool>();
   const pi = {
     registerTool: (tool: AnyTool) => registered.set(tool.name, tool),
@@ -51,7 +62,7 @@ function tools(steering: SteerWatch): Map<string, AnyTool> {
     ensure: async () => service,
     skills: noSkills,
   } as unknown as SessionHost;
-  registerAgentTools(pi, host, steering);
+  registerAgentTools(pi, host);
   return registered;
 }
 
@@ -61,15 +72,29 @@ const ctx = {
   isProjectTrusted: () => false,
 } as unknown as ExtensionContext;
 
+/**
+ * Pi stores a call's result right after the call returns, details
+ * included, and the result names the deliveries a wait took.
+ */
+function storeResult(details: unknown): void {
+  const ids = (details as { deliveries?: string[] } | undefined)?.deliveries;
+  if (ids === undefined) return;
+  setTimeout(() => {
+    if (service) parentOf(service).hold(ids);
+  }, 0);
+}
+
 /** Agent tools over a service whose model holds prompts with `hold`. */
-async function gated(steering = new SteerWatch()) {
+async function gated() {
   const faux = createGatedFaux();
   release = faux.release;
   service = await openService({ models: faux.models });
-  const registered = tools(steering);
+  const registered = tools();
+  let calls = 0;
   /**
    * Run a tool and return its text and what a script gets, which must match
-   * the tool's output schema.
+   * the tool's output schema. Every run is a call of its own unless `id`
+   * repeats one.
    */
   return async (
     name: string,
@@ -77,12 +102,13 @@ async function gated(steering = new SteerWatch()) {
     options: {
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback<unknown>;
+      id?: string;
     } = {},
   ): Promise<{ text: string; details: unknown; output: unknown }> => {
     const tool = registered.get(name);
     if (!tool) throw new Error(`No tool ${name}`);
     const result = await tool.execute(
-      "call",
+      options.id ?? `call-${++calls}`,
       params,
       options.signal,
       options.onUpdate,
@@ -90,6 +116,7 @@ async function gated(steering = new SteerWatch()) {
     );
     const output = result.structuredContent;
     expect([...Value.Errors(tool.outputSchema, output)], name).toEqual([]);
+    storeResult(result.details);
     const [first] = result.content;
     return {
       text: first?.type === "text" ? first.text : "",
@@ -148,7 +175,7 @@ function firstUpdate(): {
 
 describe("script output", () => {
   test("every agent tool declares the output scripts get", () => {
-    const registered = tools(new SteerWatch());
+    const registered = tools();
     for (const tool of registered.values())
       expect(tool.outputSchema, tool.name).toBeDefined();
     const stop = registered.get("agent_stop");
@@ -219,6 +246,8 @@ describe("script output", () => {
   test("status lists open agents; answered ones need their name", async () => {
     const run = await gated();
     await run("agent_spawn", { task: "one", name: "a", wait: 60 });
+    // The answer counts as delivered once Pi stored the call's result.
+    await until(() => service?.get("a")?.closed === true);
     await run("agent_spawn", { task: "hold", name: "w" });
     const w = { kind: "agent", name: "w", state: "working" };
     expect((await run("agent_status", {})).output).toEqual({
@@ -234,8 +263,7 @@ describe("script output", () => {
   });
 
   test("waits that end early return the state and what is pending", async () => {
-    const steering = new SteerWatch();
-    const run = await gated(steering);
+    const run = await gated();
     const w = { kind: "agent", name: "w", state: "working" };
     // A timeout.
     expect(
@@ -264,7 +292,7 @@ describe("script output", () => {
       { onUpdate: steered.onUpdate },
     );
     await steered.started;
-    steering.steer();
+    parentOf(service as AgentService).attend();
     expect((await sending).output).toEqual(w);
     expect(
       (await run("agent_send", { name: "w", message: "more" })).output,
@@ -380,6 +408,98 @@ describe("script output", () => {
   });
 });
 
+describe("repeated calls", () => {
+  test("a repeated call waits for what it started, not newer work", async () => {
+    const run = await gated();
+    // Each first run answers, then the name moves to newer work that holds.
+    const spawn = { task: "one", name: "w", wait: 60 };
+    await run("agent_spawn", spawn, { id: "spawn" });
+    await run("agent_stop", { name: "w" });
+    await run("agent_spawn", { task: "hold", name: "w" });
+    expect((await run("agent_spawn", spawn, { id: "spawn" })).output).toEqual({
+      kind: "agent",
+      name: "w",
+      state: "idle",
+      result: "done: one",
+    });
+
+    await run("agent_spawn", { task: "one", name: "a", wait: 60 });
+    const send = { name: "a", message: "two", wait: 60 };
+    await run("agent_send", send, { id: "send" });
+    await run("agent_stop", { name: "a" });
+    await run("agent_spawn", { task: "hold", name: "a" });
+    expect((await run("agent_send", send, { id: "send" })).output).toEqual({
+      kind: "agent",
+      name: "a",
+      state: "idle",
+      result: "done: two",
+    });
+
+    const graph = {
+      name: "g",
+      agents: [
+        { task: "one", name: "x" },
+        { task: "two", name: "y", after: ["x"] },
+      ],
+      wait: 60,
+    };
+    await run("agent_spawn_graph", graph, { id: "graph" });
+    await run("agent_stop", { name: "g" });
+    await run("agent_spawn_graph", {
+      name: "g",
+      agents: [
+        { task: "hold p", name: "p" },
+        { task: "q", name: "q", after: ["p"] },
+      ],
+    });
+    expect(
+      (await run("agent_spawn_graph", graph, { id: "graph" })).output,
+    ).toMatchObject({ kind: "graph", name: "g", state: "idle" });
+    // The newer work under the names keeps working.
+    expect(service?.get("w")?.state).toBe("working");
+    expect(service?.get("a")?.state).toBe("working");
+    expect(service?.getGraph("g")?.state).toBe("working");
+  });
+
+  test("a call with the same ID acts once", async () => {
+    const run = await gated();
+    const spawn = { task: "hold", name: "w" };
+    const first = await run("agent_spawn", spawn, { id: "spawn" });
+    const again = await run("agent_spawn", spawn, { id: "spawn" });
+    expect([again.text, again.output]).toEqual([first.text, first.output]);
+    expect(service?.list()).toHaveLength(1);
+
+    const graph = {
+      name: "g",
+      agents: [
+        { task: "hold one", name: "a" },
+        { task: "two", name: "b", after: ["a"] },
+      ],
+    };
+    await run("agent_spawn_graph", graph, { id: "graph" });
+    await run("agent_spawn_graph", graph, { id: "graph" });
+    expect(service?.graphs()).toHaveLength(1);
+
+    await run("agent_send", { name: "w", message: "more" }, { id: "send" });
+    await run("agent_send", { name: "w", message: "more" }, { id: "send" });
+    const w = service?.get("w")?.id as string;
+    const records = await hostOf(
+      service as AgentService,
+    ).harness.harness.snapshot(AgentsDoc, BACKGROUND_CONTEXT);
+    expect(Object.keys(records?.agents[w]?.requests ?? {})).toHaveLength(2);
+
+    await run("agent_stop", { name: "w" }, { id: "stop" });
+    await run("agent_send", { name: "w", message: "hold again" });
+    // The repeat reports what it stopped, which works on newer work.
+    expect(
+      await run("agent_stop", { name: "w" }, { id: "stop" }),
+    ).toMatchObject({
+      text: "Stopped w.",
+      output: { kind: "agent", name: "w", state: "working" },
+    });
+  });
+});
+
 describe("output", () => {
   const info = (result: string): AgentInfo => ({
     id: "1",
@@ -473,14 +593,51 @@ describe("output", () => {
 });
 
 describe("waiting tools", () => {
+  test("a wait without a call ID counts once Pi stored its result", async () => {
+    const directory = tempDir();
+    const before = await openService({
+      storage: await jsonlStorage(directory),
+    });
+    service = before;
+    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    const wait = tools().get("agent_wait") as AnyTool;
+    // The provider gave the call no ID.
+    const result = await wait.execute(
+      "",
+      { names: ["a"] },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const ids = (result.details as { deliveries?: string[] }).deliveries;
+    expect(ids).toHaveLength(1);
+    const parent = parentOf(before);
+    parent.ready = true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Pi crashes before it stores the result: nothing counts as delivered.
+    expect(parent.delivered).toEqual([]);
+    expect(before.pendingDeliveries().map((each) => each.id)).toEqual(
+      ids ?? [],
+    );
+    await closeService(before);
+
+    const after = await openService({
+      storage: await jsonlStorage(directory),
+    });
+    service = after;
+    const next = parentOf(after);
+    next.ready = true;
+    await until(() => next.delivered.length === 1);
+    expect(next.delivered.map((each) => each.id)).toEqual(ids ?? []);
+  });
+
   test("a steer from the user ends a wait; the agent keeps working", async () => {
-    const steering = new SteerWatch();
-    const run = await gated(steering);
+    const run = await gated();
     await run("agent_spawn", { task: "hold", name: "w" });
     const { onUpdate, started } = firstUpdate();
     const waiting = run("agent_wait", { names: ["w"] }, { onUpdate });
     await started;
-    steering.steer();
+    parentOf(service as AgentService).attend();
     const result = await waiting;
     expect(result.text).toBe(
       "Stopped waiting because the user sent a message. The agents keep working; their results arrive as messages.",
@@ -491,7 +648,7 @@ describe("waiting tools", () => {
 
   test("waiting calls draw what they started, never live states", async () => {
     const run = await gated();
-    const draw = tools(new SteerWatch());
+    const draw = tools();
     /** Run a waiting call, abort it after its first progress, and draw both. */
     const waitOnce = async (name: string, args: Record<string, unknown>) => {
       const tool = draw.get(name);
@@ -742,7 +899,7 @@ describe("call results", () => {
   });
 
   test("a waiting call shows what it started, then the outcome", () => {
-    const tool = tools(new SteerWatch()).get("agent_spawn_graph");
+    const tool = tools().get("agent_spawn_graph");
     const args = {
       name: "audit",
       wait: 60,

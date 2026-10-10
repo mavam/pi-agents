@@ -206,6 +206,12 @@ export interface GraphSpec {
   agents: GraphAgentSpec[];
 }
 
+/** An agent or a graph by its immutable ID. */
+export interface TargetRef {
+  kind: "agent" | "graph";
+  id: string;
+}
+
 /** An agent or a graph, as a name resolves. */
 export type Target =
   | { kind: "agent"; info: AgentInfo }
@@ -270,10 +276,22 @@ export type HelperResolver = (
 
 export type SendMode = "auto" | "followUp";
 
+/** What a parent call passes when it spawns, sends, or stops. */
+export interface CallOptions {
+  /**
+   * The call's key. Repeating a call with the same key finds what its first
+   * run created or did instead of acting again. Absent for the user's
+   * actions, which act every time.
+   */
+  call?: string;
+}
+
 /** Settled parent requests that still need delivery to the parent. Several
  * requests answered by one entry deliver together. */
 export interface AgentDelivery {
   kind: "agent";
+  /** Stable identity, by which the parent recognizes the delivery. */
+  id: string;
   agentId: string;
   name: string;
   requestIds: string[];
@@ -283,6 +301,8 @@ export interface AgentDelivery {
 /** A finished graph whose result the parent still expects. */
 export interface GraphDelivery {
   kind: "graph";
+  /** Stable identity, by which the parent recognizes the delivery. */
+  id: string;
   graphId: string;
   name: string;
   nodes: Array<GraphNode & { outcome: NodeOutcome }>;
@@ -295,3 +315,13 @@ export type PendingDelivery = AgentDelivery | GraphDelivery;
 export const USER_MESSAGE_PREFIX = "[user] ";
 
 export class AgentError extends Error {}
+
+/** A wait that ended before its agents answered: its caller cancelled it,
+ * or something needs the parent, such as the user steering. */
+export class WaitInterrupted extends AgentError {
+  constructor(readonly reason: "cancelled" | "attention") {
+    super(
+      reason === "cancelled" ? "Wait cancelled" : "Wait ended for the parent",
+    );
+  }
+}

@@ -1,0 +1,8 @@
+created: 2026-10-10
+title: Reliable result delivery
+intro: >-
+  This release makes sure agent results reach Pi, even when Pi crashes or is busy.
+  It also stops the panel from repeating while a call waits for agents.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.27.0

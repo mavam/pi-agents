@@ -143,7 +143,7 @@ or changed skills after `/reload`.
 To focus an agent, name its skills:
 
 ```text
-Have an agent update the changelog with the tenzir-ship skill.
+Have an agent write the release notes with the technical-writing skill.
 ```
 
 Pi then passes `skills` to the agent, which gets those skills in full instead

@@ -12,7 +12,7 @@ Pi can now name the skills an agent gets, so you can ask for an agent that
 works with particular skills:
 
 ```text
-Have an agent update the changelog with the tenzir-ship skill.
+Have an agent write the release notes with the technical-writing skill.
 ```
 
 The agent gets those skills in full instead of the whole skill catalog, and an

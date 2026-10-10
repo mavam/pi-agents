@@ -440,7 +440,8 @@ draws `delegate_graph` with its own, and Pi's tools with Pi's.
   an undelivered result shows `●` in the accent color and `result queued`.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's
   durable conversation view with Pi's message and tool components. ⏎ prompts
-  or steers, Alt+⏎ queues a follow-up, Esc interrupts, ← detaches.
+  or steers, Alt+⏎ queues a follow-up, Esc interrupts, Ctrl+O expands tool
+  output, ← detaches.
 - `/agents`: a table of all agents and graphs, closed ones dimmed, with
   details, attach, and stop. Each row shows how long it ran: until now while
   it works, else until it ended, from durable task end times that survive

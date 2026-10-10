@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import {
   type FauxResponseStep,
@@ -7,11 +8,16 @@ import {
   fauxText,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import type { Storage } from "@earendil-works/pi-durable";
-import type { DelegationLimits } from "../../src/agents/delegation.js";
+import type { ConversationId, Storage } from "@earendil-works/pi-durable";
+import {
+  DELEGATE_TOOL,
+  type DelegationLimits,
+} from "../../src/agents/delegation.js";
 import type { AgentService } from "../../src/agents/service.js";
+import { AGENT_TOOL_VIEWS } from "../../src/ui/tool-views.js";
 import {
   closeService,
+  hostOf,
   jsonlStorage,
   MODEL,
   openService,
@@ -88,6 +94,45 @@ async function open(
   return service;
 }
 
+/** The lead's delegate_graph result as the attach view draws it. */
+async function delegateResult(
+  service: AgentService,
+  agentId: string,
+): Promise<string[]> {
+  const conversation = await hostOf(service).harness.harness.conversation(
+    Number(agentId) as ConversationId,
+    BACKGROUND_CONTEXT,
+  );
+  const page = await conversation?.entries(
+    {},
+    100,
+    undefined,
+    BACKGROUND_CONTEXT,
+  );
+  const message = page?.items
+    .map((entry) => entry.model?.[0])
+    .find(
+      (each) => each?.role === "toolResult" && each.toolName === DELEGATE_TOOL,
+    );
+  if (message?.role !== "toolResult") return [];
+  const theme = {
+    fg: (_name: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  return (
+    AGENT_TOOL_VIEWS[DELEGATE_TOOL]
+      ?.renderResult?.(
+        message,
+        { expanded: false, isPartial: false },
+        // biome-ignore lint/suspicious/noExplicitAny: a plain test theme.
+        theme as any,
+        // biome-ignore lint/suspicious/noExplicitAny: renderers read isError.
+        { isError: false, state: {} } as any,
+      )
+      .render(80) ?? []
+  );
+}
+
 async function reopen(
   service: AgentService,
   options: Parameters<typeof open>[0],
@@ -143,6 +188,17 @@ describe("delegation", () => {
       "lead.api",
       "lead.tests",
       "lead.merge",
+    ]);
+    // The lead's call shows its helpers as they ended, usage aside.
+    expect(
+      (await delegateResult(service, info.id)).map((line) =>
+        line.replace(/ · [\d.]+k$/, ""),
+      ),
+    ).toEqual([
+      "● helpers · graph 3/3",
+      "├─ ● api · faux-1",
+      "├─ ● tests · faux-1",
+      "└─ ● merge ← api, tests · faux-1",
     ]);
     // The call ended, so the helpers left the panel.
     expect(graph?.closed).toBe(true);

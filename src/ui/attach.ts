@@ -8,6 +8,9 @@
  * replace it. This module is the one frontend place that reads pi-durable
  * view types.
  *
+ * Tool calls draw with Pi's renderers for Pi's tools and with
+ * `AGENT_TOOL_VIEWS` for the agents' own tools, such as `delegate_graph`.
+ *
  * Keys: ⏎ prompts an idle agent and steers a working one, Alt+⏎ queues a
  * follow-up, Esc interrupts a working agent, ← on an empty editor detaches,
  * and Shift+↑↓ and Shift+PgUp/PgDn scroll.
@@ -66,6 +69,7 @@ import {
   shortModel,
   statusIcon,
 } from "./format.js";
+import { AGENT_TOOL_VIEWS } from "./tool-views.js";
 
 const PANE_REFRESH_MS = 250;
 const FLASH_MS = 5_000;
@@ -140,6 +144,8 @@ class ChatView {
   private readonly renderers = new Map<string, AnyDefinition>();
   private renderedEntryIds: number[] = [];
   private streaming: AssistantMessageComponent | undefined;
+  /** Tool output shown in full; Ctrl+O toggles it, like Pi. */
+  private expanded = false;
 
   constructor(
     private readonly ui: TUI,
@@ -161,10 +167,11 @@ class ChatView {
       component.setArgsComplete();
       if (slot.status !== "running") continue;
       component.markExecutionStarted();
-      if (slot.output !== undefined) {
+      // Progress: output so far, and details such as what a call started.
+      if (slot.output !== undefined || slot.details !== undefined) {
         component.updateResult(
           {
-            content: [{ type: "text", text: slot.output }],
+            content: [{ type: "text", text: slot.output ?? "" }],
             details: slot.details,
             isError: false,
           },
@@ -285,12 +292,21 @@ class ChatView {
     }
   }
 
+  /** Show tool output in full, or collapse it again. */
+  toggleExpanded(): void {
+    this.expanded = !this.expanded;
+    for (const card of this.cards) card.setExpanded(this.expanded);
+    this.transcript.invalidate();
+  }
+
   private renderer(toolName: string): AnyDefinition | undefined {
     let definition = this.renderers.get(toolName);
     if (definition === undefined) {
+      const views = AGENT_TOOL_VIEWS[toolName];
       const create = RENDERERS[toolName];
-      if (create === undefined) return undefined;
-      definition = create(this.cwd);
+      if (views) definition = { name: toolName, ...views } as AnyDefinition;
+      else if (create) definition = create(this.cwd);
+      else return undefined;
       this.renderers.set(toolName, definition);
     }
     return definition;
@@ -317,6 +333,7 @@ class ChatView {
       this.ui,
       this.cwd,
     );
+    component.setExpanded(this.expanded);
     this.transcript.addChild(component);
     this.cards.push(component);
     this.tools.set(toolCallId, component);
@@ -431,6 +448,10 @@ class AgentPane implements Component {
     this.editor.focused = true;
     this.editor.onSubmit = (text) => this.submit(text, "auto");
     this.editor.onEscape = () => this.escape();
+    this.editor.onAction("app.tools.expand", () => {
+      this.chat.toggleExpanded();
+      this.tui.requestRender();
+    });
     this.editor.onAction("app.message.followUp", () =>
       this.submit(this.editor.getText(), "followUp"),
     );

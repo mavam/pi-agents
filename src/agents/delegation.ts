@@ -34,10 +34,19 @@ import {
   type ToolExecutionApi,
   type ToolExecutionResult,
   type ToolRegistration,
+  UsageDoc,
 } from "@earendil-works/pi-durable";
 import { type Static, Type } from "typebox";
+import { summarizeUsage, sumUsage } from "./derive.js";
 import { GraphTask, type NodeResult, NodeTask } from "./graphs.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
+import {
+  type AgentReceipt,
+  endsOutcome,
+  type GraphReceipt,
+  isFinished,
+  receipt,
+} from "./receipts.js";
 import {
   type AgentRecord,
   AgentsDoc,
@@ -139,10 +148,17 @@ export interface DelegationOptions {
   extensions: readonly Extension[];
 }
 
-function textResult(text: string, isError = false): ToolExecutionResult {
+function textResult(
+  text: string,
+  isError = false,
+  graph?: GraphReceipt,
+): ToolExecutionResult {
   return {
     content: [{ type: "text", text }],
     ...(isError ? { isError: true } : {}),
+    ...(graph
+      ? { details: { receipt: receipt({ graphs: [graph], wait: "done" }) } }
+      : {}),
   };
 }
 
@@ -422,18 +438,111 @@ async function reportNode(
   }
 }
 
-/** The graph's result as the tool's text, within the output budget. */
-async function report(
+/** A helper's name below the agent that started it: `lead.api` reads as
+ * `api`, also when `lead` was cut to fit. */
+function helperName(name: string, owner: string | undefined): string {
+  const dot = name.indexOf(".");
+  return owner !== undefined && dot > 0 && owner.startsWith(name.slice(0, dot))
+    ? name.slice(dot + 1)
+    : name;
+}
+
+/**
+ * The helpers as the agent's receipt shows them: who they are and who waits
+ * for whom, and with `nodes`, how each did its task, from stored records.
+ */
+async function helpersReceipt(
+  api: Api,
+  context: Context,
+  graph: GraphRecord,
+  names: (agent: string) => string,
+  nodes?: readonly ReportNode[],
+  stopped = false,
+): Promise<GraphReceipt> {
+  const agents: AgentReceipt[] = await Promise.all(
+    graph.nodes.map(async (node, index) => {
+      const cid = Number(node.agent) as Parameters<Api["conversation"]>[0];
+      const [durable, usage] = await Promise.all([
+        api.snapshot(AgentDoc, cid, context) as Promise<
+          DurableAgentState | undefined
+        >,
+        nodes ? api.snapshot(UsageDoc, cid, context) : undefined,
+      ]);
+      const result = nodes?.[index];
+      const inputs = node.after.map(names);
+      return {
+        name: names(node.agent),
+        ...(durable?.model?.modelId ? { model: durable.model.modelId } : {}),
+        ...(inputs.length > 0 ? { inputs } : {}),
+        ...(result
+          ? {
+              outcome: result.kind,
+              ...(isFinished(result.kind)
+                ? { usage: summarizeUsage(usage) }
+                : {}),
+              ...(result.body ? { body: result.body } : {}),
+            }
+          : {}),
+      };
+    }),
+  );
+  const owner = graph.owner ? names(graph.owner.agent) : undefined;
+  if (!nodes) return { name: helperName(graph.name, owner), agents };
+  const ends = nodes.filter((node) => node.end).map((node) => node.kind);
+  return {
+    name: helperName(graph.name, owner),
+    outcome: stopped ? "stopped" : endsOutcome(ends),
+    usage: sumUsage(agents.flatMap((agent) => agent.usage ?? [])),
+    agents,
+  };
+}
+
+/** Names of a graph's agents by conversation ID: helpers' without their
+ * agent's, which itself keeps its own. */
+function helperNames(
+  graph: GraphRecord,
+  agents: Readonly<Record<string, AgentRecord>> | undefined,
+): (agent: string) => string {
+  const owner = graph.owner ? agents?.[graph.owner.agent]?.name : undefined;
+  return (agent) => {
+    const name = agents?.[agent]?.name ?? agent;
+    return agent === graph.owner?.agent ? name : helperName(name, owner);
+  };
+}
+
+/** What the call started, for its progress. */
+async function startedReceipt(
   api: Api,
   context: Context,
   graphId: string,
-): Promise<string> {
+): Promise<GraphReceipt | undefined> {
   const [graphs, agents] = await Promise.all([
     api.snapshot(GraphsDoc, context),
     api.snapshot(AgentsDoc, context),
   ]);
   const graph = graphs?.graphs[graphId];
-  if (!graph) return "The helpers are missing.";
+  if (!graph) return undefined;
+  return helpersReceipt(
+    api,
+    context,
+    graph,
+    helperNames(graph, agents?.agents),
+  );
+}
+
+/** The graph's result as the tool's text, within the output budget, and
+ * its receipt. */
+async function report(
+  api: Api,
+  context: Context,
+  graphId: string,
+): Promise<{ text: string; receipt?: GraphReceipt }> {
+  const [graphs, agents] = await Promise.all([
+    api.snapshot(GraphsDoc, context),
+    api.snapshot(AgentsDoc, context),
+  ]);
+  const graph = graphs?.graphs[graphId];
+  if (!graph) return { text: "The helpers are missing." };
   const ends = new Set(
     endNodes(
       graph.nodes.map((node) => ({ key: node.agent, inputs: node.after })),
@@ -465,9 +574,19 @@ async function report(
     hint: "Ask for shorter results if you need all of them.",
   };
   const text = graphReport(graph.name, nodes, limit);
-  return stopped
-    ? `The helpers were stopped before they finished.\n\n${text}`
-    : text;
+  return {
+    text: stopped
+      ? `The helpers were stopped before they finished.\n\n${text}`
+      : text,
+    receipt: await helpersReceipt(
+      api,
+      context,
+      graph,
+      helperNames(graph, agents?.agents),
+      nodes,
+      stopped,
+    ),
+  };
 }
 
 async function execute(
@@ -523,8 +642,13 @@ async function execute(
     if ("error" in started) return textResult(started.error, true);
     graphId = started.graph;
   }
+  // While it waits, the call shows what it started.
+  const started = await startedReceipt(api, context, graphId);
+  if (started)
+    await api.details({ receipt: receipt({ graphs: [started] }) }, context);
   await api.waitForTask(Number(graphId) as TaskId, context);
-  return textResult(await report(api, context, graphId));
+  const { text, receipt: helpers } = await report(api, context, graphId);
+  return textResult(text, false, helpers);
 }
 
 export function createDelegationExtension(

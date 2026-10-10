@@ -14,6 +14,7 @@ import {
   type NodeKind,
   nodeCounts,
   nodeNote,
+  nodeResult,
   type ReportNode,
   truncateResult,
 } from "../agents/report.js";
@@ -158,22 +159,8 @@ export function nodeDetails(
   info: AgentInfo | undefined,
   names: ReadonlyMap<string, string>,
 ): NodeDetails {
-  const outcome = node.outcome;
   const usage = info ? formatUsage(info.usage) : "";
-  let kind: NodeKind = info?.state === "waiting" ? "waiting" : "working";
-  let body = "";
-  if (outcome?.kind === "answered") {
-    const failed = outcome.result.stopReason === "error";
-    kind = failed ? "failed" : "answered";
-    body = failed
-      ? (outcome.result.errorMessage ?? (outcome.result.text || "error"))
-      : outcome.result.text;
-  } else if (outcome?.kind === "failed") {
-    kind = "failed";
-    body = outcome.reason;
-  } else if (outcome) {
-    kind = outcome.kind;
-  }
+  const { kind, body } = nodeResult(node, info?.state);
   return {
     agentId: node.agentId,
     name: node.name,

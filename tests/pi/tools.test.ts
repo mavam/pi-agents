@@ -17,11 +17,8 @@ import {
 import { SkillCatalog } from "../../src/catalog/skills.js";
 import { agentOutput, graphOutput } from "../../src/pi/output.js";
 import type { SessionHost } from "../../src/pi/session.js";
-import {
-  FitLines,
-  registerAgentTools,
-  renderDetails,
-} from "../../src/pi/tools.js";
+import { registerAgentTools } from "../../src/pi/tools.js";
+import { FitLines } from "../../src/ui/tool-views.js";
 import {
   closeService,
   createGatedFaux,
@@ -122,18 +119,14 @@ const plainTheme = {
   bold: (text: string) => text,
 };
 
-/**
- * One frame of a tool call as Pi draws it: both renderers run, sharing
- * `state`, and the call draws after them.
- */
+/** One frame of a tool call as Pi draws it: the call, then its result. */
 function drawFrame(
   tool: AnyTool | undefined,
   args: unknown,
-  state: object,
   result?: { text?: string; details: unknown },
   { isPartial = false, isError = false, expanded = false } = {},
 ): string[] {
-  const context = { args, expanded, isError, isPartial, state };
+  const context = { args, expanded, isError, isPartial, state: {} };
   const call = tool?.renderCall?.(args, plainTheme, context);
   const drawn =
     result &&
@@ -421,38 +414,6 @@ describe("output", () => {
 });
 
 describe("call results", () => {
-  const plain = (_color: string, text: string) => text;
-  const agent = (id: string, name: string): AgentInfo => ({
-    id,
-    name,
-    task: name,
-    cwd: "/repo",
-    model: { provider: "openai", modelId: "luna" },
-    state: "working",
-    closed: false,
-    createdAt: 0,
-    stateSince: 0,
-    lastActivityAt: 0,
-    usage: { ...EMPTY_USAGE, input: 1_000 },
-    activity: {},
-  });
-  const agents = [agent("1", "map"), agent("2", "report")];
-  const graph: GraphInfo = {
-    id: "10",
-    name: "audit",
-    policy: "allSettled",
-    state: "working",
-    closed: false,
-    stopped: false,
-    createdAt: 0,
-    stateSince: 0,
-    nodes: [
-      { agentId: "1", name: "map", inputs: [], end: false },
-      { agentId: "2", name: "report", inputs: ["1"], end: true },
-    ],
-    usage: { ...EMPTY_USAGE },
-  };
-
   test("an expanded graph call keeps each task's lines", () => {
     const call = tools()
       .get("agent_spawn_graph")
@@ -501,46 +462,48 @@ describe("call results", () => {
     expect(render(undefined, "")).toEqual(["<error>Failed"]);
   });
 
-  test("a waiting call shows what it started, then the outcome", () => {
+  test("results draw what the call saw, the same live and replayed", async () => {
+    const run = await gated();
     const tool = tools().get("agent_spawn_graph");
     const args = {
       name: "audit",
-      wait: 60,
+      wait: 1,
       agents: [
-        { name: "map", task: "Map the code." },
-        { name: "report", task: "Write it up.", after: ["map"] },
+        { name: "map", task: "map" },
+        { name: "report", task: "hold report", after: ["map"] },
       ],
     };
-    const state = {};
-    const partial = (details: unknown) =>
-      drawFrame(tool, args, state, { details }, { isPartial: true });
-    const started = { at: 5_000, started: true, graphs: [graph], agents };
-    const waiting = [
-      "✦ spawn graph audit · graph of 2",
-      "├─ map · luna",
-      "└─ report ← map · luna",
-      "  wait=60s",
+    const progress: unknown[] = [];
+    const result = await run("agent_spawn_graph", args, {
+      onUpdate: (update) => progress.push(update.details),
+    });
+    // While it waits, the result shows what the call started.
+    expect(
+      drawFrame(tool, args, { details: progress[0] }, { isPartial: true }),
+    ).toEqual([
+      "✦ spawn graph audit",
+      "  wait=1s",
       "  map → report",
+      "audit · graph of 2",
+      "├─ map · faux-1",
+      "└─ report ← map · faux-1",
+    ]);
+    // A wait that gave up marks what it gave up on, which stays true after
+    // the agents finish.
+    const timedOut = [
+      "✦ spawn graph audit",
+      "  wait=1s",
+      "  map → report",
+      "⊠ audit · graph 1/2",
+      "├─ ● map · faux-1 · 2.1k",
+      "└─ ⊠ report ← map · faux-1",
+      "Timed out",
     ];
-    // While it waits, the panel shows the live states.
-    expect(partial(started)).toEqual(waiting);
-    // Progress without what started adds nothing.
-    expect(partial({ at: 5_000, graphs: [graph], agents })).toEqual(waiting);
-    // The outcome replaces what started, as its replay draws it.
-    const done = { ...graph, state: "idle" as const };
-    const result = { details: { at: 5_000, graphs: [done], agents } };
-    const outcome = drawFrame(tool, args, state, result);
-    expect(outcome[0]).toBe("✦ spawn graph audit");
-    expect(outcome.join("\n")).not.toContain("graph of 2");
-    expect(outcome.join("\n")).toContain("audit · graph");
-    expect(outcome).toEqual(drawFrame(tool, args, {}, result));
-    // So does an error after progress.
-    partial(started);
-    const error = { text: "boom", details: {} };
-    const failed = drawFrame(tool, args, state, error, { isError: true });
-    expect(failed[0]).toBe("✦ spawn graph audit");
-    expect(failed).toContain("boom");
-    expect(failed).toEqual(drawFrame(tool, args, {}, error, { isError: true }));
+    const final = { details: result.details };
+    expect(drawFrame(tool, args, final)).toEqual(timedOut);
+    release?.();
+    await run("agent_wait", { names: ["audit"] });
+    expect(drawFrame(tool, args, structuredClone(final))).toEqual(timedOut);
   });
 
   test("collapsed lines end in an ellipsis; expanded ones wrap", () => {
@@ -554,17 +517,5 @@ describe("call results", () => {
       "  one two",
       "  three four",
     ]);
-  });
-
-  test("other calls show the agents' states", () => {
-    expect(
-      renderDetails({ at: 5_000, graphs: [graph], agents }, false, plain),
-    ).toBe(
-      [
-        "◉ audit · graph 0/2 · 5s",
-        "├─ ◉ map · luna · 5s · 1.0k",
-        "└─ ◉ report ← map · luna · 5s · 1.0k",
-      ].join("\n"),
-    );
   });
 });

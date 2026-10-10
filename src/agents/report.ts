@@ -4,7 +4,7 @@
  * helpers. Pure functions over plain data.
  */
 
-import type { AgentInfo } from "./types.js";
+import type { AgentInfo, AgentState, GraphNode } from "./types.js";
 
 /**
  * What an agent's latest turn produced: its answer, what it wrote before it
@@ -55,6 +55,31 @@ export interface ReportNode {
   body: string;
   /** Whether no other agent of the graph needs its result. */
   end: boolean;
+}
+
+/**
+ * How one agent of a graph did its task, and its answer or error: from the
+ * node's outcome once it has one, else from the agent's state.
+ */
+export function nodeResult(
+  node: GraphNode,
+  state: AgentState | undefined,
+): { kind: NodeKind; body: string } {
+  const outcome = node.outcome;
+  if (!outcome)
+    return { kind: state === "waiting" ? "waiting" : "working", body: "" };
+  if (outcome.kind === "answered") {
+    const { result } = outcome;
+    return result.stopReason === "error"
+      ? {
+          kind: "failed",
+          body: result.errorMessage ?? (result.text || "error"),
+        }
+      : { kind: "answered", body: result.text };
+  }
+  if (outcome.kind === "failed")
+    return { kind: "failed", body: outcome.reason };
+  return { kind: outcome.kind, body: "" };
 }
 
 /** How much of one result the text keeps. */

@@ -8,18 +8,17 @@ import type {
   AgentToolUpdateCallback,
   ExtensionAPI,
   ExtensionContext,
-  Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import {
-  type Component,
-  truncateToWidth,
-  wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
 import { type Static, type TSchema, Type } from "typebox";
+import {
+  observed,
+  receipt,
+  startedGraph,
+  type ToolReceipt,
+} from "../agents/receipts.js";
 import { turnResult } from "../agents/report.js";
 import type { AgentService } from "../agents/service.js";
-import { shapeLine } from "../agents/topology.js";
 import {
   AgentError,
   type AgentInfo,
@@ -31,15 +30,8 @@ import {
   WaitInterrupted,
 } from "../agents/types.js";
 import { AGENT_TOOL_NAMES } from "../host/tools.js";
-import {
-  AGENT_ICON,
-  type Colorize,
-  formatAgentLine,
-  formatGraphLine,
-  formatStartedLine,
-  graphShape,
-  oneLine,
-} from "../ui/format.js";
+import { graphShape, oneLine } from "../ui/format.js";
+import { PARENT_TOOL_VIEWS, positiveSeconds } from "../ui/tool-views.js";
 import { callKey } from "./calls.js";
 import {
   graphContent,
@@ -64,14 +56,10 @@ import { resolveSpawn } from "./spawn.js";
 
 const PROGRESS_MS = 1_000;
 
+/** What a call's result stores besides its text: its receipt, for the
+ * UI, and what delivery needs to know. */
 interface AgentToolDetails {
-  at: number;
-  /** The call started work and reports what it started, not its state. */
-  started?: boolean;
-  agents: AgentInfo[];
-  graphs?: GraphInfo[];
-  timedOut?: string[];
-  message?: string;
+  receipt: ToolReceipt;
   /** The results the call's wait took instead of their delivery, by ID:
    * stored with the result, they count as delivered. */
   deliveries?: string[];
@@ -81,9 +69,13 @@ function text(content: string, details: AgentToolDetails) {
   return { content: [{ type: "text" as const, text: content }], details };
 }
 
+function lookupAgent(service: AgentService) {
+  return (id: string) => service.agentById(id);
+}
+
 function lookup(service: AgentService): OutputLookup {
   return {
-    agent: (id) => service.agentById(id),
+    agent: lookupAgent(service),
     graph: (id) => service.graphById(id),
   };
 }
@@ -181,216 +173,14 @@ type Execute<T extends TSchema, O extends TSchema> = (
   call: string | undefined,
 ) => Promise<Returned<Static<O>>>;
 
-/** How a call renders: a title, the explicit arguments, and a body. */
-export interface CallView {
-  title: string;
-  pairs?: Record<string, unknown>;
-  body?: string;
-  /** The body's one-line form; defaults to the body with spaces folded. */
-  collapsed?: string;
-}
-
 interface AgentToolSpec<T extends TSchema, O extends TSchema> {
+  /** A name `PARENT_TOOL_VIEWS` draws. */
   name: string;
-  label: string;
   description: string;
   parameters: T;
   /** The schema of the output scripts get. */
   output: O;
-  call: (args: Static<T>) => CallView;
   execute: Execute<T, O>;
-}
-
-function pairValue(value: unknown): string | undefined {
-  if (value === undefined || value === null || value === "") return undefined;
-  if (Array.isArray(value)) return `[${value.map(String).join(",")}]`;
-  if (typeof value === "string")
-    return /^[\w./:@+,-]+$/.test(value) ? value : JSON.stringify(value);
-  return String(value);
-}
-
-/** `key=value` pairs of the arguments the model set, in order. */
-export function formatPairs(pairs: Record<string, unknown> = {}): string {
-  return Object.entries(pairs)
-    .flatMap(([key, value]) => {
-      const formatted = pairValue(value);
-      return formatted === undefined ? [] : [`${key}=${formatted}`];
-    })
-    .join(" ");
-}
-
-/**
- * Lines that wrap when expanded and otherwise end in an ellipsis at the
- * terminal width, so a collapsed call never spills onto a stray line.
- */
-export class FitLines implements Component {
-  constructor(
-    /** The text, or how to build it when it renders. */
-    private readonly text: string | (() => string),
-    private readonly wrap: boolean,
-  ) {}
-
-  render(width: number): string[] {
-    const text = typeof this.text === "string" ? this.text : this.text();
-    if (width <= 0 || !text) return [];
-    if (!this.wrap)
-      return text.split("\n").map((line) => truncateToWidth(line, width, "…"));
-    // A wrapped line continues under its own indentation.
-    return text.split("\n").flatMap((line) => {
-      const indent = line.match(/^ */)?.[0] ?? "";
-      const rest = line.slice(indent.length);
-      if (!rest) return [""];
-      return wrapTextWithAnsi(rest, Math.max(1, width - indent.length)).map(
-        (part) => `${indent}${part}`,
-      );
-    });
-  }
-
-  invalidate(): void {
-    // Stateless: every render derives from the text.
-  }
-}
-
-/** What a call started, drawn right below its title. */
-export interface StartedView {
-  /** Appended to the title, such as ` · graph of 3`. */
-  suffix?: string;
-  lines: string[];
-}
-
-/** A started graph as a tree; a started agent needs nothing beyond the call. */
-export function startedView(
-  details: AgentToolDetails,
-  color: Colorize,
-): StartedView | undefined {
-  const graph = details.graphs?.[0];
-  if (!graph) return undefined;
-  const byId = new Map(details.agents.map((info) => [info.id, info]));
-  const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
-  return {
-    suffix: color("dim", ` · graph of ${graph.nodes.length}`),
-    lines: graph.nodes.flatMap((node, index) => {
-      const info = byId.get(node.agentId);
-      if (!info) return [];
-      const lead = index === graph.nodes.length - 1 ? "└─ " : "├─ ";
-      return [
-        `${color("dim", lead)}${formatStartedLine(
-          info,
-          color,
-          node.inputs.map((input) => names.get(input) ?? input),
-        )}`,
-      ];
-    }),
-  };
-}
-
-/**
- * A call: its title, what it started right below, then a dim line of the
- * explicit arguments and the body, indented. Expanded, the body shows in
- * full, set off from what started by a blank line.
- */
-export function formatCall(
-  label: string,
-  view: CallView,
-  expanded: boolean,
-  color: Colorize,
-  bold: (text: string) => string = (text) => text,
-  started?: StartedView,
-): string {
-  const lines = [
-    `${color("accent", AGENT_ICON)} ${bold(label)} ${view.title}${started?.suffix ?? ""}`,
-    ...(started?.lines ?? []),
-  ];
-  const rest: string[] = [];
-  const pairs = formatPairs(view.pairs);
-  if (pairs) rest.push(`  ${color("dim", pairs)}`);
-  if (view.body) {
-    if (expanded)
-      rest.push(
-        ...view.body
-          .split("\n")
-          .map((line) => (line ? `  ${color("muted", line)}` : "")),
-      );
-    else
-      rest.push(
-        `  ${color("muted", view.collapsed ?? view.body.replace(/\s+/g, " ").trim())}`,
-      );
-  }
-  if (expanded && rest.length > 0 && (started?.lines.length ?? 0) > 0)
-    lines.push("");
-  return [...lines, ...rest].join("\n");
-}
-
-/**
- * The agents and graphs a call reports on, with their states. A call that
- * started work renders nothing here: its call shows what started, without
- * states that would only describe the moment of the call.
- */
-export function renderDetails(
-  details: AgentToolDetails | undefined,
-  expanded: boolean,
-  color: Colorize,
-): string {
-  if (!details) return "";
-  const lines: string[] = [];
-  if (details.message) lines.push(color("dim", details.message));
-  const byId = new Map(details.agents.map((info) => [info.id, info]));
-  const agentLines = (
-    info: AgentInfo,
-    lead: string,
-    indent: string,
-    inputs: string[] = [],
-  ) => {
-    lines.push(
-      `${color("dim", lead)}${formatAgentLine(info, details.at, color, inputs)}`,
-    );
-    if (expanded && info.state !== "working" && info.result?.text)
-      lines.push(
-        ...info.result.text
-          .split("\n")
-          .map((line) => `${color("dim", indent)}  ${line}`),
-      );
-  };
-  for (const graph of details.graphs ?? []) {
-    lines.push(formatGraphLine(graph, details.at, color));
-    const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
-    graph.nodes.forEach((node, index) => {
-      const info = byId.get(node.agentId);
-      if (!info) return;
-      byId.delete(node.agentId);
-      const last = index === graph.nodes.length - 1;
-      agentLines(
-        info,
-        last ? "└─ " : "├─ ",
-        last ? "   " : "│  ",
-        node.inputs.map((input) => names.get(input) ?? input),
-      );
-    });
-  }
-  for (const info of byId.values()) agentLines(info, "", "");
-  if (details.timedOut && details.timedOut.length > 0)
-    lines.push(
-      color("warning", `Still working: ${details.timedOut.join(", ")}`),
-    );
-  return lines.join("\n");
-}
-
-/**
- * Models sometimes write `wait: false` for "don't wait" or quote numbers.
- * Seconds that aren't a positive number mean no wait; numeric strings count.
- */
-/** A number of seconds, if the value is a positive number or its string. */
-function positiveSeconds(value: unknown): number | undefined {
-  const seconds = typeof value === "string" ? Number(value) : value;
-  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
-    ? seconds
-    : undefined;
-}
-
-/** `120s` for a call line; nothing for what prepareSeconds drops. */
-function seconds(value: unknown): string | undefined {
-  const parsed = positiveSeconds(value);
-  return parsed === undefined ? undefined : `${parsed}s`;
 }
 
 /**
@@ -413,9 +203,11 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
   host: SessionHost,
   spec: AgentToolSpec<T, O>,
 ): ToolDefinition<T, AgentToolDetails> {
+  const views = PARENT_TOOL_VIEWS[spec.name];
+  if (!views) throw new Error(`No view for ${spec.name}`);
   return {
     name: spec.name,
-    label: spec.label,
+    label: views.label,
     description: spec.description,
     parameters: spec.parameters,
     outputSchema: spec.output,
@@ -445,68 +237,19 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
         throw error;
       }
     },
-    // A call that started work shows what started below its title: the
-    // result stores it in the shared state, and the call reads it when it
-    // renders, after both renderers ran. An outcome replaces it.
-    renderCall(args, theme: Theme, context) {
-      const color: Colorize = (name, value) => theme.fg(name, value);
-      const state = context.state as { started?: AgentToolDetails };
-      return new FitLines(
-        () =>
-          formatCall(
-            spec.label,
-            spec.call(args as Static<T>),
-            context.expanded,
-            color,
-            (value) => theme.bold(value),
-            state.started ? startedView(state.started, color) : undefined,
-          ),
-        context.expanded,
-      );
-    },
-    renderResult(result, options, theme: Theme, context) {
-      const state = context.state as { started?: AgentToolDetails };
-      const details = result.details as AgentToolDetails | undefined;
-      // While a call waits, the panel shows the agents' live states, so the
-      // call shows only what it started.
-      if (options.isPartial) {
-        if (details?.started) state.started = details;
-        return new FitLines("", false);
-      }
-      // A final result alone decides what its call shows, so a replay
-      // without the progress draws the same: an outcome or an error drops
-      // what started, and a call that only started work sets it again.
-      delete state.started;
-      // An error carries no agent details: the tool threw, or Pi never ran
-      // the call because the model's message broke off. Show why.
-      if (context.isError || !details?.agents) {
-        const reason = result.content
-          .map((part) => (part.type === "text" ? part.text : ""))
-          .join("\n")
-          .trim();
-        return new FitLines(
-          theme.fg("error", reason || "Failed"),
-          options.expanded,
-        );
-      }
-      if (details.started) {
-        state.started = details;
-        return new FitLines("", false);
-      }
-      const color: Colorize = (name, value) => theme.fg(name, value);
-      return new FitLines(
-        renderDetails(details, options.expanded, color),
-        options.expanded,
-      );
-    },
+    // Calls draw their arguments, results their receipts: see
+    // `src/ui/tool-views.ts`.
+    renderCall: views.renderCall,
+    renderResult: views.renderResult,
   };
 }
 
 /**
- * Wait for agents, streaming their lines as progress. Progress of a call that
- * started work carries what it started, which the call draws while it waits.
- * The wait ends early when the parent is needed, such as when the user
- * steers, so Pi can place the steer instead of holding it back.
+ * Wait for agents, streaming their lines as progress for scripts and RPC
+ * clients. Progress draws only what the call started, its receipt
+ * `started`; the panel shows the live states. The wait ends early when the
+ * parent is needed, such as when the user steers, so Pi can place the steer
+ * instead of holding it back.
  */
 async function waitWithProgress(
   service: AgentService,
@@ -515,7 +258,7 @@ async function waitWithProgress(
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
   call: string | undefined,
-  started?: AgentToolDetails,
+  started: ToolReceipt = receipt(),
 ): Promise<Returned<WaitOutput>> {
   const snapshot = () => {
     const graphs = targets.flatMap((target) => {
@@ -528,11 +271,7 @@ async function waitWithProgress(
         target.kind === "agent" ? service.agentById(target.id) : undefined;
       return info ? [info] : [];
     });
-    return {
-      graphs,
-      named: agents,
-      agents: withNodes(service, graphs, agents),
-    };
+    return { graphs, agents };
   };
   const progress = () => {
     const { graphs, agents } = snapshot();
@@ -540,9 +279,11 @@ async function waitWithProgress(
       text(
         [
           ...graphs.map(graphStatusLine),
-          ...agents.map((info) => statusLine(service, info)),
+          ...withNodes(service, graphs, agents).map((info) =>
+            statusLine(service, info),
+          ),
         ].join("\n"),
-        started ?? { at: Date.now(), agents, graphs },
+        { receipt: started },
       ),
     );
   };
@@ -572,10 +313,12 @@ async function waitWithProgress(
           ? `${content}\n\nTimed out; still working: ${outcome.timedOut.join(", ")}.`
           : content,
       details: {
-        at: Date.now(),
-        agents: withNodes(service, outcome.graphs, outcome.agents),
-        ...(outcome.graphs.length > 0 ? { graphs: outcome.graphs } : {}),
-        ...(outcome.timedOut.length > 0 ? { timedOut: outcome.timedOut } : {}),
+        receipt: observed(
+          outcome.graphs,
+          outcome.agents,
+          lookupAgent(service),
+          outcome.timedOut.length > 0 ? "timeout" : "done",
+        ),
         ...(outcome.deliveries.length > 0
           ? { deliveries: outcome.deliveries }
           : {}),
@@ -584,12 +327,12 @@ async function waitWithProgress(
   } catch (error) {
     if (error instanceof WaitInterrupted) {
       const steered = error.reason === "attention";
-      const { graphs, named, agents } = snapshot();
+      const { graphs, agents } = snapshot();
       return {
         output: {
-          ...statusOutput(named, graphs, lookup(service)),
+          ...statusOutput(agents, graphs, lookup(service)),
           pending: [
-            ...named.filter(
+            ...agents.filter(
               (info) => info.state === "working" || info.state === "waiting",
             ),
             ...graphs.filter((graph) => graph.state === "working"),
@@ -599,12 +342,12 @@ async function waitWithProgress(
           ? "Stopped waiting because the user sent a message. The agents keep working; their results arrive as messages."
           : "Stopped waiting. The agents keep working.",
         details: {
-          at: Date.now(),
-          agents,
-          ...(graphs.length > 0 ? { graphs } : {}),
-          message: steered
-            ? "Stopped waiting for your message"
-            : "Stopped waiting",
+          receipt: observed(
+            graphs,
+            agents,
+            lookupAgent(service),
+            steered ? "attention" : "cancelled",
+          ),
         },
       };
     }
@@ -658,27 +401,6 @@ const agentFields = {
   ),
 };
 
-/** The settings an agent's call line shows. */
-function agentPairs(args: {
-  profile?: string;
-  model?: string;
-  thinking?: string;
-  tools?: string[];
-  skills?: string[];
-  cwd?: string;
-  delegate?: boolean;
-}): Record<string, unknown> {
-  return {
-    profile: args.profile,
-    model: args.model,
-    thinking: args.thinking,
-    tools: args.tools,
-    skills: args.skills,
-    cwd: args.cwd,
-    delegate: args.delegate,
-  };
-}
-
 function describeTarget(service: AgentService, target: Target): string {
   return target.kind === "graph"
     ? graphStatusLine(target.info)
@@ -690,26 +412,16 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_spawn",
-      label: "spawn",
       description:
         "Start an agent on a task. Its final message is its result, which arrives later as a message. Set wait to block for the result instead.",
       parameters: spawnParams,
       output: AgentOutput,
-      call: (args) => ({
-        title: args.name ?? "agent",
-        pairs: {
-          ...agentPairs(args),
-          wait: seconds(args.wait),
-        },
-        body: args.task,
-      }),
       async execute(service, params, ctx, signal, onUpdate, call) {
         const spec = await resolveSpawn(params, ctx, {
           skills: host.skills.get,
           thinking: pi.getThinkingLevel(),
         });
         const info = await service.spawn(spec);
-        const started = { at: Date.now(), started: true, agents: [info] };
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(
             service,
@@ -718,13 +430,13 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
             signal,
             onUpdate,
             call,
-            started,
           );
           return { ...waited, output: agentNow(service, info.id) };
         }
+        // The call line already names what it started.
         return {
           content: `Started ${info.name}.`,
-          details: started,
+          details: { receipt: receipt() },
           output: agentNow(service, info.id),
         };
       },
@@ -767,50 +479,10 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_spawn_graph",
-      label: "spawn graph",
       description:
         "Start agents that work together on related tasks. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. Set wait to block for the result instead.",
       parameters: graphParams,
       output: GraphOutput,
-      call: (args) => {
-        const agents = args.agents ?? [];
-        const label = (agent: { name?: string }, index: number) =>
-          agent.name ?? `#${index + 1}`;
-        const shape = shapeLine(
-          agents.map((agent, index) => ({
-            key: label(agent, index),
-            inputs: agent.after ?? [],
-          })),
-        );
-        return {
-          title: args.name ?? "graph",
-          pairs: {
-            failFast: args.failFast,
-            wait: seconds(args.wait),
-          },
-          // The shape, then one paragraph per agent.
-          body: [
-            shape,
-            agents
-              .map((agent, index) => {
-                const pairs = formatPairs(agentPairs(agent));
-                const after = agent.after?.length
-                  ? ` ← ${agent.after.join(", ")}`
-                  : "";
-                // The task keeps its own lines, indented under the agent.
-                const [first = "", ...rest] = (agent.task ?? "")
-                  .trim()
-                  .split("\n");
-                return [
-                  `${label(agent, index)}${after}${pairs ? ` (${pairs})` : ""}: ${first}`,
-                  ...rest.map((line) => (line ? `  ${line}` : "")),
-                ].join("\n");
-              })
-              .join("\n\n"),
-          ].join("\n"),
-          collapsed: shape,
-        };
-      },
       async execute(service, params, ctx, signal, onUpdate, call) {
         const thinking = pi.getThinkingLevel();
         const graph = await service.spawnGraph({
@@ -827,12 +499,9 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
             })),
           ),
         });
-        const started = {
-          at: Date.now(),
-          started: true,
-          graphs: [graph],
-          agents: withNodes(service, [graph], []),
-        };
+        const started = receipt({
+          graphs: [startedGraph(graph, lookupAgent(service))],
+        });
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(
             service,
@@ -847,7 +516,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         }
         return {
           content: `Started graph ${graph.name}: ${graphShape(graph)}.`,
-          details: started,
+          details: { receipt: started },
           output: graphNow(service, graph.id),
         };
       },
@@ -867,19 +536,10 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_send",
-      label: "send",
       description:
         "Send a message to an agent, also one that answered or was stopped. A working agent receives it as steering. The answer arrives later as a message. Set wait to block for it instead.",
       parameters: sendParams,
       output: AgentOutput,
-      call: (args) => ({
-        title: args.name ?? "",
-        pairs: {
-          followUp: args.followUp,
-          wait: seconds(args.wait),
-        },
-        body: args.message,
-      }),
       async execute(service, params, _ctx, signal, onUpdate, call) {
         const before = service.get(params.name);
         const sent = await service.send(
@@ -907,7 +567,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
             : "Sent to";
         return {
           content: `${verb} ${info.name}.`,
-          details: { at: Date.now(), started: true, agents: [info] },
+          details: { receipt: receipt() },
           output: agentNow(service, info.id),
         };
       },
@@ -929,17 +589,10 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_wait",
-      label: "wait",
       description:
         "Block until agents or graphs answer and return their results.",
       parameters: waitParams,
       output: WaitOutput,
-      call: (args) => ({
-        title: (args.names ?? []).join(", "),
-        pairs: {
-          timeout: seconds(args.timeout),
-        },
-      }),
       execute: (service, params, _ctx, signal, onUpdate, call) =>
         waitWithProgress(
           service,
@@ -964,11 +617,9 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_status",
-      label: "status",
       description: "List agents and graphs with their state and task.",
       parameters: statusParams,
       output: StatusOutput,
-      call: (args) => ({ title: args.name ?? "all" }),
       async execute(service, params) {
         if (params.name) {
           const target = service.find(params.name);
@@ -978,9 +629,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
           return {
             content: describeTarget(service, target),
             details: {
-              at: Date.now(),
-              agents: withNodes(service, graphs, agents),
-              ...(graphs.length > 0 ? { graphs } : {}),
+              receipt: observed(graphs, agents, lookupAgent(service)),
             },
             output: statusOutput(agents, graphs, lookup(service)),
           };
@@ -993,11 +642,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         ];
         return {
           content: lines.length === 0 ? "No agents." : lines.join("\n"),
-          details: {
-            at: Date.now(),
-            agents: withNodes(service, graphs, agents),
-            ...(graphs.length > 0 ? { graphs } : {}),
-          },
+          details: { receipt: observed(graphs, agents, lookupAgent(service)) },
           output: statusOutput(agents, graphs, lookup(service)),
         };
       },
@@ -1007,14 +652,12 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_stop",
-      label: "stop",
       description:
         "Stop an agent or a graph: end its work and remove it. Messaging an agent later starts it again.",
       parameters: Type.Object({
         name: Type.String({ description: "Agent or graph name" }),
       }),
       output: StopOutput,
-      call: (args) => ({ title: args.name ?? "" }),
       async execute(service, params) {
         const target = await service.stop(params.name);
         const output = stopOutput(target);
@@ -1022,15 +665,15 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
           return {
             content: `Stopped graph ${target.info.name} and its agents.`,
             details: {
-              at: Date.now(),
-              graphs: [target.info],
-              agents: withNodes(service, [target.info], []),
+              receipt: observed([target.info], [], lookupAgent(service)),
             },
             output,
           };
         return {
           content: `Stopped ${target.info.name}.`,
-          details: { at: Date.now(), agents: [target.info] },
+          details: {
+            receipt: observed([], [target.info], lookupAgent(service)),
+          },
           output,
         };
       },

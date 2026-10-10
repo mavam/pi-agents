@@ -130,10 +130,15 @@ and they start other agents only when you let them delegate.
 
 ### Skills
 
-Agents see the same skills as your Pi session: those in `~/.pi/agent/skills`
-and `~/.agents/skills`, from packages and your settings, and the project's
-skills when you trust the project. Like Pi, an agent loads a skill when its
-task calls for it.
+Agents see the skills Pi finds on disk: those in `~/.pi/agent/skills` and
+`~/.agents/skills`, from packages and your settings, and the project's skills
+when you trust the project. Like Pi, an agent loads a skill when its task
+calls for it.
+
+Agents don't get skills that exist only in the running session: those from
+`--skill`, from packages passed on the command line, or from other
+extensions. `--no-skills` doesn't apply to agents either. Agents pick up new
+or changed skills after `/reload`.
 
 To focus an agent, name its skills:
 

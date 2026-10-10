@@ -7,6 +7,10 @@
  * project contributes nothing, but the user's skills stay available.
  * Resolution never installs a missing package; it skips it.
  *
+ * Only resources on disk count. What exists only in the running session,
+ * such as `--skill` paths, `-e` packages, skills that extensions add, and
+ * `--no-skills`, doesn't reach agents.
+ *
  * Agents see these skills as a catalog, like the parent session, or get a
  * chosen few inlined. Only the user chooses skills marked
  * `disable-model-invocation`: through `/skill:` in Pi, or in a profile.

@@ -289,8 +289,12 @@ never lose one. On session resume, unacknowledged settled requests deliver.
   the project's `.pi/skills` and `.agents/skills`. An untrusted project
   contributes none, but the user's skills remain. Resolution skips packages
   that aren't installed instead of installing them, and loads once per
-  directory and trust, like Pi at startup. An agent sees them as a catalog
-  unless a profile or the spawn names skills (`AgentRecord.ambientSkills`):
+  directory and trust, like Pi at startup; `/reload` starts a fresh catalog.
+  Session-only resources don't reach agents: `--skill` paths, packages from
+  `-e`, skills extensions add, and `--no-skills`. Packages that npm resolves
+  globally may run `npm root -g` once per catalog load. An agent sees them as
+  a catalog unless a profile or the spawn names skills
+  (`AgentRecord.ambientSkills`):
   a named list inlines those skills in the instructions and turns the
   catalog off, and an empty list means none. The spawn's list replaces the
   profile's. Pi's catalog hides skills marked `disable-model-invocation`,

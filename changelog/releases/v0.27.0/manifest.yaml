@@ -1,0 +1,8 @@
+created: 2026-10-10
+title: Skills for every agent
+intro: >-
+  Agents now find your skills the way Pi does, and Pi can choose which skills each
+  agent gets. Project profiles now come from the directory where you start Pi.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.26.1

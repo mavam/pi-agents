@@ -409,6 +409,58 @@ describe("script output", () => {
 });
 
 describe("repeated calls", () => {
+  test("a repeated call waits for what it started, not newer work", async () => {
+    const run = await gated();
+    // Each first run answers, then the name moves to newer work that holds.
+    const spawn = { task: "one", name: "w", wait: 60 };
+    await run("agent_spawn", spawn, { id: "spawn" });
+    await run("agent_stop", { name: "w" });
+    await run("agent_spawn", { task: "hold", name: "w" });
+    expect((await run("agent_spawn", spawn, { id: "spawn" })).output).toEqual({
+      kind: "agent",
+      name: "w",
+      state: "idle",
+      result: "done: one",
+    });
+
+    await run("agent_spawn", { task: "one", name: "a", wait: 60 });
+    const send = { name: "a", message: "two", wait: 60 };
+    await run("agent_send", send, { id: "send" });
+    await run("agent_stop", { name: "a" });
+    await run("agent_spawn", { task: "hold", name: "a" });
+    expect((await run("agent_send", send, { id: "send" })).output).toEqual({
+      kind: "agent",
+      name: "a",
+      state: "idle",
+      result: "done: two",
+    });
+
+    const graph = {
+      name: "g",
+      agents: [
+        { task: "one", name: "x" },
+        { task: "two", name: "y", after: ["x"] },
+      ],
+      wait: 60,
+    };
+    await run("agent_spawn_graph", graph, { id: "graph" });
+    await run("agent_stop", { name: "g" });
+    await run("agent_spawn_graph", {
+      name: "g",
+      agents: [
+        { task: "hold p", name: "p" },
+        { task: "q", name: "q", after: ["p"] },
+      ],
+    });
+    expect(
+      (await run("agent_spawn_graph", graph, { id: "graph" })).output,
+    ).toMatchObject({ kind: "graph", name: "g", state: "idle" });
+    // The newer work under the names keeps working.
+    expect(service?.get("w")?.state).toBe("working");
+    expect(service?.get("a")?.state).toBe("working");
+    expect(service?.getGraph("g")?.state).toBe("working");
+  });
+
   test("a call with the same ID acts once", async () => {
     const run = await gated();
     const spawn = { task: "hold", name: "w" };

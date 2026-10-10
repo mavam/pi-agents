@@ -173,7 +173,10 @@ a crash can declare the parent tools safe to repeat.
   good, since stops are rare; a stop without a key, such as the user's,
   leaves once done.
 - Repeats look up their key before resolving names, so a name that moved
-  to a newer agent doesn't redirect them.
+  to a newer agent doesn't redirect them. A spawn, graph spawn, or send
+  that waits then waits for what it started by its immutable ID
+  (`AgentService.waitFor`), and looks agents and graphs up by ID
+  (`agentById`, `graphById`), which no name can shadow.
 - Inside Pi the key is the tool call's ID qualified by the session entry of
   the assistant message that issued it (`src/pi/calls.ts`): some providers
   number calls per message, so IDs alone can repeat across messages.
@@ -703,23 +706,25 @@ alone, that calls without a key act every time, and that the session of
 v0.27.0 takes keyed calls. A crash after every step of an agent's or a
 graph's stop, followed by a restart, finishes the stop, and replaying it
 then leaves newer work alone; a stop's receipt outlives twenty later stops.
-Graph tests cover `allSettled` with answers and failures, pipelines, merges
-with failed inputs, skipped agents, `failFast` stopping waiting agents, edge
-validation, stopping a graph, the ownership tree through the task graph,
-restarts mid-graph and mid-pipeline that repeat no finished agent and send
-no task twice, and messaging a graph's agent after the graph finished. Tool
-tests check every result scripts get against its output schema, for answers,
-interrupted and failed turns after an earlier answer, waits ended by a
-timeout, an abort, or a steer, and answered, failed, skipped, and stopped
-graphs. A faux model holds prompts until the test releases them or the
-request aborts, so these tests don't race the model. Delegation tests cover
-a fan-out with a merging helper, that helpers and other agents can't
-delegate, progress, Esc on the agent, stopping a graph above it, stopping
-only the helpers, tool and size limits, names, and a restart mid-delegation
-that starts no second set of helpers. Request limit tests count requests
-reaching the faux provider: with a limit of 1, streams, compactions, and
-spawned agents never overlap, waiting requests run in order, and one aborted
-while waiting frees its place.
+A replayed spawn, send, or graph spawn that waits returns what its first run
+started, while newer work holds the name. Graph tests cover `allSettled`
+with answers and failures, pipelines, merges with failed inputs, skipped
+agents, `failFast` stopping waiting agents, edge validation, stopping a
+graph, the ownership tree through the task graph, restarts mid-graph and
+mid-pipeline that repeat no finished agent and send no task twice, and
+messaging a graph's agent after the graph finished. Tool tests check every
+result scripts get against its output schema, for answers, interrupted and
+failed turns after an earlier answer, waits ended by a timeout, an abort, or
+a steer, and answered, failed, skipped, and stopped graphs. A faux model
+holds prompts until the test releases them or the request aborts, so these
+tests don't race the model. Delegation tests cover a fan-out with a merging
+helper, that helpers and other agents can't delegate, progress, Esc on the
+agent, stopping a graph above it, stopping only the helpers, tool and size
+limits, names, and a restart mid-delegation that starts no second set of
+helpers. Request limit tests count requests reaching the faux provider: with
+a limit of 1, streams, compactions, and spawned agents never overlap,
+waiting requests run in order, and one aborted while waiting frees its
+place.
 
 ## Deferred
 

@@ -53,7 +53,7 @@ function message(
   details: GraphResultDetails | ResultDetails;
 } {
   if (delivery.kind === "graph") {
-    const graph = lookup.getGraph(delivery.graphId);
+    const graph = lookup.graphById(delivery.graphId);
     const details = graphResultDetails(
       {
         id: delivery.graphId,
@@ -61,7 +61,7 @@ function message(
         policy: graph?.policy ?? "allSettled",
       },
       delivery.nodes,
-      (agentId) => lookup.get(agentId),
+      (agentId) => lookup.agentById(agentId),
     );
     return {
       customType: GRAPH_RESULT_MESSAGE,
@@ -70,7 +70,7 @@ function message(
       details: { ...details, delivery: delivery.id },
     };
   }
-  const details = resultDetails(delivery, lookup.get(delivery.agentId));
+  const details = resultDetails(delivery, lookup.agentById(delivery.agentId));
   return {
     customType: RESULT_MESSAGE,
     content: resultContent(details),

@@ -112,7 +112,7 @@ export class AgentPanel {
       {
         agents: service.list(),
         graphs: service.graphs(),
-        agent: (id) => service.get(id),
+        agent: (id) => service.agentById(id),
       },
       panelCompare,
       (graph) => !collapse || graph.state === "working",

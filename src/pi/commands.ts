@@ -290,7 +290,7 @@ async function openAgentsOverlay(
       {
         agents: service.list({ includeClosed: true }),
         graphs: service.graphs({ includeClosed: true }),
-        agent: (id) => service.get(id),
+        agent: (id) => service.agentById(id),
       },
       (left, right) =>
         Number(!right.closed || right.state === "working") -
@@ -346,7 +346,7 @@ async function openAgentsOverlay(
     detail: (row, color, bold) =>
       row.kind === "agent"
         ? agentDetail(row.agent, color)
-        : graphDetail(row.graph, (id) => service.get(id), color, bold),
+        : graphDetail(row.graph, (id) => service.agentById(id), color, bold),
     onAction: (key, row) => {
       if (key === "space") return { select: fold(row, deps.panel.disclosure) };
       if (key === "tab") {

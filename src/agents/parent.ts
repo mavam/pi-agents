@@ -21,10 +21,10 @@ export interface Handover {
   call?: string;
 }
 
-/** What the parent may read to word deliveries. */
+/** What the parent may read to word deliveries, by immutable ID. */
 export interface AgentLookup {
-  get(nameOrId: string): AgentInfo | undefined;
-  getGraph(nameOrId: string): GraphInfo | undefined;
+  agentById(id: string): AgentInfo | undefined;
+  graphById(id: string): GraphInfo | undefined;
 }
 
 /** Ends one wait of the parent; release it once the wait ended. */

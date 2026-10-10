@@ -26,6 +26,7 @@ import {
   GRAPH_SIZE,
   type GraphInfo,
   type Target,
+  type TargetRef,
   THINKING_LEVELS,
   WaitInterrupted,
 } from "../agents/types.js";
@@ -82,23 +83,23 @@ function text(content: string, details: AgentToolDetails) {
 
 function lookup(service: AgentService): OutputLookup {
   return {
-    agent: (id) => service.get(id),
-    graph: (id) => service.getGraph(id),
+    agent: (id) => service.agentById(id),
+    graph: (id) => service.graphById(id),
   };
 }
 
 /** An agent as scripts see it now, by ID. */
 function agentNow(service: AgentService, id: string): AgentOutput {
   return agentOutput(
-    service.get(id) as AgentInfo,
-    (graph) => service.getGraph(graph)?.name,
+    service.agentById(id) as AgentInfo,
+    (graph) => service.graphById(graph)?.name,
   );
 }
 
 /** A graph as scripts see it now, by ID. */
 function graphNow(service: AgentService, id: string): GraphOutput {
-  return graphOutput(service.getGraph(id) as GraphInfo, (agent) =>
-    service.get(agent),
+  return graphOutput(service.graphById(id) as GraphInfo, (agent) =>
+    service.agentById(agent),
   );
 }
 
@@ -115,7 +116,7 @@ function describeAgent(info: AgentInfo): string {
 /** The model-facing summary of a graph: its result once it finished. */
 function describeGraph(service: AgentService, graph: GraphInfo): string {
   const details = graphResultDetails(graph, graph.nodes, (id) =>
-    service.get(id),
+    service.agentById(id),
   );
   if (graph.stopped) return `Graph ${graph.name} was stopped.`;
   if (graph.state === "working")
@@ -130,7 +131,7 @@ function statusLine(service: AgentService, info: AgentInfo): string {
     : info.activity.tool
       ? `${info.state}, using ${info.activity.tool}`
       : info.state;
-  const graph = info.graph ? service.getGraph(info.graph) : undefined;
+  const graph = info.graph ? service.graphById(info.graph) : undefined;
   return `${info.name} (${state}${graph ? `, in graph ${graph.name}` : ""}): ${oneLine(info.task, 120)}`;
 }
 
@@ -153,7 +154,7 @@ function withNodes(
     result.push(info);
   };
   for (const graph of graphs)
-    for (const node of graph.nodes) add(service.get(node.agentId));
+    for (const node of graph.nodes) add(service.agentById(node.agentId));
   for (const agent of agents) add(agent);
   return result;
 }
@@ -515,7 +516,7 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
  */
 async function waitWithProgress(
   service: AgentService,
-  names: string[],
+  targets: readonly TargetRef[],
   timeoutSeconds: number | undefined,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
@@ -523,13 +524,16 @@ async function waitWithProgress(
   started?: AgentToolDetails,
 ): Promise<Returned<WaitOutput>> {
   const snapshot = () => {
-    const targets = names.flatMap((name) => service.find(name) ?? []);
-    const graphs = targets.flatMap((target) =>
-      target.kind === "graph" ? [target.info] : [],
-    );
-    const agents = targets.flatMap((target) =>
-      target.kind === "agent" ? [target.info] : [],
-    );
+    const graphs = targets.flatMap((target) => {
+      const info =
+        target.kind === "graph" ? service.graphById(target.id) : undefined;
+      return info ? [info] : [];
+    });
+    const agents = targets.flatMap((target) => {
+      const info =
+        target.kind === "agent" ? service.agentById(target.id) : undefined;
+      return info ? [info] : [];
+    });
     return {
       graphs,
       named: agents,
@@ -551,7 +555,7 @@ async function waitWithProgress(
   progress();
   const timer = setInterval(progress, PROGRESS_MS);
   try {
-    const outcome = await service.wait(names, {
+    const outcome = await service.waitFor(targets, {
       ...(signal ? { signal } : {}),
       ...(timeoutSeconds !== undefined
         ? { timeoutMs: timeoutSeconds * 1000 }
@@ -713,9 +717,11 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         const info = await service.spawn(spec, { call: call.key });
         const started = { at: Date.now(), started: true, agents: [info] };
         if (params.wait !== undefined) {
+          // By ID: a replayed call waits for what it started, even once
+          // the name belongs to newer work.
           const waited = await waitWithProgress(
             service,
-            [info.name],
+            [{ kind: "agent", id: info.id }],
             params.wait,
             signal,
             onUpdate,
@@ -841,7 +847,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(
             service,
-            [graph.name],
+            [{ kind: "graph", id: graph.id }],
             params.wait,
             signal,
             onUpdate,
@@ -896,7 +902,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         if (params.wait !== undefined) {
           const waited = await waitWithProgress(
             service,
-            [sent.name],
+            [{ kind: "agent", id: sent.id }],
             params.wait,
             signal,
             onUpdate,
@@ -904,7 +910,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
           );
           return { ...waited, output: agentNow(service, sent.id) };
         }
-        const info = service.get(sent.id) as AgentInfo;
+        const info = service.agentById(sent.id) as AgentInfo;
         const verb =
           before?.state === "working"
             ? params.followUp
@@ -949,7 +955,11 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       execute: (service, params, _ctx, signal, onUpdate, call) =>
         waitWithProgress(
           service,
-          params.names,
+          params.names.map((name) => {
+            const target = service.find(name);
+            if (!target) throw new AgentError(`No agent named ${name}`);
+            return { kind: target.kind, id: target.info.id };
+          }),
           params.timeout,
           signal,
           onUpdate,

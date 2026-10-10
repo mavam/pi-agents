@@ -442,7 +442,7 @@ class AgentPane implements Component {
   }
 
   private info(): AgentInfo | undefined {
-    return this.options.service.get(this.options.agentId);
+    return this.options.service.agentById(this.options.agentId);
   }
 
   private showFlash(text: string): void {

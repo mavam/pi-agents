@@ -206,6 +206,12 @@ export interface GraphSpec {
   agents: GraphAgentSpec[];
 }
 
+/** An agent or a graph by its immutable ID. */
+export interface TargetRef {
+  kind: "agent" | "graph";
+  id: string;
+}
+
 /** An agent or a graph, as a name resolves. */
 export type Target =
   | { kind: "agent"; info: AgentInfo }

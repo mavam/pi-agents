@@ -113,6 +113,7 @@ import {
   type SendMode,
   type SpawnSpec,
   type Target,
+  type TargetRef,
   type TaskNode,
   USER_MESSAGE_PREFIX,
   WaitInterrupted,
@@ -379,9 +380,25 @@ export class AgentService {
     return undefined;
   }
 
+  /** An agent by its immutable ID, which no name can shadow. */
+  agentById(id: string): AgentInfo | undefined {
+    return this.infos.get(id);
+  }
+
+  /** A graph by its immutable ID, which no name can shadow. */
+  graphById(id: string): GraphInfo | undefined {
+    return this.graphInfos.get(id);
+  }
+
   private require(nameOrId: string): AgentInfo {
     const info = this.get(nameOrId);
     if (!info) throw new AgentError(`No agent named ${nameOrId}`);
+    return info;
+  }
+
+  private requireAgent(id: string): AgentInfo {
+    const info = this.infos.get(id);
+    if (!info) throw new AgentError(`No agent with ID ${id}`);
     return info;
   }
 
@@ -510,7 +527,7 @@ export class AgentService {
   private async submitted(agentId: string): Promise<AgentInfo> {
     await this.flushOutbox(agentId);
     await this.refresh([agentId]);
-    return this.require(agentId);
+    return this.requireAgent(agentId);
   }
 
   /** Outbox: submit recorded parent requests that lack their submission. */
@@ -696,7 +713,7 @@ export class AgentService {
     }, CONTEXT);
     await this.submit(info.id, rid, request);
     await this.refresh([info.id]);
-    return this.require(info.id);
+    return this.requireAgent(info.id);
   }
 
   /** The agent that holds a parent request, recorded or submitted. */
@@ -813,7 +830,7 @@ export class AgentService {
   private stopTarget(operation: StopOperation): Target {
     return operation.kind === "graph"
       ? { kind: "graph", info: this.requireGraph(operation.target) }
-      : { kind: "agent", info: this.require(operation.target) };
+      : { kind: "agent", info: this.requireAgent(operation.target) };
   }
 
   /** What a stop ends in one agent: its current and queued inputs. */
@@ -905,18 +922,35 @@ export class AgentService {
    * `WaitInterrupted`.
    */
   async wait(names: string[], options: WaitOptions = {}): Promise<WaitOutcome> {
-    const targets = names.map((name) => this.requireTarget(name));
+    return this.waitFor(
+      names.map((name) => {
+        const target = this.requireTarget(name);
+        return { kind: target.kind, id: target.info.id };
+      }),
+      options,
+    );
+  }
+
+  /** `wait`, for agents and graphs by their immutable IDs, which a name
+   * that moved to newer work can't redirect. */
+  async waitFor(
+    targets: readonly TargetRef[],
+    options: WaitOptions = {},
+  ): Promise<WaitOutcome> {
+    for (const target of targets)
+      if (target.kind === "agent") this.requireAgent(target.id);
+      else this.requireGraph(target.id);
     const ids = [
       ...new Set(
         targets.flatMap((target) =>
-          target.kind === "agent" ? [target.info.id] : [],
+          target.kind === "agent" ? [target.id] : [],
         ),
       ),
     ];
     const graphIds = [
       ...new Set(
         targets.flatMap((target) =>
-          target.kind === "graph" ? [target.info.id] : [],
+          target.kind === "graph" ? [target.id] : [],
         ),
       ),
     ];
@@ -974,10 +1008,12 @@ export class AgentService {
         await this.refresh(ids);
       }
       return {
-        agents: ids.map((id) => this.require(id)),
+        agents: ids.map((id) => this.requireAgent(id)),
         graphs: graphIds.map((id) => this.requireGraph(id)),
         timedOut: [
-          ...ids.filter((id) => !idle.has(id)).map((id) => this.require(id)),
+          ...ids
+            .filter((id) => !idle.has(id))
+            .map((id) => this.requireAgent(id)),
           ...graphIds
             .filter((id) => !ended.has(id))
             .map((id) => this.requireGraph(id)),

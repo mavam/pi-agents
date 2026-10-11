@@ -27,6 +27,7 @@ import {
 import { DEFAULT_AGENT_TOOLS } from "../host/tools.js";
 import { CONTEXT, contextFor, conversationId, taskId } from "./context.js";
 import { DELEGATE_TOOL } from "./delegation.js";
+import { Delivery } from "./delivery.js";
 import { type AgentExtensions, agentSelection } from "./extensions.js";
 import { GraphTask, NodeTask } from "./graphs.js";
 import { MessageLog } from "./message-log.js";
@@ -36,28 +37,21 @@ import type { Parent } from "./parent.js";
 import { Projection } from "./projection.js";
 import {
   AgentsDoc,
-  answerDeliveryId,
-  failureDeliveryId,
   GraphsDoc,
-  graphDeliveryId,
   type ParentRequest,
   requestId,
 } from "./records.js";
 import { AgentStore } from "./store.js";
 import { resolveEdges } from "./topology.js";
 import {
-  type AgentDelivery,
   AgentError,
   type AgentInfo,
   GRAPH_SIZE,
-  type GraphDelivery,
   type GraphInfo,
-  type GraphNode,
   type GraphPolicy,
   type GraphSpec,
   isThinkingLevel,
   type MessageInfo,
-  type NodeOutcome,
   type PendingDelivery,
   type SendMode,
   type SpawnSpec,
@@ -67,6 +61,8 @@ import {
   USER_MESSAGE_PREFIX,
   WaitInterrupted,
 } from "./types.js";
+
+import { Waits } from "./waits.js";
 
 const REFRESH_DELAY_MS = 50;
 
@@ -114,39 +110,15 @@ export function isGraphVisible(info: GraphInfo): boolean {
   return !info.closed || info.state === "working";
 }
 
-/** The graph ended and every agent's job has an outcome. */
-function isSettled(
-  info: GraphInfo,
-): info is GraphInfo & { nodes: Array<GraphNode & { outcome: NodeOutcome }> } {
-  return (
-    info.state !== "working" &&
-    info.nodes.every((node) => node.outcome !== undefined)
-  );
-}
-
 export class AgentService {
-  private readonly waiters = new Map<string, number>();
-  private readonly graphWaiters = new Map<string, number>();
-  /** Checks run after every refresh, for waits on graphs and nodes. */
-  private readonly checks = new Set<() => void>();
   private readonly listeners = new Set<() => void>();
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshChain: Promise<void> = Promise.resolve();
   private unsubscribeParent: (() => void) | undefined;
-  private deliveryChain: Promise<void> = Promise.resolve();
-  private deliveryQueued = false;
-  /** Deliveries handed to the parent that it doesn't hold yet: posted, or
-   * carried by the result of a parent call's wait, with that call's key.
-   * In memory only: after a restart, the parent decides what it holds, and
-   * what it doesn't hold goes out again. */
-  private readonly inFlight = new Map<
-    string,
-    { carried: boolean; call?: string }
-  >();
-  /** Whether delivery asked the parent what it holds since starting. */
-  private reconciled = false;
   private closed = false;
 
+  private readonly delivery: Delivery;
+  private readonly waits: Waits;
   private readonly projection: Projection;
   private readonly messageLog: MessageLog;
   private readonly observer: HarnessObserver;
@@ -155,7 +127,6 @@ export class AgentService {
   private readonly anchor: Conversation;
   private readonly extensions: AgentExtensions;
   private readonly parent: Parent;
-  private readonly report: (error: unknown) => void;
   private readonly refreshDelayMs: number;
 
   private constructor(options: AgentServiceOptions) {
@@ -164,7 +135,6 @@ export class AgentService {
     this.anchor = options.anchor;
     this.extensions = options.extensions;
     this.parent = options.parent;
-    this.report = options.onReport ?? (() => {});
     this.refreshDelayMs = options.refreshDelayMs ?? REFRESH_DELAY_MS;
     this.messageLog = new MessageLog({
       store: this.store,
@@ -184,7 +154,21 @@ export class AgentService {
       harness: this.harness,
       store: this.store,
       observer: this.observer,
-      carried: (id) => this.inFlight.get(id)?.carried === true,
+      carried: (id) => this.delivery.carried(id),
+    });
+    this.waits = new Waits({
+      projection: this.projection,
+      isClosed: () => this.closed,
+    });
+    this.delivery = new Delivery({
+      parent: this.parent,
+      store: this.store,
+      projection: this.projection,
+      holds: this.waits,
+      lookup: this,
+      refresh: (ids) => this.refresh(ids),
+      report: options.onReport ?? (() => {}),
+      isClosed: () => this.closed,
     });
     this.extensions.hub.state = (id) => this.projection.info(id)?.state;
   }
@@ -218,7 +202,7 @@ export class AgentService {
     await this.messageLog.load();
     await this.refresh(Object.keys(this.projection.agents()));
     this.unsubscribeParent = this.parent.subscribe(() =>
-      this.scheduleDelivery(),
+      this.delivery.schedule(),
     );
   }
 
@@ -231,9 +215,9 @@ export class AgentService {
     this.observer.stop();
     this.unsubscribeParent?.();
     this.listeners.clear();
-    for (const check of [...this.checks]) check();
+    this.waits.check();
     await this.refreshChain.catch(() => {});
-    await this.deliveryChain;
+    await this.delivery.settle();
   }
 
   // --- Observation ---
@@ -382,15 +366,6 @@ export class AgentService {
     } finally {
       graph.dispose();
     }
-  }
-
-  /** Whether a wait currently covers the agent. */
-  private isAwaited(agentId: string): boolean {
-    return (this.waiters.get(agentId) ?? 0) > 0;
-  }
-
-  private isGraphAwaited(graphId: string): boolean {
-    return (this.graphWaiters.get(graphId) ?? 0) > 0;
   }
 
   // --- Operations ---
@@ -706,16 +681,14 @@ export class AgentService {
           : []),
       ].filter((each): each is AbortSignal => each !== undefined),
     );
-    for (const id of ids) this.waiters.set(id, (this.waiters.get(id) ?? 0) + 1);
-    for (const id of graphIds)
-      this.graphWaiters.set(id, (this.graphWaiters.get(id) ?? 0) + 1);
+    this.waits.hold(ids, graphIds);
     const idle = new Set<string>();
     const ended = new Set<string>();
     try {
       await Promise.all([
         ...ids.map(async (id) => {
           // A graph agent's job arrives through its node.
-          if (!(await this.untilNodeEnded(id, signal))) return;
+          if (!(await this.waits.untilNodeEnded(id, signal))) return;
           const conversation = await this.harness.conversation(
             conversationId(id),
             CONTEXT,
@@ -728,26 +701,24 @@ export class AgentService {
           }
         }),
         ...graphIds.map(async (id) => {
-          if (await this.untilSettled(id, signal)) ended.add(id);
+          if (await this.waits.untilSettled(id, signal)) ended.add(id);
         }),
       ]);
       if (options.signal?.aborted) throw new WaitInterrupted("cancelled");
       if (attention.signal.aborted) throw new WaitInterrupted("attention");
       await this.refresh(ids);
       const taken = [
-        ...[...ended].flatMap((id) => this.graphDelivery(id) ?? []),
-        ...[...idle].flatMap((id) => this.agentDeliveries(id)),
-      ].filter((each) => !this.inFlight.has(each.id));
-      if (options.carrier === undefined) await this.acknowledgeAll(taken);
+        ...[...ended].flatMap((id) => this.delivery.graphDelivery(id) ?? []),
+        ...[...idle].flatMap((id) => this.delivery.agentDeliveries(id)),
+      ].filter((each) => !this.delivery.isInFlight(each.id));
+      if (options.carrier === undefined)
+        await this.delivery.acknowledgeAll(taken);
       else if (taken.length > 0) {
-        // In flight until the parent holds the call's result; no longer
-        // queued meanwhile.
         const { call } = options.carrier;
-        for (const each of taken)
-          this.inFlight.set(each.id, {
-            carried: true,
-            ...(call === undefined ? {} : { call }),
-          });
+        this.delivery.markCarried(
+          taken.map((each) => each.id),
+          call,
+        );
         await this.refresh(ids);
       }
       return {
@@ -765,65 +736,11 @@ export class AgentService {
       };
     } finally {
       attention.release();
-      for (const [counts, keys] of [
-        [this.waiters, ids],
-        [this.graphWaiters, graphIds],
-      ] as const)
-        for (const id of keys) {
-          const count = (counts.get(id) ?? 1) - 1;
-          if (count > 0) counts.set(id, count);
-          else counts.delete(id);
-        }
+      this.waits.release(ids, graphIds);
       this.emit();
       // Results the wait held back are due again.
-      this.scheduleDelivery();
+      this.delivery.schedule();
     }
-  }
-
-  /** Resolve true once the graph settled, false when `signal` aborts first. */
-  private untilSettled(
-    graphId: string,
-    signal?: AbortSignal,
-  ): Promise<boolean> {
-    return this.until(() => {
-      const info = this.projection.graphInfo(graphId);
-      return info !== undefined && isSettled(info);
-    }, signal);
-  }
-
-  /** Resolve true once a graph agent's node ended, or at once for others. */
-  private untilNodeEnded(
-    agentId: string,
-    signal?: AbortSignal,
-  ): Promise<boolean> {
-    return this.until(() => {
-      const graph = this.projection.info(agentId)?.graph;
-      if (graph === undefined) return true;
-      const node = this.projection
-        .graphInfo(graph)
-        ?.nodes.find((each) => each.agentId === agentId);
-      return node === undefined || node.outcome !== undefined;
-    }, signal);
-  }
-
-  /** Resolve true once `ready` holds after a refresh, false on abort or close. */
-  private until(ready: () => boolean, signal?: AbortSignal): Promise<boolean> {
-    return new Promise((resolve) => {
-      const done = (value: boolean) => {
-        this.checks.delete(check);
-        signal?.removeEventListener("abort", aborted);
-        resolve(value);
-      };
-      const check = () => {
-        if (ready()) done(true);
-        else if (this.closed) done(false);
-      };
-      const aborted = () => done(false);
-      this.checks.add(check);
-      signal?.addEventListener("abort", aborted, { once: true });
-      if (signal?.aborted) done(false);
-      else check();
-    });
   }
 
   /**
@@ -832,171 +749,12 @@ export class AgentService {
    * so are agents whose graph's result is still due.
    */
   pendingDeliveries(): PendingDelivery[] {
-    return this.deliveries(false);
-  }
-
-  /** Undelivered results; `withheld` adds those a wait or a graph holds. */
-  private deliveries(withheld: boolean): PendingDelivery[] {
-    const deliveries: PendingDelivery[] = [];
-    for (const graphId of Object.keys(this.projection.graphs())) {
-      if (!withheld && this.isGraphAwaited(graphId)) continue;
-      const delivery = this.graphDelivery(graphId);
-      if (delivery) deliveries.push(delivery);
-    }
-    for (const agentId of this.projection.settledIds()) {
-      const record = this.projection.agents()[agentId];
-      if (!record) continue;
-      if (
-        !withheld &&
-        (this.isAwaited(agentId) || this.projection.isHeldByGraph(record))
-      )
-        continue;
-      deliveries.push(...this.agentDeliveries(agentId));
-    }
-    return deliveries;
-  }
-
-  /** A finished graph's result, while the parent still expects it. */
-  private graphDelivery(graphId: string): GraphDelivery | undefined {
-    const record = this.projection.graphs()[graphId];
-    const info = this.projection.graphInfo(graphId);
-    if (!record?.pending || !info || !isSettled(info) || info.stopped)
-      return undefined;
-    return {
-      kind: "graph",
-      id: graphDeliveryId(graphId, record),
-      graphId,
-      name: info.name,
-      nodes: info.nodes,
-    };
-  }
-
-  /** An agent's settled parent requests: one delivery per failure, and one
-   * per answer for all the requests it answered. */
-  private agentDeliveries(agentId: string): AgentDelivery[] {
-    const record = this.projection.agents()[agentId];
-    const outcomes = this.projection.settledOf(agentId);
-    if (!record || !outcomes) return [];
-    const failures: AgentDelivery[] = [];
-    const answers = new Map<number, AgentDelivery>();
-    for (const [rid, outcome] of outcomes) {
-      if (outcome.kind === "aborted") continue;
-      if (outcome.kind === "failed") {
-        failures.push({
-          kind: "agent",
-          id: failureDeliveryId(agentId, record, rid),
-          agentId,
-          name: record.name,
-          requestIds: [rid],
-          outcome,
-        });
-        continue;
-      }
-      const entryId = outcome.result.entryId;
-      if (record.delivered.includes(entryId)) continue;
-      const existing = answers.get(entryId);
-      if (existing) existing.requestIds.push(rid);
-      else
-        answers.set(entryId, {
-          kind: "agent",
-          id: answerDeliveryId(agentId, record, entryId),
-          agentId,
-          name: record.name,
-          requestIds: [rid],
-          outcome,
-        });
-    }
-    return [...failures, ...answers.values()];
-  }
-
-  /**
-   * Hand due results to the parent once it can take them, and acknowledge
-   * those it holds. Serialized; runs after every refresh, when a wait ends,
-   * and when the parent changes.
-   */
-  private scheduleDelivery(): void {
-    if (this.deliveryQueued || this.closed) return;
-    this.deliveryQueued = true;
-    this.deliveryChain = this.deliveryChain
-      .then(async () => {
-        this.deliveryQueued = false;
-        if (!this.closed) await this.deliverDue();
-      })
-      .catch((error) => this.report(error));
-  }
-
-  /**
-   * A delivery counts as done once the parent holds it, never on handing it
-   * over: a crash in between repeats it rather than losing it. After a
-   * restart, results the parent already holds are acknowledged without
-   * handing them over again.
-   */
-  private async deliverDue(): Promise<void> {
-    const all = this.deliveries(true);
-    const ids = new Set(all.map((each) => each.id));
-    for (const id of this.inFlight.keys())
-      if (!ids.has(id)) this.inFlight.delete(id);
-    const due = () =>
-      this.pendingDeliveries().filter((each) => !this.inFlight.has(each.id));
-    // Ask the parent only when it may hold something new: results in
-    // flight, results about to go out, and, once, those of a past process.
-    if (
-      this.reconciled &&
-      this.inFlight.size === 0 &&
-      (due().length === 0 || !this.parent.canDeliver())
-    )
-      return;
-    this.reconciled = true;
-    if (ids.size === 0) return;
-    const received = await this.parent.received(
-      [...ids].map((id) => {
-        const call = this.inFlight.get(id)?.call;
-        return call === undefined ? { id } : { id, call };
-      }),
-    );
-    await this.acknowledgeAll(all.filter((each) => received.has(each.id)));
-    const next = due();
-    if (next.length === 0 || !this.parent.canDeliver()) return;
-    for (const each of next) this.inFlight.set(each.id, { carried: false });
-    try {
-      await this.parent.deliver(next, this);
-    } catch (error) {
-      // Due again; the next pass first acknowledges what the parent holds.
-      for (const each of next) this.inFlight.delete(each.id);
-      throw error;
-    }
+    return this.delivery.pending();
   }
 
   /** Mark a delivery done. An answered agent closes, and so does a graph. */
   async acknowledge(delivery: PendingDelivery): Promise<void> {
-    await this.acknowledgeAll([delivery]);
-  }
-
-  /** Mark deliveries done, an agent's together, so it closes once an answer
-   * reached the parent and no request remains. */
-  private async acknowledgeAll(
-    deliveries: readonly PendingDelivery[],
-  ): Promise<void> {
-    const byAgent = new Map<string, AgentDelivery[]>();
-    for (const delivery of deliveries) {
-      this.inFlight.delete(delivery.id);
-      if (delivery.kind === "graph") await this.consumeGraph(delivery.graphId);
-      else
-        byAgent.set(delivery.agentId, [
-          ...(byAgent.get(delivery.agentId) ?? []),
-          delivery,
-        ]);
-    }
-    for (const [agentId, group] of byAgent)
-      await this.removeRequests(
-        agentId,
-        group.flatMap((delivery) => delivery.requestIds),
-        group.flatMap((delivery) =>
-          delivery.outcome.kind === "answered"
-            ? [delivery.outcome.result.entryId]
-            : [],
-        ),
-      );
+    await this.delivery.acknowledge(delivery);
   }
 
   // --- Internals ---
@@ -1070,34 +828,6 @@ export class AgentService {
     );
   }
 
-  /**
-   * A graph's result reached the parent: the graph closes, and so do its
-   * agents that answered, never started, or that the graph stopped. Their
-   * answers count as delivered, so parent messages answered by the same
-   * entry deliver with the graph. Failed and interrupted agents stay open.
-   */
-  private async consumeGraph(graphId: string): Promise<void> {
-    const info = this.requireGraph(graphId);
-    await this.store.consumeGraph(graphId, info.nodes, (id) =>
-      this.projection.settledOf(id),
-    );
-    await this.refresh(info.nodes.map((node) => node.agentId));
-  }
-
-  /**
-   * Drop delivered requests. Delivering an answer closes the agent once no
-   * parent request remains: it is done. Messaging it later reopens it.
-   */
-  private async removeRequests(
-    agentId: string,
-    requestIds: string[],
-    entryIds: number[],
-  ): Promise<void> {
-    await this.store.removeRequests(agentId, requestIds, entryIds);
-    for (const rid of requestIds) this.projection.deleteSettled(agentId, rid);
-    await this.refresh([agentId]);
-  }
-
   private scheduleRefresh(): void {
     if (this.refreshTimer || this.closed) return;
     this.refreshTimer = setTimeout(() => {
@@ -1119,8 +849,8 @@ export class AgentService {
         if (rids.length > 0) await this.dropRequests(id, rids);
       if (stopped.length > 0) await this.store.clearPending(stopped);
       await this.closeEndedHelpers();
-      for (const check of [...this.checks]) check();
-      this.scheduleDelivery();
+      this.waits.check();
+      this.delivery.schedule();
     });
     this.refreshChain = run.catch(() => {});
     return run;

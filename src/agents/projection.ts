@@ -43,6 +43,16 @@ import {
   type RequestOutcome,
 } from "./types.js";
 
+/** The graph ended and every agent's job has an outcome. */
+export function isSettled(
+  info: GraphInfo,
+): info is GraphInfo & { nodes: Array<GraphNode & { outcome: NodeOutcome }> } {
+  return (
+    info.state !== "working" &&
+    info.nodes.every((node) => node.outcome !== undefined)
+  );
+}
+
 export class Projection {
   private records: Record<string, AgentRecord> = {};
   private graphRecords: Record<string, GraphRecord> = {};

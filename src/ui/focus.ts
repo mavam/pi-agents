@@ -98,7 +98,7 @@ export class FocusController {
     this.lastResult = undefined;
   }
 
-  /** Let any visible overlay own keyboard input before duplicate detection. */
+  /** Yield panel navigation to visible overlays, even non-capturing ones. */
   private yieldToOverlay(): boolean {
     if (!this.panel.hasOverlay()) return false;
     this.panel.setFocused(false);

@@ -210,7 +210,11 @@ open, they open `/agents` instead. Then:
 | Esc | Return to the editor. |
 
 While any TUI overlay is visible, the panel yields all keyboard input,
-including ← and Ctrl+Q. Panel navigation resumes when the overlays close.
+including ← and Ctrl+Q. This conservatively includes decorative
+`nonCapturing` overlays and overlays that have released keyboard focus;
+Pi's public `hasOverlay()` API reports visibility, not keyboard ownership.
+Overlays hidden with `setHidden(true)` or a false `visible` callback do not
+block navigation. Panel navigation resumes when no overlays are visible.
 
 Attaching shows the agent's conversation with Pi's own message and tool
 rendering. The editor then talks to the agent:

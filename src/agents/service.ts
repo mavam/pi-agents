@@ -16,41 +16,32 @@
  */
 
 import type { AttachedReplicatedState } from "@earendil-works/chord";
-import {
-  type Conversation,
-  type ConversationView,
-  configure,
-  type Extension,
-  type Harness,
-  type ToolRegistration,
+import type {
+  Conversation,
+  ConversationView,
+  Harness,
 } from "@earendil-works/pi-durable";
-import { DEFAULT_AGENT_TOOLS } from "../host/tools.js";
 import { CONTEXT, contextFor, conversationId, taskId } from "./context.js";
-import { DELEGATE_TOOL } from "./delegation.js";
+import {
+  type CreationDeps,
+  createAgent,
+  createGraph,
+  prepare,
+} from "./creation.js";
 import { Delivery } from "./delivery.js";
-import { type AgentExtensions, agentSelection } from "./extensions.js";
-import { GraphTask, NodeTask } from "./graphs.js";
+import type { AgentExtensions } from "./extensions.js";
 import { MessageLog } from "./message-log.js";
-import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
+import { claimName } from "./names.js";
 import { HarnessObserver } from "./observer.js";
 import type { Parent } from "./parent.js";
 import { Projection } from "./projection.js";
-import {
-  AgentsDoc,
-  GraphsDoc,
-  type ParentRequest,
-  requestId,
-} from "./records.js";
+import { type ParentRequest, requestId } from "./records.js";
 import { AgentStore } from "./store.js";
-import { resolveEdges } from "./topology.js";
 import {
   AgentError,
   type AgentInfo,
-  GRAPH_SIZE,
   type GraphInfo,
-  type GraphPolicy,
   type GraphSpec,
-  isThinkingLevel,
   type MessageInfo,
   type PendingDelivery,
   type SendMode,
@@ -117,6 +108,7 @@ export class AgentService {
   private unsubscribeParent: (() => void) | undefined;
   private closed = false;
 
+  private readonly creation: CreationDeps;
   private readonly delivery: Delivery;
   private readonly waits: Waits;
   private readonly projection: Projection;
@@ -124,7 +116,6 @@ export class AgentService {
   private readonly observer: HarnessObserver;
   private readonly store: AgentStore;
   private readonly harness: Harness;
-  private readonly anchor: Conversation;
   private readonly extensions: AgentExtensions;
   private readonly parent: Parent;
   private readonly refreshDelayMs: number;
@@ -132,7 +123,6 @@ export class AgentService {
   private constructor(options: AgentServiceOptions) {
     this.harness = options.harness;
     this.store = new AgentStore({ harness: this.harness });
-    this.anchor = options.anchor;
     this.extensions = options.extensions;
     this.parent = options.parent;
     this.refreshDelayMs = options.refreshDelayMs ?? REFRESH_DELAY_MS;
@@ -170,6 +160,13 @@ export class AgentService {
       report: options.onReport ?? (() => {}),
       isClosed: () => this.closed,
     });
+    this.creation = {
+      harness: this.harness,
+      anchor: options.anchor,
+      extensions: this.extensions,
+      takenNames: () => this.takenNames(),
+      workingClosed: () => this.workingClosed(),
+    };
     this.extensions.hub.state = (id) => this.projection.info(id)?.state;
   }
 
@@ -374,42 +371,15 @@ export class AgentService {
   async spawn(spec: SpawnSpec): Promise<AgentInfo> {
     // Fail early with the service's view; the commit claims for real.
     claimName(spec.name, spec.profile ?? "agent", this.takenNames(), "agent");
-    const { job, tools } = this.prepare(spec);
+    const { job, tools } = prepare(this.creation, spec);
     const first = requestId(1);
     const request: ParentRequest = { message: job, whenBusy: "followUp" };
-    const createdAt = Date.now();
-    const id = await this.harness.commit(async (tx) => {
-      const state = await tx.doc(AgentsDoc);
-      const name = claimName(
-        spec.name,
-        spec.profile ?? "agent",
-        takenNames(state, await tx.doc(GraphsDoc), this.workingClosed()),
-        "agent",
-      );
-      const conversation = await tx.createConversation({
-        ownership: { kind: "ownerless" },
-      });
-      await configure(tx, conversation.id, {
-        cwd: spec.cwd,
-        ...this.capabilities(tools, spec.delegate),
-        ...(spec.model ? { model: spec.model } : {}),
-        ...(spec.thinking ? { thinkingLevel: spec.thinking } : {}),
-        ...(spec.instructions ? { instructions: spec.instructions } : {}),
-      });
-      state.agents[String(conversation.id)] = {
-        name,
-        profile: spec.profile ?? null,
-        job,
-        createdAt,
-        closed: false,
-        ambientSkills: spec.ambientSkills ?? true,
-        nextRequest: 2,
-        requests: { [first]: request },
-        delivered: [],
-        ...(spec.delegate ? { delegate: true } : {}),
-      };
-      return String(conversation.id);
-    }, CONTEXT);
+    const id = await createAgent(this.creation, spec, {
+      job,
+      tools,
+      first,
+      request,
+    });
     await this.store.submit(id, first, request);
     await this.refresh([id]);
     return this.requireAgent(id);
@@ -423,103 +393,7 @@ export class AgentService {
    * tasks.
    */
   async spawnGraph(spec: GraphSpec): Promise<GraphInfo> {
-    const count = spec.agents.length;
-    if (count < GRAPH_SIZE.min || count > GRAPH_SIZE.max)
-      throw new AgentError(
-        `A graph has ${GRAPH_SIZE.min} to ${GRAPH_SIZE.max} agents, not ${count}`,
-      );
-    // Validate with the service's view first; the commit claims for real.
-    const claim = (taken: Set<string>) => {
-      const graph = claimName(spec.name, "graph", taken, "graph");
-      return {
-        graph,
-        agents: spec.agents.map((agent, index) =>
-          claimName(
-            agent.name,
-            agent.profile ?? `${graph.slice(0, NAME_BASE_LENGTH)}-${index + 1}`,
-            taken,
-            "agent",
-          ),
-        ),
-      };
-    };
-    const planned = claim(this.takenNames());
-    const nodes = spec.agents.map((agent, index) => ({
-      spec: agent,
-      name: planned.agents[index] as string,
-      ...this.prepare(agent),
-    }));
-    const inputs = resolveEdges(
-      nodes.map((node) => ({ name: node.name, after: node.spec.after })),
-    );
-    const policy: GraphPolicy = spec.failFast ? "failFast" : "allSettled";
-    const createdAt = Date.now();
-    const created = await this.anchor.commit(async (tx) => {
-      const names = claim(
-        takenNames(
-          await tx.doc(AgentsDoc),
-          await tx.doc(GraphsDoc),
-          this.workingClosed(),
-        ),
-      );
-      const graph = await tx.createTask(
-        GraphTask,
-        { policy },
-        { ownership: { kind: "conversation" }, background: true },
-      );
-      const agents: string[] = [];
-      const tasks: number[] = [];
-      for (const node of nodes) {
-        const task = await tx.createTask(
-          NodeTask,
-          { message: node.job },
-          { ownership: { kind: "task", taskId: graph } },
-        );
-        const conversation = await tx.createConversation({
-          ownership: { kind: "task", taskId: task },
-        });
-        const { spec: agent } = node;
-        await configure(tx, conversation.id, {
-          cwd: agent.cwd,
-          ...this.capabilities(node.tools, agent.delegate),
-          ...(agent.model ? { model: agent.model } : {}),
-          ...(agent.thinking ? { thinkingLevel: agent.thinking } : {}),
-          ...(agent.instructions ? { instructions: agent.instructions } : {}),
-        });
-        agents.push(String(conversation.id));
-        tasks.push(task);
-      }
-      const state = await tx.doc(AgentsDoc);
-      nodes.forEach((node, index) => {
-        state.agents[agents[index] as string] = {
-          name: names.agents[index] as string,
-          profile: node.spec.profile ?? null,
-          job: node.job,
-          createdAt,
-          closed: false,
-          ambientSkills: node.spec.ambientSkills ?? true,
-          // The node sends the job; parent requests are later messages.
-          nextRequest: 1,
-          requests: {},
-          delivered: [],
-          graph: String(graph),
-          ...(node.spec.delegate ? { delegate: true } : {}),
-        };
-      });
-      (await tx.doc(GraphsDoc)).graphs[String(graph)] = {
-        name: names.graph,
-        policy,
-        createdAt,
-        nodes: nodes.map((_node, index) => ({
-          agent: agents[index] as string,
-          task: tasks[index] as number,
-          after: (inputs[index] ?? []).map((input) => agents[input] as string),
-        })),
-        closed: false,
-        pending: true,
-      };
-      return { id: String(graph), agents };
-    }, CONTEXT);
+    const created = await createGraph(this.creation, spec);
     await this.refresh(created.agents);
     return this.requireGraph(created.id);
   }
@@ -772,60 +646,6 @@ export class AgentService {
     return this.list()
       .filter((info) => info.closed)
       .map((info) => info.name);
-  }
-
-  /** Validate a spawn's job, thinking level, and tools. */
-  private prepare(spec: SpawnSpec): {
-    job: string;
-    tools: ToolRegistration[];
-  } {
-    if (spec.thinking !== undefined && !isThinkingLevel(spec.thinking))
-      throw new AgentError(`Invalid thinking level: ${spec.thinking}`);
-    const tools = this.resolveTools(spec.tools);
-    const job = spec.job.trim();
-    if (!job) throw new AgentError("The job must not be empty");
-    return { job, tools };
-  }
-
-  /**
-   * The tools and extensions of a new agent, named explicitly, so the
-   * harness's default selection never reaches it. A delegating agent also
-   * selects the delegation extension and its tool, so only it can start
-   * helpers.
-   */
-  private capabilities(
-    tools: ToolRegistration[],
-    delegate: boolean | undefined,
-  ): { tools: ToolRegistration[]; extensions: Extension[] } {
-    const extensions = agentSelection(this.extensions, {
-      delegate: !!delegate,
-      messaging: true,
-    });
-    const extra = [
-      ...(delegate
-        ? (this.extensions.delegation.tools ?? []).filter(
-            (each) => each.name === DELEGATE_TOOL,
-          )
-        : []),
-      ...(this.extensions.messaging.tools ?? []),
-    ];
-    return { tools: [...tools, ...extra], extensions };
-  }
-
-  private resolveTools(names: string[] | undefined): ToolRegistration[] {
-    const available = [...(this.extensions.tools.tools ?? [])];
-    const wanted = names ?? [...DEFAULT_AGENT_TOOLS];
-    const unknown = wanted.filter(
-      (name) => !available.some((tool) => tool.name === name),
-    );
-    if (unknown.length > 0)
-      throw new AgentError(
-        `Unknown tools: ${unknown.join(", ")}. Available: ${available.map((tool) => tool.name).join(", ")}`,
-      );
-    return wanted.map(
-      (name) =>
-        available.find((tool) => tool.name === name) as ToolRegistration,
-    );
   }
 
   private scheduleRefresh(): void {

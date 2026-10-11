@@ -34,7 +34,6 @@ function setup(state: {
   const host = {
     current: () => service,
     messaging: () => false,
-    panelRows: () => undefined,
   } as unknown as SessionHost;
   const ctx = {
     mode: "tui",

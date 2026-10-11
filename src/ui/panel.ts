@@ -1,6 +1,12 @@
 /**
- * AgentPanel: one line per open agent or graph above the editor, a graph's
- * agents below it as a tree.
+ * AgentPanel: the open agents above the editor. Unfocused, it's one line
+ * with how many agents are in each state:
+ *
+ *   ◉ 3 working ● 1 idle · ← agents
+ *
+ * Left arrow from an empty editor, Ctrl+Q, or a click on that line focuses
+ * it (see focus.ts). Focused, it shows one line per open agent or graph, a
+ * graph's agents below it as a tree, working ones first:
  *
  *   ◉ reviewer explorer terra 1m32s 15.5k Using grep
  *   ◉ review graph 1/3 40s 12.0k
@@ -9,28 +15,21 @@
  *   └─ ○ merge after all opus
  *
  * Names are in the normal color and details dim, separated by single
- * spaces.
+ * spaces. ↑↓ select, space folds a graph or an agent's helpers, ⏎ attaches
+ * (a graph: its first agent), `s` stops, Tab opens `/agents` at the
+ * selected row, and Esc returns to the editor.
  *
- * Unfocused, it shows the first few lines, working ones first, and a
- * finished graph as one line. Left arrow from an empty editor or Ctrl+Q
- * focuses it (see focus.ts); then ↑↓ select, space folds a graph or an
- * agent's helpers, ⏎ attaches (a graph: its first agent), `s` stops, Tab
- * opens `/agents` at the selected row, and Esc returns to the editor.
- *
- * The panel shows live state only, so with messaging on it shows messages
- * still queued for their recipients, in a column to the right of the agents
- * from 120 terminal columns, else below them; delivered ones are history,
- * in the transcript and `/messages`:
+ * With messaging on, it also shows messages still queued for their
+ * recipients, in a column to the right of the agents from 120 terminal
+ * columns, else below them; delivered ones are history, in the transcript
+ * and `/messages`:
  *
  *   ◉ scout sol 40s 8.1k   scout → notes README.md is 18 KB 3s
  *
  * The agents get a fixed share of the panel, so the message column doesn't
- * move while messages come and go. A message's text starts right after the
- * names; it's dim while queued, so the names stand out.
- *
- * ↑↓ continue from the agents into the messages, ⏎ on a message attaches to
- * its recipient, and `m` opens `/messages`: the selected agent's threads,
- * or the selected message's thread.
+ * move while messages come and go. ↑↓ continue from the agents into the
+ * messages, ⏎ on a message attaches to its recipient, and `m` opens
+ * `/messages` at the selected message, or filtered by the selected agent.
  *
  * In Pi's fullscreen mode, which reports the mouse, a click on a row
  * attaches like ⏎: an agent row to the agent, a graph row to its first
@@ -48,12 +47,12 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AgentInfo, MessageInfo } from "../agents/types.js";
 import type { SessionHost } from "../pi/session.js";
-import { stateCounts } from "./footer.js";
 import {
   formatAgentLine,
   formatElapsed,
   formatGraphLine,
   sanitizeLine,
+  stateCounts,
   stateIcon,
 } from "./format.js";
 import {
@@ -75,19 +74,15 @@ import {
 } from "./rows.js";
 
 const WIDGET_KEY = "pi-agents:panel";
-/** The unfocused panel's height in rows without `piAgents.panelRows`: a
- * summary line. */
-export const DEFAULT_ROWS = 1;
 const TICK_MS = 1000;
 /** A reasoning headline stays at least this long before the next replaces it. */
 const SUMMARY_MIN_DISPLAY_MS = 3000;
 /** Focused-panel height cap, as a fraction of the terminal. */
 const MAX_HEIGHT_RATIO = 0.6;
-/** Messages stacked below the agents, unfocused and focused. */
-const STACKED_MESSAGES = 3;
-const STACKED_MESSAGES_FOCUSED = 6;
+/** The most messages stacked below the agents. */
+const STACKED_MESSAGES = 6;
 /** Below this width, columns stack. */
-export const COLUMNS_MIN_WIDTH = 120;
+const COLUMNS_MIN_WIDTH = 120;
 /** The fewest rows the message column shows, when there are messages. */
 const COLUMN_MIN_HEIGHT = 3;
 /** The agent column's share of the panel in columns. */
@@ -121,12 +116,14 @@ export function panelOrder(agents: readonly AgentInfo[]): AgentInfo[] {
   return [...agents].sort(panelCompare);
 }
 
-/** What a panel line attaches to when clicked: the agent of its left
- * part, and in columns, the recipient of its right part from `split`. */
+/** What a click on a panel line does: attach to the agent of its left
+ * part, and in columns, the recipient of its right part from `split`; or,
+ * on the summary line, focus the panel. */
 interface LineTarget {
   left?: string;
   right?: string;
   split?: number;
+  focus?: boolean;
 }
 
 class PanelLines implements Component {
@@ -301,12 +298,6 @@ export class AgentPanel {
     this.update();
   }
 
-  /** The unfocused height in rows: `piAgents.panelRows`, else a summary
-   * line. */
-  panelRows(): number {
-    return this.host.panelRows() ?? DEFAULT_ROWS;
-  }
-
   /** One line for all agents: how many are in each state. */
   private summaryLine(style: MessageStyle): string {
     const { color } = style;
@@ -401,43 +392,9 @@ export class AgentPanel {
       return `${color("dim", connector(row))}${text}${hidden ? color("dim", ` ${hidden}`) : ""}`;
     };
     if (!this.focused) {
-      const height = this.panelRows();
       this.shownMessages = [];
-      // Stacked messages share the height: a divider and up to half of it.
-      const stacked =
-        columns || messages.length === 0
-          ? 0
-          : Math.min(
-              messages.length,
-              STACKED_MESSAGES,
-              Math.floor((height - 1) / 2),
-            );
-      const room = stacked > 0 ? height - 1 - stacked : height;
-      const rows = this.rows(true);
-      let shown: string[];
-      let targets: Array<string | undefined>;
-      if (height === 1 || (room === 1 && rows.length > 1)) {
-        shown = [this.summaryLine(style)];
-        targets = [undefined];
-      } else {
-        const fits = rows.length <= room;
-        const kept = rows.slice(0, fits ? room : room - 1);
-        shown = kept.map(line);
-        targets = kept.map(attachTarget);
-        if (!fits)
-          shown.push(
-            color("dim", `+${rows.length - kept.length} more · ← agents`),
-          );
-      }
-      // The summary line stands alone, without messages.
-      const below = height === 1 || (!columns && stacked === 0);
-      return this.withMessages(shown, targets, below ? [] : messages, {
-        width,
-        style,
-        columns,
-        stacked,
-        height,
-      });
+      this.targets = [{ focus: true }];
+      return [this.summaryLine(style)];
     }
     const rows = this.rows();
     const selected = this.selected();
@@ -449,7 +406,7 @@ export class AgentPanel {
       : -1;
     const below =
       !columns && messages.length > 0
-        ? 1 + Math.min(messages.length, STACKED_MESSAGES_FOCUSED)
+        ? 1 + Math.min(messages.length, STACKED_MESSAGES)
         : 0;
     const visible = Math.max(3, budget - 1 - below);
     const start = Math.max(
@@ -474,8 +431,6 @@ export class AgentPanel {
       width,
       style,
       columns,
-      stacked: STACKED_MESSAGES_FOCUSED,
-      selectable: true,
     });
     const message = this.selectedMessage();
     const hints = [
@@ -502,34 +457,21 @@ export class AgentPanel {
     /** The agents the left lines attach to, by line. */
     leftTargets: ReadonlyArray<string | undefined>,
     messages: readonly MessageInfo[],
-    options: {
-      width: number;
-      style: MessageStyle;
-      columns: boolean;
-      stacked: number;
-      /** The most lines in columns. */
-      height?: number;
-      selectable?: boolean;
-    },
+    options: { width: number; style: MessageStyle; columns: boolean },
   ): string[] {
-    const { style, columns, selectable } = options;
+    const { style, columns, width } = options;
     const { color } = style;
-    const { width } = options;
     if (messages.length === 0) {
-      if (selectable) this.shownMessages = [];
+      this.shownMessages = [];
       this.targets = left.map((_, index) => ({ left: leftTargets[index] }));
       return left;
     }
     const marker = (message: MessageInfo) =>
-      !selectable
-        ? ""
-        : messageKey(message) === this.selectedKey
-          ? color("accent", "▸ ")
-          : "  ";
-    const markerWidth = selectable ? 2 : 0;
+      messageKey(message) === this.selectedKey ? color("accent", "▸ ") : "  ";
+    const markerWidth = 2;
     if (!columns) {
-      const shown = messages.slice(-options.stacked);
-      if (selectable) this.shownMessages = shown;
+      const shown = messages.slice(-STACKED_MESSAGES);
+      this.shownMessages = shown;
       this.targets = [
         ...left.map((_, index) => ({ left: leftTargets[index] })),
         {},
@@ -537,22 +479,19 @@ export class AgentPanel {
       ];
       return [
         ...left,
-        color(
-          "dim",
-          `${selectable ? "  " : ""}${"─".repeat(Math.max(1, width - markerWidth))}`,
-        ),
+        color("dim", `  ${"─".repeat(Math.max(1, width - markerWidth))}`),
         ...shown.map(
           (message) =>
             `${marker(message)}${messageLine(this.parts(message), width - markerWidth, style)}`,
         ),
       ];
     }
-    const height = Math.min(
-      options.height ?? Number.POSITIVE_INFINITY,
-      Math.max(left.length, Math.min(messages.length, COLUMN_MIN_HEIGHT)),
+    const height = Math.max(
+      left.length,
+      Math.min(messages.length, COLUMN_MIN_HEIGHT),
     );
     const shown = messages.slice(-height);
-    if (selectable) this.shownMessages = shown;
+    this.shownMessages = shown;
     const leftWidth = Math.floor(width * AGENT_COLUMN_RATIO);
     const rightWidth = Math.max(8, width - leftWidth - 1 - markerWidth);
     // A gap, not a bar, separates the columns.
@@ -571,9 +510,14 @@ export class AgentPanel {
     });
   }
 
-  /** A click on a line attaches to what it shows; whether it did. */
+  /** A click on a line attaches to what it shows, or focuses the panel
+   * from its summary line; whether it did. */
   private click(line: number, column: number): boolean {
     const target = this.targets[line];
+    if (target?.focus) {
+      this.setFocused(true);
+      return true;
+    }
     const agentId =
       target?.split !== undefined && column >= target.split
         ? target.right

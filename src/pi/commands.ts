@@ -37,12 +37,8 @@ import {
   stateIcon,
   statusIcon,
 } from "../ui/format.js";
-import {
-  type Bold,
-  type DetailLine,
-  type OverlaySpec,
-  openOverlay,
-} from "../ui/overlay.js";
+import type { Bold, DetailLine } from "../ui/frame.js";
+import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
 import type { AgentPanel } from "../ui/panel.js";
 import {
   attachTarget,

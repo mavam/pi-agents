@@ -29,7 +29,7 @@ import {
 } from "../host/limit.js";
 import { acquireLock, type StorageLock } from "../host/lock.js";
 import { resolveModels } from "../host/models.js";
-import { readMessaging, readPanelRows } from "../host/settings.js";
+import { readMessaging } from "../host/settings.js";
 import { openStorage, type Storage } from "../host/storage.js";
 import { isTrusted, resolveHelper } from "./spawn.js";
 
@@ -52,7 +52,6 @@ export class SessionHost {
   private readonly listeners = new Set<() => void>();
   private trusted = true;
   private messagingOn = false;
-  private panelRowsSetting: number | undefined;
   /** The skills agents can use, shared by spawns and agent prompts. */
   readonly skills = new SkillCatalog();
   /** Why agents are unavailable in this session, if they are. */
@@ -88,12 +87,6 @@ export class SessionHost {
    * when the session's agents open. */
   messaging(): boolean {
     return this.messagingOn;
-  }
-
-  /** The panel's height from `piAgents.panelRows`, read when the
-   * session's agents open; absent without the setting. */
-  panelRows(): number | undefined {
-    return this.panelRowsSetting;
   }
 
   /** The open service, if any. */
@@ -140,7 +133,6 @@ export class SessionHost {
       const { limit, error } = readRequestLimit(settingsManager.getSettings());
       if (error) this.report(new Error(`${error}; requests aren't limited`));
       this.messagingOn = readMessaging(settingsManager.getSettings());
-      this.panelRowsSetting = readPanelRows(settingsManager.getSettings());
       const models = limitRequests(
         await resolveModels(ctx.modelRegistry),
         new RequestLimiter(limit),

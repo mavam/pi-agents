@@ -492,18 +492,16 @@ message card, with its own, and Pi's tools with Pi's.
 
 ## Frontend
 
-- Panel above the editor: one line per open agent or graph, working first. A
-  graph's line shows how many of its agents finished, with its agents below
-  it as a tree in stages; unfocused, a finished graph folds to its line. ←
-  from an empty editor or Ctrl+Q focuses it, or opens `/agents` while it's
-  empty. Unfocused, it's a summary line: counts per state with the state
-  glyphs, without names or messages. `piAgents.panelRows`, 1 to 9, gives it rows instead, ending in
-  `+N more · ← agents` when agents don't fit; stacked messages share them,
-  a divider and at most half. Focused, it shows everything. Digits aren't
-  keys, so typing still returns to the editor. Space folds a graph or an agent's helpers, ⏎ attaches, `s` stops,
-  a click on a row attaches too, in Pi's fullscreen mode, which reports the
-  mouse to components (`handleMouse`),
-  Tab opens `/agents` at the same row. The panel and
+- Panel above the editor: unfocused, one summary line, counts per state
+  with the state glyphs, without names or messages. ← from an empty editor,
+  Ctrl+Q, or a click on the summary focuses it, or ← and Ctrl+Q open
+  `/agents` while it's empty. Focused, it shows one line per open agent or
+  graph, working first; a graph's line shows how many of its agents
+  finished, with its agents below it as a tree in stages. Space folds a
+  graph or an agent's helpers, ⏎ attaches, `s` stops, a click on a row
+  attaches too, in Pi's fullscreen mode, which reports the mouse to
+  components (`handleMouse`), and Tab opens `/agents` at the same row.
+  Typing returns to the editor with the key. The panel and
   `/agents` share what the user folded. Before intercepting input or taking
   focus, the controller checks `TUI.hasOverlay()` and yields to any visible
   overlay. This is intentionally conservative: `hasOverlay()` includes
@@ -536,28 +534,28 @@ message card, with its own, and Pi's tools with Pi's.
   conversation. `/agents` doesn't show messages: an agent's details are its
   job and its result. `src/ui/messages.ts` is the one place that draws
   messages: a line, `scout → notes` with the names in bold, then the text,
-  whose color is its status (`MESSAGE_STATUS_COLORS`: dim while queued,
-  normal once delivered, red once dropped), and a card, `✦` and the line on
-  Pi's message background, the whole text below when expanded.
-  - Panel: queued messages of the agents it shows, with how long they
-    waited, in a column to their right from 120 terminal columns, else
+  and a card, `✦` and the line on Pi's message background, the whole text
+  below when expanded. Lists keep the text dim so names stand out: the
+  panel, which shows only queued messages, and `/messages`. Cards color
+  the text by status where they know it, in the attach view: dim while
+  queued, like Pi's queued input, normal once delivered. Dropped messages
+  are red wherever their status shows.
+  - Panel, focused: queued messages of the agents it shows, with how long
+    they waited, in a column to their right from 120 terminal columns, else
     below them. The agents get a fixed share, so the message column stays
     put as messages come and go. Text starts right after the names, without
-    padding to a common column; it's dim while queued, so the names stand
-    out. ↑↓ reach messages, ⏎ attaches to a message's recipient.
-  - Transcript: one custom entry per message, a card, which Pi's model
-    doesn't see. Cards show no time; `/messages` has it.
-    Entries only append and are deduplicated by message ID and send time;
-    Ctrl+O shows a long message in full.
+    padding to a common column. ↑↓ reach messages, ⏎ attaches to a
+    message's recipient.
+  - Transcript: one custom entry per message, a card without time or
+    status, which Pi's model doesn't see. Entries only append and are
+    deduplicated by message ID and send time; Ctrl+O shows a long message
+    in full.
   - Attach view: received and sent messages as the same cards, never as
-    the user's input; Ctrl+O
-    expands them with tool output. Queued input shows dim below the
-    conversation.
+    the user's input; Ctrl+O expands them with tool output. Queued input
+    shows dim below the conversation.
   - `/messages` (`src/ui/stream.ts`): every message in one stream, newest
     first, one line each, as time, then the message's line; the text starts
     right after the names, so rows are ragged but the text gets the room.
-    The names stand out and the text is dim, red once dropped; queued
-    messages live in the panel.
     Typing filters by text and names. ⏎ opens the selected message as
     Markdown in a fixed pane below the list, which follows the selection,
     and closes it; messages can be whole documents, so they don't unfold

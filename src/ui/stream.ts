@@ -33,26 +33,26 @@ import {
 } from "@earendil-works/pi-tui";
 import type { MessageInfo } from "../agents/types.js";
 import {
+  boxLine,
+  edgeLine,
+  paneLayout,
+  renderDetail,
+  windowDetail,
+} from "./frame.js";
+import {
   firstLine,
   formatClock,
   type MessageStyle,
   messagePair,
   themeStyle,
 } from "./messages.js";
-import {
-  boxLine,
-  edgeLine,
-  paneLayout,
-  renderDetail,
-  windowDetail,
-} from "./overlay.js";
 import type { AgentPanel } from "./panel.js";
 
 const REFRESH_MS = 500;
 
 /** Whether a message matches a filter: its text, sender, or recipient
  * contains it, ignoring case. */
-export function matches(message: MessageInfo, query: string): boolean {
+function matches(message: MessageInfo, query: string): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
   return [

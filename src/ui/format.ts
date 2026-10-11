@@ -33,6 +33,30 @@ export const STATE_STYLES = {
   { icon: string; color: Parameters<Colorize>[0] }
 >;
 
+/** The order states show in when counted. */
+const STATE_ORDER: AgentState[] = [
+  "working",
+  "waiting",
+  "idle",
+  "failed",
+  "interrupted",
+  "skipped",
+];
+
+/** How many agents are in each state, in display order, without the
+ * states no agent is in. */
+export function stateCounts(
+  agents: readonly AgentInfo[],
+): Array<[AgentState, number]> {
+  const counts = new Map<AgentState, number>();
+  for (const agent of agents)
+    counts.set(agent.state, (counts.get(agent.state) ?? 0) + 1);
+  return STATE_ORDER.flatMap((state) => {
+    const count = counts.get(state);
+    return count ? [[state, count] as [AgentState, number]] : [];
+  });
+}
+
 /** What a call's wait gave up on before it finished: the call's outcome
  * for it, which stays true. */
 export const WAIT_ENDED_STYLE = { icon: "⊠", color: "warning" } as const;

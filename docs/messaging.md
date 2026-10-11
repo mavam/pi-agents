@@ -45,14 +45,14 @@ the UI.
   agents until you or Pi message it again. A send and a stop of the same
   agent never interleave: the send lands first and the stop interrupts it,
   or the send is refused.
-- **Visible outcome.** Each message is queued (dim), delivered once it
-  entered the recipient's conversation (normal), or dropped (red) when you
+- **Visible outcome.** Each message is queued, delivered once it entered
+  the recipient's conversation, or dropped, shown in red, when you
   interrupted or stopped the recipient while it was still queued. Delivered
   means it arrived, not that the recipient handled it: a turn that fails
   after a message arrived is the recipient's state, not the message's.
 - **Pi's model doesn't see messages between agents.** You see every message
-  in the transcript, the attach view, and `/messages`, and the panel shows
-  those still queued.
+  in the transcript, the attach view, and `/messages`, and the focused
+  panel shows those still queued.
 
 ## Not provided
 

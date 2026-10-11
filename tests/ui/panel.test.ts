@@ -27,8 +27,6 @@ function agent(id: string, name: string): AgentInfo {
 function mount(
   messages: MessageInfo[] = [],
   agents = [agent("1", "scout"), agent("2", "notes")],
-  /** `piAgents.panelRows`; null without the setting. */
-  rows: number | null = 6,
 ) {
   const service = {
     list: () => agents,
@@ -39,7 +37,6 @@ function mount(
   const host = {
     current: () => service,
     messaging: () => true,
-    panelRows: () => rows ?? undefined,
   } as unknown as SessionHost;
   const panel = new AgentPanel(host, () => now);
   const attached: string[] = [];
@@ -84,7 +81,7 @@ function mount(
 }
 
 describe("panel", () => {
-  test("a click on a row attaches to its agent, on a message to its recipient", () => {
+  test("a click on the summary focuses the panel; on a row, it attaches", () => {
     const message: MessageInfo = {
       id: "m",
       from: { id: "1", name: "scout" },
@@ -94,11 +91,14 @@ describe("panel", () => {
       status: "queued",
     };
     const { click, attached, panel } = mount([message]);
-    // Working agents, newest first: scout, then notes.
     expect(click(80, 0, 3)).toEqual({ handled: true });
-    expect(click(80, 1, 3)).toEqual({ handled: true });
+    expect(panel.isFocused()).toBe(true);
+    expect(attached).toEqual([]);
+    // Working agents, newest first: scout, then notes.
+    click(80, 0, 3);
+    click(80, 1, 3);
     // Stacked below the agents, the message attaches to its recipient.
-    expect(click(80, 3, 3)).toEqual({ handled: true });
+    click(80, 3, 3);
     expect(attached).toEqual(["1", "2", "2"]);
     // In columns, the left part attaches to the agent, the right part to
     // the message's recipient.
@@ -114,18 +114,10 @@ describe("panel", () => {
     const agents = Array.from({ length: 8 }, (_, index) =>
       agent(String(index + 1), `a${index + 1}`),
     );
-    const { panel, render } = mount([], agents, null);
+    const { panel, render } = mount([], agents);
     expect(render(80)).toEqual(["◉ 8 working · ← agents"]);
     panel.setFocused(true);
     expect(render(80).filter((line) => /◉ a\d/.test(line))).toHaveLength(8);
     panel.dispose();
-    // piAgents.panelRows gives it rows, the last saying how many more.
-    const tall = mount([], agents, 3);
-    expect(tall.render(80)).toEqual([
-      expect.stringContaining("a1"),
-      expect.stringContaining("a2"),
-      "+6 more · ← agents",
-    ]);
-    tall.panel.dispose();
   });
 });

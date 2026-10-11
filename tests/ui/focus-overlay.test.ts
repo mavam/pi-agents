@@ -73,10 +73,7 @@ function setup({ closed = false } = {}) {
     graphs: () => [],
     agentById: () => agent,
   } as unknown as AgentService;
-  const host = {
-    current: () => service,
-    panelRows: () => undefined,
-  } as unknown as SessionHost;
+  const host = { current: () => service } as unknown as SessionHost;
   const widgets = new Map<string, Component>();
   const theme = { fg: (_name: string, text: string) => text } as Theme;
   const ctx = {

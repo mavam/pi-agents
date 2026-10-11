@@ -8,4 +8,4 @@ prs:
 created: 2026-10-11T13:04:27.402024Z
 ---
 
-The agent panel now takes a single line while you type, with how many agents are in each state. Press ← in an empty editor to see every agent and message as before. Set `piAgents.panelRows` to keep up to 9 rows in view instead.
+The agent panel now takes a single line while you type, with how many agents are in each state, such as `◉ 3 working ✗ 1 failed`. Press ← in an empty editor, Ctrl+Q, or click the line to see every agent as before.

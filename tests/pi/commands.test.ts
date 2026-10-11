@@ -18,7 +18,7 @@ import {
   type DetailLine,
   paneLayout,
   renderDetail,
-} from "../../src/ui/overlay.js";
+} from "../../src/ui/frame.js";
 
 beforeAll(() => initTheme("dark"));
 

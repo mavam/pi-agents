@@ -184,12 +184,19 @@ Have three reviewer agents review this branch: correctness, tests, and docs.
 
 ### Watch and talk to agents
 
-A panel above the editor shows one line per open agent or graph, with a
-graph's agents below it as a tree. The glyph shows the state, working agents
-show how long ago they started, a graph shows how many of its agents
-finished, and `after` names the agents whose results an agent receives,
-`after all` when it waits for every other agent of its graph. Names are in
-the normal color and details dim:
+A line above the editor shows how many agents are in each state:
+
+```text
+◉ 3 working ✗ 1 failed · ← agents
+```
+
+Press ← in an empty editor, Ctrl+Q, or click the line to focus the panel. It
+then shows one line per open agent or graph, with a graph's agents below it
+as a tree. The glyph shows the state, working agents show how long ago they
+started, a graph shows how many of its agents finished, and `after` names
+the agents whose results an agent receives, `after all` when it waits for
+every other agent of its graph. Names are in the normal color and details
+dim:
 
 ```text
 ◉ reviewer explorer terra 1m32s 15.5k Using grep
@@ -212,25 +219,15 @@ color instead of green and says `result queued`, and so does a graph:
 
 Failed and interrupted agents stay until you or Pi stop them.
 
-Unfocused, the panel is a single summary line with how many agents are in
-each state:
-
-```text
-◉ 6 working ● 1 idle · ← agents
-```
-
-Focus it to see every agent and message. To keep more rows in view, set
-`piAgents.panelRows`, as described under Configuration.
-
-Press ← in an empty editor or Ctrl+Q to focus the panel. When no agents are
-open, they open `/agents` instead. Then:
+When no agents are open, ← and Ctrl+Q open `/agents` instead. In the
+focused panel:
 
 | Key | Action |
 | --- | --- |
 | ↑ ↓ | Select an agent or graph. |
 | Space | Fold or unfold a graph, or an agent's helpers. On a row inside one, fold what it sits in. |
 | ⏎ | Attach to the agent, or to a graph's first agent. |
-| Click | Attach like ⏎, also without focusing the panel first; a message attaches to its recipient. Needs Pi's fullscreen mode, its default. |
+| Click | Attach like ⏎; a message attaches to its recipient. Needs Pi's fullscreen mode, its default. |
 | Tab | Open `/agents` at the same row. Tab cycles the panel, `/agents`, and `/messages`; Shift+Tab goes back. |
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
 | Esc | Go back to the editor. |
@@ -485,20 +482,6 @@ tools in the meantime. Agents, graphs, and helpers all share the cap. Your
 session's own requests don't count toward it. Without the setting, requests
 aren't limited. Restart Pi after changing it.
 
-### Panel height
-
-Show more rows of the unfocused panel, up to 9, instead of the summary line:
-
-```json
-{
-  "piAgents": {
-    "panelRows": 6
-  }
-}
-```
-
-When more agents are open than fit, the last row says how many more.
-
 ### Messages between agents (experimental)
 
 Let agents message each other:
@@ -521,17 +504,18 @@ messages from agents until you or Pi message it.
 Restart Pi after changing the setting.
 
 Every message shows in the transcript as a card marked `✦`, like pi-agents'
-tool calls, where Pi's model doesn't see it. The panel shows messages still waiting in their
-recipient's queue, next to the agents, or below them in terminals narrower
-than 120 columns:
+tool calls, where Pi's model doesn't see it. The focused panel shows messages
+still waiting in their recipient's queue, next to the agents, or below them
+in terminals narrower than 120 columns:
 
 ```text
 ◉ scout sol 40s 8.1k   scout → notes README.md is 18 KB 3s
 ```
 
-A message's text is dim while it waits in the recipient's queue, normal once
-it reached the recipient's conversation, and red if interrupting or stopping
-the recipient dropped it. In the focused panel, ↑↓ reach the messages, ⏎
+Their text is dim, so the names stand out. In the attach view, a message is
+dim while it waits in the agent's queue, like your queued input, and red if
+interrupting or stopping the agent dropped it. In the focused panel, ↑↓
+reach the messages, ⏎
 attaches to a message's recipient, and `m` opens `/messages` at the selected
 message, or filtered by the selected agent's name.
 
@@ -554,7 +538,8 @@ The text is dim, so the names stand out, and red if the message was
 dropped. Type to filter by text and names, such as an agent's name. ⏎ opens the
 selected message in full below the list and closes it again. ← attaches to
 the sender and → to the recipient, in the order the line names them. Esc
-closes the message, then clears the filter, then closes `/messages`. A session keeps its latest 1,000 messages.
+closes the message, then clears the filter, then closes `/messages`. A
+session keeps its latest 1,000 messages.
 
 ### Footer counters
 

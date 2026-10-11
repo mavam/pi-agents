@@ -36,7 +36,7 @@ import {
 
 /** A message text's color by status: normal once delivered, dim while
  * queued, red once dropped. */
-export const MESSAGE_STATUS_COLORS = {
+const MESSAGE_STATUS_COLORS = {
   queued: "dim",
   delivered: "text",
   dropped: "error",
@@ -44,7 +44,7 @@ export const MESSAGE_STATUS_COLORS = {
 
 /** Color a message's text by its status; a message without one is plain
  * history. */
-export function statusColor(
+function statusColor(
   text: string,
   status: MessageStatus | undefined,
   color: Colorize,

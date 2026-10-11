@@ -548,12 +548,12 @@ message card, with its own, and Pi's tools with Pi's.
     put as messages come and go. Text starts right after the names, without
     padding to a common column; it's dim while queued, so the names stand
     out. ↑↓ reach messages, ⏎ attaches to a message's recipient.
-  - Transcript: one custom entry per message, a card with the time, which
-    Pi's model doesn't see.
+  - Transcript: one custom entry per message, a card, which Pi's model
+    doesn't see. Cards show no time; `/messages` has it.
     Entries only append and are deduplicated by message ID and send time;
     Ctrl+O shows a long message in full.
-  - Attach view: received and sent messages as the same cards, without
-    the time, which `/messages` has, never as the user's input; Ctrl+O
+  - Attach view: received and sent messages as the same cards, never as
+    the user's input; Ctrl+O
     expands them with tool output. Queued input shows dim below the
     conversation.
   - `/messages` (`src/ui/stream.ts`): every message in one stream, newest

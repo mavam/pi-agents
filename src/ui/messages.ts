@@ -59,8 +59,6 @@ export type MessageParts = Pick<MessageInfo, "text"> & {
   status?: MessageStatus;
   /** How long it has waited, for live views, such as `3s`. */
   age?: string;
-  /** When it was sent, for cards that show the time. */
-  sentAt?: number;
 };
 
 /** `scout → notes`. */
@@ -128,9 +126,9 @@ export function messageLine(
   return `${head} ${statusColor(text, message.status, color)}${tail}`;
 }
 
-/** A card's lines: `✦` and the message's line with its time; expanded,
- * when the line cuts the text, `✦`, who, and the time, then the whole
- * text below. */
+/** A card's lines: `✦` and the message's line; expanded, when the line
+ * cuts the text, `✦` and who, then the whole text below. `/messages` has
+ * the times. */
 class MessageLines implements Component {
   constructor(
     private readonly message: MessageParts,
@@ -146,12 +144,8 @@ class MessageLines implements Component {
     const style = themeStyle(this.theme);
     const { color } = style;
     const mark = `${color("accent", AGENT_ICON)} `;
-    const when =
-      this.message.sentAt === undefined
-        ? ""
-        : color("dim", ` ${formatClock(this.message.sentAt)}`);
-    const usable = Math.max(8, width - visibleWidth(mark) - visibleWidth(when));
-    const line = `${mark}${messageLine(this.message, usable, style)}${when}`;
+    const usable = Math.max(8, width - visibleWidth(mark));
+    const line = `${mark}${messageLine(this.message, usable, style)}`;
     const text = this.message.text.trim();
     const whole =
       !text.includes("\n") &&
@@ -165,7 +159,7 @@ class MessageLines implements Component {
         wrapTextWithAnsi(sanitizeLine(paragraph), Math.max(4, width - 2)),
       )
       .map((part) => `  ${statusColor(part, this.message.status, color)}`);
-    return [`${mark}${who}${when}`, ...body];
+    return [`${mark}${who}`, ...body];
   }
 }
 

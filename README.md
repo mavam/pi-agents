@@ -527,7 +527,7 @@ messages from agents until you or Pi message it.
 Restart Pi after changing the setting.
 
 Every message shows in the transcript as a card marked `✦`, like pi-agents'
-tool calls, with its time, where Pi's model doesn't see it. The panel shows messages still waiting in their
+tool calls, where Pi's model doesn't see it. The panel shows messages still waiting in their
 recipient's queue, next to the agents, or below them in terminals narrower
 than 120 columns:
 

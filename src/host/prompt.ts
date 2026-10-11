@@ -65,7 +65,7 @@ const DELEGATE_RULE =
 
 /** What the prompt says about messaging other agents. */
 const MESSAGING_SNIPPETS: Record<string, string> = {
-  [STATUS_TOOL]: "List the other agents of this session and their tasks",
+  [STATUS_TOOL]: "List the other agents of this session and their jobs",
   [SEND_TOOL]: "Send another agent a message without waiting for its answer",
 };
 const MESSAGING_RULE =

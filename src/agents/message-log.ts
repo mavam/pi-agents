@@ -60,6 +60,9 @@ export class MessageLog {
     const state = await this.store.loadMessages();
     this.messageLog = structuredClone(state?.messages ?? []) as MessageRecord[];
     this.messagesDropped = state?.dropped ?? 0;
+    const ids = new Set(this.messageLog.map((message) => message.id));
+    for (const id of this.messageStatuses.keys())
+      if (!ids.has(id)) this.messageStatuses.delete(id);
     const unknown = this.messageLog.filter(
       (message) => !this.messageStatuses.has(message.id),
     );

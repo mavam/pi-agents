@@ -15,8 +15,14 @@ where they stopped.
     <td width="50%"><img src="demo/messaging.gif" alt="Scout messages fixer about a concurrency bug, fixer patches it and replies, and Pi browses their exchange in /messages and attaches to both agents"></td>
   </tr>
   <tr>
-    <td align="center"><sub>Delegate work to agents and graphs</sub></td>
-    <td align="center"><sub>Agents message each other</sub></td>
+    <td align="center">
+      <strong>Delegate work to agents and graphs</strong><br>
+      <sub>Run parallel reviews, follow progress, and bring the findings together.</sub>
+    </td>
+    <td align="center">
+      <strong>Agents message each other</strong><br>
+      <sub>Coordinate a fix between agents, then browse their conversation.</sub>
+    </td>
   </tr>
 </table>
 

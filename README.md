@@ -40,7 +40,7 @@ Have an agent review src/run for error handling while we keep going.
 
 ```text
 Spawn two agents in parallel: one maps the API surface, one checks the tests.
-Wait for both and merge their findings.
+Merge their findings once both report back.
 ```
 
 ```text
@@ -54,8 +54,8 @@ helper review each, and returns one merged review.
 ```
 
 Pi starts agents only when you ask for delegation. An agent's result is its
-final message. Results of agents that Pi doesn't wait for arrive later as
-messages in your conversation. In a graph, agents pass their results to each
+final message. Agents work in the background and their results arrive as
+messages in your conversation, so you can keep talking to Pi meanwhile. In a graph, agents pass their results to each
 other, and Pi gets one message at the end.
 
 The [usage manual](docs/usage.md) covers the rest: the panel, attaching to

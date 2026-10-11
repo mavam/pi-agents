@@ -451,8 +451,14 @@ cannot be expressed in the tool schemas that providers accept. The tools,
 builds and models used to them name it. Agents without
 a name are called `<graph>-<n>`, or after their profile. `agent_send` to a
 graph fails and lists its agents. Blocking lives in one place, `agent_wait`:
-the other tools return at once, which a script follows with `agent_wait` when
-it needs the results, and they drop a `wait` argument of earlier builds.
+the other tools return at once, and they drop a `wait` argument of earlier
+builds. Results arrive as messages without a wait, so the descriptions and
+the system prompt steer the parent away from waiting: it ends its turn or
+continues with other work, calls `agent_wait` only when a turn must combine
+results, such as in a script, and never polls. Print and JSON modes end the
+run with the parent's answer and then pause the agents, so there the prompt
+tells the parent to wait for the results it needs instead. While a wait
+runs, its result tells the user that a message stops it.
 Models sometimes pass `timeout: false` or quoted numbers, so the tools drop
 seconds that aren't positive numbers and parse numeric strings.
 

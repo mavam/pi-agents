@@ -400,7 +400,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_spawn",
       description:
-        "Start an agent on a job and return at once. Its final message is its result, which arrives later as a message; to block for it, call agent_wait.",
+        "Start an agent on a job and return at once. Its final message is its result, which arrives on its own as a message that starts a new turn.",
       parameters: spawnParams,
       output: AgentOutput,
       async execute(service, params, ctx) {
@@ -449,7 +449,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_spawn_graph",
       description:
-        "Start agents whose jobs build on each other's results, or whose results you want as one message. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. For independent jobs, call agent_spawn once per job instead. Returns at once; to block for the result, call agent_wait.",
+        "Start agents whose jobs build on each other's results, or whose results you want as one message. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. For independent jobs whose results should arrive separately, call agent_spawn once per job instead. Returns at once; the result arrives on its own as one message.",
       parameters: graphParams,
       output: GraphOutput,
       async execute(service, params, ctx) {
@@ -495,7 +495,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_send",
       description:
-        "Send a message to an agent, also one that answered or was stopped, and return at once. A working agent receives it as steering. The answer arrives later as a message; to block for it, call agent_wait.",
+        "Send a message to an agent, also one that answered or was stopped, and return at once. A working agent receives it as steering. The answer arrives on its own as a message.",
       parameters: sendParams,
       output: AgentOutput,
       async execute(service, params) {
@@ -537,7 +537,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_wait",
       description:
-        "Block until agents or graphs answer and return their results.",
+        "Block the current turn until agents or graphs answer, or a message from the user interrupts, and return their results. Results arrive as messages without it; the system prompt says when to wait.",
       parameters: waitParams,
       output: WaitOutput,
       execute: (service, params, _ctx, signal, onUpdate, call) =>
@@ -564,7 +564,8 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_status",
-      description: "List agents and graphs with their state and job.",
+      description:
+        "List agents and graphs with their state and job. Returns at once; don't call it repeatedly to watch for results, which arrive as messages.",
       parameters: statusParams,
       output: StatusOutput,
       async execute(service, params) {

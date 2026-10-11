@@ -235,6 +235,8 @@ interface ToolView {
   /** The call starts the work it reports on, so what hasn't finished is
    * only what it started: no state, which would go stale. */
   starts?: true;
+  /** A note below the result while the call still runs. */
+  running?: string;
 }
 
 /** What a call that started work shows of what hasn't finished: only that
@@ -282,6 +284,7 @@ const PARENT_CALLS: Record<string, ToolView> = {
   },
   agent_wait: {
     label: "wait",
+    running: "Send a message to stop waiting; the agents keep working.",
     call: (args) => ({
       title: (Array.isArray(args.names) ? args.names : []).join(", "),
       pairs: { timeout: seconds(args.timeout) },
@@ -544,6 +547,7 @@ function toolRenderers({
   call,
   empty,
   starts,
+  running,
 }: ToolView): ToolRenderers {
   return {
     renderCall(args, theme: Theme, context) {
@@ -580,12 +584,17 @@ function toolRenderers({
           options.expanded,
         );
       }
-      const lines = formatReceipt(
-        starts ? asStarted(decoded) : decoded,
-        options.expanded,
-        color,
-        starts,
-      );
+      const lines = [
+        formatReceipt(
+          starts ? asStarted(decoded) : decoded,
+          options.expanded,
+          color,
+          starts,
+        ),
+        options.isPartial && running ? color("dim", running) : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
       return new FitLines(
         indent(lines || (empty ? color("dim", empty) : "")),
         options.expanded,

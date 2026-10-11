@@ -176,18 +176,28 @@ Pi uses these tools to work with agents:
 | `agent_status` | Show agent and graph states. |
 | `agent_stop` | Stop an agent or a graph. |
 
-`agent_spawn`, `agent_spawn_graph`, and `agent_send` return at once, and
-results arrive as messages. Only `agent_wait` blocks: until the agents
-answer, or at most its `timeout` in seconds. A result that a wait returns
-doesn't post again as a message. Cancelling a wait leaves the agents
-working, and so does a message you send to Pi while it waits: Pi stops
-waiting and answers you right away.
+`agent_spawn`, `agent_spawn_graph`, and `agent_send` return at once. Agents
+work in the background, and each result arrives on its own as a message that
+starts Pi's next turn, so you can keep talking to Pi meanwhile. Results reach
+Pi whole, without a size limit. Pi treats a result as an agent's report, not
+as your request, and acknowledges results briefly while other agents still
+work. To get several results together, start a graph: it reports as one
+message.
+
+Only `agent_wait` blocks: until the agents answer, or at most its `timeout`
+in seconds. Pi calls it only when a turn must combine results, or in a
+single-shot run such as `pi --print`, which ends with Pi's answer and would
+otherwise pause the agents before they report. A
+result that a wait returns doesn't post again as a message. Cancelling a
+wait leaves the agents working, and so does a message you send to Pi while
+it waits: Pi stops waiting and answers you right away.
 
 With [codemode](https://pi.dev/docs/latest/codemode), scripts get the
 results as data instead of text: an agent's `name`, `state`, and `result`
 or `error`, a graph's `state` and how each of its agents ended its job,
-and the names a wait leaves `pending`. A script can start agents, wait for
-all of them, and pick out what it needs before Pi reads anything:
+and the names a wait leaves `pending`. A script that waits blocks Pi like
+a direct wait, so it pays off when the script combines the results in code
+before Pi reads anything:
 
 ```js
 const names = ["api", "tests", "docs"];
@@ -197,6 +207,8 @@ await Promise.all(
 const { agents, pending } = await tools.agent_wait({ names, timeout: 600 });
 return { failed: agents.filter((a) => a.state === "failed"), pending };
 ```
+
+Names in `pending` keep working, and their results arrive as messages.
 
 Each tool call shows the arguments Pi chose, dim, after its title:
 

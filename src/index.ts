@@ -87,7 +87,11 @@ export default function agentExtension(pi: ExtensionAPI): void {
         `pi-agents ignores these profiles:\n${fresh.join("\n")}`,
         "warning",
       );
-    const appendix = buildSystemPromptAppendix(profiles, ctx.scopedModels);
+    const appendix = buildSystemPromptAppendix(
+      profiles,
+      ctx.scopedModels,
+      ctx.mode === "print" || ctx.mode === "json",
+    );
     return { systemPrompt: `${event.systemPrompt}\n\n${appendix}` };
   });
 

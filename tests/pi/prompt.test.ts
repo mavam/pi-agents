@@ -11,6 +11,7 @@ import {
 } from "../../src/pi/messages.js";
 import {
   buildSystemPromptAppendix,
+  guidance,
   profileCatalog,
 } from "../../src/pi/prompt.js";
 import { prepareArguments } from "../../src/pi/tools.js";
@@ -51,7 +52,7 @@ describe("system prompt appendix", () => {
     const appendix = buildSystemPromptAppendix(profiles);
     expect(appendix).toBe(
       [
-        "Delegate work to agents with the agent_* tools when the user asks for it. Agents can message each other with agent_send; for agents whose jobs depend on each other, say in their jobs whom to coordinate with.",
+        guidance(),
         "<agent_profiles>",
         '  <profile name="scout" thinking="low">Finds code</profile>',
         "</agent_profiles>",
@@ -75,16 +76,24 @@ describe("system prompt appendix", () => {
       ] as never),
     ).toBe(
       [
-        "Delegate work to agents with the agent_* tools when the user asks for it. Agents can message each other with agent_send; for agents whose jobs depend on each other, say in their jobs whom to coordinate with.",
+        guidance(),
         '<agent_models note="cost in USD per million input/output tokens">',
         '  <model id="anthropic/claude-sonnet-5-5" name="Claude Sonnet 5.5" context="1M" cost="2/10"/>',
         '  <model id="openai-codex/gpt-6.1-sol" thinking="high"/>',
         "</agent_models>",
       ].join("\n"),
     );
-    expect(buildSystemPromptAppendix([])).toBe(
-      "Delegate work to agents with the agent_* tools when the user asks for it. Agents can message each other with agent_send; for agents whose jobs depend on each other, say in their jobs whom to coordinate with.",
+    expect(buildSystemPromptAppendix([])).toBe(guidance());
+  });
+
+  test("a single-shot run waits for the results it needs", () => {
+    expect(guidance()).toContain("end your turn");
+    expect(guidance()).not.toContain("This run ends with your answer");
+    expect(buildSystemPromptAppendix([], [], true)).toBe(guidance(true));
+    expect(guidance(true)).toContain(
+      "call agent_wait for the results you need before you answer",
     );
+    expect(guidance(true)).not.toContain("end your turn");
   });
 
   test("profiles name their skills", () => {

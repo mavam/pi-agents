@@ -16,13 +16,13 @@ const plainTheme = {
 function draw(
   tool: string,
   details: unknown,
-  { expanded = false, text = "" } = {},
+  { expanded = false, text = "", isPartial = false } = {},
 ): string[] {
   return (
     PARENT_TOOL_VIEWS[tool]
       ?.renderResult?.(
         { content: [{ type: "text", text }], details },
-        { expanded, isPartial: false },
+        { expanded, isPartial },
         // biome-ignore lint/suspicious/noExplicitAny: a plain test theme.
         plainTheme as any,
         // biome-ignore lint/suspicious/noExplicitAny: renderers read isError.
@@ -74,6 +74,15 @@ describe("tool results", () => {
       "  The answer.",
       "◉ b luna",
     ]);
+  });
+
+  test("a running wait says that a message stops it", () => {
+    const running = { receipt: receipt({ agents: [busy] }) };
+    expect(draw("agent_wait", running, { isPartial: true })).toEqual([
+      "◉ b luna",
+      "Send a message to stop waiting; the agents keep working.",
+    ]);
+    expect(draw("agent_wait", running)).toEqual(["◉ b luna"]);
   });
 
   test("results stored by earlier versions still draw, without live state", () => {

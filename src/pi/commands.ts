@@ -9,14 +9,12 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isGraphVisible, isVisible } from "../agents/service.js";
 import { orderSentence } from "../agents/topology.js";
 import type {
   AgentInfo,
   AgentState,
   GraphInfo,
-  MessageInfo,
   NodeOutcome,
 } from "../agents/types.js";
 import {
@@ -34,13 +32,11 @@ import {
   QUEUED_NOTE,
   runtime,
   STATE_STYLES,
-  sanitizeLine,
   shortModel,
   shortName,
   stateIcon,
   statusIcon,
 } from "../ui/format.js";
-import { firstLine, formatClock, statusColor } from "../ui/messages.js";
 import {
   type Bold,
   type DetailLine,
@@ -56,13 +52,7 @@ import {
   hiddenNote,
   type Row,
 } from "../ui/rows.js";
-import {
-  buildSenders,
-  SENDER_ORDERS,
-  type SenderGroup,
-  type SenderOrder,
-  senderKey,
-} from "../ui/senders.js";
+import { openMessageStream } from "../ui/stream.js";
 import type { SessionHost } from "./session.js";
 
 /** Lines of an agent's job shown in the overlay's detail pane. */
@@ -82,18 +72,6 @@ function pad(value: string, width: number): string {
   return value.length >= width
     ? value
     : value + " ".repeat(width - value.length);
-}
-
-/** `value` cut with an ellipsis or padded to exactly `width` columns. */
-function fit(value: string, width: number): string {
-  const cut = truncateToWidth(value, width, "…");
-  return cut + " ".repeat(Math.max(0, width - visibleWidth(cut)));
-}
-
-/** The width of a column of `values`: its widest value. Names aren't cut;
- * only a row's end is, where it meets the box. */
-function columnWidth(values: readonly string[]): number {
-  return Math.max(1, ...values.map((value) => visibleWidth(value)));
 }
 
 /** A row's last column: usage, then whether its result is queued. */
@@ -310,164 +288,42 @@ export function agentDetail(
   return lines;
 }
 
-/** Counts messages in `/messages`, where every column counts. */
-const MAIL_ICON = "✉";
-
-function count(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`;
-}
-
 /**
- * A sent message in `/messages`: its time, its recipient, and its text,
- * colored by status: normal once delivered, dim while queued, red once
- * dropped. Continuation lines align under the text.
- */
-export function messageDetail(
-  message: MessageInfo,
-  options: {
-    /** The width of the recipient column. */
-    column: number;
-    color: Colorize;
-    bold: Bold;
-    now?: number;
-  },
-): DetailLine[] {
-  const { column, color, bold } = options;
-  const padded = fit(message.to.name, column);
-  const lead = `${color("dim", formatClock(message.sentAt, options.now))} ${bold(padded)} `;
-  const blank = " ".repeat(visibleWidth(lead));
-  return message.text
-    .trim()
-    .split("\n")
-    .map((paragraph, index) => ({
-      lead: index === 0 ? lead : blank,
-      text: statusColor(sanitizeLine(paragraph), message.status, color),
-    }));
-}
-
-/**
- * `/messages`: the agents that sent messages, the most recent sender first,
- * and the selected sender's messages below, oldest first, with times and
- * recipients. With `agent`, only messages from or to that agent. `/`
- * searches the messages' text and names, `o` changes the order, ⏎ attaches
- * to the sender, `a` opens it in `/agents`, and Tab goes on to the panel.
+ * `/messages`: every message between agents, newest first (see
+ * `src/ui/stream.ts`). With `agent`, it starts filtered by that agent's
+ * name; with `message`, at that message.
  */
 async function openMessagesOverlay(
   ctx: ExtensionContext,
   deps: CommandDeps,
-  options: { sender?: string; agent?: string } = {},
+  options: { message?: string; agent?: string } = {},
 ): Promise<void> {
   const service = await deps.host.ensure(ctx);
-  const agent = options.agent;
-  const agentName = agent ? service.agentById(agent)?.name : undefined;
-  let after: (() => void) | undefined;
-  let order: SenderOrder = "recent";
-  const items = (query = "") =>
-    buildSenders(service.messages(), {
-      ...(agent ? { agent } : {}),
-      ...(query ? { query } : {}),
-      order,
-    });
-  const next = () => (deps.panel.hasRows() ? "panel" : "/agents");
-  const spec: OverlaySpec<SenderGroup> = {
-    title: agentName ? `Messages · ${agentName}` : "Messages",
-    emptyText: deps.host.messaging()
-      ? "No messages between agents yet."
-      : "Messaging between agents is off. Set piAgents.messaging to turn it on.",
-    search: true,
-    footer: () =>
-      `↑↓ sender · / search · o order: ${order} · ⏎ attach · a /agents · tab ${next()} · esc back`,
-    ...(options.sender ? { initialKey: senderKey(options.sender) } : {}),
-    items,
-    keyOf: (group) => group.key,
-    // Columns start at the same place on every row: sender, count, age,
-    // then the latest message's recipient and text. Names are bold and end
-    // in an ellipsis when long; the text's color is its status.
-    row: (group, color, bold) => {
-      const now = Date.now();
-      const all = items();
-      const age = (each: SenderGroup) => {
-        const last = each.messages.at(-1);
-        return last ? `${formatElapsed(now - last.sentAt)} ago` : "";
-      };
-      const senders = columnWidth(all.map((each) => each.sender.name));
-      const counts = columnWidth(
-        all.map((each) => String(each.messages.length)),
-      );
-      const ages = columnWidth(all.map(age));
-      const last = group.messages.at(-1);
-      const total = String(group.messages.length);
-      return [
-        fit(bold(group.sender.name), senders),
-        color(
-          "dim",
-          `${MAIL_ICON} ${" ".repeat(counts - total.length)}${total}`,
-        ),
-        color("dim", fit(age(group), ages)),
-        last
-          ? `${bold(last.to.name)}${color("dim", " → ")}${statusColor(firstLine(last.text), last.status, color)}`
-          : "",
-      ].join(" ");
+  const agentName = options.agent
+    ? service.agentById(options.agent)?.name
+    : undefined;
+  const fail = (error: unknown) => ctx.ui.notify(errorText(error), "error");
+  const agents = () => void openAgentsOverlay(ctx, deps).catch(fail);
+  await openMessageStream(
+    ctx,
+    {
+      messages: () => service.messages(),
+      ...(agentName ? { query: agentName } : {}),
+      ...(options.message ? { select: options.message } : {}),
+      emptyText: deps.host.messaging()
+        ? "No messages between agents yet."
+        : "Messaging between agents is off. Set piAgents.messaging to turn it on.",
+      attach: (agentId) => deps.focus.attach(ctx, agentId),
+      next: deps.panel.hasRows()
+        ? { label: "panel", open: () => deps.focus.focusPanel(ctx) }
+        : { label: "/agents", open: agents },
+      previous: { label: "/agents", open: agents },
+      live: () =>
+        service.messages().some((message) => message.status === "queued") ||
+        service.list().some((agent) => agent.state === "working"),
     },
-    // The selected row names the sender, so the separator stays plain.
-    detail: (group, color, bold) => {
-      const dropped = service.droppedMessages();
-      const lines: DetailLine[] =
-        dropped > 0
-          ? [
-              color(
-                "dim",
-                `This session no longer keeps its ${count(dropped, "oldest message")}.`,
-              ),
-              "",
-            ]
-          : [];
-      const column = columnWidth(
-        group.messages.map((message) => message.to.name),
-      );
-      for (const message of group.messages)
-        lines.push(...messageDetail(message, { column, color, bold }));
-      return lines;
-    },
-    onAction: (key, group) => {
-      if (key === "o") {
-        order =
-          SENDER_ORDERS[
-            (SENDER_ORDERS.indexOf(order) + 1) % SENDER_ORDERS.length
-          ] ?? "recent";
-        return undefined;
-      }
-      if (key === "tab") {
-        after = deps.panel.hasRows()
-          ? () => deps.focus.focusPanel(ctx)
-          : () =>
-              void openAgentsOverlay(ctx, deps).catch((error) =>
-                ctx.ui.notify(errorText(error), "error"),
-              );
-        return "close";
-      }
-      if (key === "shift+tab" || key === "a") {
-        const target = key === "a" ? group.sender.id : undefined;
-        after = () =>
-          void openAgentsOverlay(
-            ctx,
-            deps,
-            target ? `agent:${target}` : undefined,
-          ).catch((error) => ctx.ui.notify(errorText(error), "error"));
-        return "close";
-      }
-      if (key === "enter") {
-        after = () => deps.focus.attach(ctx, group.sender.id);
-        return "close";
-      }
-      return undefined;
-    },
-    live: () =>
-      service.messages().some((message) => message.status === "queued") ||
-      service.list().some((agent) => agent.state === "working"),
-  };
-  await openOverlay(ctx, spec, deps.panel);
-  after?.();
+    deps.panel,
+  );
 }
 
 async function openAgentsOverlay(

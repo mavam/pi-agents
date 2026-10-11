@@ -335,7 +335,7 @@ below the agent, and the divider over its details in `/agents` shows it.
 | --- | --- |
 | `/agents` | Browse all agents and graphs, including ended ones, with their jobs and latest results. Attach to, fold, or stop them. |
 | `/agent <name>` | Attach to an agent. |
-| `/messages` | Read and search the messages agents sent each other, by sender. |
+| `/messages` | Read and filter the messages agents sent each other, newest first. |
 
 ### Tools
 
@@ -509,27 +509,28 @@ A message's text is dim while it waits in the recipient's queue, normal once
 it reached the recipient's conversation, and red if interrupting or stopping
 the recipient dropped it. In the focused panel, ↑↓ reach the messages, ⏎
 attaches to a message's recipient, and `m` opens `/messages` at the selected
-agent's or message's sender.
+message, or filtered by the selected agent's name.
 
-`/messages` lists the agents that sent messages, the most recent sender
-first, in columns: sender, count, age, and recipient and text of the latest
-message. The selected sender's messages show below with their times and
-recipients:
+`/messages` shows every message in one stream, newest first, one line each:
 
 ```text
-╭─ Messages (1/2) ─────────────────────────────────────────────────────╮
-│ ▸ mesh-a ✉ 2 4s ago mesh-e → TOKEN mesh-73 route A-C-E-F             │
-│   mesh-f ✉ 1 6s ago mesh-a → ACK mesh-73 route A-B-D-F               │
+╭─ Messages (3) ───────────────────────────────────────────────────────╮
+│   14:33:46 gamma → beta Serve wraps                                  │
+│   14:33:17 beta → alpha Location proposal: reserve the central lawn… │
+│ ▸ 14:32:47 alpha → gamma Offer two inclusive picnic activities:      │
 ├──────────────────────────────────────────────────────────────────────┤
-│ 12:04:11 mesh-f TOKEN mesh-73 route A-B-D-F                          │
-│ 12:04:20 mesh-e TOKEN mesh-73 route A-C-E-F                          │
-╰─ / search · o order · ⏎ attach · esc back ───────────────────────────╯
+│ Offer two inclusive picnic activities:                               │
+│                                                                      │
+│ - a relaxed nature-scavenger hunt with seated options                │
+│ - a collaborative mural                                              │
+╰─ type to filter · ⏎ close · ← alpha · → gamma · esc close ───────────╯
 ```
 
-`/` searches the messages' text and the agents' names, `o` orders senders by
-latest message, name, or count, ⏎ attaches to the sender, and `a` opens it in
-`/agents`. Opened with `m` for one agent, `/messages` shows only messages
-from or to it. A session keeps its latest 1,000 messages.
+The text is dim, so the names stand out, and red if the message was
+dropped. Type to filter by text and names, such as an agent's name. ⏎ opens the
+selected message in full below the list and closes it again. ← attaches to
+the sender and → to the recipient, in the order the line names them. Esc
+closes the message, then clears the filter, then closes `/messages`. A session keeps its latest 1,000 messages.
 
 ### Footer counters
 

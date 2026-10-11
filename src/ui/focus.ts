@@ -8,7 +8,8 @@
  *   panel  ── ⏎ ──▶ attach view (ctx.ui.custom owns focus until it closes)
  *   panel  ── tab ──▶ /agents ── tab ──▶ /messages ── tab ──▶ panel
  *   panel  ── shift+tab ──▶ /messages, the cycle backwards
- *   panel  ── m ──▶ /messages for the selected agent or message's sender
+ *   panel  ── m ──▶ /messages at the selected message, or filtered by the
+ *                   selected agent's name
  *
  * It also owns attaching, so the panel, the overlay, and `/agent` share one
  * path that hides the panel and holds deliveries while attached.
@@ -75,7 +76,7 @@ export class FocusController {
   onMessages:
     | ((
         ctx: ExtensionContext,
-        options: { sender?: string; agent?: string },
+        options: { message?: string; agent?: string },
       ) => void)
     | undefined;
   /** Invoked after the attach view closes (deliver held results, etc.). */
@@ -250,8 +251,8 @@ export class FocusController {
       messages(ctx, {});
       return { consume: true };
     }
-    // m opens messages at the selected message's sender, or the selected
-    // agent's messages.
+    // m opens messages at the selected message, or filtered by the
+    // selected agent's name.
     if (key === "m" && messages) {
       const message = this.panel.selectedMessage();
       const row = this.panel.selected();
@@ -259,7 +260,7 @@ export class FocusController {
       messages(
         ctx,
         message
-          ? { sender: message.from.id }
+          ? { message: message.id }
           : row?.kind === "agent"
             ? { agent: row.agent.id }
             : {},

@@ -59,7 +59,6 @@ import {
   type MessageStyle,
   messageLine,
   messageParts,
-  pairWidth,
   themeStyle,
 } from "./messages.js";
 import {

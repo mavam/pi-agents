@@ -7,13 +7,11 @@ import {
   EMPTY_USAGE,
   type GraphInfo,
   type GraphNode,
-  type MessageInfo,
 } from "../../src/agents/types.js";
 import {
   agentDetail,
   agentHeader,
   graphDetail,
-  messageDetail,
 } from "../../src/pi/commands.js";
 import { plainColorize } from "../../src/ui/format.js";
 import {
@@ -21,7 +19,6 @@ import {
   paneLayout,
   renderDetail,
 } from "../../src/ui/overlay.js";
-import { buildSenders } from "../../src/ui/senders.js";
 
 beforeAll(() => initTheme("dark"));
 
@@ -263,80 +260,5 @@ describe("/agents layout", () => {
     expect(paneLayout(60, 75)).toEqual({ tableRows: 22, detailRows: 22 });
     expect(paneLayout(60, 3)).toEqual({ tableRows: 3, detailRows: 41 });
     expect(paneLayout(12, 75)).toEqual({ tableRows: 2, detailRows: 2 });
-  });
-});
-
-describe("/messages", () => {
-  const a = { id: "1", name: "mesh-a" };
-  const f = { id: "2", name: "mesh-f" };
-  const e = { id: "3", name: "mesh-e" };
-  const at = new Date(2026, 9, 11, 12, 4, 11).getTime();
-  const messages: MessageInfo[] = [
-    {
-      id: "1",
-      from: a,
-      to: f,
-      text: "TOKEN A-B-D-F",
-      sentAt: at,
-      status: "delivered",
-    },
-    {
-      id: "2",
-      from: f,
-      to: a,
-      text: "ACK A-B-D-F\nand more",
-      sentAt: at + 7_000,
-      status: "queued",
-    },
-    {
-      id: "3",
-      from: a,
-      to: e,
-      text: "TOKEN A-C-E-F",
-      sentAt: at + 9_000,
-      status: "dropped",
-    },
-  ];
-
-  test("groups messages by sender, the most recent first, and searches", () => {
-    const names = (groups: ReturnType<typeof buildSenders>) =>
-      groups.map((group) => `${group.sender.name} ${group.messages.length}`);
-    expect(names(buildSenders(messages))).toEqual(["mesh-a 2", "mesh-f 1"]);
-    expect(names(buildSenders(messages, { order: "name" }))).toEqual([
-      "mesh-a 2",
-      "mesh-f 1",
-    ]);
-    // One agent's messages, from or to it.
-    expect(names(buildSenders(messages, { agent: "3" }))).toEqual(["mesh-a 1"]);
-    // Search matches text and names, ignoring case.
-    expect(names(buildSenders(messages, { query: "ack" }))).toEqual([
-      "mesh-f 1",
-    ]);
-    expect(names(buildSenders(messages, { query: "MESH-E" }))).toEqual([
-      "mesh-a 1",
-    ]);
-  });
-
-  test("a sender's messages show time, recipient, and text by status", () => {
-    const tagged = (name: string, text: string) => `<${name}>${text}</>`;
-    const lines = renderDetail(
-      messages
-        .filter((message) => message.from.id === "1")
-        .flatMap((message) =>
-          messageDetail(message, {
-            column: 6,
-            color: tagged as never,
-            bold: (text) => text,
-            now: at,
-          }),
-        ),
-      80,
-      plainColorize,
-      getMarkdownTheme(),
-    ).map((line) => ("text" in line ? line.text : ""));
-    expect(lines).toEqual([
-      "<dim>12:04:11</> mesh-f <text>TOKEN A-B-D-F</>",
-      "<dim>12:04:20</> mesh-e <error>TOKEN A-C-E-F</>",
-    ]);
   });
 });

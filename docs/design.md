@@ -549,13 +549,17 @@ message card, with its own, and Pi's tools with Pi's.
     the time, which `/messages` has, never as the user's input; Ctrl+O
     expands them with tool output. Queued input shows dim below the
     conversation.
-  - `/messages`: the senders, the most recent first, or by name or count
-    with `o`; a row is the sender, its message count, the age, and its
-    latest message with recipient, in columns that start at the same place
-    on every row; names aren't cut. The selected sender's messages
-    show as time, recipient, text. `/` searches text and names, ⏎ attaches
-    to the sender, `a` opens it in `/agents`. Grouping by sender keeps the
-    list as long as the number of agents, however many pairs talk.
+  - `/messages` (`src/ui/stream.ts`): every message in one stream, newest
+    first, one line each, as time, then the message's line; the text starts
+    right after the names, so rows are ragged but the text gets the room.
+    The names stand out and the text is dim, red once dropped; queued
+    messages live in the panel.
+    Typing filters by text and names. ⏎ opens the selected message as
+    Markdown in a fixed pane below the list, which follows the selection,
+    and closes it; messages can be whole documents, so they don't unfold
+    in the list. ← attaches to the sender and → to the recipient, in the
+    order the line names them. `m` opens it at a message or filtered by an
+    agent's name.
 - pi-durable's task graph stays out of the UI. `AgentService.liveTasks()`
   exposes it for tests and debugging.
 - The fancy-footer integration reports working and idle counts.

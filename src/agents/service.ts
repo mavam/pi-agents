@@ -15,20 +15,11 @@
  * parent's waits when the parent is needed.
  */
 
-import type {
-  AttachedReplicatedState,
-  Context,
-  JsonValue,
-} from "@earendil-works/chord";
-import {
-  BACKGROUND_CONTEXT,
-  withAbortSignal,
-} from "@earendil-works/chord/context";
+import type { AttachedReplicatedState, JsonValue } from "@earendil-works/chord";
 import {
   AgentDoc,
   type CommitPublication,
   type Conversation,
-  type ConversationId,
   type ConversationView,
   configure,
   type AgentState as DurableAgentState,
@@ -37,12 +28,12 @@ import {
   type Harness,
   LiveDoc,
   type SubmissionRecord,
-  type TaskId,
   type TaskOutcome,
   type ToolRegistration,
   UsageDoc,
 } from "@earendil-works/pi-durable";
 import { DEFAULT_AGENT_TOOLS } from "../host/tools.js";
+import { CONTEXT, contextFor, conversationId, taskId } from "./context.js";
 import { DELEGATE_TOOL } from "./delegation.js";
 import {
   ASSISTANT_KIND,
@@ -53,7 +44,6 @@ import {
   type EndedTurn,
   endedTurnOf,
   GENERATION_KIND,
-  outcomeOf,
   resultOf,
   settlementOf,
   summarizeUsage,
@@ -69,14 +59,12 @@ import {
   NodeTask,
   nodeRequestId,
 } from "./graphs.js";
-import { messageSubmission } from "./messaging.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
 import type { Parent } from "./parent.js";
 import {
   type AgentRecord,
   AgentsDoc,
   answerDeliveryId,
-  DELIVERED_MEMORY,
   failureDeliveryId,
   type GraphNodeRecord,
   type GraphRecord,
@@ -87,6 +75,7 @@ import {
   type ParentRequest,
   requestId,
 } from "./records.js";
+import { AgentStore } from "./store.js";
 import { endNodes, resolveEdges, stages } from "./topology.js";
 import {
   type AgentDelivery,
@@ -114,7 +103,6 @@ import {
   WaitInterrupted,
 } from "./types.js";
 
-const CONTEXT = BACKGROUND_CONTEXT;
 const REFRESH_DELAY_MS = 50;
 
 export interface AgentServiceOptions {
@@ -151,14 +139,6 @@ export interface WaitOutcome {
   deliveries: string[];
 }
 
-function conversationId(agentId: string): ConversationId {
-  return Number(agentId) as ConversationId;
-}
-
-function taskId(id: string | number): TaskId {
-  return Number(id) as TaskId;
-}
-
 /** Open agents, and closed ones that work again. */
 export function isVisible(info: AgentInfo): boolean {
   return !info.closed || info.state === "working";
@@ -189,10 +169,6 @@ function messageStatus(submission: SubmissionRecord): MessageStatus {
 
 function isMessageRequest(requestId: string | undefined): boolean {
   return requestId?.startsWith("message:") === true;
-}
-
-function contextFor(signal: AbortSignal | undefined): Context {
-  return signal ? withAbortSignal(signal, CONTEXT) : CONTEXT;
 }
 
 export class AgentService {
@@ -254,6 +230,7 @@ export class AgentService {
   private reconciled = false;
   private closed = false;
 
+  private readonly store: AgentStore;
   private readonly harness: Harness;
   private readonly anchor: Conversation;
   private readonly extensions: AgentExtensions;
@@ -263,6 +240,7 @@ export class AgentService {
 
   private constructor(options: AgentServiceOptions) {
     this.harness = options.harness;
+    this.store = new AgentStore({ harness: this.harness });
     this.anchor = options.anchor;
     this.extensions = options.extensions;
     this.parent = options.parent;
@@ -292,13 +270,13 @@ export class AgentService {
     this.unsubscribe = this.harness.subscribeCommits((publication) =>
       this.onCommit(publication),
     );
-    this.records = await this.loadRecords();
+    this.records = await this.store.loadAgents();
     for (const id of Object.keys(this.records)) {
       await this.loadLastAssistant(id);
       // A request recorded before a crash may lack its submission.
-      await this.flushOutbox(id);
+      await this.store.flushOutbox(id);
     }
-    await this.flushMessages();
+    await this.store.flushMessages();
     await this.loadMessages();
     await this.refresh(Object.keys(this.records));
     this.unsubscribeParent = this.parent.subscribe(() =>
@@ -541,22 +519,9 @@ export class AgentService {
       };
       return String(conversation.id);
     }, CONTEXT);
-    await this.submit(id, first, request);
+    await this.store.submit(id, first, request);
     await this.refresh([id]);
     return this.requireAgent(id);
-  }
-
-  /** Outbox: submit recorded parent requests that lack their submission. */
-  private async flushOutbox(agentId: string): Promise<void> {
-    const state = await this.harness.snapshot(AgentsDoc, CONTEXT);
-    const record = state?.agents[agentId];
-    for (const [rid, request] of Object.entries(record?.requests ?? {})) {
-      const existing = await this.harness.commit(
-        (tx) => tx.submissionByRequest(conversationId(agentId), rid),
-        CONTEXT,
-      );
-      if (!existing) await this.submit(agentId, rid, request);
-    }
   }
 
   /**
@@ -686,18 +651,8 @@ export class AgentService {
       message: text,
       whenBusy: mode === "followUp" ? "followUp" : "steer",
     };
-    const rid = await this.harness.commit(async (tx) => {
-      const state = await tx.doc(AgentsDoc);
-      const record = state.agents[info.id];
-      if (!record) throw new AgentError(`Agent ${info.name} is missing`);
-      record.closed = false;
-      delete record.stopped;
-      const next = requestId(record.nextRequest);
-      record.nextRequest += 1;
-      record.requests[next] = request;
-      return next;
-    }, CONTEXT);
-    await this.submit(info.id, rid, request);
+    const rid = await this.store.addRequest(info.id, info.name, request);
+    await this.store.submit(info.id, rid, request);
     await this.refresh([info.id]);
     return this.requireAgent(info.id);
   }
@@ -710,11 +665,7 @@ export class AgentService {
       CONTEXT,
     );
     if (!conversation) throw new AgentError(`Agent ${info.name} is missing`);
-    if (this.records[info.id]?.stopped)
-      await this.harness.commit(async (tx) => {
-        const record = (await tx.doc(AgentsDoc)).agents[info.id];
-        if (record) delete record.stopped;
-      }, CONTEXT);
+    if (this.records[info.id]?.stopped) await this.store.clearStopped(info.id);
     await conversation.submit(
       {
         type: "input",
@@ -774,13 +725,7 @@ export class AgentService {
         CONTEXT,
       );
       await conversation?.abort(CONTEXT);
-      await this.harness.commit(async (tx) => {
-        const record = (await tx.doc(AgentsDoc)).agents[agentId];
-        if (!record) return;
-        record.closed = true;
-        record.stopped = true;
-        record.requests = {};
-      }, CONTEXT);
+      await this.store.markStopped(agentId);
     });
     this.settled.delete(agentId);
     await this.refresh(this.withHelpers([agentId]));
@@ -789,15 +734,7 @@ export class AgentService {
   private async stopGraph(graphId: string): Promise<void> {
     const info = this.requireGraph(graphId);
     const finished = await this.isFinished(Number(graphId));
-    await this.harness.commit(async (tx) => {
-      const graph = (await tx.doc(GraphsDoc)).graphs[graphId];
-      if (!graph) return;
-      graph.pending = false;
-      graph.closed = true;
-      // A graph that holds a decided outcome can't become aborted, so the
-      // record keeps the stop.
-      if (!finished) graph.stopped = true;
-    }, CONTEXT);
+    await this.store.stopGraph(graphId, !finished);
     // Aborting the graph aborts its nodes, and they their agents, bottom-up.
     if (!finished) {
       await this.harness.abortTask(taskId(graphId), CONTEXT);
@@ -1222,27 +1159,6 @@ export class AgentService {
     );
   }
 
-  private async submit(
-    agentId: string,
-    rid: string,
-    request: ParentRequest,
-  ): Promise<void> {
-    const conversation = await this.harness.conversation(
-      conversationId(agentId),
-      CONTEXT,
-    );
-    if (!conversation) throw new AgentError(`Agent ${agentId} is missing`);
-    await conversation.submit(
-      {
-        type: "input",
-        content: request.message,
-        whenBusy: request.whenBusy,
-        requestId: rid,
-      },
-      CONTEXT,
-    );
-  }
-
   /**
    * A graph's result reached the parent: the graph closes, and so do its
    * agents that answered, never started, or that the graph stopped. Their
@@ -1251,40 +1167,9 @@ export class AgentService {
    */
   private async consumeGraph(graphId: string): Promise<void> {
     const info = this.requireGraph(graphId);
-    await this.harness.commit(async (tx) => {
-      const graph = (await tx.doc(GraphsDoc)).graphs[graphId];
-      if (!graph) return;
-      graph.pending = false;
-      graph.closed = true;
-      const state = await tx.doc(AgentsDoc);
-      for (const node of info.nodes) {
-        const record = state.agents[node.agentId];
-        const outcome = node.outcome;
-        if (!record || !outcome) continue;
-        if (outcome.kind === "answered") {
-          const entryId = outcome.result.entryId;
-          if (!record.delivered.includes(entryId))
-            record.delivered.push(entryId);
-          if (record.delivered.length > DELIVERED_MEMORY)
-            record.delivered.splice(
-              0,
-              record.delivered.length - DELIVERED_MEMORY,
-            );
-          for (const [rid, settled] of this.settled.get(node.agentId) ?? [])
-            if (
-              settled.kind === "answered" &&
-              settled.result.entryId === entryId
-            )
-              delete record.requests[rid];
-        }
-        const done =
-          outcome.kind === "answered" ||
-          outcome.kind === "stopped" ||
-          outcome.kind === "skipped";
-        if (done && Object.keys(record.requests).length === 0)
-          record.closed = true;
-      }
-    }, CONTEXT);
+    await this.store.consumeGraph(graphId, info.nodes, (id) =>
+      this.settled.get(id),
+    );
     await this.refresh(info.nodes.map((node) => node.agentId));
   }
 
@@ -1297,93 +1182,24 @@ export class AgentService {
     requestIds: string[],
     entryIds: number[],
   ): Promise<void> {
-    await this.harness.commit(async (tx) => {
-      const state = await tx.doc(AgentsDoc);
-      const record = state.agents[agentId];
-      if (!record) return;
-      for (const rid of requestIds) delete record.requests[rid];
-      for (const entryId of entryIds) {
-        if (record.delivered.includes(entryId)) continue;
-        record.delivered.push(entryId);
-      }
-      if (entryIds.length > 0 && Object.keys(record.requests).length === 0)
-        record.closed = true;
-      if (record.delivered.length > DELIVERED_MEMORY)
-        record.delivered.splice(0, record.delivered.length - DELIVERED_MEMORY);
-    }, CONTEXT);
+    await this.store.removeRequests(agentId, requestIds, entryIds);
     const outcomes = this.settled.get(agentId);
     for (const rid of requestIds) outcomes?.delete(rid);
     await this.refresh([agentId]);
-  }
-
-  private async loadRecords(): Promise<Record<string, AgentRecord>> {
-    const state = await this.harness.snapshot(AgentsDoc, CONTEXT);
-    return structuredClone(state?.agents ?? {}) as Record<string, AgentRecord>;
-  }
-
-  /**
-   * Submit logged messages that a crash left without a submission, before
-   * the harness resumes their senders. A message for a stopped or missing
-   * recipient is dropped instead.
-   */
-  private async flushMessages(): Promise<void> {
-    const [log, state] = await Promise.all([
-      this.harness.snapshot(MessagesDoc, CONTEXT),
-      this.harness.snapshot(AgentsDoc, CONTEXT),
-    ]);
-    // One read finds the messages a crash left without a submission.
-    const candidates = (log?.messages ?? []).filter(
-      (message) => !message.dropped,
-    );
-    if (candidates.length === 0) return;
-    const missing = await this.harness.commit(async (tx) => {
-      const found = await Promise.all(
-        candidates.map((message) =>
-          tx.submissionByRequest(conversationId(message.to), message.id),
-        ),
-      );
-      return candidates.filter((_, index) => !found[index]);
-    }, CONTEXT);
-    const dropped: string[] = [];
-    for (const message of missing) {
-      const recipient = state?.agents[message.to];
-      const conversation = recipient?.stopped
-        ? undefined
-        : await this.harness.conversation(conversationId(message.to), CONTEXT);
-      if (!conversation) {
-        dropped.push(message.id);
-        continue;
-      }
-      const sender = state?.agents[message.from]?.name ?? message.from;
-      await conversation.submit(messageSubmission(message, sender), CONTEXT);
-    }
-    if (dropped.length === 0) return;
-    await this.harness.commit(async (tx) => {
-      for (const known of (await tx.doc(MessagesDoc)).messages)
-        if (dropped.includes(known.id)) known.dropped = true;
-    }, CONTEXT);
   }
 
   /** The message log, and the status of messages this process hasn't
    * seen a submission of. */
   private async loadMessages(): Promise<void> {
     this.messagesDirty = false;
-    const state = await this.harness.snapshot(MessagesDoc, CONTEXT);
+    const state = await this.store.loadMessages();
     this.messageLog = structuredClone(state?.messages ?? []) as MessageRecord[];
     this.messagesDropped = state?.dropped ?? 0;
     const unknown = this.messageLog.filter(
       (message) => !this.messageStatuses.has(message.id),
     );
     if (unknown.length === 0) return;
-    const found = await this.harness.commit(
-      (tx) =>
-        Promise.all(
-          unknown.map((message) =>
-            tx.submissionByRequest(conversationId(message.to), message.id),
-          ),
-        ),
-      CONTEXT,
-    );
+    const found = await this.store.submissionsByRequest(unknown);
     found.forEach((submission, index) => {
       const id = unknown[index]?.id;
       if (id && submission)
@@ -1391,28 +1207,9 @@ export class AgentService {
     });
   }
 
-  private async loadGraphs(): Promise<Record<string, GraphRecord>> {
-    const state = await this.harness.snapshot(GraphsDoc, CONTEXT);
-    return structuredClone(state?.graphs ?? {}) as Record<string, GraphRecord>;
-  }
-
   private async loadLastAssistant(agentId: string): Promise<void> {
-    const conversation = await this.harness.conversation(
-      conversationId(agentId),
-      CONTEXT,
-    );
-    if (!conversation) return;
-    let cursor: Parameters<typeof conversation.entries>[2];
-    for (let page = 0; page < 64; page++) {
-      const result = await conversation.entries({}, 32, cursor, CONTEXT);
-      const found = result.items.find((entry) => entry.kind === ASSISTANT_KIND);
-      if (found) {
-        this.lastAssistant.set(agentId, found);
-        return;
-      }
-      if (result.next === undefined) return;
-      cursor = result.next;
-    }
+    const found = await this.store.lastAssistant(agentId);
+    if (found) this.lastAssistant.set(agentId, found);
   }
 
   /** Commit listener: record what changed. Must not call Session APIs. */
@@ -1509,8 +1306,8 @@ export class AgentService {
   private refresh(ids: string[]): Promise<void> {
     const run = this.refreshChain.then(async () => {
       if (this.closed) return;
-      this.records = await this.loadRecords();
-      this.graphRecords = await this.loadGraphs();
+      this.records = await this.store.loadAgents();
+      this.graphRecords = await this.store.loadGraphs();
       if (this.messagesDirty) await this.loadMessages();
       const targets = new Set(ids);
       for (const id of Object.keys(this.records))
@@ -1525,7 +1322,7 @@ export class AgentService {
       this.emit();
       for (const [id, rids] of drops)
         if (rids.length > 0) await this.dropRequests(id, rids);
-      if (stopped.length > 0) await this.clearPending(stopped);
+      if (stopped.length > 0) await this.store.clearPending(stopped);
       await this.closeEndedHelpers();
       for (const check of [...this.checks]) check();
       this.scheduleDelivery();
@@ -1535,12 +1332,7 @@ export class AgentService {
   }
 
   private async dropRequests(agentId: string, rids: string[]): Promise<void> {
-    await this.harness.commit(async (tx) => {
-      const state = await tx.doc(AgentsDoc);
-      const record = state.agents[agentId];
-      if (!record) return;
-      for (const rid of rids) delete record.requests[rid];
-    }, CONTEXT);
+    await this.store.dropRequests(agentId, rids);
     const outcomes = this.settled.get(agentId);
     for (const rid of rids) outcomes?.delete(rid);
   }
@@ -1561,22 +1353,9 @@ export class AgentService {
         ended.push(id);
     }
     if (ended.length === 0) return;
-    await this.harness.commit(async (tx) => {
-      const graphs = (await tx.doc(GraphsDoc)).graphs;
-      const agents = (await tx.doc(AgentsDoc)).agents;
-      for (const id of ended) {
-        const graph = graphs[id];
-        if (!graph) continue;
-        graph.closed = true;
-        for (const node of graph.nodes) {
-          const record = agents[node.agent];
-          if (record && Object.keys(record.requests).length === 0)
-            record.closed = true;
-        }
-      }
-    }, CONTEXT);
-    this.graphRecords = await this.loadGraphs();
-    this.records = await this.loadRecords();
+    await this.store.closeGraphs(ended);
+    this.graphRecords = await this.store.loadGraphs();
+    this.records = await this.store.loadAgents();
     for (const id of ended) {
       const info = this.graphInfos.get(id);
       if (info) info.closed = true;
@@ -1587,17 +1366,6 @@ export class AgentService {
       }
     }
     this.emit();
-  }
-
-  /** A stopped graph delivers nothing. */
-  private async clearPending(graphIds: string[]): Promise<void> {
-    await this.harness.commit(async (tx) => {
-      const state = await tx.doc(GraphsDoc);
-      for (const id of graphIds) {
-        const graph = state.graphs[id];
-        if (graph) graph.pending = false;
-      }
-    }, CONTEXT);
   }
 
   /** Recompute one agent's info; returns aborted request IDs to drop. */
@@ -1611,14 +1379,7 @@ export class AgentService {
     const outcomes = new Map<string, RequestOutcome>();
     const aborted: string[] = [];
     for (const rid of Object.keys(record.requests)) {
-      const outcome = await this.harness.commit(async (tx) => {
-        const submission = await tx.submissionByRequest(cid, rid);
-        const answer =
-          submission?.type === "input" && submission.status === "done"
-            ? await tx.entry(submission.answer)
-            : undefined;
-        return outcomeOf(submission, answer, id, record.name);
-      }, CONTEXT);
+      const outcome = await this.store.requestOutcome(id, record.name, rid);
       if (!outcome) continue;
       if (outcome.kind === "aborted") aborted.push(rid);
       else if (
@@ -1719,26 +1480,7 @@ export class AgentService {
   ): Promise<number | undefined> {
     let latest = this.generations.get(agentId);
     if (latest === undefined) {
-      const [task] = (
-        await this.harness.commit(
-          (tx) =>
-            tx.scanTasks(
-              {
-                conversationId: conversationId(agentId),
-                kind: GENERATION_KIND,
-                order: "descending",
-              },
-              1,
-            ),
-          CONTEXT,
-        )
-      ).items;
-      latest = task
-        ? {
-            task: Number(task.id),
-            ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
-          }
-        : null;
+      latest = await this.store.latestGeneration(agentId);
       // A commit may have seen a newer generation meanwhile.
       const known = this.generations.get(agentId);
       if (known && (!latest || known.task > latest.task)) latest = known;
@@ -1766,10 +1508,7 @@ export class AgentService {
       record.graph === undefined ? undefined : this.graphRecords[record.graph];
     const node = graph?.nodes.find((each) => each.agent === agentId);
     const rid = node ? nodeRequestId(node.task) : requestId(1);
-    const submission = await this.harness.commit(
-      (tx) => tx.submissionByRequest(conversationId(agentId), rid),
-      CONTEXT,
-    );
+    const submission = await this.store.submission(agentId, rid);
     if (submission?.type !== "input") return undefined;
     if (submission.status === "done") {
       this.jobAnswers.set(agentId, submission.answer);
@@ -1859,10 +1598,7 @@ export class AgentService {
   private async answer(entryId: number): Promise<EntryRecord | undefined> {
     const cached = this.answers.get(entryId);
     if (cached) return cached;
-    const entry = await this.harness.commit(
-      (tx) => tx.entry(entryId as EntryRecord["id"]),
-      CONTEXT,
-    );
+    const entry = await this.store.entry(entryId);
     if (entry) this.answers.set(entryId, entry);
     return entry;
   }

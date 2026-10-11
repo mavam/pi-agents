@@ -1,6 +1,6 @@
 /**
  * Slash commands: `/agents` opens the agent overlay, `/agent <name>`
- * attaches to an agent, and `/messages` opens the threads of messages
+ * attaches to an agent, and `/messages` opens the stream of messages
  * between agents.
  */
 

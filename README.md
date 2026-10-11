@@ -230,7 +230,7 @@ focused panel:
 | Click | Attach like ⏎; a message attaches to its recipient. Needs Pi's fullscreen mode, its default. |
 | Tab | Open `/agents` at the same row. Tab cycles the panel, `/agents`, and `/messages`; Shift+Tab goes back. |
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
-| Esc | Go back to the editor. |
+| Esc or → | Go back to the editor. Typing goes back too, with what you type. |
 
 Attaching shows the agent's conversation with Pi's own message and tool
 rendering. The editor then talks to the agent:
@@ -512,12 +512,13 @@ in terminals narrower than 120 columns:
 ◉ scout sol 40s 8.1k   scout → notes README.md is 18 KB 3s
 ```
 
-Their text is dim, so the names stand out. In the attach view, a message is
-dim while it waits in the agent's queue, like your queued input, and red if
-interrupting or stopping the agent dropped it. In the focused panel, ↑↓
-reach the messages, ⏎
-attaches to a message's recipient, and `m` opens `/messages` at the selected
-message, or filtered by the selected agent's name.
+Their text is dim, so the names stand out; a first row counts older ones
+that don't fit. In the attach view, a message is dim while it waits in the
+agent's queue, like your queued input, and leaves the view if interrupting
+or stopping the agent drops it; `/messages` shows dropped messages in red.
+In the focused panel, ↑↓ reach the messages, ⏎ attaches to a message's
+recipient, and `m` opens `/messages` at the selected message, or filtered by
+the selected agent's name.
 
 `/messages` shows every message in one stream, newest first, one line each:
 
@@ -531,7 +532,7 @@ message, or filtered by the selected agent's name.
 │                                                                      │
 │ - a relaxed nature-scavenger hunt with seated options                │
 │ - a collaborative mural                                              │
-╰─ type to filter · ⏎ close · ← alpha · → gamma · esc close ───────────╯
+╰─ ↑↓ move · ⏎ close · ← alpha · → gamma · tab panel · esc close ──────╯
 ```
 
 The text is dim, so the names stand out, and red if the message was

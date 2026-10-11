@@ -536,16 +536,18 @@ message card, with its own, and Pi's tools with Pi's.
   job and its result. `src/ui/messages.ts` is the one place that draws
   messages: a line, `scout → notes` with the names in bold, then the text,
   and a card, `✦` and the line on Pi's message background, the whole text
-  below when expanded. Lists keep the text dim so names stand out: the
-  panel, which shows only queued messages, and `/messages`. Cards color
-  the text by status where they know it, in the attach view: dim while
-  queued, like Pi's queued input, normal once delivered. Dropped messages
-  are red wherever their status shows.
+  below when expanded. Every line fits its width, and a line ends in `…`
+  when more lines follow. Lists keep the text dim so names stand out: the
+  panel, which shows only queued messages, and `/messages`, where dropped
+  messages are red. Cards in the attach view are dim while queued, like
+  Pi's queued input, and normal once delivered; a dropped message leaves
+  the view, since the agent's queue no longer holds it.
   - Panel, focused: queued messages of the agents it shows, with how long
     they waited, in a column to their right from 120 terminal columns, else
     below them. The agents get a fixed share, so the message column stays
     put as messages come and go. Text starts right after the names, without
-    padding to a common column. ↑↓ reach messages, ⏎ attaches to a
+    padding to a common column. When not all fit, a first row counts the
+    older ones and points to `m`. ↑↓ reach messages, ⏎ attaches to a
     message's recipient.
   - Transcript: one custom entry per message, a card without time or
     status, which Pi's model doesn't see. Entries only append and are
@@ -565,6 +567,9 @@ message card, with its own, and Pi's tools with Pi's.
     agent's name.
 - pi-durable's task graph stays out of the UI. `AgentService.liveTasks()`
   exposes it for tests and debugging.
+- Key hints fit the width: `fitHints` (`src/ui/frame.ts`) drops those for
+  keys that work alike everywhere first, ⇧↑↓, ↑↓, Space, Tab, then `s`.
+- Only the focused panel ticks, since only it shows times.
 - The fancy-footer integration reports working and idle counts.
 
 ## Testing

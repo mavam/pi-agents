@@ -376,7 +376,8 @@ export class AgentPanel {
     const { color } = style;
     const now = this.now();
     const messages = this.messages();
-    const columns = width >= COLUMNS_MIN_WIDTH;
+    // `width` leaves out the panel's padding column.
+    const columns = width + 1 >= COLUMNS_MIN_WIDTH;
     const line = (row: Row) => {
       const text =
         row.kind === "graph"

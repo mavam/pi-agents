@@ -3,15 +3,16 @@
  * one line each in the format of message cards, with the time in front:
  *
  *   ╭─ Messages (22) · alpha ──────────────────────────────────────╮
- *   │   12:48:31 beta → alpha 1/3 — Location proposal: reserve th… │
- *   │ ▸ 12:48:30 alpha → gamma 1/3: Offer two inclusive picnic ac… │
+ *   │   12:48:31 beta → alpha Location proposal: reserve the centr… │
+ *   │ ▸ 12:48:30 alpha → gamma Offer two inclusive picnic activiti… │
  *   ├──────────────────────────────────────────────────────────────┤
- *   │ 1/3: Offer two inclusive picnic activities: a relaxed        │
+ *   │ Offer two inclusive picnic activities: a relaxed             │
  *   │ nature-scavenger hunt with seated options.                   │
- *   ╰─ type to filter · ⏎ close · ← alpha · → gamma · esc close ───╯
+ *   ╰─ ↑↓ move · ⏎ close · ← alpha · → gamma · esc close ──────────╯
  *
  * The text starts right after the names, so rows are ragged but the text
- * gets the room. Names stand out, the text is dim, and red once dropped. Typing filters by text and names; Space types too. ⏎ opens
+ * gets the room. Names stand out, the text is dim, and red once dropped.
+ * Typing filters by text and names; Space types too. ⏎ opens
  * the selected message as Markdown in a pane below the list, which follows
  * the selection, and closes it again. ← attaches to the sender and → to the
  * recipient, in the order the line names them. Tab and Shift+Tab go on to

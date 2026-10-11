@@ -72,7 +72,7 @@ export class FocusController {
   /** Opens `/agents`, at the row with key `select` if given: for ← and
    * Ctrl+Q while the panel is empty, and for Tab from the panel. */
   onBrowse: ((ctx: ExtensionContext, select?: string) => void) | undefined;
-  /** Opens `/messages`, at a thread or for one agent's threads. */
+  /** Opens `/messages`, at a message or filtered by an agent. */
   onMessages:
     | ((
         ctx: ExtensionContext,

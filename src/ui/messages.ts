@@ -3,19 +3,18 @@
  * on it.
  *
  *   scout → notes bun.lock is 412 KB 3s                  a line
- *   ✦ scout → notes bun.lock is 412 KB 12:04:18          a card
+ *   ✦ scout → notes bun.lock is 412 KB                   a card
  *
  * A line is who, sender and recipient in bold, then the first line of the
- * text, whose color is its status (normal once delivered, dim while queued,
- * red once dropped), then, for live views, how long it waited. The panel
- * and the attach view's queue show lines.
+ * text, with `…` when more follow, whose color is its status (normal once
+ * delivered, dim while queued, red once dropped), then, for live views,
+ * how long it waited. The panel shows lines.
  *
  * A card is a message in a conversation: `✦`, pi-agents' mark, then the
- * line, and the time where it's given, on Pi's message background.
- * Collapsed, it's one line; expanded (Ctrl+O), a text the line cuts shows
- * in full below who and the time. Pi's
- * transcript and the attach view show cards, for received and sent
- * messages alike: the names say who sent what.
+ * line, on Pi's message background. Collapsed, it's one line; expanded
+ * (Ctrl+O), a text the line cuts shows in full below who. Pi's transcript
+ * and the attach view show cards, for received and sent messages alike:
+ * the names say who sent what. Every line fits its width.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";

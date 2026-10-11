@@ -4,7 +4,7 @@
  * message the session already shows, on any branch, isn't appended again,
  * also after a restart.
  *
- *   ✦ scout → notes  bun.lock is 412 KB · 12:04:18
+ *   ✦ scout → notes bun.lock is 412 KB
  *
  * `✦` marks it as pi-agents', like its tool calls, among Pi's own entries.
  *

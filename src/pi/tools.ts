@@ -455,7 +455,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_spawn_graph",
       description:
-        "Start agents that work together on related jobs. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. Returns at once; to block for the result, call agent_wait.",
+        "Start agents whose jobs build on each other's results, or whose results you want as one message. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. For independent jobs, call agent_spawn once per job instead. Returns at once; to block for the result, call agent_wait.",
       parameters: graphParams,
       output: GraphOutput,
       async execute(service, params, ctx) {

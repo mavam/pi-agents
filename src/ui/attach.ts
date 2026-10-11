@@ -12,9 +12,9 @@
  * `agentToolViews` for the agents' own tools, such as `delegate_graph` and
  * `agent_send`.
  *
- * Messages from other agents show as message cards seen from the agent
- * (`← sender`, `→ recipient`), never as the user's input; everything queued
- * shows dim below the conversation.
+ * Messages, received and sent, show as the same cards as in Pi's
+ * transcript, never as the user's input; everything queued shows dim below
+ * the conversation.
  *
  * Keys: ⏎ prompts an idle agent and steers a working one, Alt+⏎ queues a
  * follow-up, Esc interrupts a working agent and detaches from an idle one,
@@ -81,9 +81,9 @@ import {
 } from "./format.js";
 import {
   firstLine,
-  formatMessageLine,
   type MessageStyle,
   messageCard,
+  messageLine,
   themeStyle,
 } from "./messages.js";
 import { agentToolViews } from "./tool-views.js";
@@ -157,11 +157,10 @@ function queuedLines(
     const message = parseMessageInput(raw);
     if (message)
       return [
-        formatMessageLine(
+        messageLine(
           {
             from: message.from,
             to: recipient,
-            viewpoint: recipient,
             text: message.text,
             status: "queued",
           },
@@ -280,19 +279,13 @@ class ChatView {
         ? parseMessageInput(userText(message.content))
         : undefined;
     if (input) {
-      // The recipient reads the whole message, as its model does.
-      const sentAt = (message as { timestamp?: number }).timestamp;
+      // The same card as in Pi's transcript, without the time: `/messages`
+      // has it. Ctrl+O shows the whole text, as for tool output.
       this.transcript.addChild(new Spacer(1));
       this.transcript.addChild(
         messageCard(
-          {
-            from: input.from,
-            to: this.name(),
-            viewpoint: this.name(),
-            text: input.text,
-            ...(sentAt !== undefined ? { sentAt } : {}),
-          },
-          true,
+          { from: input.from, to: this.name(), text: input.text },
+          () => this.expanded,
           this.theme,
         ),
       );

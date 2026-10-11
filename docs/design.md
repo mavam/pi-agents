@@ -530,24 +530,24 @@ message card, with its own, and Pi's tools with Pi's.
   panel shows live state, so only queued messages; the transcript and
   `/messages` show history, with times; the attach view shows one agent's
   conversation. `/agents` doesn't show messages: an agent's details are its
-  job and its result. Messages have no glyphs. A message's text color is its
-  status, from `MESSAGE_STATUS_COLORS` in `src/ui/messages.ts`: dim while
-  queued, normal once delivered, red once dropped. Who is the pair in bold
-  (`scout → notes`) or, seen from one agent, an arrow and the other agent:
-  `← scout` received, `→ notes` sent.
+  job and its result. `src/ui/messages.ts` is the one place that draws
+  messages: a line, `scout → notes` with the names in bold, then the text,
+  whose color is its status (`MESSAGE_STATUS_COLORS`: dim while queued,
+  normal once delivered, red once dropped), and a card, `✦` and the line on
+  Pi's message background, the whole text below when expanded.
   - Panel: queued messages of the agents it shows, with how long they
     waited, in a column to their right from 120 terminal columns, else
     below them. The columns keep their widths as messages come and go: the
     agents get a fixed share, and the pair column fits the longest pair of
     names among the agents. ↑↓ reach messages, ⏎ attaches to a message's
     recipient.
-  - Transcript: one custom entry per message, a card on Pi's message
-    background with `✦`, pi-agents' mark as on its tool calls, the pair,
-    and the time, which Pi's model doesn't see.
+  - Transcript: one custom entry per message, a card with the time, which
+    Pi's model doesn't see.
     Entries only append and are deduplicated by message ID and send time;
     Ctrl+O shows a long message in full.
-  - Attach view: received and sent messages as cards seen from the agent,
-    never as the user's input; queued input shows dim below the
+  - Attach view: received and sent messages as the same cards, without
+    the time, which `/messages` has, never as the user's input; Ctrl+O
+    expands them with tool output. Queued input shows dim below the
     conversation.
   - `/messages`: the senders, the most recent first, or by name or count
     with `o`; a row is the sender, its message count, the age, and its

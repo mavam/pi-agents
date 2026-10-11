@@ -53,7 +53,7 @@ function entryKey(message: MessageInfo): string {
 export function registerMessageEntryRenderer(pi: ExtensionAPI): void {
   pi.registerEntryRenderer(MESSAGE_ENTRY, (entry, options, theme) => {
     if (!isMessageEntryData(entry.data)) return undefined;
-    return messageCard(entry.data, options.expanded, theme, true);
+    return messageCard(entry.data, options.expanded, theme);
   });
 }
 

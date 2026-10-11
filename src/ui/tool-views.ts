@@ -617,24 +617,21 @@ function views(
 export const PARENT_TOOL_VIEWS = views(PARENT_CALLS);
 
 /**
- * An agent's `agent_send` call as the message it sent, seen from the agent
- * (`→ recipient`), a card like a received one, and a refusal below it.
- * `sender` names the agent.
+ * An agent's `agent_send` call as the message it sent, the same card as a
+ * received one, and a refusal below it. `sender` names the agent.
  */
 function sendView(sender: () => string): ToolRenderers & { label: string } {
   return {
     label: "send",
     renderShell: "self",
-    // Like a received message, the whole text below `→ recipient`.
-    renderCall: (args, theme: Theme) =>
+    renderCall: (args, theme: Theme, context) =>
       messageCard(
         {
           from: sender(),
           to: str((args as Args | undefined)?.to) || "?",
-          viewpoint: sender(),
           text: str((args as Args | undefined)?.message),
         },
-        true,
+        context.expanded,
         theme,
       ),
     renderResult: (result, _options, theme: Theme, context) =>

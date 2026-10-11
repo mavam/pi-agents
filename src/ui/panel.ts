@@ -55,9 +55,9 @@ import {
   sanitizeLine,
 } from "./format.js";
 import {
-  formatMessageLine,
-  type MessageLineParts,
+  type MessageParts,
   type MessageStyle,
+  messageLine,
   messageParts,
   pairWidth,
   themeStyle,
@@ -223,7 +223,7 @@ export class AgentPanel {
   }
 
   /** A queued message's line parts, with how long it has waited. */
-  private parts(message: MessageInfo): MessageLineParts {
+  private parts(message: MessageInfo): MessageParts {
     return {
       ...messageParts(message),
       age: formatElapsed(this.now() - message.sentAt),
@@ -512,7 +512,7 @@ export class AgentPanel {
         ),
         ...shown.map(
           (message) =>
-            `${marker(message)}${formatMessageLine(this.parts(message), width - markerWidth, style, column)}`,
+            `${marker(message)}${messageLine(this.parts(message), width - markerWidth, style, column)}`,
         ),
       ];
     }
@@ -535,7 +535,7 @@ export class AgentPanel {
     return Array.from({ length: height }, (_, index) => {
       const message = shown[index];
       const right = message
-        ? `${marker(message)}${formatMessageLine(this.parts(message), rightWidth, style, column)}`
+        ? `${marker(message)}${messageLine(this.parts(message), rightWidth, style, column)}`
         : "";
       return `${padLine(left[index] ?? "", leftWidth)}${separator}${right}`;
     });

@@ -12,7 +12,7 @@ import {
   graphShape,
   runtime,
 } from "../../src/ui/format.js";
-import { formatMessageLine, pairWidth } from "../../src/ui/messages.js";
+import { messageCard, messageLine, pairWidth } from "../../src/ui/messages.js";
 import { panelCompare, panelOrder } from "../../src/ui/panel.js";
 import {
   attachTarget,
@@ -446,16 +446,28 @@ describe("formatting", () => {
       status: "queued" as const,
       age: "3s",
     };
-    expect(formatMessageLine(queued, 60, style)).toBe(
+    expect(messageLine(queued, 60, style)).toBe(
       "scout<dim> → </>notes <dim>bun.lock is 412 KB</><dim> 3s</>",
     );
-    // Seen from one agent, an arrow and the other agent.
-    expect(
-      formatMessageLine({ ...queued, viewpoint: "notes", age: "" }, 60, style),
-    ).toBe("<dim>← </>scout <dim>bun.lock is 412 KB</>");
     // Delivered reads normal, dropped red.
     expect(
-      formatMessageLine({ ...queued, status: "dropped", age: "" }, 60, style),
+      messageLine({ ...queued, status: "dropped", age: "" }, 60, style),
     ).toContain("<error>bun.lock is 412 KB</>");
+  });
+
+  test("a card is ✦ and the line, and expanded, the whole text", () => {
+    const theme = {
+      fg: (_name: string, text: string) => text,
+      bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
+    };
+    const message = { from: "beta", to: "gamma", text: "first\nsecond" };
+    const card = (expanded: boolean) =>
+      messageCard(message, expanded, theme as never)
+        .render(40)
+        .map((line) => line.trimEnd())
+        .filter(Boolean);
+    expect(card(false)).toEqual([" ✦ beta → gamma first"]);
+    expect(card(true)).toEqual([" ✦ beta → gamma", "   first", "   second"]);
   });
 });

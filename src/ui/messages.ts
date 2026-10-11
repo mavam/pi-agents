@@ -1,17 +1,21 @@
 /**
- * Message lines and cards, shared by the panel, the transcript, the attach
- * view, and `/messages`:
+ * How messages between agents look, in one place: a line, and a card built
+ * on it.
  *
- *   scout → notes bun.lock is 412 KB 3s
+ *   scout → notes bun.lock is 412 KB 3s                  a line
+ *   ✦ scout → notes bun.lock is 412 KB 12:04:18          a card
  *
- * Who: the pair in bold, or, seen from one agent, an arrow and the other
- * agent (`← scout` received, `→ notes` sent), then the first line of the
- * text, and for live views how long it waited. The text's color is its
- * status: normal once delivered, dim while queued, red once dropped.
+ * A line is who, sender and recipient in bold, then the first line of the
+ * text, whose color is its status (normal once delivered, dim while queued,
+ * red once dropped), then, for live views, how long it waited. The panel
+ * and the attach view's queue show lines.
  *
- * Cards, in the transcript and the attach view, stand alone, so they name
- * who and when on their own line and show the text below it; a short text
- * that fits joins the line.
+ * A card is a message in a conversation: `✦`, pi-agents' mark, then the
+ * line, and the time where it's given, on Pi's message background.
+ * Collapsed, it's one line; expanded (Ctrl+O), a text the line cuts shows
+ * in full below who and the time. Pi's
+ * transcript and the attach view show cards, for received and sent
+ * messages alike: the names say who sent what.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -38,8 +42,8 @@ export const MESSAGE_STATUS_COLORS = {
   dropped: "error",
 } as const satisfies Record<MessageStatus, Parameters<Colorize>[0]>;
 
-/** Color a message's text by its status; a message without one, such as
- * a card in the transcript, is plain history. */
+/** Color a message's text by its status; a message without one is plain
+ * history. */
 export function statusColor(
   text: string,
   status: MessageStatus | undefined,
@@ -51,34 +55,25 @@ export function statusColor(
 /** The widest sender and recipient column. */
 const MAX_PAIR_WIDTH = 28;
 
-export type MessageLineParts = Pick<MessageInfo, "text"> & {
+/** What a line or card shows of a message. */
+export type MessageParts = Pick<MessageInfo, "text"> & {
   from: string;
   to: string;
   status?: MessageStatus;
   /** How long it has waited, for live views, such as `3s`. */
   age?: string;
-  /** When it was sent, for cards. */
+  /** When it was sent, for cards that show the time. */
   sentAt?: number;
-  /** The agent the line is seen from, which then shows only the other
-   * agent and an arrow. */
-  viewpoint?: string;
 };
 
-/** Who a message is between: `scout → notes`, or from one agent's view,
- * `← scout` (received) or `→ notes` (sent). */
-export function messagePair(message: {
-  from: string;
-  to: string;
-  viewpoint?: string;
-}): string {
-  if (message.viewpoint === message.to) return `← ${message.from}`;
-  if (message.viewpoint === message.from) return `→ ${message.to}`;
+/** `scout → notes`. */
+export function messagePair(message: { from: string; to: string }): string {
   return `${message.from} → ${message.to}`;
 }
 
 /** The width of the sender and recipient column for these messages. */
 export function pairWidth(
-  messages: ReadonlyArray<{ from: string; to: string; viewpoint?: string }>,
+  messages: ReadonlyArray<{ from: string; to: string }>,
 ): number {
   return Math.min(
     MAX_PAIR_WIDTH,
@@ -121,27 +116,25 @@ export function formatClock(at: number, now: number = Date.now()): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${clock}`;
 }
 
-/** Who, padded to `column`, the names in bold and the arrow dim. */
+/** `scout → notes` padded to `column`, the names in bold and the arrow
+ * dim. */
 function formatPair(
-  message: { from: string; to: string; viewpoint?: string },
+  message: { from: string; to: string },
   column: number,
   { color, bold }: MessageStyle,
 ): string {
-  const pair = messagePair(message);
-  const width = visibleWidth(pair);
-  if (width > column) return bold(truncateToWidth(pair, column, "…"));
-  const pad = " ".repeat(column - width);
-  if (message.viewpoint === message.to)
-    return `${color("dim", "← ")}${bold(message.from)}${pad}`;
-  if (message.viewpoint === message.from)
-    return `${color("dim", "→ ")}${bold(message.to)}${pad}`;
-  return `${bold(message.from)}${color("dim", " → ")}${bold(message.to)}${pad}`;
+  const width = visibleWidth(messagePair(message));
+  if (width > column)
+    return bold(truncateToWidth(messagePair(message), column, "…"));
+  return `${bold(message.from)}${color("dim", " → ")}${bold(message.to)}${" ".repeat(column - width)}`;
 }
 
-/** A message row, at most `width` wide: who, then the text colored by its
- * status, then its age right after it. */
-export function formatMessageLine(
-  message: MessageLineParts,
+/**
+ * A message's line, at most `width` wide: who, padded to `column` so lines
+ * align, then the text colored by its status, then its age.
+ */
+export function messageLine(
+  message: MessageParts,
   width: number,
   style: MessageStyle = plainStyle,
   column = pairWidth([message]),
@@ -156,14 +149,14 @@ export function formatMessageLine(
   return `${head} ${statusColor(text, message.status, color)}${tail}`;
 }
 
-/** A card's text: on its header line when it fits there and `full` doesn't
- * ask for more, else below it. */
+/** A card's lines: `✦` and the message's line with its time; expanded,
+ * when the line cuts the text, `✦`, who, and the time, then the whole
+ * text below. */
 class MessageLines implements Component {
   constructor(
-    private readonly message: MessageLineParts,
-    private readonly full: boolean,
+    private readonly message: MessageParts,
+    private readonly expanded: () => boolean,
     private readonly theme: Theme,
-    private readonly marked: boolean,
   ) {}
 
   invalidate(): void {
@@ -173,49 +166,56 @@ class MessageLines implements Component {
   render(width: number): string[] {
     const style = themeStyle(this.theme);
     const { color } = style;
-    const usable = Math.max(8, width);
-    const pair = visibleWidth(messagePair(this.message));
-    const mark = this.marked ? `${color("accent", AGENT_ICON)} ` : "";
-    const who = `${mark}${formatPair(this.message, pair, style)}`;
+    const mark = `${color("accent", AGENT_ICON)} `;
     const when =
       this.message.sentAt === undefined
         ? ""
         : color("dim", ` ${formatClock(this.message.sentAt)}`);
+    const usable = Math.max(8, width - visibleWidth(mark) - visibleWidth(when));
+    const line = `${mark}${messageLine(this.message, usable, style)}${when}`;
     const text = this.message.text.trim();
-    const single = !text.includes("\n");
-    const inline = `${who} ${sanitizeLine(text)}${when}`;
-    if (!this.full && single && visibleWidth(inline) <= usable) return [inline];
-    if (!this.full) {
-      const room = usable - visibleWidth(who) - visibleWidth(when) - 1;
-      const cut = truncateToWidth(firstLine(text), Math.max(4, room), "…");
-      return [`${who} ${cut}${when}`];
-    }
+    const whole =
+      !text.includes("\n") &&
+      visibleWidth(messagePair(this.message)) + visibleWidth(text) + 1 <=
+        usable;
+    if (!this.expanded() || whole) return [line];
+    const who = formatPair(
+      this.message,
+      visibleWidth(messagePair(this.message)),
+      style,
+    );
     const body = text
       .split("\n")
       .flatMap((paragraph) =>
-        wrapTextWithAnsi(sanitizeLine(paragraph), Math.max(4, usable - 2)),
+        wrapTextWithAnsi(sanitizeLine(paragraph), Math.max(4, width - 2)),
       )
-      .map((part) => `  ${part}`);
-    return [`${who}${when}`, ...body];
+      .map((part) => `  ${statusColor(part, this.message.status, color)}`);
+    return [`${mark}${who}${when}`, ...body];
   }
 }
 
-/** A message as a card on Pi's custom message background. */
+/**
+ * A message as a card on Pi's custom message background. `expanded` says
+ * whether it shows the whole text; a function, so a view can toggle it.
+ */
 export function messageCard(
-  message: MessageLineParts,
-  full: boolean,
+  message: MessageParts,
+  expanded: boolean | (() => boolean),
   theme: Theme,
-  /** Start with `✦`, pi-agents' mark, where it shares a transcript with
-   * other content, such as Pi's. */
-  marked = false,
 ): Component {
   const card = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-  card.addChild(new MessageLines(message, full, theme, marked));
+  card.addChild(
+    new MessageLines(
+      message,
+      typeof expanded === "function" ? expanded : () => expanded,
+      theme,
+    ),
+  );
   return card;
 }
 
-/** A message's parts for `formatMessageLine`. */
-export function messageParts(message: MessageInfo): MessageLineParts {
+/** A message's parts for its line or card. */
+export function messageParts(message: MessageInfo): MessageParts {
   return {
     from: message.from.name,
     to: message.to.name,

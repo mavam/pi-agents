@@ -435,7 +435,10 @@ draws `delegate_graph` with its own, and Pi's tools with Pi's.
   from an empty editor or Ctrl+Q focuses it, or opens `/agents` while it's
   empty. Space folds a graph or an agent's helpers, ⏎ attaches, `s` stops,
   Tab trades the panel for `/agents` at the same row. The panel and
-  `/agents` share what the user folded. Working agents show how long ago they
+  `/agents` share what the user folded. The `rpiv:ask-user:blocked` lifecycle
+  event releases panel focus and suspends keyboard handling while the
+  `rpiv-ask-user-question` picker is active; closing it restores navigation.
+  Working agents show how long ago they
   started; finished rows show no time. An idle agent or finished graph with
   an undelivered result shows `●` in the accent color and `result queued`.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's

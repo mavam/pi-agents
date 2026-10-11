@@ -209,6 +209,10 @@ open, they open `/agents` instead. Then:
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
 | Esc | Return to the editor. |
 
+While the `rpiv-ask-user-question` picker is open, the panel yields all
+keyboard input, including ← and Ctrl+Q. Panel navigation resumes when the
+picker closes.
+
 Attaching shows the agent's conversation with Pi's own message and tool
 rendering. The editor then talks to the agent:
 

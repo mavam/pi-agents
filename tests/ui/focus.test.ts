@@ -51,7 +51,7 @@ function setup(state: {
     input?.("\u001b[I");
     return result;
   };
-  return { press, focused, browsed };
+  return { press, focused, browsed, focus };
 }
 
 describe("focus", () => {
@@ -84,6 +84,41 @@ describe("focus", () => {
     const open = setup({ rows: true, agents: 2, suppressed: true });
     expect(open.press(LEFT)).toBeUndefined();
     expect(open.focused).toEqual([]);
+  });
+
+  test("the question picker owns keys until it closes", () => {
+    const { press, focused, browsed, focus } = setup({
+      rows: true,
+      agents: 2,
+      suppressed: false,
+      focused: true,
+    });
+    focus.setQuestionPickerActive(true);
+    expect(focused).toEqual([false]);
+    for (const key of [LEFT, "\u001b[A", "\u001b[B", "\r", "\t", "s", " "]) {
+      expect(press(key)).toBeUndefined();
+    }
+    focus.focusPanel();
+    expect(focused).toEqual([false]);
+    expect(browsed).toEqual([]);
+    focus.setQuestionPickerActive(false);
+    expect(press(LEFT)).toEqual({ consume: true });
+    expect(focused).toEqual([false, true]);
+  });
+
+  test("the question picker prevents browsing when the panel is empty", () => {
+    const { press, browsed, focus } = setup({
+      rows: false,
+      agents: 2,
+      suppressed: false,
+    });
+    focus.setQuestionPickerActive(true);
+    expect(press(LEFT)).toBeUndefined();
+    focus.focusPanel();
+    expect(browsed).toEqual([]);
+    focus.setQuestionPickerActive(false);
+    expect(press(LEFT)).toEqual({ consume: true });
+    expect(browsed).toHaveLength(1);
   });
 
   test("Tab trades the focused panel for /agents at the same row", () => {

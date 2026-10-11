@@ -66,6 +66,8 @@ export class FocusController {
   private paneOpen = false;
   /** A stop confirmation is open; its dialog owns the keys. */
   private confirming = false;
+  /** The interactive question picker owns the keys. */
+  private questionPickerActive = false;
   /** Opens `/agents`, at the row with key `select` if given: for ← and
    * Ctrl+Q while the panel is empty, and for Tab from the panel. */
   onBrowse: ((ctx: ExtensionContext, select?: string) => void) | undefined;
@@ -93,12 +95,25 @@ export class FocusController {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.ctx = undefined;
+    this.setQuestionPickerActive(false);
+  }
+
+  /**
+   * Yield keyboard focus while the question picker is active.
+   */
+  setQuestionPickerActive(active: boolean): void {
+    this.questionPickerActive = active;
+    this.lastData = "";
+    this.lastDataAt = 0;
+    this.lastResult = undefined;
+    if (active) this.panel.setFocused(false);
   }
 
   /** Ctrl+Q: focus the panel, also mid-composition, or browse agents. */
   focusPanel(ctx?: ExtensionContext): void {
     if (ctx) this.ctx = ctx;
-    if (this.paneOpen || this.panel.isSuppressed()) return;
+    if (this.paneOpen || this.questionPickerActive || this.panel.isSuppressed())
+      return;
     if (this.panel.hasRows()) this.panel.setFocused(true);
     else if (this.ctx) this.browse(this.ctx);
   }
@@ -106,7 +121,8 @@ export class FocusController {
   /** Tab from `/agents`: focus the panel at the same row, if it shows it. */
   focusPanelAt(ctx: ExtensionContext, key: string): void {
     this.ctx = ctx;
-    if (this.paneOpen || !this.panel.hasRows()) return;
+    if (this.paneOpen || this.questionPickerActive || !this.panel.hasRows())
+      return;
     this.panel.select(key);
     this.panel.setFocused(true);
   }
@@ -146,9 +162,15 @@ export class FocusController {
 
   private handle(data: string): { consume?: boolean } | undefined {
     const ctx = this.ctx;
-    // Another view owns the keys: the attach view, a stop confirmation, or
-    // /agents, which hides the panel.
-    if (!ctx || this.paneOpen || this.confirming || this.panel.isSuppressed())
+    // Another view owns the keys: the attach view, a stop confirmation,
+    // the question picker, or /agents, which hides the panel.
+    if (
+      !ctx ||
+      this.paneOpen ||
+      this.confirming ||
+      this.questionPickerActive ||
+      this.panel.isSuppressed()
+    )
       return undefined;
     // The Kitty keyboard protocol reports releases separately; acting on
     // them would double every step.

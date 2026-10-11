@@ -28,7 +28,9 @@ function draw(
         // biome-ignore lint/suspicious/noExplicitAny: renderers read isError.
         { isError: false, state: {} } as any,
       )
-      .render(80) ?? []
+      .render(80)
+      // Results indent under their call; the lines compare without it.
+      .map((line) => line.replace(/^ {2}/, "")) ?? []
   );
 }
 
@@ -52,25 +54,25 @@ describe("tool results", () => {
       receipt: receipt({ agents: [done, busy], ...(wait ? { wait } : {}) }),
     });
     expect(draw("agent_wait", details("timeout"))).toEqual([
-      "● a · luna · 1.0k",
-      "⊠ b · luna",
+      "● a luna 1.0k",
+      "⊠ b luna",
       "Timed out",
     ]);
     expect(draw("agent_wait", details("attention"))).toEqual([
-      "● a · luna · 1.0k",
-      "⊠ b · luna",
+      "● a luna 1.0k",
+      "⊠ b luna",
       "Stopped waiting for your message",
     ]);
     expect(draw("agent_status", details())).toEqual([
-      "● a · luna · 1.0k",
-      "◉ b · luna",
+      "● a luna 1.0k",
+      "◉ b luna",
     ]);
     expect(draw("agent_status", { receipt: receipt() })).toEqual(["No agents"]);
     // Expanded, answers show below their agents.
     expect(draw("agent_wait", details("done"), { expanded: true })).toEqual([
-      "● a · luna · 1.0k",
+      "● a luna 1.0k",
       "  The answer.",
-      "◉ b · luna",
+      "◉ b luna",
     ]);
   });
 
@@ -115,11 +117,7 @@ describe("tool results", () => {
         graphs: [graph],
         agents,
       }),
-    ).toEqual([
-      "audit · graph of 2",
-      "├─ map · luna",
-      "└─ report ← map · luna",
-    ]);
+    ).toEqual(["├─ map luna", "└─ report after map luna"]);
     // A wait that timed out.
     expect(
       draw("agent_wait", {
@@ -127,7 +125,7 @@ describe("tool results", () => {
         agents: agents.slice(1),
         timedOut: ["report"],
       }),
-    ).toEqual(["⊠ report · luna", "Timed out"]);
+    ).toEqual(["⊠ report luna", "Timed out"]);
     // Details this version can't read show the result's text.
     expect(
       draw("agent_wait", { receipt: { version: 99 } }, { text: "x" }),

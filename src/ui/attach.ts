@@ -12,12 +12,14 @@
  * `agentToolViews` for the agents' own tools, such as `delegate_graph` and
  * `agent_send`.
  *
- * Messages from other agents show as message cards, never as the user's
- * input, and queued ones as message lines with `◷`.
+ * Messages from other agents show as message cards seen from the agent
+ * (`← sender`, `→ recipient`), never as the user's input; everything queued
+ * shows dim below the conversation.
  *
  * Keys: ⏎ prompts an idle agent and steers a working one, Alt+⏎ queues a
- * follow-up, Esc interrupts a working agent, ← or Ctrl+D on an empty editor
- * detaches, and Shift+↑↓ and Shift+PgUp/PgDn scroll.
+ * follow-up, Esc interrupts a working agent and detaches from an idle one,
+ * ← or Ctrl+D on an empty editor detach, Ctrl+O expands tool output, and
+ * Shift+↑↓ and Shift+PgUp/PgDn scroll.
  */
 
 import type { AttachedReplicatedState } from "@earendil-works/chord";
@@ -139,8 +141,9 @@ export function queuedTexts(inbox: InboxState): string[] {
   return [...steer, ...followUp];
 }
 
-/** Queued inputs as the attach view shows them, in inbox order: messages
- * from other agents as message lines, everything else as `↻ Queued`. */
+/** Queued inputs as the attach view shows them, in inbox order and dim:
+ * messages from other agents as message lines seen from the agent,
+ * everything else as `Steer:` or `Follow-up:`, like Pi. */
 function queuedLines(
   inbox: InboxState,
   recipient: string,
@@ -158,6 +161,7 @@ function queuedLines(
           {
             from: message.from,
             to: recipient,
+            viewpoint: recipient,
             text: message.text,
             status: "queued",
           },
@@ -165,7 +169,8 @@ function queuedLines(
           style,
         ),
       ];
-    return [color("dim", `↻ Queued: ${firstLine(withoutUserPrefix(raw))}`)];
+    const mode = item.mode === "steer" ? "Steer" : "Follow-up";
+    return [color("dim", `${mode}: ${firstLine(withoutUserPrefix(raw))}`)];
   });
 }
 
@@ -276,10 +281,17 @@ class ChatView {
         : undefined;
     if (input) {
       // The recipient reads the whole message, as its model does.
+      const sentAt = (message as { timestamp?: number }).timestamp;
       this.transcript.addChild(new Spacer(1));
       this.transcript.addChild(
         messageCard(
-          { from: input.from, to: this.name(), text: input.text },
+          {
+            from: input.from,
+            to: this.name(),
+            viewpoint: this.name(),
+            text: input.text,
+            ...(sentAt !== undefined ? { sentAt } : {}),
+          },
           true,
           this.theme,
         ),
@@ -427,10 +439,10 @@ function statusText(live: LiveState): string {
       : `Compacting (${compaction.reason})...`;
   // The agent waits for its helpers; Pi places messages only after that.
   if (runningTool?.name === DELEGATE_TOOL)
-    return "Waiting for helpers; messages wait until they finish (esc stops them, ← back)";
+    return "Waiting for helpers; messages wait until they finish (esc stops them)";
   if (runningTool !== undefined)
-    return `Running ${runningTool.name}... (esc to interrupt, ← back)`;
-  if (live.run !== undefined) return "Working... (esc to interrupt, ← back)";
+    return `Running ${runningTool.name}... (esc to interrupt)`;
+  if (live.run !== undefined) return "Working... (esc to interrupt)";
   return "";
 }
 
@@ -455,8 +467,7 @@ function fitQueuedLines(
 ): string[] {
   if (maxRows <= 0 || queued.length === 0) return [];
   if (queued.length <= maxRows) return [...queued];
-  if (maxRows === 1)
-    return [color("dim", `↻ Queued: ${queued.length} messages`)];
+  if (maxRows === 1) return [color("dim", `${queued.length} queued`)];
   const shown = queued.slice(0, maxRows - 1);
   shown.push(color("dim", `… ${queued.length - shown.length} more`));
   return shown;
@@ -558,8 +569,14 @@ class AgentPane implements Component {
       );
   }
 
+  /** Esc: interrupt a working agent, as in Pi, or go back from an idle
+   * one. */
   private escape(): void {
-    if (this.info()?.state !== "working" || this.interrupting) return;
+    if (this.info()?.state !== "working") {
+      this.close();
+      return;
+    }
+    if (this.interrupting) return;
     this.interrupting = true;
     const queued = queuedTexts(inboxOf(this.view));
     void this.options.service
@@ -607,7 +624,7 @@ class AgentPane implements Component {
       // Results wait while the user is attached, and while Pi works.
       info.queued ? QUEUED_NOTE : undefined,
     ].filter(Boolean);
-    return ` ${parts.join(" · ")} `;
+    return ` ${parts.join(" ")} `;
   }
 
   private windowTranscript(lines: string[], rows: number): string[] {
@@ -655,7 +672,7 @@ class AgentPane implements Component {
     }
     const statusLines = this.loader
       ? this.loader.render(width)
-      : ["", ` ${color("dim", "← back")}`];
+      : ["", ` ${color("dim", "esc back")}`];
     const failure =
       info?.state === "failed" && info.result?.errorMessage
         ? [color("error", `✗ ${info.result.errorMessage}`)]

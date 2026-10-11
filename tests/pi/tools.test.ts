@@ -436,7 +436,7 @@ describe("call results", () => {
       "",
       "    2. report",
       "",
-      "  b ← a: Merge.",
+      "  b after a: Merge.",
     ]);
   });
 
@@ -456,10 +456,10 @@ describe("call results", () => {
         )
         .render(80);
     // Pi never ran the call because the model's message broke off.
-    expect(render(undefined)).toEqual(["<error>terminated"]);
+    expect(render(undefined)).toEqual(["  <error>terminated"]);
     // The tool threw, and Pi passes empty details.
-    expect(render({})).toEqual(["<error>terminated"]);
-    expect(render(undefined, "")).toEqual(["<error>Failed"]);
+    expect(render({})).toEqual(["  <error>terminated"]);
+    expect(render(undefined, "")).toEqual(["  <error>Failed"]);
   });
 
   test("results draw what the call saw, the same live and replayed", async () => {
@@ -481,23 +481,17 @@ describe("call results", () => {
     expect(
       drawFrame(tool, args, { details: progress[0] }, { isPartial: true }),
     ).toEqual([
-      "✦ spawn graph audit",
-      "  wait=1s",
-      "  map → report",
-      "audit · graph of 2",
-      "├─ map · faux-1",
-      "└─ report ← map · faux-1",
+      "✦ spawn graph audit wait=1s",
+      "  ├─ map faux-1",
+      "  └─ report after map faux-1",
     ]);
-    // A wait that gave up marks what it gave up on, which stays true after
-    // the agents finish.
+    // A spawn whose wait timed out shows what finished and, of the rest,
+    // only what it started, which stays true after the agents finish.
     const timedOut = [
-      "✦ spawn graph audit",
-      "  wait=1s",
-      "  map → report",
-      "⊠ audit · graph 1/2",
-      "├─ ● map · faux-1 · 2.1k",
-      "└─ ⊠ report ← map · faux-1",
-      "Timed out",
+      "✦ spawn graph audit wait=1s",
+      "  ├─ ● map faux-1 2.1k",
+      "  └─ report after map faux-1",
+      "  Timed out",
     ];
     const final = { details: result.details };
     expect(drawFrame(tool, args, final)).toEqual(timedOut);

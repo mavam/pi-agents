@@ -9,6 +9,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isGraphVisible, isVisible } from "../agents/service.js";
 import { orderSentence } from "../agents/topology.js";
 import type {
@@ -27,21 +28,19 @@ import {
 import {
   type Colorize,
   formatElapsed,
+  formatInputs,
   formatUsage,
   graphNote,
   QUEUED_NOTE,
   runtime,
   STATE_STYLES,
+  sanitizeLine,
   shortModel,
   shortName,
   stateIcon,
   statusIcon,
 } from "../ui/format.js";
-import {
-  firstLine,
-  MESSAGE_ICON,
-  MESSAGE_STATUS_STYLES,
-} from "../ui/messages.js";
+import { firstLine, formatClock, statusColor } from "../ui/messages.js";
 import {
   type Bold,
   type DetailLine,
@@ -58,11 +57,12 @@ import {
   type Row,
 } from "../ui/rows.js";
 import {
-  buildThreads,
-  peerOf,
-  type Thread,
-  threadPair,
-} from "../ui/threads.js";
+  buildSenders,
+  SENDER_ORDERS,
+  type SenderGroup,
+  type SenderOrder,
+  senderKey,
+} from "../ui/senders.js";
 import type { SessionHost } from "./session.js";
 
 /** Lines of an agent's job shown in the overlay's detail pane. */
@@ -84,50 +84,71 @@ function pad(value: string, width: number): string {
     : value + " ".repeat(width - value.length);
 }
 
+/** `value` cut with an ellipsis or padded to exactly `width` columns. */
+function fit(value: string, width: number): string {
+  const cut = truncateToWidth(value, width, "…");
+  return cut + " ".repeat(Math.max(0, width - visibleWidth(cut)));
+}
+
+/** The width of a column of `values`: its widest value. Names aren't cut;
+ * only a row's end is, where it meets the box. */
+function columnWidth(values: readonly string[]): number {
+  return Math.max(1, ...values.map((value) => visibleWidth(value)));
+}
+
 /** A row's last column: usage, then whether its result is queued. */
 function rowTail(
   usage: string,
   queued: boolean | undefined,
   color: Colorize,
 ): string {
-  const tail = [usage, queued ? QUEUED_NOTE : ""].filter(Boolean).join("  ");
+  const tail = [usage, queued ? QUEUED_NOTE : ""].filter(Boolean).join(" ");
   return tail ? color("dim", tail) : "";
 }
 
+/** A name in bold, the row's primary information, padded to `width`. */
+function boldName(name: string, width: number, bold: Bold): string {
+  return `${bold(name)}${" ".repeat(Math.max(0, width - name.length))}`;
+}
+
+/** An agent's row: its name in bold, the rest dim. */
 function agentRow(
   agent: AgentInfo,
   now: number,
   nameWidth: number,
   color: Colorize,
+  bold: Bold,
   indent = "",
 ): string {
   const usage = formatUsage(agent.usage);
-  const name = pad(agent.name, nameWidth - indent.length);
+  const name = boldName(agent.name, nameWidth - indent.length, bold);
   return [
-    `${color("dim", indent)}${statusIcon(agent, color)} ${isVisible(agent) ? name : color("dim", name)}`,
+    `${color("dim", indent)}${statusIcon(agent, color)} ${name}`,
     color("dim", pad(agent.profile ?? "ad-hoc", 10)),
     color("dim", pad(shortModel(agent), 14)),
     color("dim", pad(formatElapsed(runtime(agent, now)), 7)),
     rowTail(usage, agent.queued, color),
-  ].join("  ");
+  ].join(" ");
 }
 
+/** A graph's row: its name in bold, the rest dim. */
 function graphRow(
   graph: GraphInfo,
   now: number,
   nameWidth: number,
   color: Colorize,
+  bold: Bold,
   indent = "",
 ): string {
   const usage = formatUsage(graph.usage);
-  const name = pad(graph.name, nameWidth - indent.length);
+  const name = boldName(graph.name, nameWidth - indent.length, bold);
   return [
-    `${color("dim", indent)}${statusIcon(graph, color)} ${isGraphVisible(graph) ? name : color("dim", name)}`,
+    `${color("dim", indent)}${statusIcon(graph, color)} ${name}`,
     color("dim", pad(graph.owner ? "helpers" : "graph", 10)),
     color("dim", pad(`${graph.nodes.length} agents`, 14)),
     color("dim", pad(formatElapsed(runtime(graph, now)), 7)),
     rowTail(usage, graph.queued, color),
-  ].join("  ");
+  ].join(" ");
 }
 
 /** The glyph state of a graph's agent: how its job ended, else its
@@ -182,7 +203,8 @@ export function graphDetail(
     const usage = agent ? formatUsage(agent.usage) : "";
     const meta = [agent ? shortModel(agent) : undefined, usage || undefined]
       .filter(Boolean)
-      .join(" · ");
+      .join(" ");
+    const after = formatInputs(inputs, graph.nodes.length - 1);
     const word =
       outcome?.kind === "stopped" || outcome?.kind === "interrupted"
         ? outcome.kind
@@ -191,9 +213,9 @@ export function graphDetail(
     lines.push(
       [
         `${stateIcon(nodeState(outcome, agent), color)} ${bold(name)}`,
-        inputs.length > 0 ? color("dim", ` ← ${inputs.join(", ")}`) : "",
-        meta ? color("dim", ` · ${meta}`) : "",
-        word ? color("dim", ` · ${word}`) : "",
+        after ? color("dim", ` ${after}`) : "",
+        meta ? color("dim", ` ${meta}`) : "",
+        word ? color("dim", ` ${word}`) : "",
       ].join(""),
     );
     if (outcome?.kind === "answered") {
@@ -211,7 +233,7 @@ export function graphDetail(
           indent: 2,
           maxLines: DETAIL_NODE_LINES,
           more: (hidden) =>
-            `… ${hidden} more lines · select ${name} to read all`,
+            `… ${hidden} more lines (select ${name} to read all)`,
         });
     } else if (outcome?.kind === "failed") {
       lines.push(color("error", `  ${outcome.reason}`));
@@ -232,15 +254,15 @@ function tildePath(path: string): string {
     : path;
 }
 
-/** The divider over an agent's job: `Job · name · started … · cwd`. */
+/** The divider over an agent's job: `Job name started … ago in cwd`. */
 export function agentHeader(
   agent: AgentInfo,
   color: Colorize,
   now: number = Date.now(),
 ): string {
-  return `${color("accent", "Job")}${color(
+  return `${color("accent", "Job")} ${agent.name}${color(
     "dim",
-    ` · ${agent.name} · started ${formatElapsed(now - agent.createdAt)} ago · ${tildePath(agent.cwd)}`,
+    ` started ${formatElapsed(now - agent.createdAt)} ago in ${tildePath(agent.cwd)}`,
   )}`;
 }
 
@@ -254,8 +276,6 @@ export function agentDetail(
   agent: AgentInfo,
   color: Colorize,
   now: number = Date.now(),
-  /** The agent's threads, when messaging is on. */
-  threads: readonly Thread[] = [],
 ): DetailLine[] {
   const lines: DetailLine[] = [
     {
@@ -274,10 +294,10 @@ export function agentDetail(
     const when =
       result.at === undefined
         ? ""
-        : color("dim", ` · ${formatElapsed(now - result.at)} ago`);
+        : color("dim", ` ${formatElapsed(now - result.at)} ago`);
     const label =
       result.entryId === agent.jobAnswer ? "Result" : "Latest result";
-    const queued = agent.queued ? color("dim", ` · ${QUEUED_NOTE}`) : "";
+    const queued = agent.queued ? color("dim", `, ${QUEUED_NOTE}`) : "";
     lines.push(
       { divider: `${color("accent", label)}${when}${queued}` },
       {
@@ -287,95 +307,110 @@ export function agentDetail(
       },
     );
   }
-  if (threads.length > 0) {
-    lines.push({
-      divider: `${color("accent", "Messages")}${color("dim", " · m to read")}`,
-    });
-    for (const thread of threads) {
-      const last = thread.messages.at(-1);
-      const peer = peerOf(thread, agent.id).name;
-      lines.push(
-        `⇄ ${peer}${color(
-          "dim",
-          ` · ${count(thread.messages.length, "message")}${last ? ` · ${firstLine(last.text)}` : ""}`,
-        )}`,
-      );
-    }
-  }
   return lines;
 }
+
+/** Counts messages in `/messages`, where every column counts. */
+const MAIL_ICON = "✉";
 
 function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-/** A message in a thread: who sent it to whom, its status, how long ago,
- * and its text. */
+/**
+ * A sent message in `/messages`: its time, its recipient, and its text,
+ * colored by status: normal once delivered, dim while queued, red once
+ * dropped. Continuation lines align under the text.
+ */
 export function messageDetail(
   message: MessageInfo,
-  color: Colorize,
-  bold: Bold,
-  now: number = Date.now(),
+  options: {
+    /** The width of the recipient column. */
+    column: number;
+    color: Colorize;
+    bold: Bold;
+    now?: number;
+  },
 ): DetailLine[] {
-  const status = MESSAGE_STATUS_STYLES[message.status];
-  return [
-    `${color("dim", MESSAGE_ICON)} ${bold(message.from.name)}${color("dim", " → ")}${bold(message.to.name)}${color("dim", " · ")}${color(status.color, status.icon)}${color("dim", ` · ${formatElapsed(now - message.sentAt)} ago`)}`,
-    { markdown: message.text, indent: 2 },
-  ];
+  const { column, color, bold } = options;
+  const padded = fit(message.to.name, column);
+  const lead = `${color("dim", formatClock(message.sentAt, options.now))} ${bold(padded)} `;
+  const blank = " ".repeat(visibleWidth(lead));
+  return message.text
+    .trim()
+    .split("\n")
+    .map((paragraph, index) => ({
+      lead: index === 0 ? lead : blank,
+      text: statusColor(sanitizeLine(paragraph), message.status, color),
+    }));
 }
 
 /**
- * `/messages`: threads on top, latest first, and the selected thread's
- * messages below, oldest first. ⏎ attaches to one of the thread's agents,
- * Tab opens `/agents`.
+ * `/messages`: the agents that sent messages, the most recent sender first,
+ * and the selected sender's messages below, oldest first, with times and
+ * recipients. With `agent`, only messages from or to that agent. `/`
+ * searches the messages' text and names, `o` changes the order, ⏎ attaches
+ * to the sender, `a` opens it in `/agents`, and Tab goes on to the panel.
  */
 async function openMessagesOverlay(
   ctx: ExtensionContext,
   deps: CommandDeps,
-  options: { thread?: string; agent?: string } = {},
+  options: { sender?: string; agent?: string } = {},
 ): Promise<void> {
   const service = await deps.host.ensure(ctx);
-  const agentName = options.agent
-    ? service.agentById(options.agent)?.name
-    : undefined;
+  const agent = options.agent;
+  const agentName = agent ? service.agentById(agent)?.name : undefined;
   let after: (() => void) | undefined;
-  const items = () => buildThreads(service.messages(), options.agent);
-  const spec: OverlaySpec<Thread> = {
+  let order: SenderOrder = "recent";
+  const items = (query = "") =>
+    buildSenders(service.messages(), {
+      ...(agent ? { agent } : {}),
+      ...(query ? { query } : {}),
+      order,
+    });
+  const next = () => (deps.panel.hasRows() ? "panel" : "/agents");
+  const spec: OverlaySpec<SenderGroup> = {
     title: agentName ? `Messages · ${agentName}` : "Messages",
     emptyText: deps.host.messaging()
       ? "No messages between agents yet."
       : "Messaging between agents is off. Set piAgents.messaging to turn it on.",
-    footer: "↑↓ thread · ⏎ attach · tab /agents · esc",
-    ...(options.thread ? { initialKey: options.thread } : {}),
+    search: true,
+    footer: () =>
+      `↑↓ sender · / search · o order: ${order} · ⏎ attach · a /agents · tab ${next()} · esc back`,
+    ...(options.sender ? { initialKey: senderKey(options.sender) } : {}),
     items,
-    keyOf: (thread) => thread.key,
-    row: (thread, color) => {
-      const width = Math.max(
-        ...items().map((each) => threadPair(each, options.agent).length),
-        4,
+    keyOf: (group) => group.key,
+    // Columns start at the same place on every row: sender, count, age,
+    // then the latest message's recipient and text. Names are bold and end
+    // in an ellipsis when long; the text's color is its status.
+    row: (group, color, bold) => {
+      const now = Date.now();
+      const all = items();
+      const age = (each: SenderGroup) => {
+        const last = each.messages.at(-1);
+        return last ? `${formatElapsed(now - last.sentAt)} ago` : "";
+      };
+      const senders = columnWidth(all.map((each) => each.sender.name));
+      const counts = columnWidth(
+        all.map((each) => String(each.messages.length)),
       );
-      const last = thread.messages.at(-1);
-      const queued = thread.messages.some(
-        (message) => message.status === "queued",
-      );
-      const style = MESSAGE_STATUS_STYLES.queued;
+      const ages = columnWidth(all.map(age));
+      const last = group.messages.at(-1);
+      const total = String(group.messages.length);
       return [
-        pad(threadPair(thread, options.agent), width),
+        fit(bold(group.sender.name), senders),
         color(
           "dim",
-          `${count(thread.messages.length, "message")}${last ? ` · last ${formatElapsed(Date.now() - last.sentAt)} ago` : ""}`,
+          `${MAIL_ICON} ${" ".repeat(counts - total.length)}${total}`,
         ),
-        queued ? color(style.color, style.icon) : "",
-      ]
-        .filter(Boolean)
-        .join("  ");
+        color("dim", fit(age(group), ages)),
+        last
+          ? `${bold(last.to.name)}${color("dim", " → ")}${statusColor(firstLine(last.text), last.status, color)}`
+          : "",
+      ].join(" ");
     },
-    headerLine: (thread, color) =>
-      color(
-        "dim",
-        `${threadPair(thread, options.agent)} · ${count(thread.messages.length, "message")}`,
-      ),
-    detail: (thread, color, bold) => {
+    // The selected row names the sender, so the separator stays plain.
+    detail: (group, color, bold) => {
       const dropped = service.droppedMessages();
       const lines: DetailLine[] =
         dropped > 0
@@ -387,29 +422,42 @@ async function openMessagesOverlay(
               "",
             ]
           : [];
-      thread.messages.forEach((message, index) => {
-        if (index > 0) lines.push("");
-        lines.push(...messageDetail(message, color, bold));
-      });
+      const column = columnWidth(
+        group.messages.map((message) => message.to.name),
+      );
+      for (const message of group.messages)
+        lines.push(...messageDetail(message, { column, color, bold }));
       return lines;
     },
-    onAction: (key, thread) => {
+    onAction: (key, group) => {
+      if (key === "o") {
+        order =
+          SENDER_ORDERS[
+            (SENDER_ORDERS.indexOf(order) + 1) % SENDER_ORDERS.length
+          ] ?? "recent";
+        return undefined;
+      }
       if (key === "tab") {
+        after = deps.panel.hasRows()
+          ? () => deps.focus.focusPanel(ctx)
+          : () =>
+              void openAgentsOverlay(ctx, deps).catch((error) =>
+                ctx.ui.notify(errorText(error), "error"),
+              );
+        return "close";
+      }
+      if (key === "shift+tab" || key === "a") {
+        const target = key === "a" ? group.sender.id : undefined;
         after = () =>
-          void openAgentsOverlay(ctx, deps).catch((error) =>
-            ctx.ui.notify(errorText(error), "error"),
-          );
+          void openAgentsOverlay(
+            ctx,
+            deps,
+            target ? `agent:${target}` : undefined,
+          ).catch((error) => ctx.ui.notify(errorText(error), "error"));
         return "close";
       }
       if (key === "enter") {
-        const [first, second] = thread.agents;
-        after = () =>
-          void ctx.ui
-            .select("Attach to", [first.name, second.name])
-            .then((name) => {
-              const agent = name === second.name ? second : first;
-              if (name) deps.focus.attach(ctx, agent.id);
-            });
+        after = () => deps.focus.attach(ctx, group.sender.id);
         return "close";
       }
       return undefined;
@@ -450,12 +498,18 @@ async function openAgentsOverlay(
     title: "Agents",
     emptyText: "No agents yet. Ask Pi to delegate.",
     // Tab returns to the panel only while it shows agents.
-    footer: () =>
-      `↑↓ move · space fold · ⏎ attach · s stop${deps.host.messaging() ? " · m messages" : ""}${deps.panel.hasRows() ? " · tab panel" : ""} · esc`,
+    footer: () => {
+      const next = deps.host.messaging()
+        ? "/messages"
+        : deps.panel.hasRows()
+          ? "panel"
+          : undefined;
+      return `↑↓ move · space fold · ⏎ attach · s stop${deps.host.messaging() ? " · m messages" : ""}${next ? ` · tab ${next}` : ""} · esc back`;
+    },
     ...(select ? { initialKey: select } : {}),
     items,
     keyOf: (row) => row.key,
-    row: (row, color) => {
+    row: (row, color, bold) => {
       const width = Math.max(...items().map((item) => rowName(item).length), 4);
       const line =
         row.kind === "graph"
@@ -464,6 +518,7 @@ async function openAgentsOverlay(
               Date.now(),
               width,
               color,
+              bold,
               connector(row),
             )
           : agentRow(
@@ -471,35 +526,29 @@ async function openAgentsOverlay(
               Date.now(),
               width,
               color,
+              bold,
               connector(row),
             );
       const hidden = hiddenNote(row);
-      return hidden ? `${line}  ${color("dim", hidden)}` : line;
+      return hidden ? `${line} ${color("dim", hidden)}` : line;
     },
     headerLine: (row, color) => {
       if (row.kind === "agent") return agentHeader(row.agent, color);
       const graph = row.graph;
       const note = graphNote(graph);
-      return color(
+      return `${graph.name}${color(
         "dim",
-        [
-          `${graph.name} · graph of ${graph.nodes.length}`,
+        ` ${[
+          `graph of ${graph.nodes.length}`,
           graph.policy === "failFast" ? "stops on failure" : "waits for all",
           ...(note ? [note] : []),
           `started ${formatElapsed(Date.now() - graph.createdAt)} ago`,
-        ].join(" · "),
-      );
+        ].join(", ")}`,
+      )}`;
     },
     detail: (row, color, bold) =>
       row.kind === "agent"
-        ? agentDetail(
-            row.agent,
-            color,
-            Date.now(),
-            deps.host.messaging()
-              ? buildThreads(service.messages(), row.agent.id)
-              : [],
-          )
+        ? agentDetail(row.agent, color)
         : graphDetail(row.graph, (id) => service.agentById(id), color, bold),
     onAction: (key, row) => {
       if (key === "space") return { select: fold(row, deps.panel.disclosure) };
@@ -511,10 +560,26 @@ async function openAgentsOverlay(
           );
         return "close";
       }
-      if (key === "tab") {
-        if (!deps.panel.hasRows()) return undefined;
+      // Tab goes on to /messages, Shift+Tab back to the panel; each skips
+      // to the other when it has nothing to show.
+      const toPanel = () => {
         after = () => deps.focus.focusPanelAt(ctx, row.key);
-        return "close";
+        return "close" as const;
+      };
+      const toMessages = () => {
+        after = () =>
+          void openMessagesOverlay(ctx, deps).catch((error) =>
+            ctx.ui.notify(errorText(error), "error"),
+          );
+        return "close" as const;
+      };
+      if (key === "tab") {
+        if (deps.host.messaging()) return toMessages();
+        return deps.panel.hasRows() ? toPanel() : undefined;
+      }
+      if (key === "shift+tab") {
+        if (deps.panel.hasRows()) return toPanel();
+        return deps.host.messaging() ? toMessages() : undefined;
       }
       if (key === "enter") {
         const agentId = attachTarget(row);
@@ -556,8 +621,8 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
     void openAgentsOverlay(ctx, deps, select).catch((error) =>
       ctx.ui.notify(errorText(error), "error"),
     );
-  deps.focus.onThread = (ctx, thread) =>
-    void openMessagesOverlay(ctx, deps, { thread }).catch((error) =>
+  deps.focus.onMessages = (ctx, options) =>
+    void openMessagesOverlay(ctx, deps, options).catch((error) =>
       ctx.ui.notify(errorText(error), "error"),
     );
 

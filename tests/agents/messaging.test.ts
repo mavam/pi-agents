@@ -303,7 +303,7 @@ describe("messaging", () => {
           { isError: false, state: {} } as any,
         )
         .render(80),
-    ).toEqual(["● b · faux-1 · Keep notes. Then rest."]);
+    ).toEqual(["  ● b faux-1 Keep notes. Then rest."]);
   });
 
   test("a stopped agent refuses messages until the parent messages it", async () => {

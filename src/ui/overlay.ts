@@ -48,6 +48,8 @@ export type Bold = (text: string) => string;
 export type DetailLine =
   | string
   | { divider: string }
+  /** Text after a lead, such as a time and a name, wrapped under itself. */
+  | { lead: string; text: string }
   | {
       markdown: string;
       indent?: number;
@@ -71,6 +73,13 @@ export function renderDetail(
         text,
       }));
     if ("divider" in line) return [line];
+    if ("lead" in line) {
+      const indent = visibleWidth(line.lead);
+      const parts = wrapTextWithAnsi(line.text, Math.max(4, width - indent));
+      return (parts.length > 0 ? parts : [""]).map((part, index) => ({
+        text: `${index === 0 ? line.lead : " ".repeat(indent)}${part}`,
+      }));
+    }
     return renderMarkdown(line, width, color, markdownTheme).map((text) => ({
       text,
     }));
@@ -129,20 +138,25 @@ export interface OverlaySpec<T> {
   title: string;
   /** Shown when items() is empty. */
   emptyText: string;
+  /** Whether `/` searches: the overlay passes the query to `items` and
+   * `detail`. */
+  search?: boolean;
   /** Key hints embedded in the bottom border, read on every render. */
   footer: string | (() => string);
   /** The item to select first, by key. */
   initialKey?: string;
-  items: () => T[];
+  /** The items, filtered by the search query when there is one. */
+  items: (query: string) => T[];
   /** Stable identity, so the selection survives reordering. */
   keyOf: (item: T) => string;
   /** One table line; the renderer adds the selection marker. */
-  row: (item: T, color: Colorize) => string;
-  /** Metadata line embedded in the separator. */
-  headerLine: (item: T, color: Colorize) => string;
+  row: (item: T, color: Colorize, bold: Bold) => string;
+  /** Metadata line embedded in the separator; without it, a plain
+   * separator, for details the selected row already describes. */
+  headerLine?: (item: T, color: Colorize) => string;
   /** Detail pane lines, wrapped to the pane width. */
-  detail: (item: T, color: Colorize, bold: Bold) => DetailLine[];
-  /** Handle enter, space, or a single-letter key. */
+  detail: (item: T, color: Colorize, bold: Bold, query: string) => DetailLine[];
+  /** Handle enter, space, tab, shift+tab, or a single-letter key. */
   onAction: (key: string, item: T) => OverlayAction;
   /** Whether to re-render every 500 ms. */
   live?: () => boolean;
@@ -189,7 +203,7 @@ function windowDetail(
 /** `│ content…pad │`, filled to the exact width. */
 function boxLine(content: string, width: number, color: Colorize): string {
   const inner = Math.max(1, width - 4);
-  const clipped = truncateToWidth(content, inner);
+  const clipped = truncateToWidth(content, inner, "…");
   const pad = " ".repeat(Math.max(0, inner - visibleWidth(clipped)));
   return `${color("dim", "│ ")}${clipped}${pad}${color("dim", " │")}`;
 }
@@ -202,7 +216,7 @@ function edgeLine(
   color: Colorize,
 ): string {
   const text = label
-    ? ` ${truncateToWidth(label, Math.max(1, width - 6))} `
+    ? ` ${truncateToWidth(label, Math.max(1, width - 6), "…")} `
     : "";
   const fill = Math.max(0, width - 3 - visibleWidth(text));
   return (
@@ -254,19 +268,39 @@ class SplitPaneOverlay<T> implements Component {
     }
   }
 
+  /** The search query, and whether keys type into it. */
+  private query = "";
+  private searching = false;
+
+  private title(suffix = ""): string {
+    const search =
+      this.searching || this.query
+        ? ` · /${this.query}${this.searching ? "▌" : ""}`
+        : "";
+    return `${this.spec.title}${suffix}${search}`;
+  }
+
   private footer(): string {
+    if (this.searching) return "type to search · ⏎ done · esc clear";
     const { footer } = this.spec;
     return typeof footer === "string" ? footer : footer();
   }
 
   render(width: number): string[] {
     const { color, spec } = this;
-    const items = spec.items();
+    const items = spec.items(this.query);
     this.syncTimer();
     if (items.length === 0)
       return [
-        edgeLine(["╭", "╮"], color("accent", spec.title), width, color),
-        boxLine(color("dim", spec.emptyText), width, color),
+        edgeLine(["╭", "╮"], color("accent", this.title()), width, color),
+        boxLine(
+          color(
+            "dim",
+            this.query ? `Nothing matches /${this.query}.` : spec.emptyText,
+          ),
+          width,
+          color,
+        ),
         edgeLine(["╰", "╯"], color("dim", this.footer()), width, color),
         "",
       ];
@@ -281,7 +315,7 @@ class SplitPaneOverlay<T> implements Component {
     const lines = [
       edgeLine(
         ["╭", "╮"],
-        color("accent", `${spec.title} (${index + 1}/${items.length})`),
+        color("accent", this.title(` (${index + 1}/${items.length})`)),
         width,
         color,
       ),
@@ -294,11 +328,15 @@ class SplitPaneOverlay<T> implements Component {
     for (let i = start; i < start + tableRows; i++) {
       const marker = i === index ? color("accent", "▸ ") : "  ";
       lines.push(
-        boxLine(`${marker}${spec.row(items[i] as T, color)}`, width, color),
+        boxLine(
+          `${marker}${spec.row(items[i] as T, color, this.bold)}`,
+          width,
+          color,
+        ),
       );
     }
     lines.push(
-      edgeLine(["├", "┤"], spec.headerLine(item, color), width, color),
+      edgeLine(["├", "┤"], spec.headerLine?.(item, color) ?? "", width, color),
     );
 
     const anchor = spec.keyOf(item);
@@ -308,7 +346,7 @@ class SplitPaneOverlay<T> implements Component {
     }
     const inner = Math.max(1, width - 4);
     const detail = renderDetail(
-      spec.detail(item, color, this.bold),
+      spec.detail(item, color, this.bold, this.query),
       inner,
       color,
       getMarkdownTheme(),
@@ -349,13 +387,45 @@ class SplitPaneOverlay<T> implements Component {
     );
   }
 
+  /** Keys while typing a search: text, Backspace, ⏎ to keep the query,
+   * Esc to clear it. */
+  private searchInput(data: string): void {
+    const keybindings = getKeybindings();
+    const key = parseKey(data) ?? data;
+    if (keybindings.matches(data, "tui.select.cancel")) {
+      this.query = "";
+      this.searching = false;
+    } else if (keybindings.matches(data, "tui.select.confirm"))
+      this.searching = false;
+    else if (key === "backspace") this.query = this.query.slice(0, -1);
+    else if (data.length > 0 && !data.startsWith("\u001b") && data >= " ")
+      this.query += data;
+    this.tui.requestRender();
+  }
+
   handleInput(data: string): void {
+    if (this.searching) {
+      this.searchInput(data);
+      return;
+    }
     const keybindings = getKeybindings();
     if (keybindings.matches(data, "tui.select.cancel")) {
+      // Esc clears a search first, then closes.
+      if (this.query) {
+        this.query = "";
+        this.tui.requestRender();
+        return;
+      }
       this.close();
       return;
     }
-    const items = this.spec.items();
+    if (this.spec.search && data === "/") {
+      this.searching = true;
+      this.query = "";
+      this.tui.requestRender();
+      return;
+    }
+    const items = this.spec.items(this.query);
     if (items.length === 0) return;
     const index = this.index(items);
     const key = parseKey(data) ?? data;
@@ -371,7 +441,8 @@ class SplitPaneOverlay<T> implements Component {
       this.select(items, index + 1);
     else if (keybindings.matches(data, "tui.select.confirm"))
       this.act("enter", items[index] as T);
-    else if (key === "space" || key === "tab") this.act(key, items[index] as T);
+    else if (key === "space" || key === "tab" || key === "shift+tab")
+      this.act(key, items[index] as T);
     else if (/^[a-z]$/.test(key)) this.act(key, items[index] as T);
     this.tui.requestRender();
   }

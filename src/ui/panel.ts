@@ -2,11 +2,14 @@
  * AgentPanel: one line per open agent or graph above the editor, a graph's
  * agents below it as a tree.
  *
- *   ◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep
- *   ◉ review · graph 1/3 · 40s · 12.0k
- *   ├─ ● api · terra · 4.0k
- *   ├─ ◉ tests · sol · 40s · 8.0k · Using grep
- *   └─ ○ merge ← api, tests · opus
+ *   ◉ reviewer explorer terra 1m32s 15.5k Using grep
+ *   ◉ review graph 1/3 40s 12.0k
+ *   ├─ ● api terra 4.0k
+ *   ├─ ◉ tests sol 40s 8.0k Using grep
+ *   └─ ○ merge after all opus
+ *
+ * Names are in the normal color and details dim, separated by single
+ * spaces.
  *
  * Unfocused, it shows the first few lines, working ones first, and a
  * finished graph as one line. Left arrow from an empty editor or Ctrl+Q
@@ -14,15 +17,20 @@
  * agent's helpers, ⏎ attaches (a graph: its first agent), `s` stops, Tab
  * opens `/agents` at the selected row, and Esc returns to the editor.
  *
- * With messaging on, the latest messages of the agents shown follow the
- * agents, stacked below them or in a column to their right:
+ * The panel shows live state only, so with messaging on it shows messages
+ * still queued for their recipients, in a column to the right of the agents
+ * from 120 terminal columns, else below them; delivered ones are history,
+ * in the transcript and `/messages`:
  *
- *   ◉ scout · sol · 40s · 8.1k  │ □ scout → notes  bun.lock is 412 KB   ✔
- *   ● notes · terra · 2.0k      │ □ scout → notes  README.md is 18 KB   ◷
+ *   ◉ scout sol 40s 8.1k   scout → notes README.md is 18 KB 3s
  *
- * ↑↓ continue from the agents into the messages, ⏎ on a message opens its
- * thread in `/messages`, `m` shows or hides messages, and `v` switches the
- * view. A dim line counts earlier messages the panel leaves out.
+ * The two columns keep their widths while messages come and go: the agents
+ * get a fixed share of the panel, and the sender and recipient column fits
+ * the longest pair of names among the agents.
+ *
+ * ↑↓ continue from the agents into the messages, ⏎ on a message attaches to
+ * its recipient, and `m` opens `/messages`: the selected agent's threads,
+ * or the selected message's thread.
  */
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -34,9 +42,15 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AgentInfo, MessageInfo } from "../agents/types.js";
 import type { SessionHost } from "../pi/session.js";
-import { formatAgentLine, formatGraphLine, sanitizeLine } from "./format.js";
+import {
+  formatAgentLine,
+  formatElapsed,
+  formatGraphLine,
+  sanitizeLine,
+} from "./format.js";
 import {
   formatMessageLine,
+  type MessageLineParts,
   type MessageStyle,
   messageParts,
   pairWidth,
@@ -67,12 +81,10 @@ const STACKED_MESSAGES_FOCUSED = 6;
 export const COLUMNS_MIN_WIDTH = 120;
 /** The fewest rows the message column shows, when there are messages. */
 const COLUMN_MIN_HEIGHT = 3;
-/** The widest message line, so its status stays near its text. */
-const MAX_MESSAGE_WIDTH = 100;
-/** The agent column's widest share of the panel. */
+/** The agent column's share of the panel in columns. */
 const AGENT_COLUMN_RATIO = 0.45;
-
-export type MessageView = "stacked" | "columns";
+/** The widest sender and recipient column. */
+const MAX_PAIR_COLUMN = 28;
 
 function messageKey(message: MessageInfo): string {
   return `message:${message.id}`;
@@ -134,8 +146,6 @@ export class AgentPanel {
   /** What the user folded; `/agents` shares it. */
   readonly disclosure = new Disclosure();
   private readonly held = new Map<string, HeldSummary>();
-  private messagesShown = true;
-  private view: MessageView = "columns";
   /** The messages the latest focused frame showed, which ↑↓ reach. */
   private shownMessages: MessageInfo[] = [];
 
@@ -160,30 +170,37 @@ export class AgentPanel {
     );
   }
 
-  /** Messages of the agents the panel shows, oldest first; none while
-   * messaging is off or hidden. */
+  /** Queued messages of the agents the panel shows, oldest first; none
+   * while messaging is off. */
   messages(): MessageInfo[] {
     const service = this.host.current();
-    if (!service || !this.host.messaging() || !this.messagesShown) return [];
+    if (!service || !this.host.messaging()) return [];
     const shown = new Set(service.list().map((info) => info.id));
     return service
       .messages()
       .filter(
-        (message) => shown.has(message.from.id) || shown.has(message.to.id),
+        (message) =>
+          message.status === "queued" &&
+          (shown.has(message.from.id) || shown.has(message.to.id)),
       );
   }
 
-  /** `m`: show or hide messages. */
-  toggleMessages(): void {
-    this.messagesShown = !this.messagesShown;
-    if (!this.messagesShown) this.shownMessages = [];
-    this.update();
+  /** The sender and recipient column: as wide as the longest pair of
+   * names among the agents, so it doesn't move as messages change. */
+  private pairColumn(): number {
+    const names = (this.host.current()?.list() ?? []).map(
+      (info) => info.name.length,
+    );
+    const longest = Math.max(4, ...names);
+    return Math.min(MAX_PAIR_COLUMN, longest * 2 + 3);
   }
 
-  /** `v`: switch between stacked and columns. */
-  toggleView(): void {
-    this.view = this.view === "columns" ? "stacked" : "columns";
-    this.update();
+  /** A queued message's line parts, with how long it has waited. */
+  private parts(message: MessageInfo): MessageLineParts {
+    return {
+      ...messageParts(message),
+      age: formatElapsed(this.now() - message.sentAt),
+    };
   }
 
   /** Select a row by key, if the panel shows it. */
@@ -331,7 +348,7 @@ export class AgentPanel {
     const { color } = style;
     const now = this.now();
     const messages = this.messages();
-    const columns = this.view === "columns" && width >= COLUMNS_MIN_WIDTH;
+    const columns = width >= COLUMNS_MIN_WIDTH;
     const line = (row: Row) => {
       const text =
         row.kind === "graph"
@@ -341,9 +358,10 @@ export class AgentPanel {
               now,
               color,
               row.inputs,
+              row.others,
             );
       const hidden = hiddenNote(row);
-      return `${color("dim", connector(row))}${text}${hidden ? color("dim", ` · ${hidden}`) : ""}`;
+      return `${color("dim", connector(row))}${text}${hidden ? color("dim", ` ${hidden}`) : ""}`;
     };
     if (!this.focused) {
       const rows = this.rows(true);
@@ -400,17 +418,12 @@ export class AgentPanel {
     const message = this.selectedMessage();
     const hints = [
       "↑↓ move",
-      ...(message ? ["⏎ thread"] : ["space fold", "⏎ attach", "s stop"]),
-      ...(this.host.messaging()
-        ? [
-            "m messages",
-            this.view === "columns"
-              ? `v stack${columns ? "" : " (columns need 120 cols)"}`
-              : "v columns",
-          ]
-        : []),
+      ...(message
+        ? [`⏎ attach ${message.to.name}`]
+        : ["space fold", "⏎ attach", "s stop"]),
+      ...(this.host.messaging() ? ["m messages"] : []),
       "tab /agents",
-      "esc editor",
+      "esc back",
     ];
     lines.push(color("dim", `  ${hints.join(" · ")}`));
     return lines;
@@ -434,7 +447,7 @@ export class AgentPanel {
   ): string[] {
     const { style, columns, selectable } = options;
     const { color } = style;
-    const width = Math.min(options.width, MAX_MESSAGE_WIDTH);
+    const { width } = options;
     if (messages.length === 0) {
       if (selectable) this.shownMessages = [];
       return left;
@@ -446,23 +459,19 @@ export class AgentPanel {
           ? color("accent", "▸ ")
           : "  ";
     const markerWidth = selectable ? 2 : 0;
-    const earlier = (hidden: number) =>
-      color("dim", `${selectable ? "  " : ""}… ${hidden} earlier · /messages`);
     if (!columns) {
-      const hidden = Math.max(0, messages.length - options.stacked);
       const shown = messages.slice(-options.stacked);
       if (selectable) this.shownMessages = shown;
-      const column = pairWidth(shown.map(messageParts));
+      const column = this.pairColumn();
       return [
         ...left,
         color(
           "dim",
           `${selectable ? "  " : ""}${"─".repeat(Math.max(1, width - markerWidth))}`,
         ),
-        ...(hidden > 0 ? [earlier(hidden)] : []),
         ...shown.map(
           (message) =>
-            `${marker(message)}${formatMessageLine(messageParts(message), width - markerWidth, style, column)}`,
+            `${marker(message)}${formatMessageLine(this.parts(message), width - markerWidth, style, column)}`,
         ),
       ];
     }
@@ -470,31 +479,18 @@ export class AgentPanel {
       left.length,
       Math.min(messages.length, COLUMN_MIN_HEIGHT),
     );
-    // A cut column gives its first row to the count of earlier messages.
-    const cut = messages.length > height;
-    const shown = messages.slice(-(cut ? height - 1 : height));
+    const shown = messages.slice(-height);
     if (selectable) this.shownMessages = shown;
-    const leftWidth = Math.min(
-      Math.max(...left.map((line) => visibleWidth(line))),
-      Math.floor(options.width * AGENT_COLUMN_RATIO),
-    );
-    const rightWidth = Math.max(
-      8,
-      Math.min(MAX_MESSAGE_WIDTH, options.width - leftWidth - 3) - markerWidth,
-    );
-    const column = pairWidth(shown.map(messageParts));
-    const separator = color("dim", " │ ");
-    const rows: Array<MessageInfo | number> = cut
-      ? [messages.length - shown.length, ...shown]
-      : shown;
+    const leftWidth = Math.floor(width * AGENT_COLUMN_RATIO);
+    const rightWidth = Math.max(8, width - leftWidth - 1 - markerWidth);
+    const column = this.pairColumn();
+    // A gap, not a bar, separates the columns.
+    const separator = " ";
     return Array.from({ length: height }, (_, index) => {
-      const message = rows[index];
-      const right =
-        typeof message === "number"
-          ? earlier(message)
-          : message
-            ? `${marker(message)}${formatMessageLine(messageParts(message), rightWidth, style, column)}`
-            : "";
+      const message = shown[index];
+      const right = message
+        ? `${marker(message)}${formatMessageLine(this.parts(message), rightWidth, style, column)}`
+        : "";
       return `${padLine(left[index] ?? "", leftWidth)}${separator}${right}`;
     });
   }

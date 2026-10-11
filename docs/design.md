@@ -467,10 +467,15 @@ No clocks, activity, or delivery markers. The deliveries a wait took stay
 beside the receipt, in the same details, for delivery bookkeeping.
 
 `src/ui/tool-views.ts` draws calls and results and never sees live agents.
-A call draws its arguments only: its title, a dim `key=value` line, and its
-body. A result draws its receipt only: progress what the call started, the
-final result how agents were, with `⊠` for what a wait gave up on, then why
-it ended, such as `Timed out`. Renderers share no state, so a call draws the
+A call draws its arguments only: its title with dim `key=value` pairs after
+it, and its body. A result draws its receipt only: progress what the call started, the
+final result how agents were, then why its wait ended, such as `Timed out`.
+Of what hasn't finished, a call that started it (spawn, spawn graph, send,
+delegate) shows only what it started, without a state, and `agent_wait`
+marks it `⊠`. A result indents under its call. A call whose title names its
+graph shows the graph's agents right below its arguments, without a line
+of their own for the graph until it finished, and collapsed, a graph
+call's body is the tree, not its shape again. Renderers share no state, so a call draws the
 same live, finished, and replayed. A failed call shows its error text.
 Results stored by earlier versions decode to receipts when read, and
 details no version reads show the result's text.
@@ -488,7 +493,7 @@ message card, with its own, and Pi's tools with Pi's.
   it as a tree in stages; unfocused, a finished graph folds to its line. ←
   from an empty editor or Ctrl+Q focuses it, or opens `/agents` while it's
   empty. Space folds a graph or an agent's helpers, ⏎ attaches, `s` stops,
-  Tab trades the panel for `/agents` at the same row. The panel and
+  Tab opens `/agents` at the same row. The panel and
   `/agents` share what the user folded. Before intercepting input or taking
   focus, the controller checks `TUI.hasOverlay()` and yields to any visible
   overlay. This is intentionally conservative: `hasOverlay()` includes
@@ -503,33 +508,48 @@ message card, with its own, and Pi's tools with Pi's.
   accent color and `result queued`.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's
   durable conversation view with Pi's message and tool components. ⏎ prompts
-  or steers, Alt+⏎ queues a follow-up, Esc interrupts, Ctrl+O expands tool
-  output, ← detaches.
-- `/agents`: a table of all agents and graphs, closed ones dimmed, with
-  details, attach, and stop. Each row shows how long it ran: until now while
+  or steers, Alt+⏎ queues a follow-up, Esc interrupts a working agent and
+  goes back from an idle one, Ctrl+O expands tool output, ← detaches.
+- `/agents`: a table of all agents and graphs, names in bold and the rest
+  dim, with details, attach, and stop. Each row shows how long it ran: until now while
   it works, else until it ended, from durable task end times that survive
   restarts. An agent's detail shows its job and its latest result; a
   graph's detail says its order in words and shows each agent's result.
-- Messages between agents, with messaging on. One line format everywhere:
-  `□ scout → notes  <first line>  ◷`, the kind glyph, sender and recipient in
-  bold in a fixed-width column, the text, and the status at the right edge:
-  `◷` queued, `✔` delivered, `✘` dropped. The glyphs are constants in
-  `src/ui/messages.ts`.
-  - Panel: the latest messages of the agents it shows, in a column to their
-    right from 120 terminal columns, else stacked below them; a dim line
-    counts earlier ones. ↑↓ reach them, ⏎ opens a message's thread, `m`
-    hides them, `v` switches the view, both for the session.
+- Keys follow one model. Tab cycles the panel, `/agents`, and `/messages`,
+  Shift+Tab backwards, skipping a stop with nothing to show. Esc goes back
+  one level; in the attach view it interrupts a working agent, as in Pi, and
+  goes back from an idle one. ⏎ opens the selected thing, `s` stops, and `m`
+  opens messages: the selected agent's, or at a message's sender.
+- Messages between agents, with messaging on. Each surface has one job: the
+  panel shows live state, so only queued messages; the transcript and
+  `/messages` show history, with times; the attach view shows one agent's
+  conversation. `/agents` doesn't show messages: an agent's details are its
+  job and its result. Messages have no glyphs. A message's text color is its
+  status, from `MESSAGE_STATUS_COLORS` in `src/ui/messages.ts`: dim while
+  queued, normal once delivered, red once dropped. Who is the pair in bold
+  (`scout → notes`) or, seen from one agent, an arrow and the other agent:
+  `← scout` received, `→ notes` sent.
+  - Panel: queued messages of the agents it shows, with how long they
+    waited, in a column to their right from 120 terminal columns, else
+    below them. The columns keep their widths as messages come and go: the
+    agents get a fixed share, and the pair column fits the longest pair of
+    names among the agents. ↑↓ reach messages, ⏎ attaches to a message's
+    recipient.
   - Transcript: one custom entry per message, a card on Pi's message
-    background that Pi's model doesn't see. Entries only append and are
-    deduplicated by message ID and send time; Ctrl+O shows a long message in
-    full.
-  - Attach view: incoming messages as cards, never as the user's input, and
-    queued ones as message lines; the agent's own `agent_send` calls as cards
-    too, with a refusal below.
-  - `/messages`: threads, everything two agents sent each other, latest
-    first, and the selected thread's messages in full. ⏎ asks which of the
-    two agents to attach to, Tab opens `/agents`. An agent's details in
-    `/agents` list its threads, and `m` opens them.
+    background with `✦`, pi-agents' mark as on its tool calls, the pair,
+    and the time, which Pi's model doesn't see.
+    Entries only append and are deduplicated by message ID and send time;
+    Ctrl+O shows a long message in full.
+  - Attach view: received and sent messages as cards seen from the agent,
+    never as the user's input; queued input shows dim below the
+    conversation.
+  - `/messages`: the senders, the most recent first, or by name or count
+    with `o`; a row is the sender, its message count, the age, and its
+    latest message with recipient, in columns that start at the same place
+    on every row; names aren't cut. The selected sender's messages
+    show as time, recipient, text. `/` searches text and names, ⏎ attaches
+    to the sender, `a` opens it in `/agents`. Grouping by sender keeps the
+    list as long as the number of agents, however many pairs talk.
 - pi-durable's task graph stays out of the UI. `AgentService.liveTasks()`
   exposes it for tests and debugging.
 - The fancy-footer integration reports working and idle counts.

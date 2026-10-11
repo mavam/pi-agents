@@ -112,8 +112,8 @@ function resultHeader(
     details.kind === "answered" ? STATE_STYLES.idle : STATE_STYLES.failed;
   const meta = [details.profile, details.model, details.usage]
     .filter(Boolean)
-    .join(" · ");
-  return `${color(style.color, style.icon)} ${details.name} ${details.kind === "answered" ? "answered" : "failed"}${meta ? color("dim", ` · ${meta}`) : ""}`;
+    .join(" ");
+  return `${color(style.color, style.icon)} ${details.name} ${details.kind === "answered" ? "answered" : "failed"}${meta ? color("dim", ` ${meta}`) : ""}`;
 }
 
 function collapse(body: string, expanded: boolean): string {
@@ -218,7 +218,7 @@ function graphState(ends: readonly NodeDetails[]): AgentState {
 }
 
 function nodeMeta(node: NodeDetails): string {
-  return [node.profile, node.model, node.usage].filter(Boolean).join(" · ");
+  return [node.profile, node.model, node.usage].filter(Boolean).join(" ");
 }
 
 function collapseLines(body: string, expanded: boolean, lines: number): string {
@@ -250,7 +250,7 @@ const renderGraphResult: MessageRenderer = (message, options, theme) => {
     const meta = nodeMeta(only);
     card.addChild(
       new Text(
-        `${icon} ${details.name} › ${only.name} ${only.kind}${meta ? color("dim", ` · ${meta}`) : ""}`,
+        `${icon} ${details.name} › ${only.name} ${only.kind}${meta ? color("dim", ` ${meta}`) : ""}`,
         0,
         0,
       ),
@@ -260,7 +260,7 @@ const renderGraphResult: MessageRenderer = (message, options, theme) => {
   } else {
     card.addChild(
       new Text(
-        `${icon} ${details.name} finished${color("dim", ` · ${nodeCounts(ends).replaceAll(", ", " · ")}`)}`,
+        `${icon} ${details.name} finished${color("dim", ` ${nodeCounts(ends)}`)}`,
         0,
         0,
       ),
@@ -271,7 +271,7 @@ const renderGraphResult: MessageRenderer = (message, options, theme) => {
       card.addChild(new Spacer(1));
       card.addChild(
         new Text(
-          `${color(nodeStyle.color, nodeStyle.icon)} ${node.name}${meta ? color("dim", ` · ${meta}`) : ""}`,
+          `${color(nodeStyle.color, nodeStyle.icon)} ${node.name}${meta ? color("dim", ` ${meta}`) : ""}`,
           0,
           0,
         ),

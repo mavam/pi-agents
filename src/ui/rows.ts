@@ -34,6 +34,8 @@ export type Row =
       last: boolean;
       /** Names of the agents whose results it receives. */
       inputs: string[];
+      /** How many other agents its graph has. */
+      others: number;
     } & Tree);
 
 /** What the user folded and unfolded, by row key, over a default. */
@@ -167,6 +169,7 @@ export function buildRows(
           {
             nested: true,
             last,
+            others: graph.nodes.length - 1,
             inputs: node.inputs.map((input) =>
               short(names.get(input) ?? input),
             ),
@@ -183,7 +186,12 @@ export function buildRows(
   /** An agent row, then the graphs of helpers it started. */
   const agentRows = (
     agent: AgentInfo,
-    place: { nested: boolean; last: boolean; inputs: string[] },
+    place: {
+      nested: boolean;
+      last: boolean;
+      inputs: string[];
+      others: number;
+    },
     label: string,
     lead: string,
     indent: string,
@@ -223,7 +231,7 @@ export function buildRows(
       ? graphRows(entry.info, "", "")
       : agentRows(
           entry.info,
-          { nested: false, last: false, inputs: [] },
+          { nested: false, last: false, inputs: [], others: 0 },
           entry.info.name,
           "",
           "",

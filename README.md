@@ -60,7 +60,7 @@ Pi session, with its own store next to Pi's session file:
 │ ╭┤  ◆ Pi session    │                    │  ▤ panel           │  │
 │ ┊╰───┬──────────▲───╯                    │  ⇄ attach view     │  │
 │ ┊    │ agent_*  │ results                │  ≡ /agents         │  │
-│ ┊    ▼          │                        │  □ /messages       │  │
+│ ┊    ▼          │                        │  ✉ /messages       │  │
 │ ┊╭──────────────┴───╮                    ╰─────────▲──────────╯  │
 │ ┊│  ✦ pi-agents     ├──────────────────────────────╯             │
 │ ┊╰───┬──────────▲───╯                                            │
@@ -70,7 +70,7 @@ Pi session, with its own store next to Pi's session file:
 │ ┊╭──────────────┴─────────────────────────────────────────────╮  │
 │ ┊│  pi-durable harness                                        │  │
 │ ┊│                                                            │  │
-│ ┊│   ◉ scout ─── □ message ──▶ ● notes                        │  │
+│ ┊│   ◉ scout ─── message ──▶ ● notes                          │  │
 │ ┊│                                                            │  │
 │ ┊│   ╭─ graph ─────────────────────────╮                      │  │
 │ ┊│   │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │                      │  │
@@ -187,16 +187,18 @@ Have three reviewer agents review this branch: correctness, tests, and docs.
 A panel above the editor shows one line per open agent or graph, with a
 graph's agents below it as a tree. The glyph shows the state, working agents
 show how long ago they started, a graph shows how many of its agents
-finished, and `←` names the agents whose results an agent receives:
+finished, and `after` names the agents whose results an agent receives,
+`after all` when it waits for every other agent of its graph. Names are in
+the normal color and details dim:
 
 ```text
-◉ reviewer · explorer · terra · 1m32s · 15.5k · Using grep
-✗ docs · sol · 8.0k · $0.02 · rate limit exceeded
-◉ review · graph 1/4 · 40s · 12.0k
-├─ ● api · terra · 4.0k
-├─ ◉ tests · sol · 40s · 8.0k · Using grep
-├─ ◉ host · sol · 40s
-└─ ○ merge ← api, tests, host · opus
+◉ reviewer explorer terra 1m32s 15.5k Using grep
+✗ docs sol 8.0k $0.02 rate limit exceeded
+◉ review graph 1/4 40s 12.0k
+├─ ● api terra 4.0k
+├─ ◉ tests sol 40s 8.0k Using grep
+├─ ◉ host sol 40s
+└─ ○ merge after all opus
 ```
 
 An agent leaves the panel once its answer reaches Pi, and a graph once its
@@ -205,7 +207,7 @@ attached, so until then an agent that answered Pi shows `●` in the accent
 color instead of green and says `result queued`, and so does a graph:
 
 ```text
-● series-review · sol · 1.1m · $0.42 · result queued
+● series-review sol 1.1m $0.42 result queued
 ```
 
 Failed and interrupted agents stay until you or Pi stop them.
@@ -218,9 +220,9 @@ open, they open `/agents` instead. Then:
 | ↑ ↓ | Select an agent or graph. |
 | Space | Fold or unfold a graph, or an agent's helpers. On a row inside one, fold what it sits in. |
 | ⏎ | Attach to the agent, or to a graph's first agent. |
-| Tab | Open `/agents` at the same row. Tab there returns to the panel while agents are open. |
+| Tab | Open `/agents` at the same row. Tab cycles the panel, `/agents`, and `/messages`; Shift+Tab goes back. |
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
-| Esc | Return to the editor. |
+| Esc | Go back to the editor. |
 
 Attaching shows the agent's conversation with Pi's own message and tool
 rendering. The editor then talks to the agent:
@@ -229,7 +231,7 @@ rendering. The editor then talks to the agent:
 | --- | --- |
 | ⏎ | Prompt an idle agent or steer a working one. |
 | Alt+⏎ | Queue a follow-up after the current answer. |
-| Esc | Interrupt a working agent. Queued messages return to the editor. |
+| Esc | Interrupt a working agent; queued messages return to the editor. Go back from an idle one. |
 | Ctrl+O | Expand or collapse tool output. |
 | ← or Ctrl+D | Detach when the editor is empty. |
 | Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. |
@@ -262,7 +264,7 @@ single last agent, such as a merging one, Pi gets just its answer, and the
 results in between stay in the graph, where you can attach to read them:
 
 ```text
-● review › merge answered · opus · 6.2k
+● review › merge answered opus 6.2k
   Three issues stand out: …
 ✗ host failed: rate limit exceeded
 ```
@@ -300,12 +302,12 @@ started them, never to Pi, and only that agent's final answer reports back.
 The panel draws the helpers below their agent, which shows their progress:
 
 ```text
-◉ mapper · haiku · 17s · delegating · helpers 1/4
-└─ ◉ helpers · graph 1/4 · 10s · 13.0k
-   ├─ ● models · haiku · 3.1k
-   ├─ ◉ paths · haiku · 10s
-   ├─ ◉ skills · haiku · 10s
-   └─ ○ merge ← models, paths, skills · haiku
+◉ mapper haiku 17s delegating helpers 1/4
+└─ ◉ helpers graph 1/4 10s 13.0k
+   ├─ ● models haiku 3.1k
+   ├─ ◉ paths haiku 10s
+   ├─ ◉ skills haiku 10s
+   └─ ○ merge after all haiku
 ```
 
 Helpers leave the panel once their agent has their results; `/agents` keeps
@@ -332,7 +334,7 @@ below the agent, and the divider over its details in `/agents` shows it.
 | --- | --- |
 | `/agents` | Browse all agents and graphs, including ended ones, with their jobs and latest results. Attach to, fold, or stop them. |
 | `/agent <name>` | Attach to an agent. |
-| `/messages` | Read the messages agents sent each other, one thread per pair of agents. |
+| `/messages` | Read and search the messages agents sent each other, by sender. |
 
 ### Tools
 
@@ -488,28 +490,45 @@ Agents started afterwards get `agent_status`, which lists the other agents
 with the jobs they were started with, and `agent_send`, which sends one of
 them a message without waiting. Like your messages, it steers a working
 recipient, so it can change what the recipient answers, unless the sender
-queues it as a follow-up. The recipient's answer stays with it. Helpers can't send or receive messages, and an agent
-you or Pi stopped refuses messages from agents until you or Pi message it.
+queues it as a follow-up. The recipient's answer stays with it. Helpers
+can't send or receive messages, and an agent you or Pi stopped refuses
+messages from agents until you or Pi message it.
 Restart Pi after changing the setting.
 
-Messages show in the transcript, where Pi's model doesn't see them, and in
-the panel next to the agents, or below them in terminals narrower than 120
-columns:
+Every message shows in the transcript as a card marked `✦`, like pi-agents'
+tool calls, with its time, where Pi's model doesn't see it. The panel shows messages still waiting in their
+recipient's queue, next to the agents, or below them in terminals narrower
+than 120 columns:
 
 ```text
-◉ scout · sol · 40s · 8.1k  │ □ scout → notes  bun.lock is 412 KB     ✔
-● notes · terra · 2.0k      │ □ scout → notes  README.md is 18 KB     ◷
+◉ scout sol 40s 8.1k   scout → notes README.md is 18 KB 3s
 ```
 
-`◷` waits in the recipient's queue, `✔` reached its conversation, and `✘`
-was dropped from the queue because you interrupted or stopped the recipient.
-In the focused panel, ↑↓ reach the messages, ⏎ opens a message's thread, `m`
-shows or hides messages, and `v` stacks them below the agents.
+A message's text is dim while it waits in the recipient's queue, normal once
+it reached the recipient's conversation, and red if interrupting or stopping
+the recipient dropped it. In the focused panel, ↑↓ reach the messages, ⏎
+attaches to a message's recipient, and `m` opens `/messages` at the selected
+agent's or message's sender.
 
-`/messages` lists threads, everything two agents sent each other, latest
-first, with the selected thread's messages in full below. ⏎ attaches to one
-of the two agents. In `/agents`, an agent's details list its threads, and `m`
-opens them. A session keeps its latest 1,000 messages.
+`/messages` lists the agents that sent messages, the most recent sender
+first, in columns: sender, count, age, and recipient and text of the latest
+message. The selected sender's messages show below with their times and
+recipients:
+
+```text
+╭─ Messages (1/2) ─────────────────────────────────────────────────────╮
+│ ▸ mesh-a ✉ 2 4s ago mesh-e → TOKEN mesh-73 route A-C-E-F             │
+│   mesh-f ✉ 1 6s ago mesh-a → ACK mesh-73 route A-B-D-F               │
+├──────────────────────────────────────────────────────────────────────┤
+│ 12:04:11 mesh-f TOKEN mesh-73 route A-B-D-F                          │
+│ 12:04:20 mesh-e TOKEN mesh-73 route A-C-E-F                          │
+╰─ / search · o order · ⏎ attach · esc back ───────────────────────────╯
+```
+
+`/` searches the messages' text and the agents' names, `o` orders senders by
+latest message, name, or count, ⏎ attaches to the sender, and `a` opens it in
+`/agents`. Opened with `m` for one agent, `/messages` shows only messages
+from or to it. A session keeps its latest 1,000 messages.
 
 ### Footer counters
 

@@ -6,6 +6,7 @@ import {
 } from "../../src/agents/types.js";
 import { formatFooterSummary } from "../../src/ui/footer.js";
 import {
+  type Colorize,
   formatAgentLine,
   formatGraphLine,
   graphShape,
@@ -85,13 +86,13 @@ describe("formatting", () => {
       92_000,
     );
     expect(line).toBe(
-      "◉ reviewer · explorer · terra · 1m32s · 15.5k · $0.040 · Using grep",
+      "◉ reviewer explorer terra 1m32s 15.5k $0.040 Using grep",
     );
   });
 
   test("settled agents show no elapsed time", () => {
     expect(formatAgentLine(agent({ state: "idle" }), 5_000)).toBe(
-      "● reviewer · terra",
+      "● reviewer terra",
     );
   });
 
@@ -99,9 +100,9 @@ describe("formatting", () => {
     const color = (name: string, text: string) => `<${name}>${text}`;
     expect(
       formatAgentLine(agent({ state: "idle", queued: true }), 5_000, color),
-    ).toBe("<accent>● reviewer<dim> · <dim>terra<dim> · <dim>result queued");
+    ).toBe("<accent>● reviewer <dim>terra <dim>result queued");
     expect(formatAgentLine(agent({ state: "idle" }), 5_000, color)).toBe(
-      "<success>● reviewer<dim> · <dim>terra",
+      "<success>● reviewer <dim>terra",
     );
     expect(
       formatGraphLine(
@@ -113,7 +114,7 @@ describe("formatting", () => {
         0,
         color,
       ),
-    ).toBe("<accent>● review<dim> · <dim>graph 2/2<dim> · <dim>result queued");
+    ).toBe("<accent>● review <dim>graph 2/2 <dim>result queued");
   });
 
   test("silent working agents show a stall hint", () => {
@@ -158,7 +159,7 @@ describe("formatting", () => {
         }),
         92_000,
       ),
-    ).toBe("◉ review · graph 1/2 · 1m32s · 31.5k");
+    ).toBe("◉ review graph 1/2 1m32s 31.5k");
     expect(
       formatGraphLine(
         graph({
@@ -183,10 +184,10 @@ describe("formatting", () => {
         }),
         92_000,
       ),
-    ).toBe("✗ review · graph 3/3 · 1 failed, 1 skipped");
+    ).toBe("✗ review graph 3/3 1 failed, 1 skipped");
     expect(
       formatGraphLine(graph({ state: "interrupted", stopped: true }), 0),
-    ).toBe("⊘ review · graph 0/3 · stopped");
+    ).toBe("⊘ review graph 0/3 stopped");
     expect(graphShape(graph({}))).toBe("{api, tests} → merge");
   });
 
@@ -198,7 +199,7 @@ describe("formatting", () => {
         undefined,
         ["api", "tests"],
       ),
-    ).toBe("○ merge ← api, tests · terra");
+    ).toBe("○ merge after api, tests terra");
   });
 
   test("rows draw a graph's agents as a tree and fold finished graphs", () => {
@@ -421,7 +422,7 @@ describe("formatting", () => {
         }),
         2_000,
       ),
-    ).toBe("◉ lead · terra · 2s · delegating · helpers 1/2");
+    ).toBe("◉ lead terra 2s delegating helpers 1/2");
   });
 
   test("footer counts states", () => {
@@ -435,31 +436,26 @@ describe("formatting", () => {
     ).toBe("2◉ 1●");
   });
 
-  test("message lines align their text and end with the status", () => {
-    const messages = [
-      {
-        from: "scout",
-        to: "notes",
-        text: "bun.lock is 412 KB\nmore",
-        status: "delivered" as const,
-      },
-      {
-        from: "a",
-        to: "b",
-        text: "a long line ".repeat(10),
-        status: "queued" as const,
-      },
-      { from: "a", to: "b", text: "gone", status: "dropped" as const },
-    ];
-    const column = pairWidth(messages);
-    const lines = messages.map((message) =>
-      formatMessageLine(message, 50, undefined, column),
+  test("message lines show who, the text, and its age; color is status", () => {
+    const tagged: Colorize = (name, text) => `<${name}>${text}</>`;
+    const style = { color: tagged, bold: (text: string) => text };
+    const queued = {
+      from: "scout",
+      to: "notes",
+      text: "bun.lock is 412 KB\nmore",
+      status: "queued" as const,
+      age: "3s",
+    };
+    expect(formatMessageLine(queued, 60, style)).toBe(
+      "scout<dim> → </>notes <dim>bun.lock is 412 KB</><dim> 3s</>",
     );
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: SGR codes.
-    expect(lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""))).toEqual([
-      "□ scout → notes  bun.lock is 412 KB              ✔",
-      "□ a → b          a long line a long line a long… ◷",
-      "□ a → b          gone                            ✘",
-    ]);
+    // Seen from one agent, an arrow and the other agent.
+    expect(
+      formatMessageLine({ ...queued, viewpoint: "notes", age: "" }, 60, style),
+    ).toBe("<dim>← </>scout <dim>bun.lock is 412 KB</>");
+    // Delivered reads normal, dropped red.
+    expect(
+      formatMessageLine({ ...queued, status: "dropped", age: "" }, 60, style),
+    ).toContain("<error>bun.lock is 412 KB</>");
   });
 });

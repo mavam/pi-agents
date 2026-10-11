@@ -192,13 +192,13 @@ describe("delegation", () => {
     // The lead's call shows its helpers as they ended, usage aside.
     expect(
       (await delegateResult(service, info.id)).map((line) =>
-        line.replace(/ · [\d.]+k$/, ""),
+        line.replace(/ [\d.]+k$/, ""),
       ),
     ).toEqual([
-      "● helpers · graph 3/3",
-      "├─ ● api · faux-1",
-      "├─ ● tests · faux-1",
-      "└─ ● merge ← api, tests · faux-1",
+      "  ● graph 3/3",
+      "  ├─ ● api faux-1",
+      "  ├─ ● tests faux-1",
+      "  └─ ● merge after all faux-1",
     ]);
     // The call ended, so the helpers left the panel.
     expect(graph?.closed).toBe(true);

@@ -4,9 +4,12 @@
  * message the session already shows, on any branch, isn't appended again,
  * also after a restart.
  *
- *   □ scout → notes        bun.lock is 412 KB
+ *   ✦ scout → notes  bun.lock is 412 KB · 12:04:18
  *
- * Expanded (Ctrl+O), an entry shows the message's whole text.
+ * `✦` marks it as pi-agents', like its tool calls, among Pi's own entries.
+ *
+ * A text that doesn't fit shows its first line; expanded (Ctrl+O), the whole
+ * text below the line. Entries carry no status: they're history.
  */
 
 import type {
@@ -25,6 +28,8 @@ export interface MessageEntryData {
   from: string;
   to: string;
   text: string;
+  /** When it was sent; absent in entries of earlier builds. */
+  sentAt?: number;
 }
 
 function isMessageEntryData(value: unknown): value is MessageEntryData {
@@ -48,7 +53,7 @@ function entryKey(message: MessageInfo): string {
 export function registerMessageEntryRenderer(pi: ExtensionAPI): void {
   pi.registerEntryRenderer(MESSAGE_ENTRY, (entry, options, theme) => {
     if (!isMessageEntryData(entry.data)) return undefined;
-    return messageCard(entry.data, options.expanded, theme);
+    return messageCard(entry.data, options.expanded, theme, true);
   });
 }
 
@@ -89,6 +94,7 @@ export class MessageTranscript {
         from: message.from.name,
         to: message.to.name,
         text: message.text,
+        sentAt: message.sentAt,
       };
       this.pi.appendEntry(MESSAGE_ENTRY, data);
     }

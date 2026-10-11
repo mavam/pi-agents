@@ -7,11 +7,13 @@ import {
   EMPTY_USAGE,
   type GraphInfo,
   type GraphNode,
+  type MessageInfo,
 } from "../../src/agents/types.js";
 import {
   agentDetail,
   agentHeader,
   graphDetail,
+  messageDetail,
 } from "../../src/pi/commands.js";
 import { plainColorize } from "../../src/ui/format.js";
 import {
@@ -19,6 +21,7 @@ import {
   paneLayout,
   renderDetail,
 } from "../../src/ui/overlay.js";
+import { buildSenders } from "../../src/ui/senders.js";
 
 beforeAll(() => initTheme("dark"));
 
@@ -118,14 +121,14 @@ describe("/agents detail", () => {
       ),
     );
     expect(lines).toEqual([
-      "● a · sol · 2.0k",
+      "● a sol 2.0k",
       "  - High: x breaks.",
       "    Fix: guard it.",
       "",
-      "✗ b · sol · 2.0k",
+      "✗ b sol 2.0k",
       "  rate limited",
       "",
-      "⊘ c · sol · 2.0k · stopped",
+      "⊘ c sol 2.0k stopped",
     ]);
   });
 
@@ -151,7 +154,7 @@ describe("/agents detail", () => {
     expect(lines).toEqual([
       "The result waits until Pi's turn ends.",
       "",
-      "✗ lead.a · sol · 2.0k",
+      "✗ lead.a sol 2.0k",
       "  rate limited",
     ]);
   });
@@ -171,7 +174,7 @@ describe("/agents detail", () => {
       ),
     );
     expect(lines.slice(0, 2)).toEqual(["Runs a, then b.", ""]);
-    expect(lines[4]).toBe("● b ← a · sol · 2.0k");
+    expect(lines[4]).toBe("● b after a sol 2.0k");
   });
 
   test("long results end in a line that says how to read the rest", () => {
@@ -194,7 +197,7 @@ describe("/agents detail", () => {
       ),
     );
     expect(lines).toHaveLength(10);
-    expect(lines.at(-1)).toBe("  … 12 more lines · select lead.a to read all");
+    expect(lines.at(-1)).toBe("  … 12 more lines (select lead.a to read all)");
   });
 
   test("a divider separates an agent's job from its result", () => {
@@ -204,7 +207,7 @@ describe("/agents detail", () => {
       stripVTControlCharacters(
         agentHeader(agent({ cwd: `${os.homedir()}/repo` }), plainColorize, at),
       ),
-    ).toBe("Job · a · started 1m00s ago · ~/repo");
+    ).toBe("Job a started 1m00s ago in ~/repo");
     // The task renders as Markdown; the answer to it is its result.
     expect(
       plain(
@@ -218,13 +221,7 @@ describe("/agents detail", () => {
           at,
         ),
       ),
-    ).toEqual([
-      "Review a:",
-      "",
-      "- read a.ts",
-      "├─ Result · 1m00s ago",
-      "done",
-    ]);
+    ).toEqual(["Review a:", "", "- read a.ts", "├─ Result 1m00s ago", "done"]);
     // An answer to a later message is the latest result.
     expect(
       plain(
@@ -234,7 +231,7 @@ describe("/agents detail", () => {
           at,
         ),
       ),
-    ).toEqual(["review a", "├─ Latest result · 1m00s ago", "done"]);
+    ).toEqual(["review a", "├─ Latest result 1m00s ago", "done"]);
     // An answer that waits for Pi says so.
     expect(
       plain(
@@ -244,7 +241,7 @@ describe("/agents detail", () => {
           at,
         ),
       ),
-    ).toEqual(["review a", "├─ Result · 1m00s ago · result queued", "done"]);
+    ).toEqual(["review a", "├─ Result 1m00s ago, result queued", "done"]);
     expect(
       plain(
         agentDetail(
@@ -266,5 +263,80 @@ describe("/agents layout", () => {
     expect(paneLayout(60, 75)).toEqual({ tableRows: 22, detailRows: 22 });
     expect(paneLayout(60, 3)).toEqual({ tableRows: 3, detailRows: 41 });
     expect(paneLayout(12, 75)).toEqual({ tableRows: 2, detailRows: 2 });
+  });
+});
+
+describe("/messages", () => {
+  const a = { id: "1", name: "mesh-a" };
+  const f = { id: "2", name: "mesh-f" };
+  const e = { id: "3", name: "mesh-e" };
+  const at = new Date(2026, 9, 11, 12, 4, 11).getTime();
+  const messages: MessageInfo[] = [
+    {
+      id: "1",
+      from: a,
+      to: f,
+      text: "TOKEN A-B-D-F",
+      sentAt: at,
+      status: "delivered",
+    },
+    {
+      id: "2",
+      from: f,
+      to: a,
+      text: "ACK A-B-D-F\nand more",
+      sentAt: at + 7_000,
+      status: "queued",
+    },
+    {
+      id: "3",
+      from: a,
+      to: e,
+      text: "TOKEN A-C-E-F",
+      sentAt: at + 9_000,
+      status: "dropped",
+    },
+  ];
+
+  test("groups messages by sender, the most recent first, and searches", () => {
+    const names = (groups: ReturnType<typeof buildSenders>) =>
+      groups.map((group) => `${group.sender.name} ${group.messages.length}`);
+    expect(names(buildSenders(messages))).toEqual(["mesh-a 2", "mesh-f 1"]);
+    expect(names(buildSenders(messages, { order: "name" }))).toEqual([
+      "mesh-a 2",
+      "mesh-f 1",
+    ]);
+    // One agent's messages, from or to it.
+    expect(names(buildSenders(messages, { agent: "3" }))).toEqual(["mesh-a 1"]);
+    // Search matches text and names, ignoring case.
+    expect(names(buildSenders(messages, { query: "ack" }))).toEqual([
+      "mesh-f 1",
+    ]);
+    expect(names(buildSenders(messages, { query: "MESH-E" }))).toEqual([
+      "mesh-a 1",
+    ]);
+  });
+
+  test("a sender's messages show time, recipient, and text by status", () => {
+    const tagged = (name: string, text: string) => `<${name}>${text}</>`;
+    const lines = renderDetail(
+      messages
+        .filter((message) => message.from.id === "1")
+        .flatMap((message) =>
+          messageDetail(message, {
+            column: 6,
+            color: tagged as never,
+            bold: (text) => text,
+            now: at,
+          }),
+        ),
+      80,
+      plainColorize,
+      getMarkdownTheme(),
+    ).map((line) => ("text" in line ? line.text : ""));
+    expect(lines).toEqual([
+      "<dim>12:04:11</> mesh-f <text>TOKEN A-B-D-F</>",
+      "<dim>12:04:20</> mesh-e <error>TOKEN A-C-E-F</>",
+    ]);
   });
 });

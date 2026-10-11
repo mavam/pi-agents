@@ -24,15 +24,25 @@ const ORDER: AgentState[] = [
   "skipped",
 ];
 
-/** Counts per state, empty without open agents. */
-export function formatFooterSummary(agents: readonly AgentInfo[]): string {
+/** How many agents are in each state, in display order, without the
+ * states no agent is in. */
+export function stateCounts(
+  agents: readonly AgentInfo[],
+): Array<[AgentState, number]> {
   const counts = new Map<AgentState, number>();
   for (const agent of agents)
     counts.set(agent.state, (counts.get(agent.state) ?? 0) + 1);
   return ORDER.flatMap((state) => {
     const count = counts.get(state);
-    return count ? [`${count}${STATE_STYLES[state].icon}`] : [];
-  }).join(" ");
+    return count ? [[state, count] as [AgentState, number]] : [];
+  });
+}
+
+/** Counts per state, empty without open agents. */
+export function formatFooterSummary(agents: readonly AgentInfo[]): string {
+  return stateCounts(agents)
+    .map(([state, count]) => `${count}${STATE_STYLES[state].icon}`)
+    .join(" ");
 }
 
 export class FancyFooterReporter {

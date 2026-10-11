@@ -48,11 +48,13 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AgentInfo, MessageInfo } from "../agents/types.js";
 import type { SessionHost } from "../pi/session.js";
+import { stateCounts } from "./footer.js";
 import {
   formatAgentLine,
   formatElapsed,
   formatGraphLine,
   sanitizeLine,
+  stateIcon,
 } from "./format.js";
 import {
   type MessageParts,
@@ -73,7 +75,8 @@ import {
 } from "./rows.js";
 
 const WIDGET_KEY = "pi-agents:panel";
-const MAX_UNFOCUSED = 6;
+/** The unfocused panel's height in rows, without a choice or setting. */
+export const DEFAULT_ROWS = 6;
 const TICK_MS = 1000;
 /** A reasoning headline stays at least this long before the next replaces it. */
 const SUMMARY_MIN_DISPLAY_MS = 3000;
@@ -172,6 +175,11 @@ export class AgentPanel {
   onAttach: ((agentId: string) => void) | undefined;
   /** The messages the latest focused frame showed, which ↑↓ reach. */
   private shownMessages: MessageInfo[] = [];
+  /** The height the user chose with a digit, for the running Pi. */
+  private chosenRows: number | undefined;
+  /** While 0 hides the panel: the height to return to, and the agents
+   * that were open, so a new one brings the panel back. */
+  private hiddenFrom: { rows: number; agents: Set<string> } | undefined;
 
   constructor(
     private readonly host: SessionHost,
@@ -293,8 +301,66 @@ export class AgentPanel {
   setFocused(value: boolean): void {
     if (this.focused === value) return;
     this.focused = value;
-    if (value) this.selected();
+    if (value) {
+      this.selected();
+      // Focusing a hidden panel brings it back.
+      if (this.panelRows() === 0) this.show();
+    }
     this.update();
+  }
+
+  /** The unfocused height in rows: the user's choice, else
+   * `piAgents.panelRows`, else 6. */
+  panelRows(): number {
+    return this.chosenRows ?? this.host.panelRows() ?? DEFAULT_ROWS;
+  }
+
+  /** Set the unfocused height: 1 is a summary line, 0 hides the panel
+   * until an agent starts or the panel takes focus. */
+  setRows(rows: number): void {
+    if (rows === 0 && this.panelRows() !== 0) this.hide(this.panelRows());
+    this.chosenRows = rows;
+    this.update();
+  }
+
+  private hide(rows: number): void {
+    const ids = (this.host.current()?.list() ?? []).map((info) => info.id);
+    this.hiddenFrom = { rows, agents: new Set(ids) };
+  }
+
+  private show(): void {
+    this.chosenRows = this.hiddenFrom?.rows ?? DEFAULT_ROWS;
+    this.hiddenFrom = undefined;
+  }
+
+  /** Whether the panel is hidden; a new agent brings it back. */
+  private isHidden(): boolean {
+    if (this.panelRows() !== 0) return false;
+    // A setting of 0 hides the agents open when it first applies.
+    if (!this.hiddenFrom) this.hide(DEFAULT_ROWS);
+    const seen = this.hiddenFrom?.agents ?? new Set<string>();
+    const fresh = (this.host.current()?.list() ?? []).some(
+      (info) => !seen.has(info.id),
+    );
+    if (!fresh) return true;
+    this.show();
+    return false;
+  }
+
+  /** One line for all agents: the graph's name when one runs alone, then
+   * how many agents are in each state and how many messages wait. */
+  private summaryLine(style: MessageStyle): string {
+    const { color, bold } = style;
+    const agents = this.host.current()?.list() ?? [];
+    const roots = this.rows(true).filter((row) => row.parent === undefined);
+    const only = roots.length === 1 ? roots[0] : undefined;
+    const name = only?.kind === "graph" ? `${bold(only.label)} ` : "";
+    const counts = stateCounts(agents).map(
+      ([state, count]) => `${stateIcon(state, color)} ${count} ${state}`,
+    );
+    const queued = this.messages().length;
+    if (queued > 0) counts.push(`✉ ${queued}`);
+    return `${name}${counts.join(" ")}${color("dim", " · ← agents")}`;
   }
 
   /** The selected row, normalizing a stale selection to the first row;
@@ -381,19 +447,43 @@ export class AgentPanel {
       return `${color("dim", connector(row))}${text}${hidden ? color("dim", ` ${hidden}`) : ""}`;
     };
     if (!this.focused) {
-      const rows = this.rows(true);
-      const shown = rows.slice(0, MAX_UNFOCUSED).map(line);
-      const targets = rows.slice(0, MAX_UNFOCUSED).map(attachTarget);
-      if (rows.length > MAX_UNFOCUSED)
-        shown.push(
-          color("dim", `+${rows.length - MAX_UNFOCUSED} more (/agents)`),
-        );
+      if (this.isHidden()) return [];
+      const height = this.panelRows();
       this.shownMessages = [];
-      return this.withMessages(shown, targets, messages, {
+      // Stacked messages share the height: a divider and up to half of it.
+      const stacked =
+        columns || messages.length === 0
+          ? 0
+          : Math.min(
+              messages.length,
+              STACKED_MESSAGES,
+              Math.floor((height - 1) / 2),
+            );
+      const room = stacked > 0 ? height - 1 - stacked : height;
+      const rows = this.rows(true);
+      let shown: string[];
+      let targets: Array<string | undefined>;
+      if (height === 1 || (room === 1 && rows.length > 1)) {
+        shown = [this.summaryLine(style)];
+        targets = [undefined];
+      } else {
+        const fits = rows.length <= room;
+        const kept = rows.slice(0, fits ? room : room - 1);
+        shown = kept.map(line);
+        targets = kept.map(attachTarget);
+        if (!fits)
+          shown.push(
+            color("dim", `+${rows.length - kept.length} more · ← agents`),
+          );
+      }
+      // At 1, the summary line counts the messages instead.
+      const below = height === 1 || (!columns && stacked === 0);
+      return this.withMessages(shown, targets, below ? [] : messages, {
         width,
         style,
         columns,
-        stacked: STACKED_MESSAGES,
+        stacked,
+        height,
       });
     }
     const rows = this.rows();
@@ -442,6 +532,7 @@ export class AgentPanel {
         : ["space fold", "⏎ attach", "s stop"]),
       ...(this.host.messaging() ? ["m messages"] : []),
       "tab /agents",
+      `0–9 rows (${this.panelRows()})`,
       "esc back",
     ];
     lines.push(color("dim", `  ${hints.join(" · ")}`));
@@ -464,6 +555,8 @@ export class AgentPanel {
       style: MessageStyle;
       columns: boolean;
       stacked: number;
+      /** The most lines in columns. */
+      height?: number;
       selectable?: boolean;
     },
   ): string[] {
@@ -502,9 +595,9 @@ export class AgentPanel {
         ),
       ];
     }
-    const height = Math.max(
-      left.length,
-      Math.min(messages.length, COLUMN_MIN_HEIGHT),
+    const height = Math.min(
+      options.height ?? Number.POSITIVE_INFINITY,
+      Math.max(left.length, Math.min(messages.length, COLUMN_MIN_HEIGHT)),
     );
     const shown = messages.slice(-height);
     if (selectable) this.shownMessages = shown;

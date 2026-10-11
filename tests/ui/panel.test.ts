@@ -24,8 +24,10 @@ function agent(id: string, name: string): AgentInfo {
 }
 
 /** A panel over fixed agents and messages, mounted like Pi mounts it. */
-function mount(messages: MessageInfo[] = []) {
-  const agents = [agent("1", "scout"), agent("2", "notes")];
+function mount(
+  messages: MessageInfo[] = [],
+  agents = [agent("1", "scout"), agent("2", "notes")],
+) {
   const service = {
     list: () => agents,
     graphs: () => [],
@@ -35,6 +37,7 @@ function mount(messages: MessageInfo[] = []) {
   const host = {
     current: () => service,
     messaging: () => true,
+    panelRows: () => undefined,
   } as unknown as SessionHost;
   const panel = new AgentPanel(host, () => now);
   const attached: string[] = [];
@@ -72,7 +75,10 @@ function mount(messages: MessageInfo[] = []) {
       y,
     } as TuiMouseEvent);
   };
-  return { click, attached, panel };
+  // Lines start after one column of padding.
+  const render = (width: number): string[] =>
+    component.render(width).map((line: string) => line.slice(1).trimEnd());
+  return { click, attached, panel, render };
 }
 
 describe("panel", () => {
@@ -99,6 +105,30 @@ describe("panel", () => {
     // Nothing attaches past the last message.
     expect(click(140, 1, 100)).toBeUndefined();
     expect(attached.slice(3)).toEqual(["2", "2"]);
+    panel.dispose();
+  });
+
+  test("a digit sets the height: 1 is a summary line, 0 hides until an agent starts", () => {
+    const agents = Array.from({ length: 8 }, (_, index) =>
+      agent(String(index + 1), `a${index + 1}`),
+    );
+    const { panel, render } = mount([], agents);
+    // By default, five agents and how many more there are.
+    expect(render(80)).toHaveLength(6);
+    expect(render(80).at(-1)).toBe("+3 more · ← agents");
+    panel.setRows(3);
+    expect(render(80)).toEqual([
+      expect.stringContaining("a1"),
+      expect.stringContaining("a2"),
+      "+6 more · ← agents",
+    ]);
+    panel.setRows(1);
+    expect(render(80)).toEqual(["◉ 8 working · ← agents"]);
+    panel.setRows(0);
+    expect(render(80)).toEqual([]);
+    // A new agent brings the panel back at the height it had.
+    agents.push(agent("9", "a9"));
+    expect(render(80)).toEqual(["◉ 9 working · ← agents"]);
     panel.dispose();
   });
 });

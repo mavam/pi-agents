@@ -1336,29 +1336,37 @@ export class AgentService {
       this.harness.snapshot(MessagesDoc, CONTEXT),
       this.harness.snapshot(AgentsDoc, CONTEXT),
     ]);
-    for (const message of log?.messages ?? []) {
-      if (message.dropped) continue;
-      const existing = await this.harness.commit(
-        (tx) => tx.submissionByRequest(conversationId(message.to), message.id),
-        CONTEXT,
+    // One read finds the messages a crash left without a submission.
+    const candidates = (log?.messages ?? []).filter(
+      (message) => !message.dropped,
+    );
+    if (candidates.length === 0) return;
+    const missing = await this.harness.commit(async (tx) => {
+      const found = await Promise.all(
+        candidates.map((message) =>
+          tx.submissionByRequest(conversationId(message.to), message.id),
+        ),
       );
-      if (existing) continue;
+      return candidates.filter((_, index) => !found[index]);
+    }, CONTEXT);
+    const dropped: string[] = [];
+    for (const message of missing) {
       const recipient = state?.agents[message.to];
       const conversation = recipient?.stopped
         ? undefined
         : await this.harness.conversation(conversationId(message.to), CONTEXT);
-      if (conversation) {
-        const sender = state?.agents[message.from]?.name ?? message.from;
-        await conversation.submit(messageSubmission(message, sender), CONTEXT);
+      if (!conversation) {
+        dropped.push(message.id);
         continue;
       }
-      await this.harness.commit(async (tx) => {
-        const known = (await tx.doc(MessagesDoc)).messages.find(
-          (each) => each.id === message.id,
-        );
-        if (known) known.dropped = true;
-      }, CONTEXT);
+      const sender = state?.agents[message.from]?.name ?? message.from;
+      await conversation.submit(messageSubmission(message, sender), CONTEXT);
     }
+    if (dropped.length === 0) return;
+    await this.harness.commit(async (tx) => {
+      for (const known of (await tx.doc(MessagesDoc)).messages)
+        if (dropped.includes(known.id)) known.dropped = true;
+    }, CONTEXT);
   }
 
   /** The message log, and the status of messages this process hasn't

@@ -45,7 +45,9 @@ export default function agentExtension(pi: ExtensionAPI): void {
   host.subscribe(() => {
     panel.update();
     footer.update();
-    transcript.sync(host.messaging() ? (host.current()?.messages() ?? []) : []);
+    // Messages sent before messaging was turned off still get their cards,
+    // also those a crash left behind and the service delivers at start.
+    transcript.sync(host.current()?.messages() ?? []);
   });
 
   registerMessageRenderers(pi);

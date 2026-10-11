@@ -53,7 +53,7 @@ describe("runtime", () => {
       storage: await jsonlStorage(directory),
       models,
     });
-    await first.spawn({ task: "long", name: "w", cwd: ".", model: MODEL });
+    await first.spawn({ job: "long", name: "w", cwd: ".", model: MODEL });
     await first.wait(["w"]);
     const ended = endedAt(first, "w");
     const info = first.get("w");
@@ -69,7 +69,7 @@ describe("runtime", () => {
     expect(endedAt(second, "w")).toBe(ended);
   });
 
-  test("a graph ends with its task, not with later messages", async () => {
+  test("a graph ends with its job, not with later messages", async () => {
     const directory = tempDir();
     const { models } = createFaux();
     const first = await open({
@@ -79,8 +79,8 @@ describe("runtime", () => {
     await first.spawnGraph({
       name: "g",
       agents: [
-        { task: "a", cwd: ".", model: MODEL },
-        { task: "b", cwd: ".", model: MODEL },
+        { job: "a", cwd: ".", model: MODEL },
+        { job: "b", cwd: ".", model: MODEL },
       ],
     });
     await first.wait(["g"]);

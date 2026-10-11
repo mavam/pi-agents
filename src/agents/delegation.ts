@@ -66,6 +66,7 @@ import {
   type HelperDefaults,
   type HelperResolver,
   isThinkingLevel,
+  renameTaskToJob,
   type SpawnSpec,
   THINKING_LEVELS,
 } from "./types.js";
@@ -101,9 +102,9 @@ const parameters = Type.Object({
   ),
   agents: Type.Array(
     Type.Object({
-      task: Type.String({
+      job: Type.String({
         description:
-          "Self-contained task; the helper does not see your conversation",
+          "Self-contained instructions for the helper's work; it can't see your conversation",
       }),
       name: Type.Optional(
         Type.String({ description: "Short name, such as a role" }),
@@ -232,11 +233,11 @@ async function plan(
   const helpers: Planned[] = [];
   for (const [index, agent] of args.agents.entries()) {
     const name = names[index] as string;
-    if (!agent.task.trim())
-      throw new AgentError(`The task of helper ${name} must not be empty`);
+    if (!agent.job.trim())
+      throw new AgentError(`The job of helper ${name} must not be empty`);
     const spec = await options.resolve(
       {
-        task: agent.task,
+        job: agent.job,
         ...(agent.profile ? { profile: agent.profile } : {}),
         ...(agent.model ? { model: agent.model } : {}),
         ...(agent.thinking ? { thinking: agent.thinking } : {}),
@@ -343,7 +344,7 @@ async function start(
     for (const helper of planned.helpers) {
       const task = await tx.createTask(
         NodeTask,
-        { message: helper.spec.task.trim() },
+        { message: helper.spec.job.trim() },
         { ownership: { kind: "task", taskId: graph } },
       );
       const conversation = await tx.createConversation({
@@ -368,7 +369,7 @@ async function start(
       agentsDoc.agents[agents[index] as string] = {
         name: names[index] as string,
         profile: helper.spec.profile ?? null,
-        task: helper.spec.task.trim(),
+        job: helper.spec.job.trim(),
         createdAt,
         closed: false,
         ambientSkills: helper.spec.ambientSkills ?? true,
@@ -449,7 +450,7 @@ function helperName(name: string, owner: string | undefined): string {
 
 /**
  * The helpers as the agent's receipt shows them: who they are and who waits
- * for whom, and with `nodes`, how each did its task, from stored records.
+ * for whom, and with `nodes`, how each did its job, from stored records.
  */
 async function helpersReceipt(
   api: Api,
@@ -660,10 +661,12 @@ export function createDelegationExtension(
       defineTool({
         name: DELEGATE_TOOL,
         description:
-          "Split your task among helper agents and wait for their results. Helpers run in parallel; one that lists others in after starts once they finished and receives their final messages. Returns the final messages of the helpers nothing waits for, so add a helper after the others to merge their results into one. Helpers don't see your conversation.",
+          "Split your job among helper agents and wait for their results. Helpers run in parallel; one that lists others in after starts once they finished and receives their final messages. Returns the final messages of the helpers nothing waits for, so add a helper after the others to merge their results into one. Helpers don't see your conversation.",
         parameters,
         // A rerun finds the graph the interrupted call started.
         replay: "safe",
+        // Calls of earlier builds and models used to them say `task`.
+        prepareArguments: (args) => renameTaskToJob(args) as Args,
         execute: (args, api, context) => execute(args, api, context, options),
       }),
     ],

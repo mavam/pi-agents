@@ -92,11 +92,11 @@ function scripted(options: { slow?: boolean } = {}) {
 }
 
 function agents(...tasks: string[]): SpawnSpec[] {
-  return tasks.map((task) => ({ task, cwd: ".", model: MODEL }));
+  return tasks.map((task) => ({ job: task, cwd: ".", model: MODEL }));
 }
 
-function node(name: string, task: string, after?: string[]): GraphAgentSpec {
-  return { name, task, cwd: ".", model: MODEL, ...(after ? { after } : {}) };
+function node(name: string, job: string, after?: string[]): GraphAgentSpec {
+  return { name, job, cwd: ".", model: MODEL, ...(after ? { after } : {}) };
 }
 
 function graphDelivery(deliveries: PendingDelivery[]): GraphDelivery {
@@ -283,11 +283,11 @@ describe("graphs", () => {
     expect(view.value).toBeDefined();
     view.dispose();
 
-    // A graph's agent knows its task's answer, too.
+    // A graph's agent knows its job's answer, too.
     const answered = service.getGraph("g")?.nodes[0]?.outcome;
     expect(answered?.kind).toBe("answered");
     if (answered?.kind === "answered")
-      expect(service.get("g-1")?.taskAnswer).toBe(answered.result.entryId);
+      expect(service.get("g-1")?.jobAnswer).toBe(answered.result.entryId);
     await service.send("g-1", "again", "auto");
     expect(service.get("g-1")?.closed).toBe(false);
     await until(() => service.pendingDeliveries().length === 1);
@@ -324,15 +324,15 @@ describe("graphs", () => {
 
   test("graphs share names with agents and start whole or not at all", async () => {
     const service = await open({ models: scripted().models });
-    await service.spawn({ task: "x", name: "taken", cwd: ".", model: MODEL });
+    await service.spawn({ job: "x", name: "taken", cwd: ".", model: MODEL });
     await expect(
       service.spawnGraph({ name: "taken", agents: agents("a", "b") }),
     ).rejects.toThrow("already exists");
     await expect(
       service.spawnGraph({
         agents: [
-          { task: "a", cwd: ".", model: MODEL },
-          { task: "b", cwd: ".", model: MODEL, tools: ["nope"] },
+          { job: "a", cwd: ".", model: MODEL },
+          { job: "b", cwd: ".", model: MODEL, tools: ["nope"] },
         ],
       }),
     ).rejects.toThrow("Unknown tools: nope");
@@ -341,7 +341,7 @@ describe("graphs", () => {
 
     await service.spawnGraph({ agents: agents("a", "b") });
     await expect(
-      service.spawn({ task: "x", name: "graph", cwd: ".", model: MODEL }),
+      service.spawn({ job: "x", name: "graph", cwd: ".", model: MODEL }),
     ).rejects.toThrow("already exists");
     await expect(service.send("graph", "hi", "auto")).rejects.toThrow(
       "graph is a graph. Message its agents instead: graph-1, graph-2",

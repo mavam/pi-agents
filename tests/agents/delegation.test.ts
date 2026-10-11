@@ -144,7 +144,7 @@ async function reopen(
 
 type Helper = {
   name?: string;
-  task: string;
+  job: string;
   after?: string[];
   tools?: string[];
 };
@@ -154,15 +154,15 @@ function delegate(agents: Helper[], extra: Record<string, unknown> = {}) {
 }
 
 const fanOut: Helper[] = [
-  { name: "api", task: "map api" },
-  { name: "tests", task: "map tests" },
-  { name: "merge", task: "merge", after: ["api", "tests"] },
+  { name: "api", job: "map api" },
+  { name: "tests", job: "map tests" },
+  { name: "merge", job: "merge", after: ["api", "tests"] },
 ];
 
-function lead(task: string, extra: Record<string, unknown> = {}) {
+function lead(job: string, extra: Record<string, unknown> = {}) {
   return {
     name: "lead",
-    task,
+    job,
     delegate: true,
     cwd: ".",
     model: MODEL,
@@ -215,8 +215,8 @@ describe("delegation", () => {
     await service.spawn(
       lead(
         delegate([
-          { name: "deep", task: delegate([{ task: "too deep" }]) },
-          { name: "plain", task: "plain" },
+          { name: "deep", job: delegate([{ job: "too deep" }]) },
+          { name: "plain", job: "plain" },
         ]),
       ),
     );
@@ -226,7 +226,7 @@ describe("delegation", () => {
     // Neither has an agent without delegate.
     await service.spawn({
       name: "solo",
-      task: delegate([{ task: "x" }]),
+      job: delegate([{ job: "x" }]),
       cwd: ".",
       model: MODEL,
     });
@@ -240,8 +240,8 @@ describe("delegation", () => {
     await service.spawn(
       lead(
         delegate([
-          { name: "a", task: "a" },
-          { name: "b", task: "slow b" },
+          { name: "a", job: "a" },
+          { name: "b", job: "slow b" },
         ]),
       ),
     );
@@ -261,8 +261,8 @@ describe("delegation", () => {
     await service.spawn(
       lead(
         delegate([
-          { name: "a", task: "slow a" },
-          { name: "b", task: "slow b" },
+          { name: "a", job: "slow a" },
+          { name: "b", job: "slow b" },
         ]),
       ),
     );
@@ -281,8 +281,8 @@ describe("delegation", () => {
     await service.spawnGraph({
       name: "top",
       agents: [
-        lead(delegate([{ name: "a", task: "slow a" }])),
-        { name: "other", task: "slow other", cwd: ".", model: MODEL },
+        lead(delegate([{ name: "a", job: "slow a" }])),
+        { name: "other", job: "slow other", cwd: ".", model: MODEL },
       ],
     });
     await until(() => service.get("lead.a")?.state === "working");
@@ -298,8 +298,8 @@ describe("delegation", () => {
     await service.spawn(
       lead(
         delegate([
-          { name: "a", task: "slow a" },
-          { name: "b", task: "b" },
+          { name: "a", job: "slow a" },
+          { name: "b", job: "b" },
         ]),
       ),
     );
@@ -321,7 +321,7 @@ describe("delegation", () => {
   test("helpers get only the tools of their agent", async () => {
     const service = await open({ limits: { perCall: 2, active: 2 } });
     await service.spawn(
-      lead(delegate([{ name: "a", task: "a", tools: ["bash"] }]), {
+      lead(delegate([{ name: "a", job: "a", tools: ["bash"] }]), {
         tools: ["read"],
       }),
     );
@@ -332,9 +332,9 @@ describe("delegation", () => {
     await service.spawn(
       lead(
         delegate([
-          { name: "a", task: "a" },
-          { name: "b", task: "b" },
-          { name: "c", task: "c" },
+          { name: "a", job: "a" },
+          { name: "b", job: "b" },
+          { name: "c", job: "c" },
         ]),
         { name: "big" },
       ),
@@ -348,10 +348,10 @@ describe("delegation", () => {
 
   test("a session caps helpers that work at once", async () => {
     const service = await open({ limits: { active: 1 } });
-    await service.spawn(lead(delegate([{ name: "a", task: "slow a" }])));
+    await service.spawn(lead(delegate([{ name: "a", job: "slow a" }])));
     await until(() => service.get("lead.a")?.state === "working");
     await service.spawn(
-      lead(delegate([{ name: "b", task: "b" }]), { name: "second" }),
+      lead(delegate([{ name: "b", job: "b" }]), { name: "second" }),
     );
     const second = await service.wait(["second"]);
     expect(second.agents[0]?.result?.text).toStartWith(
@@ -372,8 +372,8 @@ describe("delegation durability", () => {
     await before.spawn(
       lead(
         delegate([
-          { name: "a", task: "a" },
-          { name: "b", task: "slow b" },
+          { name: "a", job: "a" },
+          { name: "b", job: "slow b" },
         ]),
       ),
     );
@@ -394,7 +394,7 @@ describe("delegation durability", () => {
       throw new Error("expected the lead's answer");
     expect(delivery.outcome.result.text).toContain("## lead.b (answered)");
     expect(after.graphs({ includeClosed: true })).toHaveLength(1);
-    // Only b's interrupted answer ran again; a and the lead's task didn't.
+    // Only b's interrupted answer ran again; a and the lead's job didn't.
     expect(second.prompts).toEqual(["slow b"]);
     expect(first.prompts.filter((prompt) => prompt === "a")).toHaveLength(1);
   });

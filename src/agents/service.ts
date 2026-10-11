@@ -160,7 +160,7 @@ export function isGraphVisible(info: GraphInfo): boolean {
   return !info.closed || info.state === "working";
 }
 
-/** The graph ended and every agent's task has an outcome. */
+/** The graph ended and every agent's job has an outcome. */
 function isSettled(
   info: GraphInfo,
 ): info is GraphInfo & { nodes: Array<GraphNode & { outcome: NodeOutcome }> } {
@@ -199,11 +199,11 @@ export class AgentService {
     number,
     { outcome: TaskOutcome<JsonValue>; terminal: boolean; endedAt?: number }
   >();
-  /** Answer entries of graph agents' tasks; entries never change. */
+  /** Answer entries of graph agents' jobs; entries never change. */
   private readonly answers = new Map<number, EntryRecord>();
-  /** Per agent, the entry that answered its task, or null when the task
+  /** Per agent, the entry that answered its job, or null when the job
    * ended without an answer; settled submissions never change. */
-  private readonly taskAnswers = new Map<string, number | null>();
+  private readonly jobAnswers = new Map<string, number | null>();
   private readonly waiters = new Map<string, number>();
   private readonly graphWaiters = new Map<string, number>();
   /** Checks run after every refresh, for waits on graphs and nodes. */
@@ -443,13 +443,13 @@ export class AgentService {
 
   // --- Operations ---
 
-  /** Create an agent and send it its task. */
+  /** Create an agent and send it its job. */
   async spawn(spec: SpawnSpec): Promise<AgentInfo> {
     // Fail early with the service's view; the commit claims for real.
     claimName(spec.name, spec.profile ?? "agent", this.takenNames(), "agent");
-    const { task, tools } = this.prepare(spec);
+    const { job, tools } = this.prepare(spec);
     const first = requestId(1);
-    const request: ParentRequest = { message: task, whenBusy: "followUp" };
+    const request: ParentRequest = { message: job, whenBusy: "followUp" };
     const createdAt = Date.now();
     const id = await this.harness.commit(async (tx) => {
       const state = await tx.doc(AgentsDoc);
@@ -472,7 +472,7 @@ export class AgentService {
       state.agents[String(conversation.id)] = {
         name,
         profile: spec.profile ?? null,
-        task,
+        job,
         createdAt,
         closed: false,
         ambientSkills: spec.ambientSkills ?? true,
@@ -558,7 +558,7 @@ export class AgentService {
       for (const node of nodes) {
         const task = await tx.createTask(
           NodeTask,
-          { message: node.task },
+          { message: node.job },
           { ownership: { kind: "task", taskId: graph } },
         );
         const conversation = await tx.createConversation({
@@ -580,11 +580,11 @@ export class AgentService {
         state.agents[agents[index] as string] = {
           name: names.agents[index] as string,
           profile: node.spec.profile ?? null,
-          task: node.task,
+          job: node.job,
           createdAt,
           closed: false,
           ambientSkills: node.spec.ambientSkills ?? true,
-          // The node sends the task; parent requests are later messages.
+          // The node sends the job; parent requests are later messages.
           nextRequest: 1,
           requests: {},
           delivered: [],
@@ -726,7 +726,7 @@ export class AgentService {
       await this.harness.abortTask(taskId(graphId), CONTEXT);
       await this.harness.waitForTask(taskId(graphId), CONTEXT);
     }
-    // Agents may work beyond their task, for example on a user's message.
+    // Agents may work beyond their job, for example on a user's message.
     for (const node of info.nodes) await this.stopAgent(node.agentId);
     await this.refresh(
       this.withHelpers(info.nodes.map((node) => node.agentId)),
@@ -792,7 +792,7 @@ export class AgentService {
     try {
       await Promise.all([
         ...ids.map(async (id) => {
-          // A graph agent's task arrives through its node.
+          // A graph agent's job arrives through its node.
           if (!(await this.untilNodeEnded(id, signal))) return;
           const conversation = await this.harness.conversation(
             conversationId(id),
@@ -1091,17 +1091,17 @@ export class AgentService {
       .map((info) => info.name);
   }
 
-  /** Validate a spawn's task, thinking level, and tools. */
+  /** Validate a spawn's job, thinking level, and tools. */
   private prepare(spec: SpawnSpec): {
-    task: string;
+    job: string;
     tools: ToolRegistration[];
   } {
     if (spec.thinking !== undefined && !isThinkingLevel(spec.thinking))
       throw new AgentError(`Invalid thinking level: ${spec.thinking}`);
     const tools = this.resolveTools(spec.tools);
-    const task = spec.task.trim();
-    if (!task) throw new AgentError("The task must not be empty");
-    return { task, tools };
+    const job = spec.job.trim();
+    if (!job) throw new AgentError("The job must not be empty");
+    return { job, tools };
   }
 
   /**
@@ -1468,7 +1468,7 @@ export class AgentService {
     if (outcomes.size > 0) this.settled.set(id, outcomes);
     else this.settled.delete(id);
 
-    const taskAnswer = await this.taskAnswer(id, record);
+    const jobAnswer = await this.jobAnswer(id, record);
     const result: AgentResult | undefined = resultOf(
       this.lastAssistant.get(id),
       id,
@@ -1493,7 +1493,7 @@ export class AgentService {
       id,
       name: record.name,
       ...(record.profile ? { profile: record.profile } : {}),
-      task: record.task,
+      job: record.job,
       cwd: durable.cwd ?? process.cwd(),
       ...(durable.model ? { model: { ...durable.model } } : {}),
       ...(isThinkingLevel(durable.thinkingLevel)
@@ -1529,7 +1529,7 @@ export class AgentService {
             },
           }
         : {}),
-      ...(taskAnswer !== undefined ? { taskAnswer } : {}),
+      ...(jobAnswer !== undefined ? { jobAnswer } : {}),
       ...(record.graph ? { graph: record.graph } : {}),
       ...(record.delegate ? { delegates: true } : {}),
       ...(state === "idle" &&
@@ -1589,15 +1589,15 @@ export class AgentService {
   }
 
   /**
-   * The entry that answered the agent's task: the answer to the submission
-   * of its task, under `parent:1` for agents the parent started and under
+   * The entry that answered the agent's job: the answer to the submission
+   * of its job, under `parent:1` for agents the parent started and under
    * its node's request ID for a graph's agents.
    */
-  private async taskAnswer(
+  private async jobAnswer(
     agentId: string,
     record: AgentRecord,
   ): Promise<number | undefined> {
-    const cached = this.taskAnswers.get(agentId);
+    const cached = this.jobAnswers.get(agentId);
     if (cached !== undefined) return cached ?? undefined;
     const graph =
       record.graph === undefined ? undefined : this.graphRecords[record.graph];
@@ -1609,17 +1609,17 @@ export class AgentService {
     );
     if (submission?.type !== "input") return undefined;
     if (submission.status === "done") {
-      this.taskAnswers.set(agentId, submission.answer);
+      this.jobAnswers.set(agentId, submission.answer);
       return submission.answer;
     }
-    if (submission.status === "unanswered") this.taskAnswers.set(agentId, null);
+    if (submission.status === "unanswered") this.jobAnswers.set(agentId, null);
     return undefined;
   }
 
   /**
    * A graph agent's state while its own conversation doesn't run: it waits
    * until its inputs ended, then works until its node ended, also before the
-   * node sent the task. An agent that never answered shows why: skipped, or
+   * node sent the job. An agent that never answered shows why: skipped, or
    * stopped by its graph. Undefined when the conversation decides.
    */
   private async nodeState(

@@ -147,8 +147,8 @@ describe("delivery to Pi", () => {
     parent.setBlocked(() => attached);
     const current = await openService({ parent });
     service = current;
-    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
-    await current.spawn({ task: "b", name: "b", cwd: ".", model: MODEL });
+    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawn({ job: "b", name: "b", cwd: ".", model: MODEL });
     await until(() => current.pendingDeliveries().length === 2);
 
     state.idle = true;
@@ -182,8 +182,8 @@ describe("delivery to Pi", () => {
     await current.spawnGraph({
       name: "pair",
       agents: [
-        { name: "a", task: "a", cwd: ".", model: MODEL },
-        { name: "merge", task: "merge", cwd: ".", model: MODEL, after: ["a"] },
+        { name: "a", job: "a", cwd: ".", model: MODEL },
+        { name: "merge", job: "merge", cwd: ".", model: MODEL, after: ["a"] },
       ],
     });
     await until(() => sent.length === 1);
@@ -197,7 +197,7 @@ describe("delivery to Pi", () => {
     const pi = setup(state);
     const current = await openService({ parent: pi.parent });
     service = current;
-    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
     await until(() => current.pendingDeliveries().length === 1);
     await settle();
     expect(pi.sent).toEqual([]);
@@ -214,7 +214,7 @@ describe("delivery to Pi", () => {
     const pi = setup(state, { recheckMs: 20 });
     const current = await openService({ parent: pi.parent });
     service = current;
-    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
     await until(() => current.pendingDeliveries().length === 1);
     await settle();
     expect(pi.sent).toEqual([]);
@@ -229,7 +229,7 @@ describe("confirmed delivery to Pi", () => {
     const { sent, parent, session } = setup({ idle: true, saves: false });
     const current = await openService({ parent });
     service = current;
-    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
     await until(() => sent.length === 1);
     expect(sent[0]?.details?.delivery).toBe(current.pendingDeliveries()[0]?.id);
 
@@ -253,7 +253,7 @@ describe("confirmed delivery to Pi", () => {
       storage: await jsonlStorage(directory),
     });
     service = before;
-    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await before.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
     await until(() => first.sent.length === 1);
     // Pi saved the message, and pi-agents crashed before it saw it.
     await closeService(before);
@@ -278,7 +278,7 @@ describe("confirmed delivery to Pi", () => {
       storage: await jsonlStorage(directory),
     });
     service = before;
-    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await before.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
     await until(() => first.sent.length === 1);
     await closeService(before);
 
@@ -301,7 +301,7 @@ describe("confirmed delivery to Pi", () => {
     const { sent, parent, session, ctx } = setup(state);
     const current = await openService({ parent });
     service = current;
-    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
     session.issue("toolu_1");
     const outcome = await current.wait(["a"], {
       carrier: { call: callKey(ctx, "toolu_1") },
@@ -330,7 +330,7 @@ describe("confirmed delivery to Pi", () => {
     // An earlier turn's script reused the call's ID; its result doesn't count.
     session.issue("toolu_2");
     session.store("toolu_2", { nested: ["toolu_2/1"] });
-    await current.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
     session.issue("toolu_2");
     await current.wait(["a"], {
       carrier: { call: callKey(ctx, "toolu_2/1") },
@@ -354,7 +354,7 @@ describe("confirmed delivery to Pi", () => {
       storage: await jsonlStorage(directory),
     });
     service = before;
-    await before.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
+    await before.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
     first.session.issue("toolu_3");
     const outcome = await before.wait(["a"], {
       carrier: { call: callKey(first.ctx, "toolu_3") },

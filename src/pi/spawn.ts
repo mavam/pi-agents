@@ -31,7 +31,7 @@ import {
 } from "../catalog/skills.js";
 
 export interface SpawnRequest {
-  task: string;
+  job: string;
   name?: string;
   profile?: string;
   model?: string;
@@ -214,7 +214,7 @@ export async function resolveSpawn(
   );
   const delegate = request.delegate ?? profile?.delegate;
   return {
-    task: request.task,
+    job: request.job,
     cwd,
     ambientSkills,
     ...(delegate ? { delegate: true } : {}),
@@ -240,7 +240,7 @@ export async function resolveHelper(
 ): Promise<SpawnSpec> {
   const { delegate: _, ...spec } = await resolveSpawn(
     {
-      task: request.task,
+      job: request.job,
       ...(request.profile ? { profile: request.profile } : {}),
       ...(request.model ? { model: request.model } : {}),
       ...(request.thinking ? { thinking: request.thinking } : {}),

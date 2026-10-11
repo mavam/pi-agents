@@ -143,7 +143,7 @@ function observedAgent(info: AgentInfo): AgentReceipt {
 type AgentLookup = (agentId: string) => AgentInfo | undefined;
 
 /** A graph's agents: who they are and, when `observe`, how they did their
- * task. */
+ * job. */
 function graphAgents(
   graph: GraphInfo,
   lookup: AgentLookup,
@@ -176,7 +176,7 @@ export function startedGraph(
   return { name: graph.name, agents: graphAgents(graph, lookup, false) };
 }
 
-/** A graph as a call saw it: how it and each agent did its task. */
+/** A graph as a call saw it: how it and each agent did its job. */
 function observedGraph(graph: GraphInfo, lookup: AgentLookup): GraphReceipt {
   const outcome = graph.stopped ? "stopped" : stateOutcome(graph.state);
   return {

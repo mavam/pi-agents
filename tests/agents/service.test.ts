@@ -34,10 +34,10 @@ async function open(
 }
 
 describe("AgentService", () => {
-  test("spawn runs the task and offers the result for delivery", async () => {
+  test("spawn runs the job and offers the result for delivery", async () => {
     const service = await open();
     const spawned = await service.spawn({
-      task: "review src",
+      job: "review src",
       name: "reviewer",
       cwd: process.cwd(),
       model: MODEL,
@@ -63,8 +63,8 @@ describe("AgentService", () => {
 
   test("wait consumes results instead of delivering them", async () => {
     const service = await open();
-    await service.spawn({ task: "a", name: "a", cwd: ".", model: MODEL });
-    await service.spawn({ task: "b", name: "b", cwd: ".", model: MODEL });
+    await service.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
+    await service.spawn({ job: "b", name: "b", cwd: ".", model: MODEL });
     const outcome = await service.wait(["a", "b"]);
     expect(outcome.timedOut).toEqual([]);
     expect(outcome.agents.map((agent) => agent.result?.text)).toEqual([
@@ -80,7 +80,7 @@ describe("AgentService", () => {
 
   test("messaging a closed agent reopens it until it answers", async () => {
     const service = await open();
-    await service.spawn({ task: "first", name: "w", cwd: ".", model: MODEL });
+    await service.spawn({ job: "first", name: "w", cwd: ".", model: MODEL });
     await service.wait(["w"]);
     expect(service.get("w")?.closed).toBe(true);
     await service.send("w", "second", "auto");
@@ -99,7 +99,7 @@ describe("AgentService", () => {
       fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom" }),
     ]);
     const service = await open({ models });
-    await service.spawn({ task: "x", name: "w", cwd: ".", model: MODEL });
+    await service.spawn({ job: "x", name: "w", cwd: ".", model: MODEL });
     await until(() => service.pendingDeliveries().length === 1);
     const [delivery] = service.pendingDeliveries();
     if (delivery) await service.acknowledge(delivery);
@@ -107,21 +107,21 @@ describe("AgentService", () => {
     expect(service.list().map((agent) => agent.name)).toEqual(["w"]);
   });
 
-  test("an agent knows which answer replied to its task", async () => {
+  test("an agent knows which answer replied to its job", async () => {
     const service = await open();
-    await service.spawn({ task: "first", name: "w", cwd: ".", model: MODEL });
+    await service.spawn({ job: "first", name: "w", cwd: ".", model: MODEL });
     const first = (await service.wait(["w"])).agents[0];
-    expect(first?.taskAnswer).toBe(first?.result?.entryId);
+    expect(first?.jobAnswer).toBe(first?.result?.entryId);
     await service.send("w", "second", "auto");
     const second = (await service.wait(["w"])).agents[0];
     expect(second?.result?.text).toBe("done: second");
-    expect(second?.taskAnswer).toBe(first?.result?.entryId);
-    expect(second?.result?.entryId).not.toBe(second?.taskAnswer);
+    expect(second?.jobAnswer).toBe(first?.result?.entryId);
+    expect(second?.result?.entryId).not.toBe(second?.jobAnswer);
   });
 
   test("user prompts never deliver into the parent", async () => {
     const service = await open();
-    await service.spawn({ task: "first", name: "w", cwd: ".", model: MODEL });
+    await service.spawn({ job: "first", name: "w", cwd: ".", model: MODEL });
     await service.wait(["w"]);
     await service.prompt("w", "from the user", "auto");
     await until(
@@ -136,7 +136,7 @@ describe("AgentService", () => {
       tokensPerSecond: 20,
     });
     const service = await open({ models });
-    await service.spawn({ task: "long", name: "w", cwd: ".", model: MODEL });
+    await service.spawn({ job: "long", name: "w", cwd: ".", model: MODEL });
     await until(() => service.get("w")?.state === "working");
     await service.interrupt("w");
     await until(() => service.get("w")?.state === "interrupted");
@@ -146,35 +146,35 @@ describe("AgentService", () => {
 
   test("names are unique among open agents and generated when absent", async () => {
     const service = await open();
-    const first = await service.spawn({ task: "x", cwd: ".", model: MODEL });
-    const second = await service.spawn({ task: "y", cwd: ".", model: MODEL });
+    const first = await service.spawn({ job: "x", cwd: ".", model: MODEL });
+    const second = await service.spawn({ job: "y", cwd: ".", model: MODEL });
     expect(first.name).toBe("agent");
     expect(second.name).toBe("agent-2");
     const profiled = await service.spawn({
-      task: "z",
+      job: "z",
       profile: "explorer",
       cwd: ".",
       model: MODEL,
     });
     expect(profiled.name).toBe("explorer");
     await expect(
-      service.spawn({ task: "x", name: "agent", cwd: ".", model: MODEL }),
+      service.spawn({ job: "x", name: "agent", cwd: ".", model: MODEL }),
     ).rejects.toThrow("already exists");
     await expect(
-      service.spawn({ task: "x", name: "bad name", cwd: ".", model: MODEL }),
+      service.spawn({ job: "x", name: "bad name", cwd: ".", model: MODEL }),
     ).rejects.toThrow("Invalid agent name");
   });
 
   test("concurrent spawns never share a name", async () => {
     const service = await open();
     const results = await Promise.allSettled([
-      service.spawn({ task: "x", name: "same", cwd: ".", model: MODEL }),
-      service.spawn({ task: "y", name: "same", cwd: ".", model: MODEL }),
+      service.spawn({ job: "x", name: "same", cwd: ".", model: MODEL }),
+      service.spawn({ job: "y", name: "same", cwd: ".", model: MODEL }),
       service.spawnGraph({
         name: "same",
         agents: [
-          { task: "a", cwd: ".", model: MODEL },
-          { task: "b", cwd: ".", model: MODEL },
+          { job: "a", cwd: ".", model: MODEL },
+          { job: "b", cwd: ".", model: MODEL },
         ],
       }),
     ]);
@@ -187,8 +187,8 @@ describe("AgentService", () => {
       if (result.status === "rejected")
         expect(String(result.reason)).toContain("named same already exists");
     const generated = await Promise.all([
-      service.spawn({ task: "x", cwd: ".", model: MODEL }),
-      service.spawn({ task: "y", cwd: ".", model: MODEL }),
+      service.spawn({ job: "x", cwd: ".", model: MODEL }),
+      service.spawn({ job: "y", cwd: ".", model: MODEL }),
     ]);
     expect(generated.map((info) => info.name).sort()).toEqual([
       "agent",
@@ -201,22 +201,22 @@ describe("AgentService", () => {
       tokensPerSecond: 20,
     });
     const service = await open({ models });
-    await service.spawn({ task: "x", name: "w", cwd: ".", model: MODEL });
+    await service.spawn({ job: "x", name: "w", cwd: ".", model: MODEL });
     await until(() => service.get("w")?.state === "working");
     await service.stop("w");
     expect(service.list().map((agent) => agent.name)).toEqual([]);
     expect(service.list({ includeClosed: true })).toHaveLength(1);
     expect(service.pendingDeliveries()).toEqual([]);
-    await service.spawn({ task: "y", name: "w", cwd: ".", model: MODEL });
+    await service.spawn({ job: "y", name: "w", cwd: ".", model: MODEL });
     expect(service.list()).toHaveLength(1);
-    expect(service.get("w")?.task).toBe("y");
+    expect(service.get("w")?.job).toBe("y");
   });
 
   test("a wait ends when the parent is needed and consumes nothing", async () => {
     const faux = createGatedFaux();
     const service = await open({ models: faux.models });
-    await service.spawn({ task: "hold", name: "w", cwd: ".", model: MODEL });
-    await service.spawn({ task: "quick", name: "q", cwd: ".", model: MODEL });
+    await service.spawn({ job: "hold", name: "w", cwd: ".", model: MODEL });
+    await service.spawn({ job: "quick", name: "q", cwd: ".", model: MODEL });
     await until(() => service.get("q")?.state === "idle");
     const waiting = service.wait(["w", "q"]);
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -241,7 +241,7 @@ describe("durability", () => {
       storage: await jsonlStorage(directory),
       models: slow.models,
     });
-    await first.spawn({ task: "long", name: "w", cwd: ".", model: MODEL });
+    await first.spawn({ job: "long", name: "w", cwd: ".", model: MODEL });
     await until(() => first.get("w")?.state === "working");
     await closeService(first);
 

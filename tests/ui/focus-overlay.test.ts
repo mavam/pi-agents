@@ -57,7 +57,7 @@ function setup({ closed = false } = {}) {
   const agent: AgentInfo = {
     id: "1",
     name: "reviewer",
-    task: "review",
+    job: "review",
     cwd: "/repo",
     state: closed ? "idle" : "working",
     closed,

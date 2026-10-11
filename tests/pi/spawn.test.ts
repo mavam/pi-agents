@@ -70,12 +70,12 @@ describe("resolveSpawn", () => {
   test("ad-hoc agents inherit the parent model and thinking level", async () => {
     const cwd = project();
     expect(
-      await resolveSpawn({ task: "x" }, context(cwd), {
+      await resolveSpawn({ job: "x" }, context(cwd), {
         skills: discoverSkills,
         thinking: "high",
       }),
     ).toEqual({
-      task: "x",
+      job: "x",
       cwd,
       ambientSkills: true,
       model: { provider: "openai", modelId: "big" },
@@ -86,7 +86,7 @@ describe("resolveSpawn", () => {
   test("profiles supply settings, instructions, and skills", async () => {
     const cwd = project();
     const spec = await resolveSpawn(
-      { task: "x", profile: "checker" },
+      { job: "x", profile: "checker" },
       context(cwd),
       { skills: discoverSkills, thinking: "high" },
     );
@@ -102,7 +102,7 @@ describe("resolveSpawn", () => {
     const cwd = project();
     const spec = await resolveSpawn(
       {
-        task: "x",
+        job: "x",
         profile: "checker",
         model: "big",
         thinking: "off",
@@ -119,27 +119,27 @@ describe("resolveSpawn", () => {
   test("reports unknown profiles, skills, models, and directories", async () => {
     const cwd = project();
     expect(
-      resolveSpawn({ task: "x", profile: "nope" }, context(cwd), {
+      resolveSpawn({ job: "x", profile: "nope" }, context(cwd), {
         skills: discoverSkills,
       }),
     ).rejects.toThrow('Unknown profile "nope"');
     expect(
-      resolveSpawn({ task: "x", profile: "broken" }, context(cwd), {
+      resolveSpawn({ job: "x", profile: "broken" }, context(cwd), {
         skills: discoverSkills,
       }),
     ).rejects.toThrow("missing (unknown)");
     expect(
-      resolveSpawn({ task: "x", skills: ["missing"] }, context(cwd), {
+      resolveSpawn({ job: "x", skills: ["missing"] }, context(cwd), {
         skills: discoverSkills,
       }),
     ).rejects.toThrow("Unavailable skills: missing (unknown)");
     expect(
-      resolveSpawn({ task: "x", model: "nope" }, context(cwd), {
+      resolveSpawn({ job: "x", model: "nope" }, context(cwd), {
         skills: discoverSkills,
       }),
     ).rejects.toThrow("No available model matches");
     expect(
-      resolveSpawn({ task: "x", cwd: "missing" }, context(cwd), {
+      resolveSpawn({ job: "x", cwd: "missing" }, context(cwd), {
         skills: discoverSkills,
       }),
     ).rejects.toThrow("Working directory not found");
@@ -148,7 +148,7 @@ describe("resolveSpawn", () => {
   test("skills in the request replace the catalog and the profile's", async () => {
     const cwd = project();
     const chosen = await resolveSpawn(
-      { task: "x", skills: ["style", "lint"] },
+      { job: "x", skills: ["style", "lint"] },
       context(cwd),
       { skills: discoverSkills },
     );
@@ -156,7 +156,7 @@ describe("resolveSpawn", () => {
     expect(chosen.instructions).toContain("Apply style.");
     expect(chosen.instructions).toContain("Run the linter.");
     const replaced = await resolveSpawn(
-      { task: "x", profile: "checker", skills: ["style"] },
+      { job: "x", profile: "checker", skills: ["style"] },
       context(cwd),
       { skills: discoverSkills },
     );
@@ -166,7 +166,7 @@ describe("resolveSpawn", () => {
     // An empty list means no skills, even for a profile whose skills are
     // missing.
     const none = await resolveSpawn(
-      { task: "x", profile: "broken", skills: [] },
+      { job: "x", profile: "broken", skills: [] },
       context(cwd),
       { skills: discoverSkills },
     );
@@ -177,14 +177,14 @@ describe("resolveSpawn", () => {
   test("only profiles name skills that models can't invoke", async () => {
     const cwd = project();
     expect(
-      resolveSpawn({ task: "x", skills: ["review"] }, context(cwd), {
+      resolveSpawn({ job: "x", skills: ["review"] }, context(cwd), {
         skills: discoverSkills,
       }),
     ).rejects.toThrow(
       "review (only the user can choose it, with /skill:review or in a profile)",
     );
     const spec = await resolveSpawn(
-      { task: "x", profile: "reviewer" },
+      { job: "x", profile: "reviewer" },
       context(cwd),
       { skills: discoverSkills },
     );
@@ -194,7 +194,7 @@ describe("resolveSpawn", () => {
   test("helpers choose skills like spawns", async () => {
     const cwd = project();
     const spec = await resolveHelper(
-      { task: "x", skills: ["lint"] },
+      { job: "x", skills: ["lint"] },
       context(cwd),
       { cwd },
       discoverSkills,
@@ -203,7 +203,7 @@ describe("resolveSpawn", () => {
     expect(spec.instructions).toContain("Run the linter.");
     expect(
       resolveHelper(
-        { task: "x", skills: ["review"] },
+        { job: "x", skills: ["review"] },
         context(cwd),
         { cwd },
         discoverSkills,

@@ -137,7 +137,7 @@ describe("agents with a request limit", () => {
       models: limitRequests(models, new RequestLimiter(1)) as typeof faux,
     });
     for (const name of ["a", "b", "c"])
-      await service.spawn({ task: name, name, cwd: ".", model: MODEL });
+      await service.spawn({ job: name, name, cwd: ".", model: MODEL });
     const current = service;
     await until(() => current.pendingDeliveries().length === 3, 10_000);
     for (const delivery of current.pendingDeliveries())

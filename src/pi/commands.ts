@@ -52,7 +52,7 @@ import {
 } from "../ui/rows.js";
 import type { SessionHost } from "./session.js";
 
-/** Lines of an agent's task shown in the overlay's detail pane. */
+/** Lines of an agent's job shown in the overlay's detail pane. */
 const DETAIL_TASK_LINES = 20;
 /** Lines of the latest result shown in the overlay's detail pane. */
 const DETAIL_RESULT_LINES = 200;
@@ -117,7 +117,7 @@ function graphRow(
   ].join("  ");
 }
 
-/** The glyph state of a graph's agent: how its task ended, else its
+/** The glyph state of a graph's agent: how its job ended, else its
  * current state. */
 function nodeState(
   outcome: NodeOutcome | undefined,
@@ -219,22 +219,22 @@ function tildePath(path: string): string {
     : path;
 }
 
-/** The divider over an agent's task: `Task · name · started … · cwd`. */
+/** The divider over an agent's job: `Job · name · started … · cwd`. */
 export function agentHeader(
   agent: AgentInfo,
   color: Colorize,
   now: number = Date.now(),
 ): string {
-  return `${color("accent", "Task")}${color(
+  return `${color("accent", "Job")}${color(
     "dim",
     ` · ${agent.name} · started ${formatElapsed(now - agent.createdAt)} ago · ${tildePath(agent.cwd)}`,
   )}`;
 }
 
 /**
- * An agent's detail below its task's divider: the task, then a divider and
+ * An agent's detail below its job's divider: the job, then a divider and
  * its latest result, both as Markdown, or its error. The divider says
- * "Result" while that result answers the task, and "Latest result" once the
+ * "Result" while that result answers the job, and "Latest result" once the
  * agent answered later messages.
  */
 export function agentDetail(
@@ -244,7 +244,7 @@ export function agentDetail(
 ): DetailLine[] {
   const lines: DetailLine[] = [
     {
-      markdown: agent.task,
+      markdown: agent.job,
       maxLines: DETAIL_TASK_LINES,
       more: (hidden) => `… ${hidden} more lines (attach to read)`,
     },
@@ -261,7 +261,7 @@ export function agentDetail(
         ? ""
         : color("dim", ` · ${formatElapsed(now - result.at)} ago`);
     const label =
-      result.entryId === agent.taskAnswer ? "Result" : "Latest result";
+      result.entryId === agent.jobAnswer ? "Result" : "Latest result";
     const queued = agent.queued ? color("dim", ` · ${QUEUED_NOTE}`) : "";
     lines.push(
       { divider: `${color("accent", label)}${when}${queued}` },
@@ -423,7 +423,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         : matches.map((agent) => ({
             value: agent.name,
             label: agent.name,
-            description: `${STATE_STYLES[agent.state].icon} ${agent.task.replace(/\s+/g, " ").slice(0, 60)}`,
+            description: `${STATE_STYLES[agent.state].icon} ${agent.job.replace(/\s+/g, " ").slice(0, 60)}`,
           }));
     },
     handler: async (args, ctx) => {

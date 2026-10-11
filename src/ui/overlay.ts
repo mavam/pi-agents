@@ -9,7 +9,7 @@
  *   │ ▸ ◉ reviewer  explorer  terra  15.5k             │
  *   │   ● docs      ad-hoc    sol    8.0k              │
  *   ├─ reviewer · /repo · started 4m ago ──────────────┤
- *   │ Task                                             │
+ *   │ Job                                              │
  *   │ Review src/run for error handling                │
  *   ╰─ ↑↓ move · ⏎ attach · s stop · esc ──────────────╯
  */

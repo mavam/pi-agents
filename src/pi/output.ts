@@ -54,7 +54,7 @@ const NodeOutput = exact({
     description: "Nothing waits for it; the graph's result is its result",
   }),
   outcome: StringEnum(NODE_KINDS, {
-    description: "How its task in the graph ended, or that it still runs",
+    description: "How its job in the graph ended, or that it still runs",
   }),
   ...resultFields,
 });
@@ -128,8 +128,8 @@ export function agentOutput(
 }
 
 /**
- * A graph with how each agent ended its task in it. An agent may answer
- * again later; its graph keeps the answer to its task.
+ * A graph with how each agent ended its job in it. An agent may answer
+ * again later; its graph keeps the answer to its job.
  */
 export function graphOutput(
   graph: GraphInfo,

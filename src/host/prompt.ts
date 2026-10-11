@@ -25,7 +25,7 @@ const PROMPT_EXTENSION = "pi-agents-prompt";
 
 const AGENT_PREAMBLE = [
   "You are an expert coding assistant operating inside pi, a coding agent harness.",
-  "Another agent gave you a task. It sees only your final message, so make that message a self-contained result with concrete file paths. If you need a decision, ask for it in your final message.",
+  "Another agent gave you a job. It sees only your final message, so make that message a self-contained result with concrete file paths. If you need a decision, ask for it in your final message.",
   `Messages that start with ${USER_MESSAGE_PREFIX.trim()} come from the user, who sees your whole conversation. Answer the user directly.`,
 ].join("\n\n");
 
@@ -57,9 +57,9 @@ function buildRules(tools: readonly string[]): string {
 
 /** What the prompt says about the tool of agents that delegate. */
 const DELEGATE_SNIPPET =
-  "Start helper agents for parts of your task and wait for their results";
+  "Start helper agents for parts of your job and wait for their results";
 const DELEGATE_RULE =
-  "Use delegate_graph when your task splits into parts that can run on their own, such as one per file or area; give each helper a self-contained task";
+  "Use delegate_graph when your job splits into parts that can run on their own, such as one per file or area; give each helper a self-contained job";
 
 function renderTools(tools: readonly string[]): string {
   const lines = tools.flatMap((name) => {

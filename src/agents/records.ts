@@ -7,10 +7,12 @@
  * Sessions stored by earlier builds may also hold the documents
  * `pi-agents.stops` and `pi-agents.receipts`; nothing reads them.
  *
- * Migration: both documents are at version 1. A change to their shape bumps
- * `version` and adds `migrate(value, fromVersion)` to the definition;
- * pi-durable migrates a stored document on its next access. Optional fields
- * that records of earlier versions lack need no migration.
+ * Migration: a change to a document's shape bumps its `version` and adds a
+ * step to its `migrate(value, fromVersion)`; pi-durable migrates a stored
+ * document on its next access. Optional fields that records of earlier
+ * versions lack need no migration. `pi-agents.agents` is at version 2,
+ * which renamed each agent's `task` to `job`; `pi-agents.graphs` is at
+ * version 1.
  */
 
 import { defineDoc } from "@earendil-works/pi-durable";
@@ -24,7 +26,8 @@ export type ParentRequest = {
 export type AgentRecord = {
   name: string;
   profile: string | null;
-  task: string;
+  /** The instructions the agent was started with. */
+  job: string;
   createdAt: number;
   closed: boolean;
   ambientSkills: boolean;
@@ -46,10 +49,27 @@ export type AgentsState = {
 
 export const AgentsDoc = defineDoc<AgentsState>({
   kind: "pi-agents.agents",
-  version: 1,
+  version: 2,
   scope: "session",
   initial: () => ({ agents: {} }),
+  migrate: (value) => migrateAgents(value),
 });
+
+/** Version 1 called an agent's job its `task`. */
+export function migrateAgents(value: Record<string, unknown>): AgentsState {
+  const agents = (value.agents ?? {}) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  return {
+    agents: Object.fromEntries(
+      Object.entries(agents).map(([id, record]) => {
+        const { task, ...rest } = record;
+        return [id, { job: rest.job ?? task ?? "", ...rest } as AgentRecord];
+      }),
+    ),
+  };
+}
 
 export type GraphNodeRecord = {
   /** The agent's conversation ID. */

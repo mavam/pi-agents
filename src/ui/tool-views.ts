@@ -4,7 +4,7 @@
  * looks at live agents:
  *
  * - The call draws its arguments only: a title, a dim line of `key=value`
- *   pairs, and the body, such as a task.
+ *   pairs, and the body, such as a job.
  * - The result draws its receipt only (see `src/agents/receipts.ts`):
  *   progress draws what the call started, the final result how agents and
  *   graphs were when the call looked, and why its wait ended.
@@ -175,7 +175,7 @@ interface GraphArgs {
   failFast?: boolean;
   wait?: unknown;
   agents?: Array<
-    AgentArgs & { name?: string; task?: string; after?: string[] }
+    AgentArgs & { name?: string; job?: string; task?: string; after?: string[] }
   >;
 }
 
@@ -201,8 +201,11 @@ function graphCall(args: GraphArgs, fallback: string): CallView {
           const after = agent.after?.length
             ? ` ← ${agent.after.join(", ")}`
             : "";
-          // The task keeps its own lines, indented under the agent.
-          const [first = "", ...rest] = (agent.task ?? "").trim().split("\n");
+          // The job keeps its own lines, indented under the agent; calls
+          // of earlier builds named it `task`.
+          const [first = "", ...rest] = (agent.job ?? agent.task ?? "")
+            .trim()
+            .split("\n");
           return [
             `${label(agent, index)}${after}${pairs ? ` (${pairs})` : ""}: ${first}`,
             ...rest.map((line) => (line ? `  ${line}` : "")),
@@ -231,7 +234,7 @@ const PARENT_CALLS: Record<string, ToolView> = {
     call: (args) => ({
       title: str(args.name) || "agent",
       pairs: { ...agentPairs(args as AgentArgs), wait: seconds(args.wait) },
-      body: str(args.task),
+      body: str(args.job ?? args.task),
     }),
   },
   agent_spawn_graph: {

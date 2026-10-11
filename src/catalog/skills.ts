@@ -140,7 +140,7 @@ export function inlineSkills(
   const prompt =
     blocks.length === 0
       ? ""
-      : ["Apply the following skills when working on this task:", "", ...blocks]
+      : ["Apply the following skills when working on this job:", "", ...blocks]
           .join("\n")
           .trim();
   return { prompt, missing };

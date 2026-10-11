@@ -25,7 +25,7 @@ function agent(overrides: Partial<AgentInfo>): AgentInfo {
   return {
     id: "1",
     name: "reviewer",
-    task: "review",
+    job: "review",
     cwd: "/repo",
     model: { provider: "openai", modelId: "terra" },
     state: "idle",

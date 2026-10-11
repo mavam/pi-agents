@@ -1,6 +1,6 @@
 # 🤖 pi-agents
 
-Give [Pi](https://pi.dev) durable, named agents. Delegate a task, keep working
+Give [Pi](https://pi.dev) durable, named agents. Delegate a job, keep working
 while the agent runs, and get its result back as a message. Watch any agent
 live, talk to it, or stop it. Agents survive crashes and restarts.
 
@@ -52,7 +52,8 @@ that finished hours ago, and keep talking to it like a regular Pi session.
 
 Agents run inside your Pi process. Pi-agents keeps one pi-durable harness per
 Pi session. Each agent is a conversation in that harness, and each graph a
-task that starts its agents and passes their results along:
+durable task, pi-durable's unit of work that survives restarts, which starts
+its agents and passes their results along:
 
 ```text
 ╭─ Pi process ─────────────────────────────────────────────────────╮
@@ -77,8 +78,8 @@ task that starts its agents and passes their results along:
 │  │               │            └─ ◉ ◉ ◉ helpers     │          │  │
 │  │   …           ╰─────────────────────────────────╯          │  │
 │  │                                                            │  │
-│  │   agents are conversations; a graph is a task that starts  │  │
-│  │   them in order and passes their results on                │  │
+│  │   agents are conversations; a graph is a durable task      │  │
+│  │   that starts them in order and passes their results on    │  │
 │  ╰─────────────────────────────┬──────────────────────────────╯  │
 ╰────────────────────────────────┼─────────────────────────────────╯
                                  │ checkpoint every step
@@ -99,11 +100,11 @@ logins and models, so they need no separate setup.
 | Term | Meaning |
 | --- | --- |
 | Agent | A separate Pi agent with its own name, model, working directory, and conversation. It keeps its conversation after it answers. |
-| Task | The first message an agent gets. It must stand on its own, because the agent doesn't see your conversation. |
+| Job | The instructions an agent starts with. They must stand on their own, because the agent doesn't see your conversation. |
 | Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done. |
-| Result | The agent's final message after a task or message. |
+| Result | The agent's final message after its job or a message. |
 | Graph | Agents that work together: some in parallel, some after others, receiving their results. Pi gets one message at the end. |
-| Helper | An agent that another agent started for part of its task. Its result goes to that agent, not to Pi. |
+| Helper | An agent that another agent started for part of its job. Its result goes to that agent, not to Pi. |
 | Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
 | Attach | Open an agent's conversation to watch it and talk to it. |
 | Stop | End an agent or graph and remove it from the panel. Agents end on their own once their answer reaches Pi. Messaging an agent that ended starts it again. |
@@ -112,7 +113,7 @@ An agent is in one of these states:
 
 | State | Meaning |
 | --- | --- |
-| ◉ `working` | The agent works on a task or message. |
+| ◉ `working` | The agent works on its job or a message. |
 | ● `idle` | The agent answered and waits for messages. |
 | ✗ `failed` | The last answer ended with an error. |
 | ⊘ `interrupted` | The last answer was interrupted before it finished. |
@@ -132,7 +133,7 @@ and they start other agents only when you let them delegate.
 
 Agents see the skills Pi finds on disk: those in `~/.pi/agent/skills` and
 `~/.agents/skills`, from packages and your settings, and the project's skills
-when you trust the project. Like Pi, an agent loads a skill when its task
+when you trust the project. Like Pi, an agent loads a skill when its job
 calls for it.
 
 Agents don't get skills that exist only in the running session: those from
@@ -236,7 +237,7 @@ after the graph finished, and after you resume a session.
 
 A graph starts two to twelve agents that work together. Agents run in
 parallel, and an agent that waits for others starts once they finished and
-receives their final messages with its task. Common shapes:
+receives their final messages with its job. Common shapes:
 
 | Shape | Example |
 | --- | --- |
@@ -276,7 +277,7 @@ message the agents again.
 
 ### Agents that delegate
 
-An agent that may delegate splits its own task while it works: it starts
+An agent that may delegate splits its own job while it works: it starts
 helper agents, waits for them, and continues with their results. This covers
 work whose shape only shows up on the way, such as one helper per file the
 agent finds. Ask Pi for it, or set `delegate: true` in a profile.
@@ -317,7 +318,7 @@ below the agent, and the divider over its details in `/agents` shows it.
 
 | Command | Action |
 | --- | --- |
-| `/agents` | Browse all agents and graphs, including ended ones, with their tasks and latest results. Attach to, fold, or stop them. |
+| `/agents` | Browse all agents and graphs, including ended ones, with their jobs and latest results. Attach to, fold, or stop them. |
 | `/agent <name>` | Attach to an agent. |
 
 ### Tools
@@ -326,7 +327,7 @@ Pi uses these tools to work with agents:
 
 | Tool | Purpose |
 | --- | --- |
-| `agent_spawn` | Start an agent on a task, optionally waiting for its result, and optionally letting it delegate. |
+| `agent_spawn` | Start an agent on a job, optionally waiting for its result, and optionally letting it delegate. |
 | `agent_spawn_graph` | Start a graph of agents, optionally waiting for its result. |
 | `agent_send` | Message an agent: prompt, steer, or queue a follow-up. |
 | `agent_wait` | Block until agents or graphs answer and return their results. |
@@ -341,14 +342,14 @@ stops waiting and answers you right away.
 
 With [codemode](https://pi.dev/docs/latest/codemode), scripts get the
 results as data instead of text: an agent's `name`, `state`, and `result`
-or `error`, a graph's `state` and how each of its agents ended its task,
+or `error`, a graph's `state` and how each of its agents ended its job,
 and the names a wait leaves `pending`. A script can start agents, wait for
 all of them, and pick out what it needs before Pi reads anything:
 
 ```js
 const names = ["api", "tests", "docs"];
 await Promise.all(
-  names.map((name) => tools.agent_spawn({ name, task: `Review the ${name}.` })),
+  names.map((name) => tools.agent_spawn({ name, job: `Review the ${name}.` })),
 );
 const { agents, pending } = await tools.agent_wait({ names, timeout: 600 });
 return { failed: agents.filter((a) => a.state === "failed"), pending };
@@ -374,7 +375,7 @@ conversation. A result has arrived once Pi saved it in the session, so a crash
 never loses one; a result that Pi showed but hadn't saved yet posts again, and
 after a crash, so may a result that a codemode script waited for. A graph
 continues too: its agents that already finished don't work again, and no
-agent gets its task twice. A tool call that can't safely repeat reports the
+agent gets its job twice. A tool call that can't safely repeat reports the
 interruption to the agent instead.
 
 Agents of sessions started with `--no-session` live in memory and end with

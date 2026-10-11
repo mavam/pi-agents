@@ -58,7 +58,7 @@ export interface ReportNode {
 }
 
 /**
- * How one agent of a graph did its task, and its answer or error: from the
+ * How one agent of a graph did its job, and its answer or error: from the
  * node's outcome once it has one, else from the agent's state.
  */
 export function nodeResult(

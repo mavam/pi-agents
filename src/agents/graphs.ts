@@ -9,7 +9,7 @@
  *         └─ agent conversation
  *
  * A node waits for the nodes whose results it needs, then sends its agent
- * the task with those results appended. Aborting the graph aborts its nodes
+ * its job with those results appended. Aborting the graph aborts its nodes
  * and their agents bottom-up, and `failFast` reaches the agents of sibling
  * nodes. Once a node finished, its agent keeps working normally when
  * messaged.
@@ -122,17 +122,17 @@ function missingReason(outcome: TaskOutcome<JsonValue>): string {
 }
 
 /**
- * The agent's task with its inputs' results appended, or undefined when no
+ * The agent's job with its inputs' results appended, or undefined when no
  * input answered. Built from stored records only, so a rerun builds the same
  * message.
  */
 async function composeMessage(
-  task: string,
+  job: string,
   inputs: number[],
   runtime: Runtime,
   context: Context,
 ): Promise<string | undefined> {
-  if (inputs.length === 0) return task;
+  if (inputs.length === 0) return job;
   const outcomes = await runtime.outcomes(inputs as TaskId[], context);
   const [graphs, agents] = await Promise.all([
     runtime.snapshot(GraphsDoc, context),
@@ -166,12 +166,12 @@ async function composeMessage(
     }
   }
   if (answered === 0) return undefined;
-  return `${task}\n\n## Results of other agents\n\n${sections.join("\n\n")}`;
+  return `${job}\n\n## Results of other agents\n\n${sections.join("\n\n")}`;
 }
 
 /**
  * One agent of a graph. It waits for the nodes it needs, then sends its
- * agent the task with their results appended, using a request ID derived
+ * agent its job with their results appended, using a request ID derived
  * from the node, so a node interrupted by a restart waits for the same
  * submission instead of sending it again.
  */

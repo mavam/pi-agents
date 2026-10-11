@@ -79,7 +79,7 @@ describe("tool results", () => {
       ({
         id,
         name,
-        task: name,
+        job: name,
         cwd: "/repo",
         model: { provider: "openai", modelId: "luna" },
         state,

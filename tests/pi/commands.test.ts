@@ -26,7 +26,7 @@ function agent(overrides: Partial<AgentInfo>): AgentInfo {
   return {
     id: "1",
     name: "a",
-    task: "review a",
+    job: "review a",
     cwd: "/repo",
     model: { provider: "openai", modelId: "sol" },
     state: "idle",
@@ -197,22 +197,22 @@ describe("/agents detail", () => {
     expect(lines.at(-1)).toBe("  … 12 more lines · select lead.a to read all");
   });
 
-  test("a divider separates an agent's task from its result", () => {
+  test("a divider separates an agent's job from its result", () => {
     const at = 60_000;
     const done = { ...answered("1", "a", "**done**").result, at: 0 };
     expect(
       stripVTControlCharacters(
         agentHeader(agent({ cwd: `${os.homedir()}/repo` }), plainColorize, at),
       ),
-    ).toBe("Task · a · started 1m00s ago · ~/repo");
+    ).toBe("Job · a · started 1m00s ago · ~/repo");
     // The task renders as Markdown; the answer to it is its result.
     expect(
       plain(
         agentDetail(
           agent({
-            task: "Review **a**:\n\n- read `a.ts`",
+            job: "Review **a**:\n\n- read `a.ts`",
             result: done,
-            taskAnswer: done.entryId,
+            jobAnswer: done.entryId,
           }),
           plainColorize,
           at,
@@ -229,7 +229,7 @@ describe("/agents detail", () => {
     expect(
       plain(
         agentDetail(
-          agent({ result: { ...done, entryId: 7 }, taskAnswer: done.entryId }),
+          agent({ result: { ...done, entryId: 7 }, jobAnswer: done.entryId }),
           plainColorize,
           at,
         ),
@@ -239,7 +239,7 @@ describe("/agents detail", () => {
     expect(
       plain(
         agentDetail(
-          agent({ result: done, taskAnswer: done.entryId, queued: true }),
+          agent({ result: done, jobAnswer: done.entryId, queued: true }),
           plainColorize,
           at,
         ),

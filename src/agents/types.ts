@@ -1,6 +1,8 @@
 /**
  * The agent abstraction: a durable, named conversation whose result is its
- * last assistant message. These types are the frontend's whole view of
+ * last assistant message. An agent starts with a *job*: self-contained
+ * instructions for its initial work. pi-durable's tasks are something else:
+ * the durable units of work, such as a turn, a tool call, or a graph. These types are the frontend's whole view of
  * agents; nothing outside `src/host` and `src/agents` sees pi-durable.
  */
 
@@ -99,7 +101,8 @@ export interface AgentInfo {
   id: string;
   name: string;
   profile?: string;
-  task: string;
+  /** The instructions the agent was started with. */
+  job: string;
   cwd: string;
   model?: ModelRef;
   thinking?: ThinkingLevel;
@@ -120,9 +123,9 @@ export interface AgentInfo {
   result?: AgentResult;
   /** The latest turn ended without an answer, as this process saw it. */
   unanswered?: UnansweredTurn;
-  /** The entry that answered the agent's task, once one did. The latest
-   * result answers the task only while it is this entry. */
-  taskAnswer?: number;
+  /** The entry that answered the agent's job, once one did. The latest
+   * result answers the job only while it is this entry. */
+  jobAnswer?: number;
   /** The graph this agent belongs to, by graph ID. */
   graph?: string;
   /** Whether the agent can start helper agents. */
@@ -145,7 +148,7 @@ export interface UnansweredTurn {
 /** How a graph waits for its agents: all of them, or until one fails. */
 export type GraphPolicy = "allSettled" | "failFast";
 
-/** How one agent of a graph ended its task. `interrupted`: the agent itself
+/** How one agent of a graph ended its job. `interrupted`: the agent itself
  * was interrupted or stopped; `stopped`: the graph stopped it; `skipped`: it
  * never started because none of its inputs answered. */
 export type NodeOutcome =
@@ -162,7 +165,7 @@ export interface GraphNode {
   inputs: string[];
   /** Whether no other agent of the graph needs this agent's result. */
   end: boolean;
-  /** Set once the agent's task ended. */
+  /** Set once the agent's job ended. */
   outcome?: NodeOutcome;
 }
 
@@ -170,7 +173,7 @@ export interface GraphInfo {
   id: string;
   name: string;
   policy: GraphPolicy;
-  /** `working` until every agent ended its task; then derived from the
+  /** `working` until every agent ended its job; then derived from the
    * agents nothing waits for. */
   state: AgentState;
   closed: boolean;
@@ -230,7 +233,8 @@ export interface TaskNode {
 }
 
 export interface SpawnSpec {
-  task: string;
+  /** Self-contained instructions for the agent's initial work. */
+  job: string;
   name?: string;
   profile?: string;
   cwd: string;
@@ -248,7 +252,7 @@ export interface SpawnSpec {
 
 /** What a delegating agent asks for one helper. */
 export interface HelperRequest {
-  task: string;
+  job: string;
   profile?: string;
   model?: string;
   thinking?: string;
@@ -314,4 +318,23 @@ export class WaitInterrupted extends AgentError {
       reason === "cancelled" ? "Wait cancelled" : "Wait ended for the parent",
     );
   }
+}
+
+/**
+ * Arguments with each agent's `task` renamed to `job`, its name before
+ * pi-agents left "task" to pi-durable, so calls of earlier builds replay and
+ * models used to the old name still work.
+ */
+export function renameTaskToJob(args: unknown): unknown {
+  if (typeof args !== "object" || args === null) return args;
+  const rename = (value: unknown): unknown => {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      return value;
+    const { task, ...rest } = value as Record<string, unknown>;
+    return task === undefined || "job" in rest ? rest : { ...rest, job: task };
+  };
+  const renamed = rename(args) as Record<string, unknown>;
+  return Array.isArray(renamed.agents)
+    ? { ...renamed, agents: renamed.agents.map(rename) }
+    : renamed;
 }

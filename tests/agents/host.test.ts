@@ -44,8 +44,8 @@ afterEach(async () => {
   cleanups = [];
 });
 
-function agent(name: string, task: string) {
-  return { name, task, cwd: ".", model: MODEL };
+function agent(name: string, job: string) {
+  return { name, job, cwd: ".", model: MODEL };
 }
 
 describe("hosts", () => {
@@ -82,14 +82,14 @@ describe("hosts", () => {
     const graph = await service.spawnGraph({
       name: "g",
       agents: [
-        { name: "a", task: "a", cwd: ".", model: MODEL },
-        { name: "b", task: "b", cwd: ".", model: MODEL, after: ["a"] },
+        { name: "a", job: "a", cwd: ".", model: MODEL },
+        { name: "b", job: "b", cwd: ".", model: MODEL, after: ["a"] },
       ],
     });
     const task = await harness.getTask(Number(graph.id) as TaskId, CONTEXT);
     expect(task?.conversationId).toBe(anchor.id);
     expect(task?.background).toBe(true);
-    await service.spawn({ name: "solo", task: "solo", cwd: ".", model: MODEL });
+    await service.spawn({ name: "solo", job: "solo", cwd: ".", model: MODEL });
     const outcome = await service.wait(["g", "solo"]);
     expect(outcome.timedOut).toEqual([]);
     expect(service.get("solo")?.result?.text).toBe("done: solo");
@@ -125,7 +125,7 @@ describe("hosts", () => {
         return fauxAssistantMessage(
           [
             fauxToolCall("delegate_graph", {
-              agents: [{ name: "h", task: "help" }],
+              agents: [{ name: "h", job: "help" }],
             }),
           ],
           { stopReason: "toolUse" },
@@ -189,8 +189,8 @@ describe("hosts", () => {
     const graph = await service.spawnGraph({
       name: "g",
       agents: [
-        { task: "a", cwd: ".", model: MODEL },
-        { task: "b", cwd: ".", model: MODEL },
+        { job: "a", cwd: ".", model: MODEL },
+        { job: "b", cwd: ".", model: MODEL },
       ],
     });
     const task = await harness.getTask(Number(graph.id) as TaskId, CONTEXT);

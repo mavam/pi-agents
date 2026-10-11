@@ -24,6 +24,7 @@ import {
   type AgentInfo,
   GRAPH_SIZE,
   type GraphInfo,
+  renameTaskToJob,
   type Target,
   type TargetRef,
   THINKING_LEVELS,
@@ -124,7 +125,7 @@ function statusLine(service: AgentService, info: AgentInfo): string {
       ? `${info.state}, using ${info.activity.tool}`
       : info.state;
   const graph = info.graph ? service.graphById(info.graph) : undefined;
-  return `${info.name} (${state}${graph ? `, in graph ${graph.name}` : ""}): ${oneLine(info.task, 120)}`;
+  return `${info.name} (${state}${graph ? `, in graph ${graph.name}` : ""}): ${oneLine(info.job, 120)}`;
 }
 
 function graphStatusLine(graph: GraphInfo): string {
@@ -184,12 +185,14 @@ interface AgentToolSpec<T extends TSchema, O extends TSchema> {
 }
 
 /**
- * Models sometimes write `wait: false` for "don't wait" or quote numbers.
- * Seconds that aren't a positive number mean no wait; numeric strings count.
+ * Arguments as the tools take them. Models sometimes write `wait: false` for
+ * "don't wait" or quote numbers: seconds that aren't a positive number mean
+ * no wait, and numeric strings count. Calls of earlier builds, and models
+ * used to them, name a job `task`.
  */
-export function prepareSeconds(args: unknown): unknown {
+export function prepareArguments(args: unknown): unknown {
   if (typeof args !== "object" || args === null) return args;
-  const prepared: Record<string, unknown> = { ...args };
+  const prepared = renameTaskToJob(args) as Record<string, unknown>;
   for (const key of ["wait", "timeout"]) {
     if (!(key in prepared)) continue;
     const parsed = positiveSeconds(prepared[key]);
@@ -211,7 +214,7 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
     description: spec.description,
     parameters: spec.parameters,
     outputSchema: spec.output,
-    prepareArguments: (args) => prepareSeconds(args) as Static<T>,
+    prepareArguments: (args) => prepareArguments(args) as Static<T>,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       let service: AgentService;
       try {
@@ -365,11 +368,11 @@ const waitParam = Type.Optional(
   }),
 );
 
-/** What one agent gets: its task and settings. */
+/** What one agent gets: its job and settings. */
 const agentFields = {
-  task: Type.String({
+  job: Type.String({
     description:
-      "Self-contained task; the agent does not see this conversation",
+      "Self-contained instructions for the agent's work; it can't see this conversation",
   }),
   name: Type.Optional(
     Type.String({ description: "Short name, such as a role" }),
@@ -396,7 +399,7 @@ const agentFields = {
   delegate: Type.Optional(
     Type.Boolean({
       description:
-        "Let the agent split its task among helper agents it starts and waits for",
+        "Let the agent split its job among helper agents it starts and waits for",
     }),
   ),
 };
@@ -413,7 +416,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_spawn",
       description:
-        "Start an agent on a task. Its final message is its result, which arrives later as a message. Set wait to block for the result instead.",
+        "Start an agent on a job. Its final message is its result, which arrives later as a message. Set wait to block for the result instead.",
       parameters: spawnParams,
       output: AgentOutput,
       async execute(service, params, ctx, signal, onUpdate, call) {
@@ -480,7 +483,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_spawn_graph",
       description:
-        "Start agents that work together on related tasks. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. Set wait to block for the result instead.",
+        "Start agents that work together on related jobs. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. Set wait to block for the result instead.",
       parameters: graphParams,
       output: GraphOutput,
       async execute(service, params, ctx, signal, onUpdate, call) {
@@ -617,7 +620,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_status",
-      description: "List agents and graphs with their state and task.",
+      description: "List agents and graphs with their state and job.",
       parameters: statusParams,
       output: StatusOutput,
       async execute(service, params) {

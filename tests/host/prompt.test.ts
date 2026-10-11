@@ -69,7 +69,7 @@ describe("agent prompt", () => {
 
   test("agents see the user's skill catalog, even in untrusted projects", async () => {
     const { service, prompts } = await open(false);
-    await service.spawn({ task: "x", cwd, model: MODEL, tools: ["read"] });
+    await service.spawn({ job: "x", cwd, model: MODEL, tools: ["read"] });
     await until(() => prompts.length === 1);
     expect(prompts[0]).toContain("<name>catalogued</name>");
     expect(prompts[0]).not.toContain("<name>manual</name>");
@@ -78,7 +78,7 @@ describe("agent prompt", () => {
 
   test("trusted projects add their skills", async () => {
     const { service, prompts } = await open(true);
-    await service.spawn({ task: "x", cwd, model: MODEL, tools: ["read"] });
+    await service.spawn({ job: "x", cwd, model: MODEL, tools: ["read"] });
     await until(() => prompts.length === 1);
     expect(prompts[0]).toContain("<name>project-only</name>");
   });
@@ -86,7 +86,7 @@ describe("agent prompt", () => {
   test("chosen skills turn the catalog off", async () => {
     const { service, prompts } = await open(true);
     await service.spawn({
-      task: "x",
+      job: "x",
       cwd,
       model: MODEL,
       tools: ["read"],

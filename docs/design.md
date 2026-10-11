@@ -23,16 +23,21 @@ conversations. Graphs compose them: agents that pass results to each other.
 
 ## Core abstractions
 
+pi-agents calls the instructions an agent starts with its *job*. *Task*
+means only pi-durable's durable units of work: a turn, a tool call, a graph,
+a node.
+
 | Abstraction | Meaning | Backed by |
 | --- | --- | --- |
 | Host | Owns the storage, its lock, and one pi-durable `Harness` per parent Pi session | JSONL storage in `~/.pi/agent/pi-agents/sessions/<session-id>/` |
 | Anchor | The conversation that owns the graphs the parent starts | Chosen by the host; inside Pi the harness's root conversation, which never runs |
 | Parent | The conversation that starts agents and receives their results | `Parent`, implemented by the host; inside Pi, Pi's session |
 | Agent | A durable, named conversation | An ownerless conversation, or one a task owns, plus an `AgentRecord` |
-| AgentRecord | Name, profile, creation time, closed flag, parent requests, graph | The session document `pi-agents.agents` |
+| Job | The self-contained instructions an agent starts with; it doesn't see the parent's conversation | The first submission: `parent:1`, or the node's for a graph agent |
+| AgentRecord | Name, profile, job, creation time, closed flag, parent requests, graph | The session document `pi-agents.agents` |
 | Graph | Named agents plus edges that carry results; reports back as one result | A graph task plus a `GraphRecord` |
 | GraphRecord | Name, policy, creation time, nodes, closed flag, whether the parent still expects the result | The session document `pi-agents.graphs` |
-| Node | One graph agent's task: wait for its inputs, then one message and its answer | A node task |
+| Node | One graph agent's job: wait for its inputs, then one message and its answer | A node task |
 | Edge | `A → B`: B starts once A finished and receives A's final message | A node's `after` list |
 | Result | The last assistant message: text, stop reason, entry ID | The turn's assistant entry |
 | Parent request | A turn the parent model started through `spawn` or `send` | An outbox entry in the record plus a submission with request ID `parent:<n>` |
@@ -115,7 +120,7 @@ a name.
 ### Lifecycle
 
 - `spawn` creates the conversation and its record in one commit, then sends
-  the task. Settings resolve as profile, then spawn arguments, then the parent
+  the job. Settings resolve as profile, then spawn arguments, then the parent
   session's model and thinking level.
 - `send` prompts an idle agent and steers a working one; `followUp` queues
   after the current answer instead.
@@ -139,7 +144,7 @@ durable and cancellable without hand-written state machines.
 ### Model
 
 A graph is agents plus edges. An edge `A → B` means B starts once A finished
-and receives A's final message, appended to its task under "Results of other
+and receives A's final message, appended to its job under "Results of other
 agents". The agents nothing waits for are the graph's end nodes; their
 results are the graph's result. A graph without edges reports every agent's
 result; a merging agent after all others makes the graph's result that
@@ -188,13 +193,15 @@ Graphs and standalone agents share one name space.
 Closing the harness preserves every task. On reopen, finished nodes never run
 again, and a running node reruns its phase: it builds the same message from
 stored answers, and its request ID (`node:<task-id>`) finds the submission it
-already made, so the agent gets its task once while pi-durable resumes its
+already made, so the agent gets its job once while pi-durable resumes its
 run. These guarantees cover admission: a model call or tool effect that was
 in flight at the crash can run again.
 
 ### Versions and migration
 
-Tasks and documents are at version 1. A later change to a task's input or
+Tasks are at version 1, and so is the document `pi-agents.graphs`;
+`pi-agents.agents` is at version 2, which renamed each agent's `task` to
+`job`. A later change to a task's input or
 checkpoint bumps its `version` and adds `migrate`; a migration must keep the
 task IDs in checkpoints. Terminal tasks never migrate. A task whose
 definition is missing stays blocked rather than lost; stopping its graph then
@@ -205,7 +212,7 @@ earlier builds may hold the documents `pi-agents.stops` and
 
 ### Agents that delegate
 
-An agent with `delegate` splits its own task at runtime: it starts a graph of
+An agent with `delegate` splits its own job at runtime: it starts a graph of
 helpers, waits for it, and continues with its result in the same run. This
 covers map, fan-out over what the agent discovers, and nested workflows,
 without a language.
@@ -228,7 +235,7 @@ delegating agent's conversation
   graph the agent belongs to reaches them too. Stopping only the helpers
   ends the call with a "stopped" result, and the agent goes on.
 - A restart reruns the call, which finds the graph its tool task owns and
-  waits for it. Finished helpers don't rerun, and no helper gets its task
+  waits for it. Finished helpers don't rerun, and no helper gets its job
   twice.
 - Only delegating agents select the extension; the tool also refuses agents
   whose record doesn't allow it and helpers. pi-durable copies an owner
@@ -353,15 +360,17 @@ loses a delivery but can repeat one.
 
 | Tool | Parameters |
 | --- | --- |
-| `agent_spawn` | `task`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `skills?`, `cwd?`, `delegate?`, `wait?` (seconds) |
-| `agent_spawn_graph` | `name?`, `agents` (2 to 12 of `task`, `name?`, `after?`, `profile?`, `model?`, `thinking?`, `tools?`, `skills?`, `cwd?`, `delegate?`), `failFast?`, `wait?` (seconds) |
+| `agent_spawn` | `job`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `skills?`, `cwd?`, `delegate?`, `wait?` (seconds) |
+| `agent_spawn_graph` | `name?`, `agents` (2 to 12 of `job`, `name?`, `after?`, `profile?`, `model?`, `thinking?`, `tools?`, `skills?`, `cwd?`, `delegate?`), `failFast?`, `wait?` (seconds) |
 | `agent_send` | `name`, `message`, `followUp?`, `wait?` (seconds) |
 | `agent_wait` | `names` (agents or graphs), `timeout?` |
 | `agent_status` | `name?` (agent or graph) |
 | `agent_stop` | `name` (agent or graph) |
 
-`agent_spawn_graph` is a separate tool because "either `task` or `agents`"
-cannot be expressed in the tool schemas that providers accept. Agents without
+`agent_spawn_graph` is a separate tool because "either `job` or `agents`"
+cannot be expressed in the tool schemas that providers accept. The tools,
+`delegate_graph` included, take `task` for `job` too, as calls of earlier
+builds and models used to them name it. Agents without
 a name are called `<graph>-<n>`, or after their profile. `agent_send` to a
 graph fails and lists its agents. Models sometimes pass `wait: false` or
 quoted numbers, so the tools drop seconds that aren't positive numbers and
@@ -383,7 +392,7 @@ An agent is its `name`, `state`, `graph`, and what its latest turn produced:
 `error` when it failed, and nothing while it works or waits. A turn never
 reports an earlier turn's answer. A graph is its `state`, `stopped`, and per
 agent its `after`, `end`, and `outcome`, with `result` or `error`; nodes
-carry the answer to the graph's task. Results keep the limit of the text the
+carry the answer to the graph's job. Results keep the limit of the text the
 model reads and say when they were cut with `truncated`. Calls that wait
 return what they observed after the wait.
 
@@ -454,7 +463,7 @@ draws `delegate_graph` with its own, and Pi's tools with Pi's.
 - `/agents`: a table of all agents and graphs, closed ones dimmed, with
   details, attach, and stop. Each row shows how long it ran: until now while
   it works, else until it ended, from durable task end times that survive
-  restarts. An agent's detail shows its task and its latest result; a
+  restarts. An agent's detail shows its job and its latest result; a
   graph's detail says its order in words and shows each agent's result.
 - pi-durable's task graph stays out of the UI. `AgentService.liveTasks()`
   exposes it for tests and debugging.

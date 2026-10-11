@@ -169,7 +169,7 @@ describe("script output", () => {
     const run = await gated();
     const a = { kind: "agent", name: "a", state: "idle" };
     expect(
-      (await run("agent_spawn", { task: "one", name: "a", wait: 60 })).output,
+      (await run("agent_spawn", { job: "one", name: "a", wait: 60 })).output,
     ).toEqual({ ...a, result: "done: one" });
     expect(
       (await run("agent_send", { name: "a", message: "two", wait: 60 })).output,
@@ -188,7 +188,7 @@ describe("script output", () => {
 
   test("an interrupted turn doesn't report an earlier answer", async () => {
     const run = await gated();
-    await run("agent_spawn", { task: "one", name: "a", wait: 60 });
+    await run("agent_spawn", { job: "one", name: "a", wait: 60 });
     expect(
       (await run("agent_send", { name: "a", message: "hold two" })).output,
     ).toEqual({ kind: "agent", name: "a", state: "working" });
@@ -209,7 +209,7 @@ describe("script output", () => {
 
   test("a failed turn reports its error, not an earlier answer", async () => {
     const run = await gated();
-    await run("agent_spawn", { task: "one", name: "a", wait: 60 });
+    await run("agent_spawn", { job: "one", name: "a", wait: 60 });
     const failed = await run("agent_send", {
       name: "a",
       message: "fail two",
@@ -229,7 +229,7 @@ describe("script output", () => {
     const w = { kind: "agent", name: "w", state: "working" };
     // A timeout.
     expect(
-      (await run("agent_spawn", { task: "hold", name: "w", wait: 1 })).output,
+      (await run("agent_spawn", { job: "hold", name: "w", wait: 1 })).output,
     ).toEqual(w);
     // An abort.
     const abort = new AbortController();
@@ -268,8 +268,8 @@ describe("script output", () => {
         await run("agent_spawn_graph", {
           name: "g",
           agents: [
-            { task: "fail one", name: "a" },
-            { task: "two", name: "b", after: ["a"] },
+            { job: "fail one", name: "a" },
+            { job: "two", name: "b", after: ["a"] },
           ],
           wait: 60,
         })
@@ -295,8 +295,8 @@ describe("script output", () => {
         await run("agent_spawn_graph", {
           name: "h",
           agents: [
-            { task: "hold", name: "c" },
-            { task: "two", name: "d", after: ["c"] },
+            { job: "hold", name: "c" },
+            { job: "two", name: "d", after: ["c"] },
           ],
         })
       ).output,
@@ -337,7 +337,7 @@ describe("output", () => {
   const info = (result: string): AgentInfo => ({
     id: "1",
     name: "a",
-    task: "a",
+    job: "a",
     cwd: "/repo",
     state: "idle",
     closed: false,
@@ -386,7 +386,7 @@ describe("output", () => {
   test("a graph keeps the answer to its task, not later replies", () => {
     const later = info("a later reply");
     const answer = { ...(later.result as NonNullable<AgentInfo["result"]>) };
-    answer.text = "the task's answer";
+    answer.text = "the job's answer";
     const graph: GraphInfo = {
       id: "10",
       name: "g",
@@ -408,7 +408,7 @@ describe("output", () => {
       usage: { ...EMPTY_USAGE },
     };
     expect(graphOutput(graph, () => later).agents[0]?.result).toBe(
-      "the task's answer",
+      "the job's answer",
     );
   });
 });
@@ -421,8 +421,8 @@ describe("call results", () => {
         {
           name: "g",
           agents: [
-            { name: "a", task: "Steps:\n1. read  the code\n\n2. report" },
-            { name: "b", task: "Merge.", after: ["a"] },
+            { name: "a", job: "Steps:\n1. read  the code\n\n2. report" },
+            { name: "b", job: "Merge.", after: ["a"] },
           ],
         },
         plainTheme,
@@ -469,8 +469,8 @@ describe("call results", () => {
       name: "audit",
       wait: 1,
       agents: [
-        { name: "map", task: "map" },
-        { name: "report", task: "hold report", after: ["map"] },
+        { name: "map", job: "map" },
+        { name: "report", job: "hold report", after: ["map"] },
       ],
     };
     const progress: unknown[] = [];

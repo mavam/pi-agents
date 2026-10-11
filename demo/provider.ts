@@ -9,6 +9,7 @@
  * --model demo/sol`. See demo/record.sh.
  */
 
+import { setTimeout } from "node:timers/promises";
 import type { FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import {
   fauxAssistantMessage,
@@ -141,10 +142,104 @@ const call = (
     { stopReason: "toolUse" },
   );
 
+const FINDING =
+  "src/agents/graphs.ts starts independent agents one at a time. Replace the awaited loop with Promise.all(agents.map(start)) so they start together. Message me when it is fixed.";
+const FIXED =
+  "Fixed src/agents/graphs.ts: runGraph now awaits Promise.all(agents.map(start)). Independent agents start together, and runGraph still waits for all of them.";
+
 /** One answer, chosen by the newest message of the conversation. */
-const respond: FauxResponseStep = (context) => {
+const respond: FauxResponseStep = async (context, options) => {
   const messages = context.messages.filter((each) => each.role !== "system");
   const last = messages.at(-1);
+  const task = textOf(messages.find((each) => each.role === "user"));
+  const tool = last?.role === "toolResult" ? last.toolName : undefined;
+
+  // Messaging demo: real discovery, sends, and a file edit in the disposable
+  // project. Pace the fixer's first read so the queued steer stays visible.
+  if (task.startsWith("Find and fix")) {
+    if (tool === "agent_spawn_graph")
+      return say(
+        "**scout** is looking for a bug; **fixer** is reviewing the code. They can message each other directly.",
+      );
+    if (textOf(last).startsWith("Graph repair"))
+      return say(
+        "The repair is in. Scout found the sequential starts; fixer patched them. Open /messages to read their exchange.",
+      );
+    return call("Starting two teammates", "", [
+      [
+        "agent_spawn_graph",
+        {
+          name: "repair",
+          agents: [
+            {
+              name: "scout",
+              model: "luna",
+              tools: ["read"],
+              task: "Scout the graph runner for a concurrency bug. Discover your teammate and message fixer with the finding.",
+            },
+            {
+              name: "fixer",
+              model: "sol",
+              tools: ["read", "edit"],
+              task: "Fix the graph runner using scout's finding. Read the code, apply the fix, and message scout back.",
+            },
+          ],
+        },
+      ],
+    ]);
+  }
+  if (task.startsWith("Scout the graph runner")) {
+    if (textOf(last).startsWith("[from fixer]"))
+      return say("Thanks, fixer. That addresses the sequential-start finding.");
+    if (tool === "read")
+      return call("Finding my teammate", "", [["agent_status", {}]]);
+    if (tool === "agent_status")
+      return call("Sharing the finding", "", [
+        ["agent_send", { name: "fixer", message: FINDING }],
+      ]);
+    if (tool === "agent_send")
+      return say("Sent the concurrency finding directly to fixer.");
+    return call("Checking the graph runner", "", [
+      ["read", { path: "src/agents/graphs.ts" }],
+    ]);
+  }
+  if (task.startsWith("Fix the graph runner")) {
+    if (tool === "edit")
+      return call("Reporting back to scout", "", [
+        ["agent_send", { name: "scout", message: FIXED }],
+      ]);
+    if (tool === "agent_send")
+      return say("Fixed the sequential starts and messaged scout back.");
+    if (
+      messages.some(
+        (message) =>
+          message.role === "user" && textOf(message).startsWith("[from scout]"),
+      )
+    )
+      return call("Applying scout's finding", "", [
+        [
+          "edit",
+          {
+            path: "src/agents/graphs.ts",
+            edits: [
+              {
+                oldText:
+                  "  for (const agent of agents) {\n    await start(agent);\n  }",
+                newText: "  await Promise.all(agents.map(start));",
+              },
+            ],
+          },
+        ],
+      ]);
+    if (tool === "read")
+      throw new Error(
+        "The demo expected scout's finding before fixer's next step.",
+      );
+    await setTimeout(16_000, undefined, { signal: options?.signal });
+    return call("Reading the graph runner", "", [
+      ["read", { path: "src/agents/graphs.ts" }],
+    ]);
+  }
   if (last?.role === "toolResult") {
     const tool = (last as { toolName?: string }).toolName;
     const task = textOf(messages.find((each) => each.role === "user"));

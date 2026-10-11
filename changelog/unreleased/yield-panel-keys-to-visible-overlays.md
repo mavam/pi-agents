@@ -6,4 +6,4 @@ authors:
 created: 2026-10-11T00:25:52Z
 ---
 
-The agent panel no longer intercepts left arrow or other navigation keys while any TUI overlay is visible. The panel releases focus and suspends Ctrl+Q as well, without relying on events from a specific extension. This also prevents opening `/agents` over an overlay when the panel is empty. The visibility check conservatively includes non-capturing overlays and overlays that released focus; hidden overlays do not block navigation. Normal panel navigation resumes when no overlays are visible.
+The agent panel no longer intercepts arrow keys or Ctrl+Q while another extension's overlay is visible. This also applies when the panel is empty, so it no longer opens `/agents` over an overlay. The panel conservatively yields to any visible overlay, even purely decorative ones. The panel's widget is now mounted from session start, so it may appear above other extensions' widgets where it previously appeared below them.

@@ -26,7 +26,7 @@ function receiver(text: string) {
 }
 
 /** Bridge a terminal device and extension UI calls to Pi's real TUI. */
-function setup() {
+function setup({ closed = false } = {}) {
   let onInput: ((data: string) => void) | undefined;
   const terminal: Terminal = {
     start: (input) => {
@@ -59,8 +59,8 @@ function setup() {
     name: "reviewer",
     task: "review",
     cwd: "/repo",
-    state: "working",
-    closed: false,
+    state: closed ? "idle" : "working",
+    closed,
     createdAt: 0,
     stateSince: 0,
     lastActivityAt: 0,
@@ -68,7 +68,8 @@ function setup() {
     activity: {},
   };
   const service = {
-    list: () => [agent],
+    list: (options?: { includeClosed?: boolean }) =>
+      !closed || options?.includeClosed ? [agent] : [],
     graphs: () => [],
     agentById: () => agent,
   } as unknown as AgentService;
@@ -139,33 +140,60 @@ describe("real overlay input dispatch", () => {
     }
   });
 
-  for (const mechanism of ["visible callback", "setHidden"] as const) {
-    test(`an overlay hidden by ${mechanism} does not block panel navigation`, () => {
-      const ui = setup();
-      let visible = true;
-      try {
-        const picker = receiver("picker");
-        const handle = ui.tui.showOverlay(picker.component, {
-          visible: () => visible,
-        });
-        ui.press(LEFT);
-        expect(picker.inputs).toEqual([LEFT]);
-        if (mechanism === "visible callback") visible = false;
-        else handle.setHidden(true);
-        expect(ui.tui.hasOverlay()).toBe(false);
-        ui.press(LEFT);
-        expect(ui.panel.isFocused()).toBe(true);
-        expect(picker.inputs).toEqual([LEFT]);
-        if (mechanism === "visible callback") visible = true;
-        else handle.setHidden(false);
-        ui.press(RIGHT);
-        expect(ui.panel.isFocused()).toBe(false);
-        expect(picker.inputs).toEqual([LEFT, RIGHT]);
-      } finally {
-        ui.close();
-      }
-    });
-  }
+  test("a visible overlay prevents opening /agents from an empty panel", () => {
+    const ui = setup({ closed: true });
+    const browsed: ExtensionContext[] = [];
+    ui.focus.onBrowse = (ctx) => browsed.push(ctx);
+    try {
+      expect(ui.panel.hasRows()).toBe(false);
+      const picker = receiver("picker");
+      const handle = ui.tui.showOverlay(picker.component);
+      ui.press(LEFT);
+      ui.focus.focusPanel(ui.ctx);
+      expect(browsed).toEqual([]);
+      expect(picker.inputs).toEqual([LEFT]);
+      expect(ui.editor.inputs).toEqual([]);
+      handle.hide();
+      ui.press(LEFT);
+      expect(browsed).toEqual([ui.ctx]);
+      expect(picker.inputs).toEqual([LEFT]);
+    } finally {
+      ui.close();
+    }
+  });
+
+  test("hidden overlays do not block panel navigation", () => {
+    const ui = setup();
+    let visible = true;
+    try {
+      const picker = receiver("picker");
+      const handle = ui.tui.showOverlay(picker.component, {
+        visible: () => visible,
+      });
+      ui.press(LEFT);
+      expect(picker.inputs).toEqual([LEFT]);
+      visible = false;
+      expect(ui.tui.hasOverlay()).toBe(false);
+      ui.press(LEFT);
+      expect(ui.panel.isFocused()).toBe(true);
+      expect(picker.inputs).toEqual([LEFT]);
+      visible = true;
+      ui.press(RIGHT);
+      expect(ui.panel.isFocused()).toBe(false);
+      expect(picker.inputs).toEqual([LEFT, RIGHT]);
+      handle.setHidden(true);
+      expect(ui.tui.hasOverlay()).toBe(false);
+      ui.press(LEFT);
+      expect(ui.panel.isFocused()).toBe(true);
+      expect(picker.inputs).toEqual([LEFT, RIGHT]);
+      handle.setHidden(false);
+      ui.press(RIGHT);
+      expect(ui.panel.isFocused()).toBe(false);
+      expect(picker.inputs).toEqual([LEFT, RIGHT, RIGHT]);
+    } finally {
+      ui.close();
+    }
+  });
 
   test("a visible non-capturing overlay conservatively disables panel navigation", () => {
     const ui = setup();

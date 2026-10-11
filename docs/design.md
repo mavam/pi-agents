@@ -444,8 +444,9 @@ draws `delegate_graph` with its own, and Pi's tools with Pi's.
   overlay currently owns keyboard focus. The panel's widget stays mounted
   with empty output while hidden or empty so the check always uses the current
   TUI. No extension-specific lifecycle events are needed.
-  Working agents show how long ago they started; finished rows show no time. An idle agent or finished graph with
-  an undelivered result shows `●` in the accent color and `result queued`.
+  Working agents show how long ago they started; finished rows show no time. An
+  idle agent or finished graph with an undelivered result shows `●` in the
+  accent color and `result queued`.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's
   durable conversation view with Pi's message and tool components. ⏎ prompts
   or steers, Alt+⏎ queues a follow-up, Esc interrupts, Ctrl+O expands tool

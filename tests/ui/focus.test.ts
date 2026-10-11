@@ -14,7 +14,6 @@ function setup(state: {
   agents: number;
   suppressed: boolean;
   focused?: boolean;
-  overlay?: boolean;
 }) {
   let input: ((data: string) => { consume?: boolean } | undefined) | undefined;
   const focused: boolean[] = [];
@@ -23,7 +22,7 @@ function setup(state: {
     selected: () => ({ key: "agent:7" }),
     hasRows: () => state.rows,
     isSuppressed: () => state.suppressed,
-    hasOverlay: () => state.overlay === true,
+    hasOverlay: () => false,
     setFocused: (value: boolean) => {
       state.focused = value;
       focused.push(value);
@@ -54,14 +53,7 @@ function setup(state: {
     input?.("\u001b[I");
     return result;
   };
-  return {
-    press,
-    focused,
-    browsed,
-    focus,
-    ctx,
-    raw: (data: string) => input?.(data),
-  };
+  return { press, focused, browsed };
 }
 
 describe("focus", () => {
@@ -94,62 +86,6 @@ describe("focus", () => {
     const open = setup({ rows: true, agents: 2, suppressed: true });
     expect(open.press(LEFT)).toBeUndefined();
     expect(open.focused).toEqual([]);
-  });
-
-  test("a visible overlay owns keys until it closes", () => {
-    const state = {
-      rows: true,
-      agents: 2,
-      suppressed: false,
-      focused: true,
-      overlay: true,
-    };
-    const { press, focused, browsed, focus, ctx } = setup(state);
-    for (const key of [LEFT, "\u001b[A", "\u001b[B", "\r", "\t", "s", " "]) {
-      expect(press(key)).toBeUndefined();
-    }
-    focus.focusPanel();
-    focus.focusPanelAt(ctx, "agent:7");
-    expect(focused.every((value) => value === false)).toBe(true);
-    expect(state.focused).toBe(false);
-    expect(browsed).toEqual([]);
-    state.overlay = false;
-    expect(press(LEFT)).toEqual({ consume: true });
-    expect(state.focused).toBe(true);
-  });
-
-  test("an overlay prevents browsing when the panel is empty", () => {
-    const state = {
-      rows: false,
-      agents: 2,
-      suppressed: false,
-      overlay: true,
-    };
-    const { press, browsed, focus } = setup(state);
-    expect(press(LEFT)).toBeUndefined();
-    focus.focusPanel();
-    expect(browsed).toEqual([]);
-    state.overlay = false;
-    expect(press(LEFT)).toEqual({ consume: true });
-    expect(browsed).toHaveLength(1);
-  });
-
-  test("overlays take precedence over cached duplicate input", () => {
-    const state = {
-      rows: true,
-      agents: 2,
-      suppressed: false,
-      focused: false,
-      overlay: false,
-    };
-    const { raw } = setup(state);
-    expect(raw(LEFT)).toEqual({ consume: true });
-    state.overlay = true;
-    expect(raw(LEFT)).toBeUndefined();
-    expect(state.focused).toBe(false);
-    state.overlay = false;
-    expect(raw(LEFT)).toEqual({ consume: true });
-    expect(state.focused).toBe(true);
   });
 
   test("the empty panel retains overlay detection without rendering content", () => {

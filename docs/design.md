@@ -517,7 +517,8 @@ message card, with its own, and Pi's tools with Pi's.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's
   durable conversation view with Pi's message and tool components. ⏎ prompts
   or steers, Alt+⏎ queues a follow-up, Esc interrupts a working agent and
-  goes back from an idle one, Ctrl+O expands tool output, ← detaches.
+  goes back from an idle one while the editor is empty, Ctrl+O expands
+  tool output, ← detaches.
 - `/agents`: a table of all agents and graphs, names in bold and the rest
   dim, with details, attach, and stop. Each row shows how long it ran: until now while
   it works, else until it ended, from durable task end times that survive

@@ -563,10 +563,10 @@ class AgentPane implements Component {
   }
 
   /** Esc: interrupt a working agent, as in Pi, or go back from an idle
-   * one. */
+   * one while the editor is empty, so a draft is never lost. */
   private escape(): void {
     if (this.info()?.state !== "working") {
-      this.close();
+      if (this.editor.getText() === "") this.close();
       return;
     }
     if (this.interrupting) return;

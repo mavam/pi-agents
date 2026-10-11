@@ -338,14 +338,15 @@ below the agent, and the divider over its details in `/agents` shows it.
 
 ### Messages between agents
 
+<img src="demo/messaging.gif" width="840" alt="Scout messages fixer about a concurrency bug, fixer patches it and replies, and Pi browses their exchange in /messages and attaches to both agents">
+
 Agents message each other. Each gets `agent_status`, which lists the other
 agents with the jobs they were started with, and `agent_send`, which sends
 one of them a message without waiting. Like your messages, it steers a
 working recipient, so it can change what the recipient answers, unless the
 sender queues it as a follow-up. The recipient's answer stays with it.
 Helpers can't send or receive messages, and an agent you or Pi stopped
-refuses messages from agents until you or Pi message it. Agents from
-earlier versions of pi-agents can receive messages but not send them.
+refuses messages from agents until you or Pi message it.
 
 Every message shows in the transcript as a card marked `✦`, like pi-agents'
 tool calls, where Pi's model doesn't see it. The focused panel shows messages

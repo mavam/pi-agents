@@ -188,13 +188,11 @@ interface AgentToolSpec<T extends TSchema, O extends TSchema> {
  * Arguments as the tools take them. Models sometimes write `timeout: false`
  * or quote numbers: seconds that aren't a positive number mean none, and
  * numeric strings count. Calls of earlier builds, and models used to them,
- * name a job `task` and pass `wait` to spawns and sends, which only
- * `agent_wait` does now; it's dropped.
+ * name a job `task`.
  */
 export function prepareArguments(args: unknown): unknown {
   if (typeof args !== "object" || args === null) return args;
   const prepared = renameTaskToJob(args) as Record<string, unknown>;
-  delete prepared.wait;
   for (const key of ["timeout"]) {
     if (!(key in prepared)) continue;
     const parsed = positiveSeconds(prepared[key]);

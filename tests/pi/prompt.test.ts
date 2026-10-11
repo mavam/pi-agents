@@ -208,13 +208,11 @@ describe("tool calls", () => {
 });
 
 describe("tool arguments", () => {
-  test("timeouts that aren't positive numbers mean none; waits are dropped", () => {
+  test("timeouts that aren't positive numbers mean none", () => {
     expect(prepareArguments({ names: ["a"], timeout: false })).toEqual({
       names: ["a"],
     });
     expect(prepareArguments({ timeout: "120" })).toEqual({ timeout: 120 });
-    // Spawns and sends no longer wait; agent_wait does.
-    expect(prepareArguments({ job: "a", wait: 60 })).toEqual({ job: "a" });
   });
 
   test("calls that name a job task still work", () => {

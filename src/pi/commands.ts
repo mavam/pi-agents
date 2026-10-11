@@ -461,6 +461,14 @@ async function openAgentsOverlay(
   after?.();
 }
 
+/** Whether the views can open: they need Pi's terminal UI, which RPC
+ * clients don't render. Says so where it can. */
+function inTerminal(ctx: ExtensionContext, command: string): boolean {
+  if (ctx.mode === "tui") return true;
+  if (ctx.hasUI) ctx.ui.notify(`${command} needs Pi's terminal UI.`, "warning");
+  return false;
+}
+
 export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   deps.focus.onBrowse = (ctx, select) =>
     void openAgentsOverlay(ctx, deps, select).catch((error) =>
@@ -474,6 +482,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   pi.registerCommand("messages", {
     description: "Read the messages agents sent each other",
     handler: async (_args, ctx) => {
+      if (!inTerminal(ctx, "/messages")) return;
       try {
         await openMessagesOverlay(ctx, deps);
       } catch (error) {
@@ -485,6 +494,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   pi.registerCommand("agents", {
     description: "Browse agents: attach to or stop them",
     handler: async (_args, ctx) => {
+      if (!inTerminal(ctx, "/agents")) return;
       try {
         await openAgentsOverlay(ctx, deps);
       } catch (error) {
@@ -514,6 +524,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
           }));
     },
     handler: async (args, ctx) => {
+      if (!inTerminal(ctx, "/agent")) return;
       const name = args.trim();
       if (!name) {
         await openAgentsOverlay(ctx, deps).catch((error) =>

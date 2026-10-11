@@ -17,59 +17,38 @@
 
 import type { AttachedReplicatedState } from "@earendil-works/chord";
 import {
-  AgentDoc,
   type Conversation,
   type ConversationView,
   configure,
-  type AgentState as DurableAgentState,
   type Extension,
   type Harness,
-  LiveDoc,
   type ToolRegistration,
-  UsageDoc,
 } from "@earendil-works/pi-durable";
 import { DEFAULT_AGENT_TOOLS } from "../host/tools.js";
 import { CONTEXT, contextFor, conversationId, taskId } from "./context.js";
 import { DELEGATE_TOOL } from "./delegation.js";
-import {
-  activityOf,
-  addPartialUsage,
-  deriveGraphState,
-  deriveState,
-  resultOf,
-  summarizeUsage,
-  sumUsage,
-} from "./derive.js";
 import { type AgentExtensions, agentSelection } from "./extensions.js";
-import {
-  GraphTask,
-  type NodeResult,
-  NodeTask,
-  nodeRequestId,
-} from "./graphs.js";
+import { GraphTask, NodeTask } from "./graphs.js";
 import { MessageLog } from "./message-log.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
 import { HarnessObserver } from "./observer.js";
 import type { Parent } from "./parent.js";
+import { Projection } from "./projection.js";
 import {
-  type AgentRecord,
   AgentsDoc,
   answerDeliveryId,
   failureDeliveryId,
-  type GraphNodeRecord,
-  type GraphRecord,
   GraphsDoc,
   graphDeliveryId,
   type ParentRequest,
   requestId,
 } from "./records.js";
 import { AgentStore } from "./store.js";
-import { endNodes, resolveEdges, stages } from "./topology.js";
+import { resolveEdges } from "./topology.js";
 import {
   type AgentDelivery,
   AgentError,
   type AgentInfo,
-  type AgentResult,
   GRAPH_SIZE,
   type GraphDelivery,
   type GraphInfo,
@@ -80,7 +59,6 @@ import {
   type MessageInfo,
   type NodeOutcome,
   type PendingDelivery,
-  type RequestOutcome,
   type SendMode,
   type SpawnSpec,
   type Target,
@@ -147,12 +125,6 @@ function isSettled(
 }
 
 export class AgentService {
-  private records: Record<string, AgentRecord> = {};
-  private graphRecords: Record<string, GraphRecord> = {};
-  private readonly infos = new Map<string, AgentInfo>();
-  private readonly graphInfos = new Map<string, GraphInfo>();
-  /** Settled outcomes of undelivered parent requests, per agent. */
-  private readonly settled = new Map<string, Map<string, RequestOutcome>>();
   private readonly waiters = new Map<string, number>();
   private readonly graphWaiters = new Map<string, number>();
   /** Checks run after every refresh, for waits on graphs and nodes. */
@@ -175,6 +147,7 @@ export class AgentService {
   private reconciled = false;
   private closed = false;
 
+  private readonly projection: Projection;
   private readonly messageLog: MessageLog;
   private readonly observer: HarnessObserver;
   private readonly store: AgentStore;
@@ -195,19 +168,25 @@ export class AgentService {
     this.refreshDelayMs = options.refreshDelayMs ?? REFRESH_DELAY_MS;
     this.messageLog = new MessageLog({
       store: this.store,
-      agents: () => this.records,
+      agents: () => this.projection.agents(),
     });
     this.observer = new HarnessObserver({
       harness: this.harness,
       store: this.store,
-      graphOfNode: (task) => this.graphOfNode(task),
+      graphOfNode: (task) => this.projection.graphOfNode(task),
       onChange: () => this.scheduleRefresh(),
       onMessage: (submission) => this.messageLog.noteSubmission(submission),
       onMessagesChanged: () => this.messageLog.markDirty(),
       isMessagesDirty: () => this.messageLog.isDirty(),
-      agentIds: () => Object.keys(this.records),
+      agentIds: () => Object.keys(this.projection.agents()),
     });
-    this.extensions.hub.state = (id) => this.infos.get(id)?.state;
+    this.projection = new Projection({
+      harness: this.harness,
+      store: this.store,
+      observer: this.observer,
+      carried: (id) => this.inFlight.get(id)?.carried === true,
+    });
+    this.extensions.hub.state = (id) => this.projection.info(id)?.state;
   }
 
   /**
@@ -229,15 +208,15 @@ export class AgentService {
 
   private async initialize(): Promise<void> {
     this.observer.start();
-    this.records = await this.store.loadAgents();
-    for (const id of Object.keys(this.records)) {
+    await this.projection.reload();
+    for (const id of Object.keys(this.projection.agents())) {
       await this.observer.loadLastAssistant(id);
       // A request recorded before a crash may lack its submission.
       await this.store.flushOutbox(id);
     }
     await this.store.flushMessages();
     await this.messageLog.load();
-    await this.refresh(Object.keys(this.records));
+    await this.refresh(Object.keys(this.projection.agents()));
     this.unsubscribeParent = this.parent.subscribe(() =>
       this.scheduleDelivery(),
     );
@@ -273,14 +252,14 @@ export class AgentService {
    * `includeClosed` adds every closed agent.
    */
   list(options: { includeClosed?: boolean } = {}): AgentInfo[] {
-    return [...this.infos.values()]
+    return [...this.projection.infos()]
       .filter((info) => options.includeClosed || isVisible(info))
       .sort((left, right) => left.createdAt - right.createdAt);
   }
 
   /** Visible graphs, oldest first; `includeClosed` adds closed ones. */
   graphs(options: { includeClosed?: boolean } = {}): GraphInfo[] {
-    return [...this.graphInfos.values()]
+    return [...this.projection.graphInfos()]
       .filter((info) => options.includeClosed || isGraphVisible(info))
       .sort((left, right) => left.createdAt - right.createdAt);
   }
@@ -300,7 +279,9 @@ export class AgentService {
     const named = this.list({ includeClosed: true }).filter(
       (info) => info.name === nameOrId,
     );
-    return named.find(isVisible) ?? named.at(-1) ?? this.infos.get(nameOrId);
+    return (
+      named.find(isVisible) ?? named.at(-1) ?? this.projection.info(nameOrId)
+    );
   }
 
   /** A visible graph by name, else the newest closed one, else by ID. */
@@ -311,7 +292,7 @@ export class AgentService {
     return (
       named.find(isGraphVisible) ??
       named.at(-1) ??
-      this.graphInfos.get(nameOrId)
+      this.projection.graphInfo(nameOrId)
     );
   }
 
@@ -341,12 +322,12 @@ export class AgentService {
 
   /** An agent by its immutable ID, which no name can shadow. */
   agentById(id: string): AgentInfo | undefined {
-    return this.infos.get(id);
+    return this.projection.info(id);
   }
 
   /** A graph by its immutable ID, which no name can shadow. */
   graphById(id: string): GraphInfo | undefined {
-    return this.graphInfos.get(id);
+    return this.projection.graphInfo(id);
   }
 
   private require(nameOrId: string): AgentInfo {
@@ -356,13 +337,13 @@ export class AgentService {
   }
 
   private requireAgent(id: string): AgentInfo {
-    const info = this.infos.get(id);
+    const info = this.projection.info(id);
     if (!info) throw new AgentError(`No agent with ID ${id}`);
     return info;
   }
 
   private requireGraph(id: string): GraphInfo {
-    const info = this.graphInfos.get(id);
+    const info = this.projection.graphInfo(id);
     if (!info) throw new AgentError(`No graph with ID ${id}`);
     return info;
   }
@@ -410,14 +391,6 @@ export class AgentService {
 
   private isGraphAwaited(graphId: string): boolean {
     return (this.graphWaiters.get(graphId) ?? 0) > 0;
-  }
-
-  /** A graph agent's own results wait while its graph's result is due. */
-  private isHeldByGraph(record: AgentRecord): boolean {
-    return (
-      record.graph !== undefined &&
-      this.graphRecords[record.graph]?.pending === true
-    );
   }
 
   // --- Operations ---
@@ -608,7 +581,8 @@ export class AgentService {
       CONTEXT,
     );
     if (!conversation) throw new AgentError(`Agent ${info.name} is missing`);
-    if (this.records[info.id]?.stopped) await this.store.clearStopped(info.id);
+    if (this.projection.agents()[info.id]?.stopped)
+      await this.store.clearStopped(info.id);
     await conversation.submit(
       {
         type: "input",
@@ -627,16 +601,7 @@ export class AgentService {
       CONTEXT,
     );
     await conversation?.abort(CONTEXT);
-    await this.refresh(this.withHelpers([info.id]));
-  }
-
-  /** The agents and the helpers they started. */
-  private withHelpers(ids: string[]): string[] {
-    const all = new Set(ids);
-    for (const graph of Object.values(this.graphRecords))
-      if (graph.owner && all.has(graph.owner.agent))
-        for (const node of graph.nodes) all.add(node.agent);
-    return [...all];
+    await this.refresh(this.projection.withHelpers([info.id]));
   }
 
   /**
@@ -670,8 +635,8 @@ export class AgentService {
       await conversation?.abort(CONTEXT);
       await this.store.markStopped(agentId);
     });
-    this.settled.delete(agentId);
-    await this.refresh(this.withHelpers([agentId]));
+    this.projection.clearSettled(agentId);
+    await this.refresh(this.projection.withHelpers([agentId]));
   }
 
   private async stopGraph(graphId: string): Promise<void> {
@@ -686,7 +651,7 @@ export class AgentService {
     // Agents may work beyond their job, for example on a user's message.
     for (const node of info.nodes) await this.stopAgent(node.agentId);
     await this.refresh(
-      this.withHelpers(info.nodes.map((node) => node.agentId)),
+      this.projection.withHelpers(info.nodes.map((node) => node.agentId)),
     );
   }
 
@@ -821,7 +786,7 @@ export class AgentService {
     signal?: AbortSignal,
   ): Promise<boolean> {
     return this.until(() => {
-      const info = this.graphInfos.get(graphId);
+      const info = this.projection.graphInfo(graphId);
       return info !== undefined && isSettled(info);
     }, signal);
   }
@@ -832,10 +797,10 @@ export class AgentService {
     signal?: AbortSignal,
   ): Promise<boolean> {
     return this.until(() => {
-      const graph = this.infos.get(agentId)?.graph;
+      const graph = this.projection.info(agentId)?.graph;
       if (graph === undefined) return true;
-      const node = this.graphInfos
-        .get(graph)
+      const node = this.projection
+        .graphInfo(graph)
         ?.nodes.find((each) => each.agentId === agentId);
       return node === undefined || node.outcome !== undefined;
     }, signal);
@@ -873,15 +838,18 @@ export class AgentService {
   /** Undelivered results; `withheld` adds those a wait or a graph holds. */
   private deliveries(withheld: boolean): PendingDelivery[] {
     const deliveries: PendingDelivery[] = [];
-    for (const graphId of Object.keys(this.graphRecords)) {
+    for (const graphId of Object.keys(this.projection.graphs())) {
       if (!withheld && this.isGraphAwaited(graphId)) continue;
       const delivery = this.graphDelivery(graphId);
       if (delivery) deliveries.push(delivery);
     }
-    for (const agentId of this.settled.keys()) {
-      const record = this.records[agentId];
+    for (const agentId of this.projection.settledIds()) {
+      const record = this.projection.agents()[agentId];
       if (!record) continue;
-      if (!withheld && (this.isAwaited(agentId) || this.isHeldByGraph(record)))
+      if (
+        !withheld &&
+        (this.isAwaited(agentId) || this.projection.isHeldByGraph(record))
+      )
         continue;
       deliveries.push(...this.agentDeliveries(agentId));
     }
@@ -890,8 +858,8 @@ export class AgentService {
 
   /** A finished graph's result, while the parent still expects it. */
   private graphDelivery(graphId: string): GraphDelivery | undefined {
-    const record = this.graphRecords[graphId];
-    const info = this.graphInfos.get(graphId);
+    const record = this.projection.graphs()[graphId];
+    const info = this.projection.graphInfo(graphId);
     if (!record?.pending || !info || !isSettled(info) || info.stopped)
       return undefined;
     return {
@@ -906,8 +874,8 @@ export class AgentService {
   /** An agent's settled parent requests: one delivery per failure, and one
    * per answer for all the requests it answered. */
   private agentDeliveries(agentId: string): AgentDelivery[] {
-    const record = this.records[agentId];
-    const outcomes = this.settled.get(agentId);
+    const record = this.projection.agents()[agentId];
+    const outcomes = this.projection.settledOf(agentId);
     if (!record || !outcomes) return [];
     const failures: AgentDelivery[] = [];
     const answers = new Map<number, AgentDelivery>();
@@ -1111,7 +1079,7 @@ export class AgentService {
   private async consumeGraph(graphId: string): Promise<void> {
     const info = this.requireGraph(graphId);
     await this.store.consumeGraph(graphId, info.nodes, (id) =>
-      this.settled.get(id),
+      this.projection.settledOf(id),
     );
     await this.refresh(info.nodes.map((node) => node.agentId));
   }
@@ -1126,15 +1094,8 @@ export class AgentService {
     entryIds: number[],
   ): Promise<void> {
     await this.store.removeRequests(agentId, requestIds, entryIds);
-    const outcomes = this.settled.get(agentId);
-    for (const rid of requestIds) outcomes?.delete(rid);
+    for (const rid of requestIds) this.projection.deleteSettled(agentId, rid);
     await this.refresh([agentId]);
-  }
-
-  private graphOfNode(task: number): GraphRecord | undefined {
-    return Object.values(this.graphRecords).find((graph) =>
-      graph.nodes.some((node) => node.task === task),
-    );
   }
 
   private scheduleRefresh(): void {
@@ -1150,19 +1111,9 @@ export class AgentService {
   private refresh(ids: string[]): Promise<void> {
     const run = this.refreshChain.then(async () => {
       if (this.closed) return;
-      this.records = await this.store.loadAgents();
-      this.graphRecords = await this.store.loadGraphs();
+      await this.projection.reload();
       if (this.messageLog.isDirty()) await this.messageLog.load();
-      const targets = new Set(ids);
-      for (const id of Object.keys(this.records))
-        if (!this.infos.has(id)) targets.add(id);
-      const drops: Array<[string, string[]]> = [];
-      for (const id of targets) {
-        const record = this.records[id];
-        if (!record) continue;
-        drops.push([id, await this.compute(id, record)]);
-      }
-      const stopped = await this.computeGraphs();
+      const { drops, stopped } = await this.projection.refresh(ids);
       this.emit();
       for (const [id, rids] of drops)
         if (rids.length > 0) await this.dropRequests(id, rids);
@@ -1177,8 +1128,7 @@ export class AgentService {
 
   private async dropRequests(agentId: string, rids: string[]): Promise<void> {
     await this.store.dropRequests(agentId, rids);
-    const outcomes = this.settled.get(agentId);
-    for (const rid of rids) outcomes?.delete(rid);
+    for (const rid of rids) this.projection.deleteSettled(agentId, rid);
   }
 
   /**
@@ -1188,7 +1138,7 @@ export class AgentService {
    */
   private async closeEndedHelpers(): Promise<void> {
     const ended: string[] = [];
-    for (const [id, graph] of Object.entries(this.graphRecords)) {
+    for (const [id, graph] of Object.entries(this.projection.graphs())) {
       if (!graph.owner || graph.closed) continue;
       if (
         (await this.observer.isFinished(Number(id))) &&
@@ -1198,335 +1148,8 @@ export class AgentService {
     }
     if (ended.length === 0) return;
     await this.store.closeGraphs(ended);
-    this.graphRecords = await this.store.loadGraphs();
-    this.records = await this.store.loadAgents();
-    for (const id of ended) {
-      const info = this.graphInfos.get(id);
-      if (info) info.closed = true;
-      for (const node of this.graphRecords[id]?.nodes ?? []) {
-        const agent = this.infos.get(node.agent);
-        const record = this.records[node.agent];
-        if (agent && record) agent.closed = record.closed;
-      }
-    }
+    await this.projection.reload();
+    this.projection.markClosed(ended);
     this.emit();
-  }
-
-  /** Recompute one agent's info; returns aborted request IDs to drop. */
-  private async compute(id: string, record: AgentRecord): Promise<string[]> {
-    const cid = conversationId(id);
-    const [live, usage, agent] = await Promise.all([
-      this.harness.snapshot(LiveDoc, cid, CONTEXT),
-      this.harness.snapshot(UsageDoc, cid, CONTEXT),
-      this.harness.snapshot(AgentDoc, cid, CONTEXT),
-    ]);
-    const outcomes = new Map<string, RequestOutcome>();
-    const aborted: string[] = [];
-    for (const rid of Object.keys(record.requests)) {
-      const outcome = await this.store.requestOutcome(id, record.name, rid);
-      if (!outcome) continue;
-      if (outcome.kind === "aborted") aborted.push(rid);
-      else if (
-        outcome.kind === "answered" &&
-        record.delivered.includes(outcome.result.entryId)
-      )
-        aborted.push(rid);
-      else outcomes.set(rid, outcome);
-    }
-    if (outcomes.size > 0) this.settled.set(id, outcomes);
-    else this.settled.delete(id);
-
-    const jobAnswer = await this.jobAnswer(id, record);
-    const result: AgentResult | undefined = resultOf(
-      this.observer.lastAssistantOf(id),
-      id,
-      record.name,
-    );
-    const state =
-      (live?.run === undefined
-        ? await this.nodeState(id, record, result)
-        : undefined) ??
-      deriveState(live, result, this.observer.settlementOf(id));
-    const ended = this.observer.endedTurnOf(id);
-    const previous = this.infos.get(id);
-    const now = Date.now();
-    const endedAt =
-      state === "working" || state === "waiting"
-        ? undefined
-        : await this.agentEndedAt(id, record);
-    const durable = (agent ?? {}) as DurableAgentState;
-    const tools = Array.isArray(durable.tools)
-      ? durable.tools.filter((tool) => tool !== DELEGATE_TOOL)
-      : undefined;
-    this.infos.set(id, {
-      id,
-      name: record.name,
-      ...(record.profile ? { profile: record.profile } : {}),
-      job: record.job,
-      cwd: durable.cwd ?? process.cwd(),
-      ...(durable.model ? { model: { ...durable.model } } : {}),
-      ...(isThinkingLevel(durable.thinkingLevel)
-        ? { thinking: durable.thinkingLevel }
-        : {}),
-      ...(tools ? { tools: [...tools] } : {}),
-      state,
-      closed: record.closed,
-      createdAt: record.createdAt,
-      stateSince:
-        previous?.state === state
-          ? previous.stateSince
-          : previous
-            ? now
-            : state === "working"
-              ? record.createdAt
-              : (result?.at ?? record.createdAt),
-      lastActivityAt:
-        this.observer.activityAtOf(id) ??
-        previous?.lastActivityAt ??
-        record.createdAt,
-      ...(endedAt !== undefined ? { endedAt } : {}),
-      usage: addPartialUsage(summarizeUsage(usage), live),
-      activity: activityOf(live),
-      ...(result ? { result } : {}),
-      ...(ended && (state === "interrupted" || state === "failed")
-        ? {
-            unanswered: {
-              reason: ended.reason,
-              ...(ended.detail !== undefined ? { detail: ended.detail } : {}),
-              current:
-                result !== undefined &&
-                ended.since !== undefined &&
-                result.entryId > ended.since,
-            },
-          }
-        : {}),
-      ...(jobAnswer !== undefined ? { jobAnswer } : {}),
-      ...(record.graph ? { graph: record.graph } : {}),
-      ...(record.delegate ? { delegates: true } : {}),
-      ...(state === "idle" &&
-      [...outcomes.values()].some(
-        (outcome) =>
-          outcome.kind === "answered" &&
-          !this.inFlight.get(
-            answerDeliveryId(id, record, outcome.result.entryId),
-          )?.carried,
-      )
-        ? { queued: true }
-        : {}),
-    });
-    return aborted;
-  }
-
-  /**
-   * When the agent's latest run ended: when its latest generation became
-   * terminal. A graph's agent that never ran ended with its node.
-   */
-  private async agentEndedAt(
-    agentId: string,
-    record: AgentRecord,
-  ): Promise<number | undefined> {
-    const latest = await this.observer.latestGeneration(agentId);
-    if (latest) return latest.endedAt;
-    const graph =
-      record.graph === undefined ? undefined : this.graphRecords[record.graph];
-    const node = graph?.nodes.find((each) => each.agent === agentId);
-    return node
-      ? (await this.observer.settledTask(node.task))?.endedAt
-      : undefined;
-  }
-
-  /**
-   * The entry that answered the agent's job: the answer to the submission
-   * of its job, under `parent:1` for agents the parent started and under
-   * its node's request ID for a graph's agents.
-   */
-  private async jobAnswer(
-    agentId: string,
-    record: AgentRecord,
-  ): Promise<number | undefined> {
-    const graph =
-      record.graph === undefined ? undefined : this.graphRecords[record.graph];
-    const node = graph?.nodes.find((each) => each.agent === agentId);
-    const rid = node ? nodeRequestId(node.task) : requestId(1);
-    return this.observer.jobAnswer(agentId, rid);
-  }
-
-  /**
-   * A graph agent's state while its own conversation doesn't run: it waits
-   * until its inputs ended, then works until its node ended, also before the
-   * node sent the job. An agent that never answered shows why: skipped, or
-   * stopped by its graph. Undefined when the conversation decides.
-   */
-  private async nodeState(
-    agentId: string,
-    record: AgentRecord,
-    result: AgentResult | undefined,
-  ): Promise<AgentInfo["state"] | undefined> {
-    const graph =
-      record.graph === undefined ? undefined : this.graphRecords[record.graph];
-    const node = graph?.nodes.find((each) => each.agent === agentId);
-    if (!graph || !node) return undefined;
-    const outcome = await this.observer.taskOutcome(node.task);
-    if (outcome === undefined) {
-      for (const input of node.after) {
-        const task = graph.nodes.find((each) => each.agent === input)?.task;
-        if (task !== undefined && !(await this.observer.isFinished(task)))
-          return "waiting";
-      }
-      return "working";
-    }
-    if (result) return undefined;
-    if (
-      outcome.status === "completed" &&
-      (outcome.result as NodeResult).kind === "skipped"
-    )
-      return "skipped";
-    if (outcome.status === "aborted") return "interrupted";
-    return undefined;
-  }
-
-  /** How a graph agent's node ended, once it did. */
-  private async nodeOutcome(
-    task: number,
-    agentId: string,
-    name: string,
-  ): Promise<NodeOutcome | undefined> {
-    const outcome = await this.observer.taskOutcome(task);
-    if (!outcome) return undefined;
-    switch (outcome.status) {
-      case "completed": {
-        const result = outcome.result as NodeResult;
-        if (result.kind === "skipped") return { kind: "skipped" };
-        if (result.kind !== "answered") return { kind: "interrupted" };
-        const answered = resultOf(
-          await this.observer.answer(result.entryId),
-          agentId,
-          name,
-        );
-        return answered
-          ? { kind: "answered", result: answered }
-          : { kind: "failed", reason: "answer missing" };
-      }
-      case "aborted":
-        return { kind: "stopped" };
-      case "orphaned":
-        return { kind: "failed", reason: outcome.reason };
-      default:
-        return { kind: "failed", reason: outcome.error.message };
-    }
-  }
-
-  /** Recompute every graph's info; returns stopped graphs still pending. */
-  private async computeGraphs(): Promise<string[]> {
-    const stopped: string[] = [];
-    const now = Date.now();
-    for (const [id, record] of Object.entries(this.graphRecords)) {
-      // A graph works until it is terminal, also while it holds an outcome.
-      const settled = await this.observer.settledTask(Number(id));
-      const ended = settled?.terminal ? settled.outcome : undefined;
-      const endedAt = settled?.terminal ? settled.endedAt : undefined;
-      const topology = record.nodes.map((node) => ({
-        key: node.agent,
-        inputs: node.after,
-      }));
-      const ends = new Set(endNodes(topology));
-      const byAgent = new Map<string, GraphNodeRecord>(
-        record.nodes.map((node) => [node.agent, node]),
-      );
-      const nodes: GraphNode[] = [];
-      for (const agentId of stages(topology).flat()) {
-        const node = byAgent.get(agentId);
-        if (!node) continue;
-        const name = this.records[agentId]?.name ?? agentId;
-        const outcome = await this.nodeOutcome(node.task, agentId, name);
-        nodes.push({
-          agentId,
-          name,
-          inputs: [...node.after],
-          end: ends.has(agentId),
-          ...(outcome ? { outcome } : {}),
-        });
-      }
-      const isStopped =
-        ended !== undefined &&
-        (record.stopped === true || ended.status === "aborted");
-      const state = isStopped ? "interrupted" : deriveGraphState(ended, nodes);
-      if (isStopped && record.pending) stopped.push(id);
-      const previous = this.graphInfos.get(id);
-      this.graphInfos.set(id, {
-        id,
-        name: record.name,
-        policy: record.policy,
-        state,
-        closed: record.closed,
-        stopped: isStopped,
-        createdAt: record.createdAt,
-        stateSince:
-          previous?.state === state
-            ? previous.stateSince
-            : previous
-              ? now
-              : record.createdAt,
-        ...(endedAt !== undefined ? { endedAt } : {}),
-        nodes,
-        usage: sumUsage(
-          record.nodes.flatMap((node) => {
-            const usage = this.infos.get(node.agent)?.usage;
-            return usage ? [usage] : [];
-          }),
-        ),
-        ...(record.owner ? { owner: record.owner.agent } : {}),
-        ...(record.pending &&
-        ended !== undefined &&
-        !isStopped &&
-        !this.inFlight.get(graphDeliveryId(id, record))?.carried
-          ? { queued: true }
-          : {}),
-      });
-    }
-    this.deriveDelegation();
-    return stopped;
-  }
-
-  /**
-   * What delegation adds to the derived infos: a graph's usage includes the
-   * helpers its agents started, and an agent that waits for helpers shows
-   * their progress instead of its tool.
-   */
-  private deriveDelegation(): void {
-    const owned = new Map<string, GraphInfo[]>();
-    for (const graph of this.graphInfos.values())
-      if (graph.owner)
-        owned.set(graph.owner, [...(owned.get(graph.owner) ?? []), graph]);
-    for (const graph of this.graphInfos.values()) {
-      if (graph.owner) continue;
-      const nested = graph.nodes.flatMap(
-        (node) => owned.get(node.agentId) ?? [],
-      );
-      if (nested.length > 0)
-        graph.usage = sumUsage([
-          graph.usage,
-          ...nested.map((each) => each.usage),
-        ]);
-    }
-    for (const info of this.infos.values()) {
-      const working = (owned.get(info.id) ?? []).find(
-        (graph) => graph.state === "working",
-      );
-      const { delegation: _, ...activity } = info.activity;
-      if (!working) {
-        info.activity = activity;
-        continue;
-      }
-      if (activity.tool === DELEGATE_TOOL) delete activity.tool;
-      info.activity = {
-        ...activity,
-        delegation: {
-          graph: working.name,
-          done: working.nodes.filter((node) => node.outcome).length,
-          total: working.nodes.length,
-        },
-      };
-    }
   }
 }

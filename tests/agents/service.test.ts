@@ -132,6 +132,42 @@ describe("AgentService", () => {
     expect(service.pendingDeliveries()).toEqual([]);
   });
 
+  test("a carried result closes the agent after a user prompt", async () => {
+    const service = await open();
+    const agent = await service.spawn({
+      job: "first",
+      name: "w",
+      cwd: ".",
+      model: MODEL,
+    });
+    const outcome = await service.waitFor([{ kind: "agent", id: agent.id }], {
+      carrier: { call: "c1" },
+    });
+    expect(outcome.deliveries).toHaveLength(1);
+    expect(outcome.agents[0]?.result?.text).toBe("done: first");
+    expect(service.get("w")?.closed).toBe(false);
+    expect(service.get("w")?.queued).toBeUndefined();
+
+    await service.prompt("w", "from the user", "auto");
+    await until(
+      () =>
+        service.get("w")?.state === "idle" &&
+        service.get("w")?.result?.text === "done: [user] from the user",
+    );
+    expect(service.get("w")?.closed).toBe(false);
+    // The user answered a different turn; the carried delivery still names
+    // the answer to the parent's request, not the agent's latest answer.
+    expect(service.pendingDeliveries().map((delivery) => delivery.id)).toEqual(
+      outcome.deliveries,
+    );
+    expect(service.get("w")?.queued).toBeUndefined();
+
+    parentOf(service).hold(outcome.deliveries);
+    await until(() => service.get("w")?.closed === true);
+    expect(service.pendingDeliveries()).toEqual([]);
+    expect(service.list()).toEqual([]);
+  });
+
   test("interrupt aborts work without delivering", async () => {
     const { models } = createFaux((prompt) => `${prompt} `.repeat(400), {
       tokensPerSecond: 20,

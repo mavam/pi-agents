@@ -21,6 +21,7 @@ import {
   type TurnSettlement,
 } from "./derive.js";
 import { GRAPH_TASK, NODE_TASK } from "./graphs.js";
+import { isMessageRequest } from "./message-log.js";
 import {
   AgentsDoc,
   type GraphRecord,
@@ -42,10 +43,6 @@ interface HarnessObserverOptions {
   onMessagesChanged: () => void;
   isMessagesDirty: () => boolean;
   agentIds: () => Iterable<string>;
-}
-
-function isMessageRequest(requestId: string | undefined): boolean {
-  return requestId?.startsWith("message:") === true;
 }
 
 export class HarnessObserver {

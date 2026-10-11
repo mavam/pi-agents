@@ -25,7 +25,6 @@ import {
   type Extension,
   type Harness,
   LiveDoc,
-  type SubmissionRecord,
   type ToolRegistration,
   UsageDoc,
 } from "@earendil-works/pi-durable";
@@ -48,6 +47,7 @@ import {
   NodeTask,
   nodeRequestId,
 } from "./graphs.js";
+import { MessageLog } from "./message-log.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
 import { HarnessObserver } from "./observer.js";
 import type { Parent } from "./parent.js";
@@ -60,7 +60,6 @@ import {
   type GraphRecord,
   GraphsDoc,
   graphDeliveryId,
-  type MessageRecord,
   type ParentRequest,
   requestId,
 } from "./records.js";
@@ -79,7 +78,6 @@ import {
   type GraphSpec,
   isThinkingLevel,
   type MessageInfo,
-  type MessageStatus,
   type NodeOutcome,
   type PendingDelivery,
   type RequestOutcome,
@@ -148,21 +146,8 @@ function isSettled(
   );
 }
 
-/** Where a message is, from its submission. */
-function messageStatus(submission: SubmissionRecord): MessageStatus {
-  if (submission.status === "queued") return "queued";
-  if (submission.status === "unanswered" && submission.entry === undefined)
-    return "dropped";
-  return "delivered";
-}
-
 export class AgentService {
   private records: Record<string, AgentRecord> = {};
-  /** The message log, oldest first, and each message's status. */
-  private messageLog: MessageRecord[] = [];
-  private readonly messageStatuses = new Map<string, MessageStatus>();
-  private messagesDirty = false;
-  private messagesDropped = 0;
   private graphRecords: Record<string, GraphRecord> = {};
   private readonly infos = new Map<string, AgentInfo>();
   private readonly graphInfos = new Map<string, GraphInfo>();
@@ -190,6 +175,7 @@ export class AgentService {
   private reconciled = false;
   private closed = false;
 
+  private readonly messageLog: MessageLog;
   private readonly observer: HarnessObserver;
   private readonly store: AgentStore;
   private readonly harness: Harness;
@@ -207,22 +193,18 @@ export class AgentService {
     this.parent = options.parent;
     this.report = options.onReport ?? (() => {});
     this.refreshDelayMs = options.refreshDelayMs ?? REFRESH_DELAY_MS;
+    this.messageLog = new MessageLog({
+      store: this.store,
+      agents: () => this.records,
+    });
     this.observer = new HarnessObserver({
       harness: this.harness,
       store: this.store,
       graphOfNode: (task) => this.graphOfNode(task),
       onChange: () => this.scheduleRefresh(),
-      onMessage: (submission) => {
-        this.messageStatuses.set(
-          submission.requestId as string,
-          messageStatus(submission),
-        );
-        this.messagesDirty = true;
-      },
-      onMessagesChanged: () => {
-        this.messagesDirty = true;
-      },
-      isMessagesDirty: () => this.messagesDirty,
+      onMessage: (submission) => this.messageLog.noteSubmission(submission),
+      onMessagesChanged: () => this.messageLog.markDirty(),
+      isMessagesDirty: () => this.messageLog.isDirty(),
       agentIds: () => Object.keys(this.records),
     });
     this.extensions.hub.state = (id) => this.infos.get(id)?.state;
@@ -254,7 +236,7 @@ export class AgentService {
       await this.store.flushOutbox(id);
     }
     await this.store.flushMessages();
-    await this.loadMessages();
+    await this.messageLog.load();
     await this.refresh(Object.keys(this.records));
     this.unsubscribeParent = this.parent.subscribe(() =>
       this.scheduleDelivery(),
@@ -305,28 +287,12 @@ export class AgentService {
 
   /** How many older messages the log dropped. */
   droppedMessages(): number {
-    return this.messagesDropped;
+    return this.messageLog.dropped();
   }
 
   /** Messages between agents, oldest first. */
   messages(): MessageInfo[] {
-    return this.messageLog.flatMap((message) => {
-      const from = this.records[message.from];
-      const to = this.records[message.to];
-      if (!from || !to) return [];
-      return [
-        {
-          id: message.id,
-          from: { id: message.from, name: from.name },
-          to: { id: message.to, name: to.name },
-          text: message.text,
-          sentAt: message.sentAt,
-          status: message.dropped
-            ? "dropped"
-            : (this.messageStatuses.get(message.id) ?? "queued"),
-        },
-      ];
-    });
+    return this.messageLog.list();
   }
 
   /** A visible agent by name, else the newest closed one, else by ID. */
@@ -1165,25 +1131,6 @@ export class AgentService {
     await this.refresh([agentId]);
   }
 
-  /** The message log, and the status of messages this process hasn't
-   * seen a submission of. */
-  private async loadMessages(): Promise<void> {
-    this.messagesDirty = false;
-    const state = await this.store.loadMessages();
-    this.messageLog = structuredClone(state?.messages ?? []) as MessageRecord[];
-    this.messagesDropped = state?.dropped ?? 0;
-    const unknown = this.messageLog.filter(
-      (message) => !this.messageStatuses.has(message.id),
-    );
-    if (unknown.length === 0) return;
-    const found = await this.store.submissionsByRequest(unknown);
-    found.forEach((submission, index) => {
-      const id = unknown[index]?.id;
-      if (id && submission)
-        this.messageStatuses.set(id, messageStatus(submission));
-    });
-  }
-
   private graphOfNode(task: number): GraphRecord | undefined {
     return Object.values(this.graphRecords).find((graph) =>
       graph.nodes.some((node) => node.task === task),
@@ -1205,7 +1152,7 @@ export class AgentService {
       if (this.closed) return;
       this.records = await this.store.loadAgents();
       this.graphRecords = await this.store.loadGraphs();
-      if (this.messagesDirty) await this.loadMessages();
+      if (this.messageLog.isDirty()) await this.messageLog.load();
       const targets = new Set(ids);
       for (const id of Object.keys(this.records))
         if (!this.infos.has(id)) targets.add(id);

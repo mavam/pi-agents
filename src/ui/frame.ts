@@ -175,3 +175,20 @@ export function edgeLine(
     color("dim", `${"─".repeat(fill)}${corners[1]}`)
   );
 }
+
+/** Hints that go first when key hints don't fit, in this order: those for
+ * keys that work alike everywhere. */
+const DROPPABLE_HINTS = ["⇧↑↓ ", "↑↓ ", "space ", "tab ", "s "];
+
+/** Key hints joined with ` · `, at most `width` wide: hints for common keys
+ * go first, then the row's end is cut. */
+export function fitHints(hints: readonly string[], width: number): string {
+  const kept = [...hints];
+  const fits = () => visibleWidth(kept.join(" · ")) <= width;
+  for (const prefix of DROPPABLE_HINTS) {
+    if (fits()) break;
+    const index = kept.findIndex((hint) => hint.startsWith(prefix));
+    if (index >= 0) kept.splice(index, 1);
+  }
+  return truncateToWidth(kept.join(" · "), Math.max(1, width), "…");
+}

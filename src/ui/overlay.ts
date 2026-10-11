@@ -32,6 +32,7 @@ import {
   clamp,
   type DetailLine,
   edgeLine,
+  fitHints,
   paneLayout,
   renderDetail,
   windowDetail,
@@ -49,7 +50,8 @@ export interface OverlaySpec<T> {
   /** Shown when items() is empty. */
   emptyText: string;
   /** Key hints embedded in the bottom border, read on every render. */
-  footer: string | (() => string);
+  /** Key hints, which drop common ones when they don't fit. */
+  footer: () => string[];
   /** The item to select first, by key. */
   initialKey?: string;
   items: () => T[];
@@ -113,9 +115,10 @@ class SplitPaneOverlay<T> implements Component {
     }
   }
 
-  private footer(): string {
-    const { footer } = this.spec;
-    return typeof footer === "string" ? footer : footer();
+  /** The bottom border's hints, fit inside it. */
+  private footer(width: number, scroll = false): string {
+    const hints = [...(scroll ? ["⇧↑↓ scroll"] : []), ...this.spec.footer()];
+    return fitHints(hints, Math.max(1, width - 6));
   }
 
   render(width: number): string[] {
@@ -126,7 +129,7 @@ class SplitPaneOverlay<T> implements Component {
       return [
         edgeLine(["╭", "╮"], color("accent", spec.title), width, color),
         boxLine(color("dim", spec.emptyText), width, color),
-        edgeLine(["╰", "╯"], color("dim", this.footer()), width, color),
+        edgeLine(["╰", "╯"], color("dim", this.footer(width)), width, color),
         "",
       ];
     const index = this.index(items);
@@ -198,8 +201,7 @@ class SplitPaneOverlay<T> implements Component {
     for (let i = shown.length; i < this.detailFloor; i++)
       lines.push(boxLine("", width, color));
 
-    const footer = this.footer();
-    const hints = maxOffset > 0 ? `⇧↑↓ scroll · ${footer}` : footer;
+    const hints = this.footer(width, maxOffset > 0);
     lines.push(edgeLine(["╰", "╯"], color("dim", hints), width, color), "");
     return lines;
   }

@@ -35,6 +35,7 @@ import type { MessageInfo } from "../agents/types.js";
 import {
   boxLine,
   edgeLine,
+  fitHints,
   paneLayout,
   renderDetail,
   windowDetail,
@@ -165,7 +166,10 @@ class MessageStreamView implements Component {
     const footer = (scroll: boolean) =>
       edgeLine(
         ["╰", "╯"],
-        color("dim", [...(scroll ? ["⇧↑↓ scroll"] : []), ...hints].join(" · ")),
+        color(
+          "dim",
+          fitHints([...(scroll ? ["⇧↑↓ scroll"] : []), ...hints], width - 6),
+        ),
         width,
         color,
       );

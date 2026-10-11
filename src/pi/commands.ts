@@ -356,7 +356,15 @@ async function openAgentsOverlay(
         : deps.panel.hasRows()
           ? "panel"
           : undefined;
-      return `↑↓ move · space fold · ⏎ attach · s stop${deps.host.messaging() ? " · m messages" : ""}${next ? ` · tab ${next}` : ""} · esc back`;
+      return [
+        "↑↓ move",
+        "space fold",
+        "⏎ attach",
+        "s stop",
+        ...(deps.host.messaging() ? ["m messages"] : []),
+        ...(next ? [`tab ${next}`] : []),
+        "esc back",
+      ];
     },
     ...(select ? { initialKey: select } : {}),
     items,

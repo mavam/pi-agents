@@ -52,9 +52,6 @@ export function statusColor(
   return status ? color(MESSAGE_STATUS_COLORS[status], text) : text;
 }
 
-/** The widest sender and recipient column. */
-const MAX_PAIR_WIDTH = 28;
-
 /** What a line or card shows of a message. */
 export type MessageParts = Pick<MessageInfo, "text"> & {
   from: string;
@@ -69,19 +66,6 @@ export type MessageParts = Pick<MessageInfo, "text"> & {
 /** `scout → notes`. */
 export function messagePair(message: { from: string; to: string }): string {
   return `${message.from} → ${message.to}`;
-}
-
-/** The width of the sender and recipient column for these messages. */
-export function pairWidth(
-  messages: ReadonlyArray<{ from: string; to: string }>,
-): number {
-  return Math.min(
-    MAX_PAIR_WIDTH,
-    Math.max(
-      0,
-      ...messages.map((message) => visibleWidth(messagePair(message))),
-    ),
-  );
 }
 
 /** The first line of a message, flattened for one row. */
@@ -116,31 +100,26 @@ export function formatClock(at: number, now: number = Date.now()): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${clock}`;
 }
 
-/** `scout → notes` padded to `column`, the names in bold and the arrow
- * dim. */
+/** `scout → notes`, the names in bold and the arrow dim. */
 function formatPair(
   message: { from: string; to: string },
-  column: number,
   { color, bold }: MessageStyle,
 ): string {
-  const width = visibleWidth(messagePair(message));
-  if (width > column)
-    return bold(truncateToWidth(messagePair(message), column, "…"));
-  return `${bold(message.from)}${color("dim", " → ")}${bold(message.to)}${" ".repeat(column - width)}`;
+  return `${bold(message.from)}${color("dim", " → ")}${bold(message.to)}`;
 }
 
 /**
- * A message's line, at most `width` wide: who, padded to `column` so lines
- * align, then the text colored by its status, then its age.
+ * A message's line, at most `width` wide: who, then the text colored by its
+ * status, then its age. Lines don't align in columns, so the text gets the
+ * room; only the line's end is cut, never a name.
  */
 export function messageLine(
   message: MessageParts,
   width: number,
   style: MessageStyle = plainStyle,
-  column = pairWidth([message]),
 ): string {
   const { color } = style;
-  const head = formatPair(message, column, style);
+  const head = formatPair(message, style);
   const tail = message.age ? color("dim", ` ${message.age}`) : "";
   const room = width - visibleWidth(head) - visibleWidth(tail) - 1;
   if (room < 4)
@@ -179,11 +158,7 @@ class MessageLines implements Component {
       visibleWidth(messagePair(this.message)) + visibleWidth(text) + 1 <=
         usable;
     if (!this.expanded() || whole) return [line];
-    const who = formatPair(
-      this.message,
-      visibleWidth(messagePair(this.message)),
-      style,
-    );
+    const who = formatPair(this.message, style);
     const body = text
       .split("\n")
       .flatMap((paragraph) =>

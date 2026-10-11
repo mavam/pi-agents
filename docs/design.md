@@ -537,10 +537,10 @@ message card, with its own, and Pi's tools with Pi's.
   Pi's message background, the whole text below when expanded.
   - Panel: queued messages of the agents it shows, with how long they
     waited, in a column to their right from 120 terminal columns, else
-    below them. The columns keep their widths as messages come and go: the
-    agents get a fixed share, and the pair column fits the longest pair of
-    names among the agents. ↑↓ reach messages, ⏎ attaches to a message's
-    recipient.
+    below them. The agents get a fixed share, so the message column stays
+    put as messages come and go. Text starts right after the names, without
+    padding to a common column; it's dim while queued, so the names stand
+    out. ↑↓ reach messages, ⏎ attaches to a message's recipient.
   - Transcript: one custom entry per message, a card with the time, which
     Pi's model doesn't see.
     Entries only append and are deduplicated by message ID and send time;

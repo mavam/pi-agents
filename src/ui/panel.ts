@@ -24,9 +24,9 @@
  *
  *   ◉ scout sol 40s 8.1k   scout → notes README.md is 18 KB 3s
  *
- * The two columns keep their widths while messages come and go: the agents
- * get a fixed share of the panel, and the sender and recipient column fits
- * the longest pair of names among the agents.
+ * The agents get a fixed share of the panel, so the message column doesn't
+ * move while messages come and go. A message's text starts right after the
+ * names; it's dim while queued, so the names stand out.
  *
  * ↑↓ continue from the agents into the messages, ⏎ on a message attaches to
  * its recipient, and `m` opens `/messages`: the selected agent's threads,
@@ -88,8 +88,6 @@ export const COLUMNS_MIN_WIDTH = 120;
 const COLUMN_MIN_HEIGHT = 3;
 /** The agent column's share of the panel in columns. */
 const AGENT_COLUMN_RATIO = 0.45;
-/** The widest sender and recipient column. */
-const MAX_PAIR_COLUMN = 28;
 
 function messageKey(message: MessageInfo): string {
   return `message:${message.id}`;
@@ -209,16 +207,6 @@ export class AgentPanel {
           message.status === "queued" &&
           (shown.has(message.from.id) || shown.has(message.to.id)),
       );
-  }
-
-  /** The sender and recipient column: as wide as the longest pair of
-   * names among the agents, so it doesn't move as messages change. */
-  private pairColumn(): number {
-    const names = (this.host.current()?.list() ?? []).map(
-      (info) => info.name.length,
-    );
-    const longest = Math.max(4, ...names);
-    return Math.min(MAX_PAIR_COLUMN, longest * 2 + 3);
   }
 
   /** A queued message's line parts, with how long it has waited. */
@@ -497,7 +485,6 @@ export class AgentPanel {
     if (!columns) {
       const shown = messages.slice(-options.stacked);
       if (selectable) this.shownMessages = shown;
-      const column = this.pairColumn();
       this.targets = [
         ...left.map((_, index) => ({ left: leftTargets[index] })),
         {},
@@ -511,7 +498,7 @@ export class AgentPanel {
         ),
         ...shown.map(
           (message) =>
-            `${marker(message)}${messageLine(this.parts(message), width - markerWidth, style, column)}`,
+            `${marker(message)}${messageLine(this.parts(message), width - markerWidth, style)}`,
         ),
       ];
     }
@@ -523,7 +510,6 @@ export class AgentPanel {
     if (selectable) this.shownMessages = shown;
     const leftWidth = Math.floor(width * AGENT_COLUMN_RATIO);
     const rightWidth = Math.max(8, width - leftWidth - 1 - markerWidth);
-    const column = this.pairColumn();
     // A gap, not a bar, separates the columns.
     const separator = " ";
     this.targets = Array.from({ length: height }, (_, index) => ({
@@ -534,7 +520,7 @@ export class AgentPanel {
     return Array.from({ length: height }, (_, index) => {
       const message = shown[index];
       const right = message
-        ? `${marker(message)}${messageLine(this.parts(message), rightWidth, style, column)}`
+        ? `${marker(message)}${messageLine(this.parts(message), rightWidth, style)}`
         : "";
       return `${padLine(left[index] ?? "", leftWidth)}${separator}${right}`;
     });

@@ -12,7 +12,7 @@ import {
   graphShape,
   runtime,
 } from "../../src/ui/format.js";
-import { messageCard, messageLine, pairWidth } from "../../src/ui/messages.js";
+import { messageCard, messageLine } from "../../src/ui/messages.js";
 import { panelCompare, panelOrder } from "../../src/ui/panel.js";
 import {
   attachTarget,

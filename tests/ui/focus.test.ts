@@ -125,7 +125,7 @@ describe("focus", () => {
     expect(panel.hasOverlay()).toBe(false);
   });
 
-  test("Tab trades the focused panel for /agents at the same row", () => {
+  test("Tab and Shift+Tab trade the panel for /agents at the same row", () => {
     const { press, focused, browsed } = setup({
       rows: true,
       agents: 2,
@@ -135,5 +135,15 @@ describe("focus", () => {
     expect(press("\t")).toEqual({ consume: true });
     expect(focused).toEqual([false]);
     expect(browsed).toEqual(["agent:7"]);
+    // With messaging off, Shift+Tab goes back to /agents too, instead of
+    // reaching Pi, where it changes the thinking level.
+    const back = setup({
+      rows: true,
+      agents: 2,
+      suppressed: false,
+      focused: true,
+    });
+    expect(back.press("\u001b[Z")).toEqual({ consume: true });
+    expect(back.browsed).toEqual(["agent:7"]);
   });
 });

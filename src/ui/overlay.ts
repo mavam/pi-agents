@@ -62,7 +62,10 @@ export interface OverlaySpec<T> {
   headerLine?: (item: T, color: Colorize) => string;
   /** Detail pane lines, wrapped to the pane width. */
   detail: (item: T, color: Colorize, bold: Bold) => DetailLine[];
-  /** Handle enter, space, tab, shift+tab, or a single-letter key. */
+  /** Handle tab or shift+tab, also without items, which go to other
+   * views. */
+  onNavigate: (key: "tab" | "shift+tab", item: T | undefined) => OverlayAction;
+  /** Handle enter, space, or a single-letter key on the selected item. */
   onAction: (key: string, item: T) => OverlayAction;
   /** Whether to re-render every 500 ms. */
   live?: () => boolean;
@@ -216,9 +219,14 @@ class SplitPaneOverlay<T> implements Component {
       return;
     }
     const items = this.spec.items();
+    const key = parseKey(data) ?? data;
+    if (key === "tab" || key === "shift+tab") {
+      const item = items.length > 0 ? items[this.index(items)] : undefined;
+      this.apply(this.spec.onNavigate(key, item));
+      return;
+    }
     if (items.length === 0) return;
     const index = this.index(items);
-    const key = parseKey(data) ?? data;
     const page = Math.max(1, this.detailScroll.rows - 1);
     if (key === "shift+up" || matchesKey(data, "shift+k")) this.scroll(-1);
     else if (key === "shift+down" || matchesKey(data, "shift+j"))
@@ -231,14 +239,16 @@ class SplitPaneOverlay<T> implements Component {
       this.select(items, index + 1);
     else if (keybindings.matches(data, "tui.select.confirm"))
       this.act("enter", items[index] as T);
-    else if (key === "space" || key === "tab" || key === "shift+tab")
-      this.act(key, items[index] as T);
+    else if (key === "space") this.act(key, items[index] as T);
     else if (/^[a-z]$/.test(key)) this.act(key, items[index] as T);
     this.tui.requestRender();
   }
 
   private act(key: string, item: T): void {
-    const action = this.spec.onAction(key, item);
+    this.apply(this.spec.onAction(key, item));
+  }
+
+  private apply(action: OverlayAction): void {
     if (action === "close") this.close();
     else if (action) this.selectedKey = action.select;
   }

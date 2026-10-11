@@ -402,20 +402,14 @@ async function openAgentsOverlay(
       row.kind === "agent"
         ? agentDetail(row.agent, color)
         : graphDetail(row.graph, (id) => service.agentById(id), color, bold),
-    onAction: (key, row) => {
-      if (key === "space") return { select: fold(row, deps.panel.disclosure) };
-      if (key === "m" && deps.host.messaging()) {
-        const agent = row.kind === "agent" ? row.agent.id : undefined;
-        after = () =>
-          void openMessagesOverlay(ctx, deps, agent ? { agent } : {}).catch(
-            (error) => ctx.ui.notify(errorText(error), "error"),
-          );
-        return "close";
-      }
-      // Tab goes on to /messages, Shift+Tab back to the panel; each skips
-      // to the other when it has nothing to show.
+    // Tab goes on to /messages, Shift+Tab back to the panel; each skips to
+    // the other when it has nothing to show.
+    onNavigate: (key, row) => {
       const toPanel = () => {
-        after = () => deps.focus.focusPanelAt(ctx, row.key);
+        after = () =>
+          row
+            ? deps.focus.focusPanelAt(ctx, row.key)
+            : deps.focus.focusPanel(ctx);
         return "close" as const;
       };
       const toMessages = () => {
@@ -425,13 +419,21 @@ async function openAgentsOverlay(
           );
         return "close" as const;
       };
-      if (key === "tab") {
-        if (deps.host.messaging()) return toMessages();
-        return deps.panel.hasRows() ? toPanel() : undefined;
-      }
-      if (key === "shift+tab") {
-        if (deps.panel.hasRows()) return toPanel();
-        return deps.host.messaging() ? toMessages() : undefined;
+      const panel = deps.panel.hasRows();
+      const messages = deps.host.messaging();
+      if (key === "tab")
+        return messages ? toMessages() : panel ? toPanel() : undefined;
+      return panel ? toPanel() : messages ? toMessages() : undefined;
+    },
+    onAction: (key, row) => {
+      if (key === "space") return { select: fold(row, deps.panel.disclosure) };
+      if (key === "m" && deps.host.messaging()) {
+        const agent = row.kind === "agent" ? row.agent.id : undefined;
+        after = () =>
+          void openMessagesOverlay(ctx, deps, agent ? { agent } : {}).catch(
+            (error) => ctx.ui.notify(errorText(error), "error"),
+          );
+        return "close";
       }
       if (key === "enter") {
         const agentId = attachTarget(row);

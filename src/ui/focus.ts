@@ -246,9 +246,13 @@ export class FocusController {
       return { consume: true };
     }
     const messages = this.host.messaging() ? this.onMessages : undefined;
-    if (key === "shift+tab" && messages) {
+    // Shift+Tab goes back: to /messages, or to /agents while messaging is
+    // off, never on to Pi, where it changes the thinking level.
+    if (key === "shift+tab") {
+      const row = this.panel.selected();
       this.panel.setFocused(false);
-      messages(ctx, {});
+      if (messages) messages(ctx, {});
+      else this.onBrowse?.(ctx, row?.key);
       return { consume: true };
     }
     // m opens messages at the selected message, or filtered by the

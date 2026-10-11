@@ -29,11 +29,16 @@ import {
 } from "../host/limit.js";
 import { acquireLock, type StorageLock } from "../host/lock.js";
 import { resolveModels } from "../host/models.js";
+import { pruneSessions, readRetention } from "../host/retention.js";
 import { openStorage, type Storage } from "../host/storage.js";
 import { isTrusted, resolveHelper } from "./spawn.js";
 
+function sessionsRoot(): string {
+  return path.join(getAgentDir(), "pi-agents", "sessions");
+}
+
 function sessionDirectory(sessionId: string): string {
-  return path.join(getAgentDir(), "pi-agents", "sessions", sessionId);
+  return path.join(sessionsRoot(), sessionId);
 }
 
 function isPersistent(ctx: ExtensionContext): boolean {
@@ -50,6 +55,7 @@ export class SessionHost {
   private unsubscribe: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
   private trusted = true;
+  private pruned = false;
   /** The skills agents can use, shared by spawns and agent prompts. */
   readonly skills = new SkillCatalog();
   /** Why agents are unavailable in this session, if they are. */
@@ -74,6 +80,31 @@ export class SessionHost {
           );
       }
     }
+    this.prune(ctx);
+  }
+
+  /**
+   * Once per Pi process, delete the storage of sessions older than
+   * `piAgents.retentionDays`, in the background.
+   */
+  private prune(ctx: ExtensionContext): void {
+    if (this.pruned) return;
+    this.pruned = true;
+    const current = this.sessionId;
+    void (async () => {
+      // Off the startup path: settings and storage are read afterwards.
+      await new Promise((resolve) => setImmediate(resolve));
+      const settings = SettingsManager.create(ctx.cwd, getAgentDir());
+      const { days, error } = readRetention(settings.getSettings());
+      if (error) this.report(new Error(`${error}; storage is kept`));
+      if (days === undefined) return;
+      await pruneSessions({
+        root: sessionsRoot(),
+        days,
+        current,
+        onError: (failure) => this.report(failure),
+      });
+    })().catch((error) => this.report(error));
   }
 
   setContext(ctx: ExtensionContext): void {

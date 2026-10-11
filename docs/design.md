@@ -418,6 +418,14 @@ loses a delivery but can repeat one.
   cap wait in order; an abort while waiting ends the request as aborted. It
   never refuses work. Read when the host opens; an invalid value shows a
   warning and means no limit.
+- Retention: `piAgents.retentionDays` deletes the storage directories of
+  sessions whose last write, the newest mtime of the directory and the files
+  directly in its `storage/`, is older than that many days
+  (`src/host/retention.ts`). It runs once per Pi process, in the background
+  after the first session start, and skips the current session and
+  directories whose lock names a live process, without taking the lock. Read
+  then; an invalid value shows a warning and deletes nothing, and so does an
+  absent one.
 - No MCP and no extension tools yet.
 
 ## Parent tools

@@ -34,6 +34,28 @@ tools in the meantime. Agents, graphs, and helpers all share the cap. Your
 session's own requests don't count toward it. Without the setting, requests
 aren't limited. Restart Pi after changing it.
 
+## Storage retention
+
+Pi-agents keeps each session's agents in its own store in
+`~/.pi/agent/pi-agents/sessions/<session-id>/`, apart from Pi's session
+file, and keeps it after Pi deletes that file. To delete stores you no longer
+use, set how many days to keep them in `~/.pi/agent/settings.json` or your
+project's `.pi/settings.json`:
+
+```json
+{
+  "piAgents": {
+    "retentionDays": 30
+  }
+}
+```
+
+A store is old when neither it nor its agents' data changed for that many
+days. When Pi starts, pi-agents deletes old stores in the background. It
+keeps the current session's store and stores another running Pi holds, and
+deleting one removes its agents for good. Without the setting, stores stay
+forever. Changes apply the next time Pi starts.
+
 ## Footer counters
 
 With [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) installed,

@@ -17,11 +17,11 @@ where they stopped.
   <tr>
     <td align="center">
       <strong>Delegate work to agents and graphs</strong><br>
-      <sub>Run parallel reviews, follow progress, and bring the findings together.</sub>
+      <small>Run parallel reviews, follow progress, and bring the findings together.</small>
     </td>
     <td align="center">
       <strong>Agents message each other</strong><br>
-      <sub>Coordinate a fix between agents, then browse their conversation.</sub>
+      <small>Coordinate a fix between agents, then browse their conversation.</small>
     </td>
   </tr>
 </table>

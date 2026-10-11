@@ -63,3 +63,12 @@ export function acquireLock(
   }
   throw new Error(`Could not acquire ${file}`);
 }
+
+/**
+ * The PID of the live process holding the lock in `directory`, if any. Only
+ * reads the lock; it never takes one over.
+ */
+export function lockHolder(directory: string): number | undefined {
+  const owner = readOwner(path.join(directory, "lock"));
+  return owner !== undefined && processAlive(owner) ? owner : undefined;
+}

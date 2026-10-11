@@ -1,9 +1,66 @@
 # Agent messaging
 
 Agents of one Pi session send each other one-way messages. This document
-states what senders and recipients can rely on, what's deliberately left
-out, and what may come next. `docs/design.md` describes the mechanics and
-the UI.
+shows how to use messages and states what senders and recipients can rely
+on, what's deliberately left out, and what may come next.
+[docs/design.md](./design.md) describes the mechanics and the UI.
+
+## Using messages
+
+<img
+  src="../demo/messaging.gif"
+  width="840"
+  alt="Scout messages fixer about a concurrency bug, fixer patches it and
+    replies, and Pi browses their exchange in /messages and attaches to both
+    agents"
+>
+
+Agents message each other. Each gets `agent_status`, which lists the other
+agents with the jobs they were started with, and `agent_send`, which sends
+one of them a message without waiting. Like your messages, it steers a
+working recipient, so it can change what the recipient answers, unless the
+sender queues it as a follow-up. The recipient's answer stays with it.
+Helpers can't send or receive messages, and an agent you or Pi stopped
+refuses messages from agents until you or Pi message it.
+
+Every message shows in the transcript as a card marked `✦`, like pi-agents'
+tool calls, where Pi's model doesn't see it. The focused panel shows messages
+still waiting in their recipient's queue, next to the agents, or below them
+in terminals narrower than 120 columns:
+
+```text
+◉ scout sol 40s 8.1k   scout → notes README.md is 18 KB 3s
+```
+
+Their text is dim, so the names stand out; a first row counts older ones
+that don't fit. In the attach view, a message is dim while it waits in the
+agent's queue, like your queued input, and leaves the view if interrupting
+or stopping the agent drops it; `/messages` shows dropped messages in red.
+In the focused panel, ↑↓ reach the messages, ⏎ attaches to a message's
+recipient, and `m` opens `/messages` at the selected message, or filtered by
+the selected agent's name.
+
+`/messages` shows every message in one stream, newest first, one line each:
+
+```text
+╭─ Messages (3) ───────────────────────────────────────────────────────╮
+│   14:33:46 gamma → beta Serve wraps                                  │
+│   14:33:17 beta → alpha Location proposal: reserve the central lawn… │
+│ ▸ 14:32:47 alpha → gamma Offer two inclusive picnic activities:      │
+├──────────────────────────────────────────────────────────────────────┤
+│ Offer two inclusive picnic activities:                               │
+│                                                                      │
+│ - a relaxed nature-scavenger hunt with seated options                │
+│ - a collaborative mural                                              │
+╰─ ↑↓ move · ⏎ close · ← alpha · → gamma · tab panel · esc close ──────╯
+```
+
+The text is dim, so the names stand out, and red if the message was
+dropped. Type to filter by text and names, such as an agent's name. ⏎ opens the
+selected message in full below the list and closes it again. ← attaches to
+the sender and → to the recipient, in the order the line names them. Esc
+closes the message, then clears the filter, then closes `/messages`. A
+session keeps its latest 1,000 messages.
 
 ## Model
 

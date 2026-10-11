@@ -146,6 +146,11 @@ export class FocusController {
     return this.paneOpen;
   }
 
+  /** Attach to an agent in the current session, such as on a click. */
+  attachTo(agentId: string): void {
+    if (this.ctx) this.attach(this.ctx, agentId);
+  }
+
   /** Open the attach view for an agent. */
   attach(ctx: ExtensionContext, agentId: string): void {
     this.ctx = ctx;

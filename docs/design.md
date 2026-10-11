@@ -493,6 +493,8 @@ message card, with its own, and Pi's tools with Pi's.
   it as a tree in stages; unfocused, a finished graph folds to its line. ←
   from an empty editor or Ctrl+Q focuses it, or opens `/agents` while it's
   empty. Space folds a graph or an agent's helpers, ⏎ attaches, `s` stops,
+  a click on a row attaches too, in Pi's fullscreen mode, which reports the
+  mouse to components (`handleMouse`),
   Tab opens `/agents` at the same row. The panel and
   `/agents` share what the user folded. Before intercepting input or taking
   focus, the controller checks `TUI.hasOverlay()` and yields to any visible

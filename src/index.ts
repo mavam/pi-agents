@@ -34,6 +34,8 @@ export default function agentExtension(pi: ExtensionAPI): void {
     () => host.current()?.list() ?? [],
   );
 
+  // A click on a panel row attaches, like ⏎.
+  panel.onAttach = (agentId) => focus.attachTo(agentId);
   // While the user is attached to an agent, nothing wakes the parent.
   parent.setBlocked(() => focus.isPaneOpen());
   focus.onPaneClosed = (ctx) => {

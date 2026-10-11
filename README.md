@@ -220,6 +220,7 @@ open, they open `/agents` instead. Then:
 | ↑ ↓ | Select an agent or graph. |
 | Space | Fold or unfold a graph, or an agent's helpers. On a row inside one, fold what it sits in. |
 | ⏎ | Attach to the agent, or to a graph's first agent. |
+| Click | Attach like ⏎, also without focusing the panel first; a message attaches to its recipient. Needs Pi's fullscreen mode, its default. |
 | Tab | Open `/agents` at the same row. Tab cycles the panel, `/agents`, and `/messages`; Shift+Tab goes back. |
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
 | Esc | Go back to the editor. |

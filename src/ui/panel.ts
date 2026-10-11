@@ -31,12 +31,18 @@
  * ↑↓ continue from the agents into the messages, ⏎ on a message attaches to
  * its recipient, and `m` opens `/messages`: the selected agent's threads,
  * or the selected message's thread.
+ *
+ * In Pi's fullscreen mode, which reports the mouse, a click on a row
+ * attaches like ⏎: an agent row to the agent, a graph row to its first
+ * agent, and a message to its recipient.
  */
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -114,8 +120,19 @@ export function panelOrder(agents: readonly AgentInfo[]): AgentInfo[] {
   return [...agents].sort(panelCompare);
 }
 
+/** What a panel line attaches to when clicked: the agent of its left
+ * part, and in columns, the recipient of its right part from `split`. */
+interface LineTarget {
+  left?: string;
+  right?: string;
+  split?: number;
+}
+
 class PanelLines implements Component {
-  constructor(private readonly build: (width: number) => string[]) {}
+  constructor(
+    private readonly build: (width: number) => string[],
+    private readonly click: (line: number, column: number) => boolean,
+  ) {}
 
   invalidate(): void {
     // Content is a pure function of panel state.
@@ -126,6 +143,12 @@ class PanelLines implements Component {
     return this.build(usable).map(
       (line) => ` ${truncateToWidth(sanitizeLine(line), usable, "…")}`,
     );
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type !== "click" || event.button !== "left") return undefined;
+    // Lines start after one column of padding.
+    return this.click(event.y, event.x - 1) ? { handled: true } : undefined;
   }
 }
 
@@ -146,6 +169,10 @@ export class AgentPanel {
   /** What the user folded; `/agents` shares it. */
   readonly disclosure = new Disclosure();
   private readonly held = new Map<string, HeldSummary>();
+  /** What each line of the latest frame attaches to when clicked. */
+  private targets: LineTarget[] = [];
+  /** Attaches to an agent, by ID; the host wires it to focus. */
+  onAttach: ((agentId: string) => void) | undefined;
   /** The messages the latest focused frame showed, which ↑↓ reach. */
   private shownMessages: MessageInfo[] = [];
 
@@ -234,7 +261,10 @@ export class AgentPanel {
       // widget mounted too, so keyboard guards always have the current TUI.
       context.ui.setWidget(WIDGET_KEY, (tui, theme) => {
         this.lastTui = tui;
-        return new PanelLines((width) => this.frame(tui, theme, width));
+        return new PanelLines(
+          (width) => this.frame(tui, theme, width),
+          (line, column) => this.click(line, column),
+        );
       });
       this.mounted = true;
       return;
@@ -366,12 +396,13 @@ export class AgentPanel {
     if (!this.focused) {
       const rows = this.rows(true);
       const shown = rows.slice(0, MAX_UNFOCUSED).map(line);
+      const targets = rows.slice(0, MAX_UNFOCUSED).map(attachTarget);
       if (rows.length > MAX_UNFOCUSED)
         shown.push(
           color("dim", `+${rows.length - MAX_UNFOCUSED} more (/agents)`),
         );
       this.shownMessages = [];
-      return this.withMessages(shown, messages, {
+      return this.withMessages(shown, targets, messages, {
         width,
         style,
         columns,
@@ -404,11 +435,12 @@ export class AgentPanel {
         (row, offset) =>
           `${start + offset === index ? color("accent", "▸ ") : "  "}${line(row)}`,
       );
+    const targets = rows.slice(start, start + visible).map(attachTarget);
     if (rows.length > start + visible)
       agentLines.push(
         color("dim", `  …+${rows.length - start - visible} more`),
       );
-    const lines = this.withMessages(agentLines, messages, {
+    const lines = this.withMessages(agentLines, targets, messages, {
       width,
       style,
       columns,
@@ -426,6 +458,7 @@ export class AgentPanel {
       "esc back",
     ];
     lines.push(color("dim", `  ${hints.join(" · ")}`));
+    this.targets.push({});
     return lines;
   }
 
@@ -436,6 +469,8 @@ export class AgentPanel {
    */
   private withMessages(
     left: string[],
+    /** The agents the left lines attach to, by line. */
+    leftTargets: ReadonlyArray<string | undefined>,
     messages: readonly MessageInfo[],
     options: {
       width: number;
@@ -450,6 +485,7 @@ export class AgentPanel {
     const { width } = options;
     if (messages.length === 0) {
       if (selectable) this.shownMessages = [];
+      this.targets = left.map((_, index) => ({ left: leftTargets[index] }));
       return left;
     }
     const marker = (message: MessageInfo) =>
@@ -463,6 +499,11 @@ export class AgentPanel {
       const shown = messages.slice(-options.stacked);
       if (selectable) this.shownMessages = shown;
       const column = this.pairColumn();
+      this.targets = [
+        ...left.map((_, index) => ({ left: leftTargets[index] })),
+        {},
+        ...shown.map((message) => ({ left: message.to.id })),
+      ];
       return [
         ...left,
         color(
@@ -486,6 +527,11 @@ export class AgentPanel {
     const column = this.pairColumn();
     // A gap, not a bar, separates the columns.
     const separator = " ";
+    this.targets = Array.from({ length: height }, (_, index) => ({
+      left: leftTargets[index],
+      right: shown[index]?.to.id,
+      split: leftWidth + separator.length,
+    }));
     return Array.from({ length: height }, (_, index) => {
       const message = shown[index];
       const right = message
@@ -495,7 +541,20 @@ export class AgentPanel {
     });
   }
 
+  /** A click on a line attaches to what it shows; whether it did. */
+  private click(line: number, column: number): boolean {
+    const target = this.targets[line];
+    const agentId =
+      target?.split !== undefined && column >= target.split
+        ? target.right
+        : target?.left;
+    if (!agentId || !this.onAttach) return false;
+    this.onAttach(agentId);
+    return true;
+  }
+
   private frame(tui: TUI, theme: Theme, width: number): string[] {
+    this.targets = [];
     if (this.disposed || this.suppressed) return [];
     const rows = this.rows();
     if (rows.length === 0) return [];

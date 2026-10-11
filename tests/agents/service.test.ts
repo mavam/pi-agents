@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 import { createModels } from "@earendil-works/pi-ai/models";
 import {
   fauxAssistantMessage,
@@ -265,5 +266,21 @@ describe("durability", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(third.pendingDeliveries()).toEqual([]);
     expect(third.get("w")?.state).toBe("idle");
+  });
+
+  test("a crash while stopping an agent never resumes its job", async () => {
+    const directory = tempDir();
+    const worker = fileURLToPath(new URL("./stop-worker.ts", import.meta.url));
+    const crashed = Bun.spawn(["bun", worker, directory], { stdout: "ignore" });
+    expect(await crashed.exited).toBe(0);
+
+    const service = await open({
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const [victim] = service.list({ includeClosed: true });
+    expect(victim).toMatchObject({ name: "victim", closed: true });
+    expect(victim?.result).toBeUndefined();
   });
 });

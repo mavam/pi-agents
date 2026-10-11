@@ -766,23 +766,28 @@ export class AgentService {
   }
 
   /**
-   * Stop an agent: record the stop first, in the agent's turn, so a send
-   * from another agent lands before it, and the interrupt withdraws or
-   * aborts it, or after it, and is refused. Then interrupt.
+   * Stop an agent in its turn, so a send from another agent lands before
+   * the stop, and the interrupt withdraws or aborts it, or after it, and is
+   * refused. The interrupt comes first: a crash before the stop is recorded
+   * leaves an interrupted agent, never a stopped one whose work resumes.
    */
   private async stopAgent(agentId: string): Promise<void> {
-    await this.extensions.hub.turn(agentId, () =>
-      this.harness.commit(async (tx) => {
+    await this.extensions.hub.turn(agentId, async () => {
+      const conversation = await this.harness.conversation(
+        conversationId(agentId),
+        CONTEXT,
+      );
+      await conversation?.abort(CONTEXT);
+      await this.harness.commit(async (tx) => {
         const record = (await tx.doc(AgentsDoc)).agents[agentId];
         if (!record) return;
         record.closed = true;
         record.stopped = true;
         record.requests = {};
-      }, CONTEXT),
-    );
-    await this.interrupt(agentId);
+      }, CONTEXT);
+    });
     this.settled.delete(agentId);
-    await this.refresh([agentId]);
+    await this.refresh(this.withHelpers([agentId]));
   }
 
   private async stopGraph(graphId: string): Promise<void> {

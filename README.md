@@ -51,7 +51,7 @@ that finished hours ago, and keep talking to it like a regular Pi session.
 ### Architecture
 
 Agents run inside your Pi process. Pi-agents keeps one pi-durable harness per
-Pi session, with its own store next to Pi's session file:
+Pi session, with its own store, kept apart from Pi's session file:
 
 ```text
 ╭─ Pi process ─────────────────────────────────────────────────────╮
@@ -62,7 +62,7 @@ Pi session, with its own store next to Pi's session file:
 │ ┊    │ agent_*  │ results                │  ≡ /agents         │  │
 │ ┊    ▼          │                        │  ✉ /messages       │  │
 │ ┊╭──────────────┴───╮                    ╰─────────▲──────────╯  │
-│ ┊│  ✦ pi-agents     ├──────────────────────────────╯             │
+│ ┊│  ✦ pi-agents     ├◀─────────────────────────────╯             │
 │ ┊╰───┬──────────▲───╯                                            │
 │ ┊    │ start    │ state                                          │
 │ ┊    │ message  │ results                                        │
@@ -85,9 +85,10 @@ Pi session, with its own store next to Pi's session file:
   ┊ saves                        │ checkpoint every step
   ▼                              ▼
 ╭──────────────────────╮    ╭──────────────────────────────╮
-│ ▤ Pi's session file  │    │ ▤ pi-agents store, one JSONL │
-│   your conversation  │    │   per session: agents,       │
-│   and saved results  │    │   graphs, messages, tasks    │
+│ ▤ Pi's session file  │    │ ▤ pi-agents store, one per   │
+│   your conversation, │    │   session: agents, graphs,   │
+│   saved results, and │    │   messages, tasks            │
+│   message cards      │    │                              │
 ╰──────────────────────╯    ╰──────────────────────────────╯
 ```
 

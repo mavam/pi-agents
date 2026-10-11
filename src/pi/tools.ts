@@ -490,7 +490,9 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
 
   const sendParams = Type.Object({
     name: Type.String({ description: "Agent name" }),
-    message: Type.String(),
+    message: Type.String({
+      description: "What to tell the agent; it receives it as your input",
+    }),
     followUp: Type.Optional(
       Type.Boolean({
         description: "Queue after the current answer instead of steering",

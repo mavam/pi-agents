@@ -628,7 +628,7 @@ function sendView(sender: () => string): ToolRenderers & { label: string } {
       messageCard(
         {
           from: sender(),
-          to: str((args as Args | undefined)?.to) || "?",
+          to: str((args as Args | undefined)?.name) || "?",
           text: str((args as Args | undefined)?.message),
         },
         context.expanded,

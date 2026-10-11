@@ -136,7 +136,7 @@ const spec = (name: string, job: string) => ({
   model: MODEL,
 });
 
-const SEND = `send ${JSON.stringify({ to: "b", message: "hello" })}`;
+const SEND = `send ${JSON.stringify({ name: "b", message: "hello" })}`;
 
 describe("messaging", () => {
   test("a message reaches its recipient, and the answer stays there", async () => {
@@ -235,7 +235,7 @@ describe("messaging", () => {
     });
     await service.spawn(spec("b", "idle"));
     await until(() => service.get("b")?.state === "idle");
-    const hold = JSON.stringify({ to: "b", message: "hold on" });
+    const hold = JSON.stringify({ name: "b", message: "hold on" });
     await service.spawn(spec("a", `send ${hold}`));
     await isLogged;
     const stopping = service.stop("b");

@@ -139,7 +139,7 @@ function reachable(
 
 /** The first run of a send: check it and bind its recipient. */
 async function bind(
-  args: { to: string; message: string; followUp?: boolean },
+  args: { name: string; message: string; followUp?: boolean },
   api: ToolExecutionApi,
   context: Context,
   options: MessagingOptions,
@@ -157,8 +157,8 @@ async function bind(
   const sender = agents[from];
   if (!sender || isHelper(sender, graphs))
     return `${SEND_TOOL} is not available to you.`;
-  const target = resolve(agents, graphs, args.to);
-  if (!target) return `No agent named ${args.to}.`;
+  const target = resolve(agents, graphs, args.name);
+  if (!target) return `No agent named ${args.name}.`;
   const [to, recipient] = target;
   if (to === from) return "You can't message yourself.";
   return api.memo<Binding>(
@@ -244,8 +244,11 @@ export function createMessagingExtension(
         description:
           "Send a message to another agent of this session; agent_status lists them. You don't wait. A working recipient sees it at its next step, so it can change the answer the recipient is working on; with followUp, it waits until that work ends. The recipient's answer stays with it, so to get an answer, ask it to message you. Messages from other agents reach you as input that starts with [from <name>]; they don't come from the user.",
         parameters: Type.Object({
-          to: Type.String({ description: "Agent name" }),
-          message: Type.String(),
+          name: Type.String({ description: "Agent name" }),
+          message: Type.String({
+            description:
+              "What to tell the agent; it receives it as input that starts with [from <your name>]",
+          }),
           followUp: Type.Optional(
             Type.Boolean({
               description:

@@ -55,6 +55,7 @@ import {
   stateCounts,
   stateIcon,
 } from "./format.js";
+import { fitHints } from "./frame.js";
 import {
   type MessageParts,
   type MessageStyle,
@@ -237,12 +238,11 @@ export class AgentPanel {
     const context = ctx ?? this.lastContext;
     if (context?.mode !== "tui") return;
     this.lastContext = context;
-    if (!this.shouldShow()) {
-      this.stopTicking();
-      this.focused = false;
-    } else {
-      this.startTicking();
-    }
+    if (!this.shouldShow()) this.focused = false;
+    // Only the focused panel shows times; the summary line changes with the
+    // agents, which update the panel themselves.
+    if (this.focused) this.startTicking();
+    else this.stopTicking();
     if (!this.mounted) {
       // One persistent component that pulls live state per render; remounting
       // per update desynchronizes Pi's differential renderer. Keep the empty
@@ -442,7 +442,7 @@ export class AgentPanel {
       "tab /agents",
       "esc back",
     ];
-    lines.push(color("dim", `  ${hints.join(" · ")}`));
+    lines.push(color("dim", `  ${fitHints(hints, width - 2)}`));
     this.targets.push({});
     return lines;
   }
@@ -469,17 +469,28 @@ export class AgentPanel {
     const marker = (message: MessageInfo) =>
       messageKey(message) === this.selectedKey ? color("accent", "▸ ") : "  ";
     const markerWidth = 2;
+    // The newest messages that fit; a first row counts the older ones,
+    // which `/messages` shows.
+    const window = (rows: number) => {
+      if (messages.length <= rows) return { shown: [...messages], more: 0 };
+      const shown = messages.slice(-Math.max(1, rows - 1));
+      return { shown, more: messages.length - shown.length };
+    };
+    const moreLine = (more: number) =>
+      color("dim", `  +${more} more · m messages`);
     if (!columns) {
-      const shown = messages.slice(-STACKED_MESSAGES);
+      const { shown, more } = window(STACKED_MESSAGES);
       this.shownMessages = shown;
       this.targets = [
         ...left.map((_, index) => ({ left: leftTargets[index] })),
         {},
+        ...(more > 0 ? [{}] : []),
         ...shown.map((message) => ({ left: message.to.id })),
       ];
       return [
         ...left,
         color("dim", `  ${"─".repeat(Math.max(1, width - markerWidth))}`),
+        ...(more > 0 ? [moreLine(more)] : []),
         ...shown.map(
           (message) =>
             `${marker(message)}${messageLine(this.parts(message), width - markerWidth, style)}`,
@@ -490,8 +501,10 @@ export class AgentPanel {
       left.length,
       Math.min(messages.length, COLUMN_MIN_HEIGHT),
     );
-    const shown = messages.slice(-height);
-    this.shownMessages = shown;
+    const { shown: newest, more } = window(height);
+    this.shownMessages = newest;
+    const shown: Array<MessageInfo | undefined> =
+      more > 0 ? [undefined, ...newest] : newest;
     const leftWidth = Math.floor(width * AGENT_COLUMN_RATIO);
     const rightWidth = Math.max(8, width - leftWidth - 1 - markerWidth);
     // A gap, not a bar, separates the columns.
@@ -505,7 +518,9 @@ export class AgentPanel {
       const message = shown[index];
       const right = message
         ? `${marker(message)}${messageLine(this.parts(message), rightWidth, style)}`
-        : "";
+        : index === 0 && more > 0
+          ? moreLine(more)
+          : "";
       return `${padLine(left[index] ?? "", leftWidth)}${separator}${right}`;
     });
   }

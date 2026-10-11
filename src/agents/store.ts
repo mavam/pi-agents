@@ -343,6 +343,7 @@ export class AgentStore {
       : null;
   }
 
+  /** The newest assistant entry, paging newest-first through the conversation. */
   async lastAssistant(agentId: string): Promise<EntryRecord | undefined> {
     const conversation = await this.harness.conversation(
       conversationId(agentId),
@@ -350,7 +351,7 @@ export class AgentStore {
     );
     if (!conversation) return;
     let cursor: Parameters<typeof conversation.entries>[2];
-    for (let page = 0; page < 64; page++) {
+    for (;;) {
       const result = await conversation.entries({}, 32, cursor, CONTEXT);
       const found = result.items.find((entry) => entry.kind === ASSISTANT_KIND);
       if (found) return found;

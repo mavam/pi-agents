@@ -126,8 +126,9 @@ A graph's agent is also `waiting` while an input's node is live, and
 
 `closed` is a flag that hides an idle agent from the panel; storage keeps it.
 Users and models call this *stopping* an agent. An agent closes on its own
-once an answer to a parent request is delivered or consumed by a wait and no
-parent request remains. Failed and interrupted agents stay open. A parent
+once an answer is delivered or consumed by a wait and no parent request
+remains. A successful wait consumes an answer to a user prompt at once,
+without a parent delivery. Failed and interrupted agents stay open. A parent
 message to a closed agent opens it again. A closed agent that works again,
 for example because the user talks to it, shows in the panel until it is
 idle. Names are unique among visible agents and graphs; a name resolves to

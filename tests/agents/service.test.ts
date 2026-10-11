@@ -168,6 +168,43 @@ describe("AgentService", () => {
     expect(service.list()).toEqual([]);
   });
 
+  test("wait closes an interrupted agent resumed by a user prompt", async () => {
+    const { models } = createGatedFaux();
+    const service = await open({ models });
+    const agent = await service.spawn({
+      job: "hold",
+      name: "w",
+      cwd: ".",
+      model: MODEL,
+    });
+    await until(() => service.get("w")?.state === "working");
+    const waiting = service.waitFor([{ kind: "agent", id: agent.id }], {
+      carrier: { call: "c1" },
+    });
+    parentOf(service).attend();
+    await expect(waiting).rejects.toBeInstanceOf(WaitInterrupted);
+
+    await service.interrupt("w");
+    expect(service.get("w")?.state).toBe("interrupted");
+    expect(service.get("w")?.closed).toBe(false);
+    expect(service.pendingDeliveries()).toEqual([]);
+    await service.prompt("w", "continue", "auto");
+    await until(() => service.get("w")?.state === "idle");
+    expect(service.get("w")?.closed).toBe(false);
+    expect(service.pendingDeliveries()).toEqual([]);
+
+    const outcome = await service.waitFor([{ kind: "agent", id: agent.id }], {
+      carrier: { call: "c2" },
+    });
+    expect(outcome.agents[0]?.result?.text).toBe("done: [user] continue");
+    // The interrupted parent request is gone, and the user turn has no
+    // delivery. The wait still consumed its answer and must close it.
+    expect(outcome.deliveries).toEqual([]);
+    expect(service.get("w")?.closed).toBe(true);
+    expect(service.pendingDeliveries()).toEqual([]);
+    expect(service.list()).toEqual([]);
+  });
+
   test("interrupt aborts work without delivering", async () => {
     const { models } = createFaux((prompt) => `${prompt} `.repeat(400), {
       tokensPerSecond: 20,

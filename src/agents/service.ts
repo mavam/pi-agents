@@ -500,9 +500,10 @@ export class AgentService {
    * them. The wait takes their results instead of their delivery: when a
    * parent call waits (`carrier`), its result carries them, so they count
    * as delivered once the parent holds that result; otherwise the caller
-   * takes them, and they count at once. Aborting `signal` ends only the
-   * wait, and so does the parent's attention: either throws
-   * `WaitInterrupted`.
+   * takes them, and they count at once. Successful answers with no parent
+   * request have no delivery; the wait consumes them at once. Aborting
+   * `signal` ends only the wait, and so does the parent's attention:
+   * either throws `WaitInterrupted`.
    */
   async wait(names: string[], options: WaitOptions = {}): Promise<WaitOutcome> {
     return this.waitFor(
@@ -586,6 +587,7 @@ export class AgentService {
         );
         await this.refresh(ids);
       }
+      await this.delivery.consumeUnrequested([...idle]);
       return {
         agents: ids.map((id) => this.requireAgent(id)),
         graphs: graphIds.map((id) => this.requireGraph(id)),

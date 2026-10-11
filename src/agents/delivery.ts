@@ -213,6 +213,29 @@ export class Delivery {
     }
   }
 
+  /**
+   * A wait also consumes successful answers to user prompts. They have no
+   * delivery to acknowledge, for example after an interrupted parent request
+   * was dropped; close them now, unless the graph still holds the answer.
+   */
+  async consumeUnrequested(agentIds: readonly string[]): Promise<void> {
+    const consumed = agentIds.filter((id) => {
+      const record = this.options.projection.agents()[id];
+      const info = this.options.projection.info(id);
+      return (
+        record !== undefined &&
+        info?.state === "idle" &&
+        !info.closed &&
+        info.result !== undefined &&
+        Object.keys(record.requests).length === 0 &&
+        !this.options.projection.isHeldByGraph(record)
+      );
+    });
+    if (consumed.length === 0) return;
+    await this.options.store.closeUnrequested(consumed);
+    await this.options.refresh(consumed);
+  }
+
   /** Mark a delivery done. An answered agent closes, and so does a graph. */
   async acknowledge(delivery: PendingDelivery): Promise<void> {
     await this.acknowledgeAll([delivery]);

@@ -110,6 +110,18 @@ export class AgentStore {
     }, CONTEXT);
   }
 
+  /** A wait consumed successful answers with no parent requests left. */
+  async closeUnrequested(agentIds: readonly string[]): Promise<void> {
+    await this.harness.commit(async (tx) => {
+      const state = await tx.doc(AgentsDoc);
+      for (const id of agentIds) {
+        const record = state.agents[id];
+        if (record && Object.keys(record.requests).length === 0)
+          record.closed = true;
+      }
+    }, CONTEXT);
+  }
+
   /**
    * A graph's result reached the parent: the graph closes, and so do its
    * agents that answered, never started, or that the graph stopped. Their

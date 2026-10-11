@@ -61,7 +61,13 @@ its services, and then resumes the harness:
   graph tasks, and delegation; `installAgentExtensions` installs them in any
   registry, the way the session worker installs `CodingTools` and its
   prompt. The core never opens storage or a harness, never closes or
-  resumes one, and never assumes the root conversation.
+  resumes one, and never assumes the root conversation. The `AgentService`
+  facade delegates to `store.ts` for bookkeeping commits and snapshots,
+  `observer.ts` for commit observation and harness caches, `message-log.ts`
+  for messages and their statuses, `projection.ts` for derived agent and
+  graph infos, `delivery.ts` for parent results and acknowledgments,
+  `waits.ts` for wait counts and conditions, and `creation.ts` for spawn
+  validation and creating commits, with `context.ts` sharing context and IDs.
 - **Frontend** (`src/pi`, `src/ui`): tools, commands, and views. They see
   plain data through `AgentService`, like the session worker's presentations
   see `AgentController` and `Transcript`; only the attach view reads a

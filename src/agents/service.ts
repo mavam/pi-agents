@@ -1,18 +1,10 @@
 /**
- * AgentService: the agent abstraction over one pi-durable Harness, the
- * core of pi-agents. The host opens the harness with pi-agents' extensions
- * installed (see extensions.ts) and hands it over with the anchor, the
- * conversation that owns the parent's graphs; the service never opens
- * storage or a harness and never closes them.
- *
- * Standalone agents are ownerless conversations, so aborting other work
- * never reaches them. A graph's agents are conversations owned by the node
- * tasks of the graph (see graphs.ts). The service keeps a derived
- * `AgentInfo` per agent and a `GraphInfo` per graph, refreshed from commit
- * publications, and tracks parent requests and graph results until they are
- * delivered. It reaches the parent only through `Parent` (see parent.ts):
- * it hands results over when the parent can take them, and ends the
- * parent's waits when the parent is needed.
+ * AgentService: the facade over the host's harness and anchor, owning the
+ * lifecycle, queries, operations, and refresh orchestration. AgentStore
+ * commits bookkeeping, HarnessObserver follows commits, MessageLog tracks
+ * messages, Projection derives infos, Delivery reaches the parent, Waits
+ * holds results and checks wait conditions, and creation validates and
+ * creates agents and graphs. The host owns storage and the harness.
  */
 
 import type { AttachedReplicatedState } from "@earendil-works/chord";

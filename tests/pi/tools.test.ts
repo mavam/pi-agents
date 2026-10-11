@@ -168,12 +168,17 @@ describe("script output", () => {
   test("agents resolve to what their latest turn produced", async () => {
     const run = await gated();
     const a = { kind: "agent", name: "a", state: "idle" };
+    // Spawns and sends return at once; a script waits with agent_wait.
     expect(
-      (await run("agent_spawn", { job: "one", name: "a", wait: 60 })).output,
-    ).toEqual({ ...a, result: "done: one" });
-    expect(
-      (await run("agent_send", { name: "a", message: "two", wait: 60 })).output,
-    ).toEqual({ ...a, result: "done: two" });
+      (await run("agent_spawn", { job: "one", name: "a" })).output,
+    ).toMatchObject({ kind: "agent", name: "a" });
+    expect((await run("agent_wait", { names: ["a"] })).output).toEqual({
+      agents: [{ ...a, result: "done: one" }],
+      graphs: [],
+      pending: [],
+    });
+    await run("agent_send", { name: "a", message: "two" });
+    await run("agent_wait", { names: ["a"] });
     expect((await run("agent_status", { name: "a" })).output).toEqual({
       agents: [{ ...a, result: "done: two" }],
       graphs: [],
@@ -188,7 +193,8 @@ describe("script output", () => {
 
   test("an interrupted turn doesn't report an earlier answer", async () => {
     const run = await gated();
-    await run("agent_spawn", { job: "one", name: "a", wait: 60 });
+    await run("agent_spawn", { job: "one", name: "a" });
+    await run("agent_wait", { names: ["a"] });
     expect(
       (await run("agent_send", { name: "a", message: "hold two" })).output,
     ).toEqual({ kind: "agent", name: "a", state: "working" });
@@ -209,17 +215,16 @@ describe("script output", () => {
 
   test("a failed turn reports its error, not an earlier answer", async () => {
     const run = await gated();
-    await run("agent_spawn", { job: "one", name: "a", wait: 60 });
-    const failed = await run("agent_send", {
-      name: "a",
-      message: "fail two",
-      wait: 60,
-    });
+    await run("agent_spawn", { job: "one", name: "a" });
+    await run("agent_wait", { names: ["a"] });
+    await run("agent_send", { name: "a", message: "fail two" });
+    const failed = await run("agent_wait", { names: ["a"] });
     expect(failed.output).toEqual({
-      kind: "agent",
-      name: "a",
-      state: "failed",
-      error: "cannot fail two",
+      agents: [
+        { kind: "agent", name: "a", state: "failed", error: "cannot fail two" },
+      ],
+      graphs: [],
+      pending: [],
     });
     expect(failed.text).toBe("## a (failed)\nError: cannot fail two");
   });
@@ -227,10 +232,12 @@ describe("script output", () => {
   test("waits that end early return the state and what is pending", async () => {
     const run = await gated();
     const w = { kind: "agent", name: "w", state: "working" };
+    const pending = { agents: [w], graphs: [], pending: ["w"] };
+    await run("agent_spawn", { job: "hold", name: "w" });
     // A timeout.
     expect(
-      (await run("agent_spawn", { job: "hold", name: "w", wait: 0.05 })).output,
-    ).toEqual(w);
+      (await run("agent_wait", { names: ["w"], timeout: 0.05 })).output,
+    ).toEqual(pending);
     // An abort.
     const abort = new AbortController();
     const aborted = firstUpdate();
@@ -246,16 +253,17 @@ describe("script output", () => {
       graphs: [],
       pending: ["w"],
     });
-    // A steer from the user, to an agent that is steered itself.
+    // A steer from the user, also after steering the agent itself.
+    await run("agent_send", { name: "w", message: "and more" });
     const steered = firstUpdate();
-    const sending = run(
-      "agent_send",
-      { name: "w", message: "and more", wait: 60 },
+    const waitingAgain = run(
+      "agent_wait",
+      { names: ["w"] },
       { onUpdate: steered.onUpdate },
     );
     await steered.started;
     parentOf(service as AgentService).attend();
-    expect((await sending).output).toEqual(w);
+    expect((await waitingAgain).output).toEqual(pending);
     expect(
       (await run("agent_send", { name: "w", message: "more" })).output,
     ).toEqual(w);
@@ -263,17 +271,19 @@ describe("script output", () => {
 
   test("graphs report failed, skipped, and stopped agents", async () => {
     const run = await gated();
+    await run("agent_spawn_graph", {
+      name: "g",
+      agents: [
+        { job: "fail one", name: "a" },
+        { job: "two", name: "b", after: ["a"] },
+      ],
+    });
     expect(
       (
-        await run("agent_spawn_graph", {
-          name: "g",
-          agents: [
-            { job: "fail one", name: "a" },
-            { job: "two", name: "b", after: ["a"] },
-          ],
-          wait: 60,
-        })
-      ).output,
+        (await run("agent_wait", { names: ["g"] })).output as {
+          graphs: unknown[];
+        }
+      ).graphs[0],
     ).toEqual({
       kind: "graph",
       name: "g",
@@ -464,40 +474,43 @@ describe("call results", () => {
 
   test("results draw what the call saw, the same live and replayed", async () => {
     const run = await gated();
-    const tool = tools().get("agent_spawn_graph");
+    const spawn = tools().get("agent_spawn_graph");
     const args = {
       name: "audit",
-      wait: 0.5,
       agents: [
         { name: "map", job: "map" },
         { name: "report", job: "hold report", after: ["map"] },
       ],
     };
-    const progress: unknown[] = [];
-    const result = await run("agent_spawn_graph", args, {
-      onUpdate: (update) => progress.push(update.details),
-    });
-    // While it waits, the result shows what the call started.
-    expect(
-      drawFrame(tool, args, { details: progress[0] }, { isPartial: true }),
-    ).toEqual([
-      "✦ spawn graph audit wait=0.5s",
+    // A spawn shows what it started, which stays true as the agents work.
+    const started = { details: (await run("agent_spawn_graph", args)).details };
+    const tree = [
+      "✦ spawn graph audit",
       "  ├─ map faux-1",
       "  └─ report after map faux-1",
-    ]);
-    // A spawn whose wait timed out shows what finished and, of the rest,
-    // only what it started, which stays true after the agents finish.
-    const timedOut = [
-      "✦ spawn graph audit wait=0.5s",
+    ];
+    expect(drawFrame(spawn, args, started)).toEqual(tree);
+    // A wait that timed out marks what it gave up on, and says so.
+    const wait = tools().get("agent_wait");
+    const waitArgs = { names: ["audit"], timeout: 0.3 };
+    const timedOut = {
+      details: (await run("agent_wait", waitArgs)).details,
+    };
+    const gaveUp = [
+      "✦ wait audit timeout=0.3s",
+      "  ⊠ audit graph 1/2",
       "  ├─ ● map faux-1 2.1k",
-      "  └─ report after map faux-1",
+      "  └─ ⊠ report after map faux-1",
       "  Timed out",
     ];
-    const final = { details: result.details };
-    expect(drawFrame(tool, args, final)).toEqual(timedOut);
+    expect(drawFrame(wait, waitArgs, timedOut)).toEqual(gaveUp);
+    // Both replay the same after the agents finished.
     release?.();
     await run("agent_wait", { names: ["audit"] });
-    expect(drawFrame(tool, args, structuredClone(final))).toEqual(timedOut);
+    expect(drawFrame(spawn, args, structuredClone(started))).toEqual(tree);
+    expect(drawFrame(wait, waitArgs, structuredClone(timedOut))).toEqual(
+      gaveUp,
+    );
   });
 
   test("collapsed lines end in an ellipsis; expanded ones wrap", () => {

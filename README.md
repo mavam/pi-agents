@@ -343,18 +343,19 @@ Pi uses these tools to work with agents:
 
 | Tool | Purpose |
 | --- | --- |
-| `agent_spawn` | Start an agent on a job, optionally waiting for its result, and optionally letting it delegate. |
-| `agent_spawn_graph` | Start a graph of agents, optionally waiting for its result. |
+| `agent_spawn` | Start an agent on a job, optionally letting it delegate. |
+| `agent_spawn_graph` | Start a graph of agents. |
 | `agent_send` | Message an agent: prompt, steer, or queue a follow-up. |
 | `agent_wait` | Block until agents or graphs answer and return their results. |
 | `agent_status` | Show agent and graph states. |
 | `agent_stop` | Stop an agent or a graph. |
 
-`agent_spawn`, `agent_spawn_graph`, and `agent_send` can also block for the
-result: their `wait` argument sets the most seconds to wait. A result that a
-wait returns doesn't post again as a message. Cancelling a wait leaves the
-agents working, and so does a message you send to Pi while it waits: Pi
-stops waiting and answers you right away.
+`agent_spawn`, `agent_spawn_graph`, and `agent_send` return at once, and
+results arrive as messages. Only `agent_wait` blocks: until the agents
+answer, or at most its `timeout` in seconds. A result that a wait returns
+doesn't post again as a message. Cancelling a wait leaves the agents
+working, and so does a message you send to Pi while it waits: Pi stops
+waiting and answers you right away.
 
 With [codemode](https://pi.dev/docs/latest/codemode), scripts get the
 results as data instead of text: an agent's `name`, `state`, and `result`
@@ -371,11 +372,10 @@ const { agents, pending } = await tools.agent_wait({ names, timeout: 600 });
 return { failed: agents.filter((a) => a.state === "failed"), pending };
 ```
 
-Each tool call shows the arguments Pi chose on a dim line below it:
+Each tool call shows the arguments Pi chose, dim, after its title:
 
 ```text
-✦ spawn lister
-  profile=explorer thinking=low tools=[read,ls] wait=120s
+✦ spawn lister profile=explorer thinking=low tools=[read,ls]
   List the files in src and summarize them.
 ```
 

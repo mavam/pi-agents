@@ -125,7 +125,8 @@ a name.
 - `send` prompts an idle agent and steers a working one; `followUp` queues
   after the current answer instead.
 - `wait` resolves once the named agents are idle and returns their results.
-  Cancelling a wait cancels only the wait.
+  Cancelling a wait cancels only the wait. Only `agent_wait` waits; spawns
+  and sends return at once.
 - `interrupt` aborts the current work; the agent stays open. Only the attach
   view's Esc interrupts.
 - `stop` interrupts, drops pending parent requests, and closes the agent or
@@ -404,10 +405,10 @@ loses a delivery but can repeat one.
 
 | Tool | Parameters |
 | --- | --- |
-| `agent_spawn` | `job`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `skills?`, `cwd?`, `delegate?`, `wait?` (seconds) |
-| `agent_spawn_graph` | `name?`, `agents` (2 to 12 of `job`, `name?`, `after?`, `profile?`, `model?`, `thinking?`, `tools?`, `skills?`, `cwd?`, `delegate?`), `failFast?`, `wait?` (seconds) |
-| `agent_send` | `name`, `message`, `followUp?`, `wait?` (seconds) |
-| `agent_wait` | `names` (agents or graphs), `timeout?` |
+| `agent_spawn` | `job`, `name?`, `profile?`, `model?`, `thinking?`, `tools?`, `skills?`, `cwd?`, `delegate?` |
+| `agent_spawn_graph` | `name?`, `agents` (2 to 12 of `job`, `name?`, `after?`, `profile?`, `model?`, `thinking?`, `tools?`, `skills?`, `cwd?`, `delegate?`), `failFast?` |
+| `agent_send` | `name`, `message`, `followUp?` |
+| `agent_wait` | `names` (agents or graphs), `timeout?` (seconds) |
 | `agent_status` | `name?` (agent or graph) |
 | `agent_stop` | `name` (agent or graph) |
 
@@ -416,9 +417,11 @@ cannot be expressed in the tool schemas that providers accept. The tools,
 `delegate_graph` included, take `task` for `job` too, as calls of earlier
 builds and models used to them name it. Agents without
 a name are called `<graph>-<n>`, or after their profile. `agent_send` to a
-graph fails and lists its agents. Models sometimes pass `wait: false` or
-quoted numbers, so the tools drop seconds that aren't positive numbers and
-parse numeric strings.
+graph fails and lists its agents. Blocking lives in one place, `agent_wait`:
+the other tools return at once, which a script follows with `agent_wait` when
+it needs the results, and they drop a `wait` argument of earlier builds.
+Models sometimes pass `timeout: false` or quoted numbers, so the tools drop
+seconds that aren't positive numbers and parse numeric strings.
 
 Each tool declares an output schema and returns structured content, which
 codemode scripts receive instead of the text (`src/pi/output.ts`):
@@ -437,8 +440,9 @@ An agent is its `name`, `state`, `graph`, and what its latest turn produced:
 reports an earlier turn's answer. A graph is its `state`, `stopped`, and per
 agent its `after`, `end`, and `outcome`, with `result` or `error`; nodes
 carry the answer to the graph's job. Results keep the limit of the text the
-model reads and say when they were cut with `truncated`. Calls that wait
-return what they observed after the wait.
+model reads and say when they were cut with `truncated`. `agent_wait`
+returns what it observed after the wait; the other calls return what they
+started.
 
 A steer from the user ends every running wait at once; the agents keep
 working and their results arrive as messages. Follow-ups don't end waits.
@@ -471,8 +475,8 @@ A call draws its arguments only: its title with dim `key=value` pairs after
 it, and its body. A result draws its receipt only: progress what the call started, the
 final result how agents were, then why its wait ended, such as `Timed out`.
 Of what hasn't finished, a call that started it (spawn, spawn graph, send,
-delegate) shows only what it started, without a state, and `agent_wait`
-marks it `⊠`. A result indents under its call. A call whose title names its
+delegate, or such a call of an earlier build that waited) shows only what
+it started, without a state, and `agent_wait` marks it `⊠`. A result indents under its call. A call whose title names its
 graph shows the graph's agents right below its arguments, without a line
 of their own for the graph until it finished, and collapsed, a graph
 call's body is the tree, not its shape again. Renderers share no state, so a call draws the

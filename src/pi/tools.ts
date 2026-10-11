@@ -185,15 +185,17 @@ interface AgentToolSpec<T extends TSchema, O extends TSchema> {
 }
 
 /**
- * Arguments as the tools take them. Models sometimes write `wait: false` for
- * "don't wait" or quote numbers: seconds that aren't a positive number mean
- * no wait, and numeric strings count. Calls of earlier builds, and models
- * used to them, name a job `task`.
+ * Arguments as the tools take them. Models sometimes write `timeout: false`
+ * or quote numbers: seconds that aren't a positive number mean none, and
+ * numeric strings count. Calls of earlier builds, and models used to them,
+ * name a job `task` and pass `wait` to spawns and sends, which only
+ * `agent_wait` does now; it's dropped.
  */
 export function prepareArguments(args: unknown): unknown {
   if (typeof args !== "object" || args === null) return args;
   const prepared = renameTaskToJob(args) as Record<string, unknown>;
-  for (const key of ["wait", "timeout"]) {
+  delete prepared.wait;
+  for (const key of ["timeout"]) {
     if (!(key in prepared)) continue;
     const parsed = positiveSeconds(prepared[key]);
     if (parsed === undefined) delete prepared[key];
@@ -248,11 +250,10 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
 }
 
 /**
- * Wait for agents, streaming their lines as progress for scripts and RPC
- * clients. Progress draws only what the call started, its receipt
- * `started`; the panel shows the live states. The wait ends early when the
- * parent is needed, such as when the user steers, so Pi can place the steer
- * instead of holding it back.
+ * `agent_wait`: block for agents, streaming their lines as progress for
+ * scripts and RPC clients; the panel shows the live states. The wait ends
+ * early when the parent is needed, such as when the user steers, so Pi can
+ * place the steer instead of holding it back.
  */
 async function waitWithProgress(
   service: AgentService,
@@ -261,7 +262,6 @@ async function waitWithProgress(
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
   call: string | undefined,
-  started: ToolReceipt = receipt(),
 ): Promise<Returned<WaitOutput>> {
   const snapshot = () => {
     const graphs = targets.flatMap((target) => {
@@ -286,7 +286,7 @@ async function waitWithProgress(
             statusLine(service, info),
           ),
         ].join("\n"),
-        { receipt: started },
+        { receipt: receipt() },
       ),
     );
   };
@@ -360,14 +360,6 @@ async function waitWithProgress(
   }
 }
 
-const waitParam = Type.Optional(
-  Type.Number({
-    description:
-      "Block until the agent answers, at most this many seconds, and return its result",
-    minimum: 1,
-  }),
-);
-
 /** What one agent gets: its job and settings. */
 const agentFields = {
   job: Type.String({
@@ -411,31 +403,20 @@ function describeTarget(service: AgentService, target: Target): string {
 }
 
 export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
-  const spawnParams = Type.Object({ ...agentFields, wait: waitParam });
+  const spawnParams = Type.Object({ ...agentFields });
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_spawn",
       description:
-        "Start an agent on a job. Its final message is its result, which arrives later as a message. Set wait to block for the result instead.",
+        "Start an agent on a job and return at once. Its final message is its result, which arrives later as a message; to block for it, call agent_wait.",
       parameters: spawnParams,
       output: AgentOutput,
-      async execute(service, params, ctx, signal, onUpdate, call) {
+      async execute(service, params, ctx) {
         const spec = await resolveSpawn(params, ctx, {
           skills: host.skills.get,
           thinking: pi.getThinkingLevel(),
         });
         const info = await service.spawn(spec);
-        if (params.wait !== undefined) {
-          const waited = await waitWithProgress(
-            service,
-            [{ kind: "agent", id: info.id }],
-            params.wait,
-            signal,
-            onUpdate,
-            call,
-          );
-          return { ...waited, output: agentNow(service, info.id) };
-        }
         // The call line already names what it started.
         return {
           content: `Started ${info.name}.`,
@@ -471,22 +452,15 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         description: "Stop the other agents as soon as one fails",
       }),
     ),
-    wait: Type.Optional(
-      Type.Number({
-        description:
-          "Block until the graph finishes, at most this many seconds, and return its result",
-        minimum: 1,
-      }),
-    ),
   });
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_spawn_graph",
       description:
-        "Start agents that work together on related jobs. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. Set wait to block for the result instead.",
+        "Start agents that work together on related jobs. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. Returns at once; to block for the result, call agent_wait.",
       parameters: graphParams,
       output: GraphOutput,
-      async execute(service, params, ctx, signal, onUpdate, call) {
+      async execute(service, params, ctx) {
         const thinking = pi.getThinkingLevel();
         const graph = await service.spawnGraph({
           ...(params.name ? { name: params.name } : {}),
@@ -505,18 +479,6 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         const started = receipt({
           graphs: [startedGraph(graph, lookupAgent(service))],
         });
-        if (params.wait !== undefined) {
-          const waited = await waitWithProgress(
-            service,
-            [{ kind: "graph", id: graph.id }],
-            params.wait,
-            signal,
-            onUpdate,
-            call,
-            started,
-          );
-          return { ...waited, output: graphNow(service, graph.id) };
-        }
         return {
           content: `Started graph ${graph.name}: ${graphShape(graph)}.`,
           details: { receipt: started },
@@ -534,33 +496,21 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         description: "Queue after the current answer instead of steering",
       }),
     ),
-    wait: waitParam,
   });
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_send",
       description:
-        "Send a message to an agent, also one that answered or was stopped. A working agent receives it as steering. The answer arrives later as a message. Set wait to block for it instead.",
+        "Send a message to an agent, also one that answered or was stopped, and return at once. A working agent receives it as steering. The answer arrives later as a message; to block for it, call agent_wait.",
       parameters: sendParams,
       output: AgentOutput,
-      async execute(service, params, _ctx, signal, onUpdate, call) {
+      async execute(service, params) {
         const before = service.get(params.name);
         const sent = await service.send(
           params.name,
           params.message,
           params.followUp ? "followUp" : "auto",
         );
-        if (params.wait !== undefined) {
-          const waited = await waitWithProgress(
-            service,
-            [{ kind: "agent", id: sent.id }],
-            params.wait,
-            signal,
-            onUpdate,
-            call,
-          );
-          return { ...waited, output: agentNow(service, sent.id) };
-        }
         const info = service.agentById(sent.id) as AgentInfo;
         const verb =
           before?.state === "working"

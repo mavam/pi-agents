@@ -447,8 +447,9 @@ started.
 A steer from the user ends every running wait at once; the agents keep
 working and their results arrive as messages. Follow-ups don't end waits.
 
-The system prompt adds one line of guidance, the usable profiles, and the
-user's scoped models, so the parent recognizes model names. The `model`
+The system prompt adds brief guidance, also that agents can message each
+other, the usable profiles, and the user's scoped models, so the parent
+recognizes model names. The `model`
 argument and profile models resolve like `pi --model` patterns among models
 with credentials. Profiles with an unavailable model or unresolvable skills
 stay out of the prompt, and the UI reports them once per session.

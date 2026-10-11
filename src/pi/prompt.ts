@@ -1,5 +1,5 @@
 /**
- * The parent's system prompt section: one line of guidance, the usable
+ * The parent's system prompt section: brief guidance, the usable
  * profiles, and the user's scoped models. The tools describe themselves.
  */
 
@@ -9,7 +9,7 @@ import type { SkillSource } from "../catalog/skills.js";
 import { profileProblem } from "./spawn.js";
 
 const GUIDANCE =
-  "Delegate work to agents with the agent_* tools when the user asks for it.";
+  "Delegate work to agents with the agent_* tools when the user asks for it. Agents can message each other with agent_send; for agents whose jobs depend on each other, say in their jobs whom to coordinate with.";
 
 function oneLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();

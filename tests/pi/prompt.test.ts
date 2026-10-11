@@ -51,7 +51,7 @@ describe("system prompt appendix", () => {
     const appendix = buildSystemPromptAppendix(profiles);
     expect(appendix).toBe(
       [
-        "Delegate work to agents with the agent_* tools when the user asks for it.",
+        "Delegate work to agents with the agent_* tools when the user asks for it. Agents can message each other with agent_send; for agents whose jobs depend on each other, say in their jobs whom to coordinate with.",
         "<agent_profiles>",
         '  <profile name="scout" thinking="low">Finds code</profile>',
         "</agent_profiles>",
@@ -75,7 +75,7 @@ describe("system prompt appendix", () => {
       ] as never),
     ).toBe(
       [
-        "Delegate work to agents with the agent_* tools when the user asks for it.",
+        "Delegate work to agents with the agent_* tools when the user asks for it. Agents can message each other with agent_send; for agents whose jobs depend on each other, say in their jobs whom to coordinate with.",
         '<agent_models note="cost in USD per million input/output tokens">',
         '  <model id="anthropic/claude-sonnet-5-5" name="Claude Sonnet 5.5" context="1M" cost="2/10"/>',
         '  <model id="openai-codex/gpt-6.1-sol" thinking="high"/>',
@@ -83,7 +83,7 @@ describe("system prompt appendix", () => {
       ].join("\n"),
     );
     expect(buildSystemPromptAppendix([])).toBe(
-      "Delegate work to agents with the agent_* tools when the user asks for it.",
+      "Delegate work to agents with the agent_* tools when the user asks for it. Agents can message each other with agent_send; for agents whose jobs depend on each other, say in their jobs whom to coordinate with.",
     );
   });
 

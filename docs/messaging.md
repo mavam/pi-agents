@@ -1,7 +1,5 @@
 # Agent messaging
 
-Status: experimental, behind the setting `piAgents.messaging`.
-
 Agents of one Pi session send each other one-way messages. This document
 states what senders and recipients can rely on, what's deliberately left
 out, and what may come next. `docs/design.md` describes the mechanics and

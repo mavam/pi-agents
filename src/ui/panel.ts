@@ -19,7 +19,7 @@
  * (a graph: its first agent), `s` stops, Tab opens `/agents` at the
  * selected row, and Esc returns to the editor.
  *
- * With messaging on, it also shows messages still queued for their
+ * It also shows messages still queued for their
  * recipients, in a column to the right of the agents from 120 terminal
  * columns, else below them; delivered ones are history, in the transcript
  * and `/messages`:
@@ -196,11 +196,10 @@ export class AgentPanel {
     );
   }
 
-  /** Queued messages of the agents the panel shows, oldest first; none
-   * while messaging is off. */
+  /** Queued messages of the agents the panel shows, oldest first. */
   messages(): MessageInfo[] {
     const service = this.host.current();
-    if (!service || !this.host.messaging()) return [];
+    if (!service) return [];
     const shown = new Set(service.list().map((info) => info.id));
     return service
       .messages()
@@ -439,7 +438,7 @@ export class AgentPanel {
       ...(message
         ? [`⏎ attach ${message.to.name}`]
         : ["space fold", "⏎ attach", "s stop"]),
-      ...(this.host.messaging() ? ["m messages"] : []),
+      "m messages",
       "tab /agents",
       "esc back",
     ];

@@ -170,7 +170,7 @@ describe("messaging", () => {
     ).toEqual(["done: idle", "tool: Sent to b."]);
   });
 
-  test("a crash after logging delivers once, also once messaging is off", async () => {
+  test("a crash after logging delivers once", async () => {
     const directory = tempDir();
     let held = false;
     const before = await open({
@@ -187,7 +187,7 @@ describe("messaging", () => {
     await before.spawn(spec("a", SEND));
     await until(() => held);
 
-    const after = await reopen(before, directory, { enabled: () => false });
+    const after = await reopen(before, directory, {});
     await until(() => after.get("a")?.result?.text === "tool: Sent to b.");
     await until(() => after.get("b")?.result?.text === "got: hello");
     expect(count(await transcript(after, "b"), "[from a] hello")).toBe(1);

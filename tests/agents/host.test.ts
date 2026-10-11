@@ -166,10 +166,15 @@ describe("hosts", () => {
     expect(service.get("lead")?.result?.text).toBe("merged");
 
     const ours = [extensions.tools.name, extensions.prompt.name];
+    // Agents can message each other; helpers can't.
+    const messaging = [...ours, extensions.messaging.name];
     for (const [name, selected] of [
-      ["solo", ours],
-      ["x", ours],
-      ["lead", [...ours, extensions.delegation.name]],
+      ["solo", messaging],
+      ["x", messaging],
+      [
+        "lead",
+        [...ours, extensions.delegation.name, extensions.messaging.name],
+      ],
       ["lead.h", ours],
     ] as const) {
       const id = Number(service.get(name)?.id) as ConversationId;

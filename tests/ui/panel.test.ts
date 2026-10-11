@@ -36,7 +36,6 @@ function mount(
   };
   const host = {
     current: () => service,
-    messaging: () => true,
   } as unknown as SessionHost;
   const panel = new AgentPanel(host, () => now);
   const attached: string[] = [];

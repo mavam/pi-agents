@@ -33,7 +33,8 @@ export interface AgentExtensions {
   graphs: Extension;
   /** `delegate_graph`; only delegating agents select it. */
   delegation: Extension;
-  /** `agent_send`; agents started while messaging is on select it. */
+  /** `agent_send` and `agent_status`; every agent selects it, helpers
+   * don't. */
   messaging: Extension;
   /** What the messaging tools share with the service. */
   hub: MessagingHub;

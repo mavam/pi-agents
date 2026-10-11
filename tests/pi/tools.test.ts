@@ -499,7 +499,7 @@ describe("call results", () => {
     const gaveUp = [
       "✦ wait audit timeout=0.3s",
       "  ⊠ audit graph 1/2",
-      "  ├─ ● map faux-1 2.1k",
+      "  ├─ ● map faux-1 2.8k",
       "  └─ ⊠ report after map faux-1",
       "  Timed out",
     ];

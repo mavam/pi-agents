@@ -255,9 +255,9 @@ delegating agent's conversation
 
 ### Messages between agents
 
-Experimental, behind `piAgents.messaging`; `docs/messaging.md` states the
-guarantees and what's left out. The extension `pi-agents-messaging` holds
-two tools:
+Every agent that isn't a helper can message the others; `docs/messaging.md`
+states the guarantees and what's left out. The extension
+`pi-agents-messaging` holds two tools:
 
 - `agent_status` lists the agents a sender can message, finished ones too,
   with their state and the job each was started with, cut at 4,000
@@ -528,10 +528,11 @@ message card, with its own, and Pi's tools with Pi's.
   Shift+Tab backwards, skipping a stop with nothing to show. Esc goes back
   one level; in the attach view it interrupts a working agent, as in Pi, and
   goes back from an idle one. ⏎ opens the selected thing, `s` stops, and `m`
-  opens messages: the selected agent's, or at a message's sender.
-- Messages between agents, with messaging on. Each surface has one job: the
+  opens `/messages`, filtered by the selected agent or at the selected
+  message.
+- Messages between agents. Each surface has one job: the
   panel shows live state, so only queued messages; the transcript and
-  `/messages` show history, with times; the attach view shows one agent's
+  `/messages` show history, `/messages` with times; the attach view shows one agent's
   conversation. `/agents` doesn't show messages: an agent's details are its
   job and its result. `src/ui/messages.ts` is the one place that draws
   messages: a line, `scout → notes` with the names in bold, then the text,

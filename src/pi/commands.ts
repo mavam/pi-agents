@@ -306,9 +306,7 @@ async function openMessagesOverlay(
       messages: () => service.messages(),
       ...(agentName ? { query: agentName } : {}),
       ...(options.message ? { select: options.message } : {}),
-      emptyText: deps.host.messaging()
-        ? "No messages between agents yet."
-        : "Messaging between agents is off. Set piAgents.messaging to turn it on.",
+      emptyText: "No messages between agents yet.",
       attach: (agentId) => deps.focus.attach(ctx, agentId),
       next: deps.panel.hasRows()
         ? { label: "panel", open: () => deps.focus.focusPanel(ctx) }
@@ -349,23 +347,15 @@ async function openAgentsOverlay(
   const spec: OverlaySpec<Row> = {
     title: "Agents",
     emptyText: "No agents yet. Ask Pi to delegate.",
-    // Tab returns to the panel only while it shows agents.
-    footer: () => {
-      const next = deps.host.messaging()
-        ? "/messages"
-        : deps.panel.hasRows()
-          ? "panel"
-          : undefined;
-      return [
-        "↑↓ move",
-        "space fold",
-        "⏎ attach",
-        "s stop",
-        ...(deps.host.messaging() ? ["m messages"] : []),
-        ...(next ? [`tab ${next}`] : []),
-        "esc back",
-      ];
-    },
+    footer: () => [
+      "↑↓ move",
+      "space fold",
+      "⏎ attach",
+      "s stop",
+      "m messages",
+      "tab /messages",
+      "esc back",
+    ],
     ...(select ? { initialKey: select } : {}),
     items,
     keyOf: (row) => row.key,
@@ -410,32 +400,25 @@ async function openAgentsOverlay(
       row.kind === "agent"
         ? agentDetail(row.agent, color)
         : graphDetail(row.graph, (id) => service.agentById(id), color, bold),
-    // Tab goes on to /messages, Shift+Tab back to the panel; each skips to
-    // the other when it has nothing to show.
+    // Tab goes on to /messages, Shift+Tab back to the panel, or to
+    // /messages while the panel has nothing to show.
     onNavigate: (key, row) => {
-      const toPanel = () => {
+      if (key === "shift+tab" && deps.panel.hasRows()) {
         after = () =>
           row
             ? deps.focus.focusPanelAt(ctx, row.key)
             : deps.focus.focusPanel(ctx);
-        return "close" as const;
-      };
-      const toMessages = () => {
-        after = () =>
-          void openMessagesOverlay(ctx, deps).catch((error) =>
-            ctx.ui.notify(errorText(error), "error"),
-          );
-        return "close" as const;
-      };
-      const panel = deps.panel.hasRows();
-      const messages = deps.host.messaging();
-      if (key === "tab")
-        return messages ? toMessages() : panel ? toPanel() : undefined;
-      return panel ? toPanel() : messages ? toMessages() : undefined;
+        return "close";
+      }
+      after = () =>
+        void openMessagesOverlay(ctx, deps).catch((error) =>
+          ctx.ui.notify(errorText(error), "error"),
+        );
+      return "close";
     },
     onAction: (key, row) => {
       if (key === "space") return { select: fold(row, deps.panel.disclosure) };
-      if (key === "m" && deps.host.messaging()) {
+      if (key === "m") {
         const agent = row.kind === "agent" ? row.agent.id : undefined;
         after = () =>
           void openMessagesOverlay(ctx, deps, agent ? { agent } : {}).catch(

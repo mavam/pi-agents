@@ -60,9 +60,6 @@ const JOB_LIMIT: ResultLimit = {
 const STATUS_CHARS = 30_000;
 
 export interface MessagingOptions {
-  /** Whether messaging is on; agents that have the tool get an error
-   * while it's off. A send that already began finishes regardless. */
-  enabled?: () => boolean;
   /** Tests only: runs after the recipient is bound. */
   afterBind?: (context: Context) => Promise<void>;
   /** Tests only: runs after the message is logged and before it's
@@ -150,8 +147,6 @@ async function bind(
   context: Context,
   options: MessagingOptions,
 ): Promise<Binding | string> {
-  if (options.enabled && !options.enabled())
-    return "Messaging between agents is off.";
   const text = args.message.trim();
   if (!text) return "The message must not be empty.";
   const [state, graphs] = await Promise.all([

@@ -204,7 +204,7 @@ export interface HostOptions {
   trusted?: boolean;
   skills?: SkillSource;
   delegationLimits?: Partial<DelegationLimits>;
-  /** Turns messaging between agents on. */
+  /** Hooks into messaging between agents. */
   messaging?: MessagingOptions;
 }
 
@@ -250,7 +250,6 @@ export async function openService(
       anchor: harness.anchor,
       extensions,
       parent,
-      messaging: () => options.messaging !== undefined,
       refreshDelayMs: TEST_REFRESH_MS,
     });
     harness.harness.resume();

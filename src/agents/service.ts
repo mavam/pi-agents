@@ -127,8 +127,6 @@ export interface AgentServiceOptions {
   parent: Parent;
   /** Receives failures of background work, such as delivery. */
   onReport?: (error: unknown) => void;
-  /** Whether agents started now may message each other. */
-  messaging?: () => boolean;
   /** How long the service gathers commits before it refreshes; tests
    * shorten it. */
   refreshDelayMs?: number;
@@ -261,7 +259,6 @@ export class AgentService {
   private readonly extensions: AgentExtensions;
   private readonly parent: Parent;
   private readonly report: (error: unknown) => void;
-  private readonly messaging: () => boolean;
   private readonly refreshDelayMs: number;
 
   private constructor(options: AgentServiceOptions) {
@@ -270,7 +267,6 @@ export class AgentService {
     this.extensions = options.extensions;
     this.parent = options.parent;
     this.report = options.onReport ?? (() => {});
-    this.messaging = options.messaging ?? (() => false);
     this.refreshDelayMs = options.refreshDelayMs ?? REFRESH_DELAY_MS;
     this.extensions.hub.state = (id) => this.infos.get(id)?.state;
   }
@@ -1195,10 +1191,9 @@ export class AgentService {
     tools: ToolRegistration[],
     delegate: boolean | undefined,
   ): { tools: ToolRegistration[]; extensions: Extension[] } {
-    const messaging = this.messaging();
     const extensions = agentSelection(this.extensions, {
       delegate: !!delegate,
-      messaging,
+      messaging: true,
     });
     const extra = [
       ...(delegate
@@ -1206,7 +1201,7 @@ export class AgentService {
             (each) => each.name === DELEGATE_TOOL,
           )
         : []),
-      ...(messaging ? (this.extensions.messaging.tools ?? []) : []),
+      ...(this.extensions.messaging.tools ?? []),
     ];
     return { tools: [...tools, ...extra], extensions };
   }

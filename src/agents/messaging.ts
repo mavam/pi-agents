@@ -42,22 +42,17 @@ import {
   type MessageRecord,
   MessagesDoc,
 } from "./records.js";
-import { type ResultLimit, truncateResult } from "./report.js";
 import { messageInput } from "./types.js";
 
 export const MESSAGING_EXTENSION = "pi-agents-messaging";
 export const SEND_TOOL = "agent_send";
 export const STATUS_TOOL = "agent_status";
 
-/** How much of each agent's job `agent_status` shows. */
-const JOB_LIMIT: ResultLimit = {
-  chars: 4_000,
-  lines: 200,
-  hint: "The rest of the job is left out.",
+/** Tool output pi-durable passes on whole. */
+export const UNBOUNDED_OUTPUT = {
+  maxBytes: Number.POSITIVE_INFINITY,
+  maxLines: Number.POSITIVE_INFINITY,
 };
-
-/** How much `agent_status` shows in all, below pi-durable's output limit. */
-const STATUS_CHARS = 30_000;
 
 export interface MessagingOptions {
   /** Tests only: runs after the recipient is bound. */
@@ -190,6 +185,7 @@ export function createMessagingExtension(
           "List the other agents of this session you can message, with their state and the job each was started with.",
         parameters: Type.Object({}),
         replay: "safe",
+        outputLimits: UNBOUNDED_OUTPUT,
         async execute(_args, api, context) {
           const [state, graphs] = await Promise.all([
             api.snapshot(AgentsDoc, context),
@@ -212,27 +208,21 @@ export function createMessagingExtension(
                 name: record.name,
                 ...(model ? { model } : {}),
                 outcome: stateOutcome(hub.state(id) ?? "idle"),
-                job: truncateResult(record.job.trim(), JOB_LIMIT),
+                job: record.job.trim(),
               };
             }),
           );
           const stateWord = (agent: AgentReceipt) =>
             agent.outcome === "answered" ? "idle" : agent.outcome;
-          const sections: string[] = [];
-          let size = 0;
-          for (const agent of agents) {
-            const section = `## ${agent.name} (${stateWord(agent)})\nJob:\n${agent.job}`;
-            if (size + section.length > STATUS_CHARS) {
-              sections.push(
-                `${agents.length - sections.length} more agents are left out.`,
-              );
-              break;
-            }
-            sections.push(section);
-            size += section.length;
-          }
           const text =
-            agents.length === 0 ? "No other agents." : sections.join("\n\n");
+            agents.length === 0
+              ? "No other agents."
+              : agents
+                  .map(
+                    (agent) =>
+                      `## ${agent.name} (${stateWord(agent)})\nJob:\n${agent.job}`,
+                  )
+                  .join("\n\n");
           return {
             content: [{ type: "text", text }],
             details: { receipt: receipt({ agents }) },

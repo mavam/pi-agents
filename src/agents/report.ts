@@ -82,42 +82,6 @@ export function nodeResult(
   return { kind: outcome.kind, body: "" };
 }
 
-/** How much of one result the text keeps. */
-export interface ResultLimit {
-  chars: number;
-  lines: number;
-  /** Appended to the truncation notice. */
-  hint: string;
-}
-
-export const PARENT_LIMIT: ResultLimit = {
-  chars: 40_000,
-  lines: Number.POSITIVE_INFINITY,
-  hint: "Attach to the agent to read all of it.",
-};
-
-/** Cut a result to its limit: the text it keeps and how many characters it
- * leaves out. */
-export function cutResult(
-  body: string,
-  limit: ResultLimit = PARENT_LIMIT,
-): { text: string; omitted: number } {
-  const lines = body.split("\n");
-  const kept = lines.length > limit.lines ? lines.slice(0, limit.lines) : lines;
-  const text = kept.join("\n").slice(0, limit.chars);
-  return { text, omitted: body.length - text.length };
-}
-
-/** Cut a result to its limit, saying how much is left out. */
-export function truncateResult(
-  body: string,
-  limit: ResultLimit = PARENT_LIMIT,
-): string {
-  const { text, omitted } = cutResult(body, limit);
-  if (omitted <= 0) return body;
-  return `${text}\n\n[Result truncated: ${omitted} more characters. ${limit.hint}]`;
-}
-
 /** `2 answered, 1 failed`. */
 export function nodeCounts(nodes: readonly ReportNode[]): string {
   return NODE_KINDS.flatMap((kind) => {
@@ -138,14 +102,12 @@ export function nodeNote(node: ReportNode): string {
 export function nodesContent(
   nodes: readonly ReportNode[],
   level: number,
-  limit: ResultLimit = PARENT_LIMIT,
 ): string {
   const hashes = "#".repeat(level);
   return nodes
     .map((node) => {
       const head = `${hashes} ${node.name} (${node.kind})`;
-      if (node.kind === "answered")
-        return `${head}\n${truncateResult(node.body || "(empty)", limit)}`;
+      if (node.kind === "answered") return `${head}\n${node.body || "(empty)"}`;
       if (node.kind === "failed") return `${head}\nError: ${node.body}`;
       return head;
     })
@@ -160,16 +122,15 @@ export function nodesContent(
 export function graphReport(
   name: string,
   nodes: readonly ReportNode[],
-  limit: ResultLimit = PARENT_LIMIT,
 ): string {
   const ends = nodes.filter((node) => node.end);
   const [only] = ends;
   const main =
     ends.length === 1 && only
       ? only.kind === "answered"
-        ? `Graph ${name}: ${only.name} answered:\n\n${truncateResult(only.body || "(empty)", limit)}`
+        ? `Graph ${name}: ${only.name} answered:\n\n${only.body || "(empty)"}`
         : `Graph ${name}: ${only.name} ${nodeNote(only)}.`
-      : `Graph ${name} finished: ${nodeCounts(ends)}.\n\n${nodesContent(ends, 2, limit)}`;
+      : `Graph ${name} finished: ${nodeCounts(ends)}.\n\n${nodesContent(ends, 2)}`;
   const others = nodes.filter((node) => !node.end && node.kind !== "answered");
   if (others.length === 0) return main;
   return `${main}\n\nOther agents: ${others.map((node) => `${node.name} ${nodeNote(node)}`).join("; ")}.`;

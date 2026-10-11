@@ -34,12 +34,7 @@ import { AGENT_TOOL_NAMES } from "../host/tools.js";
 import { graphShape, oneLine } from "../ui/format.js";
 import { PARENT_TOOL_VIEWS, positiveSeconds } from "../ui/tool-views.js";
 import { callKey } from "./calls.js";
-import {
-  graphContent,
-  graphResultDetails,
-  nodeCounts,
-  truncateResult,
-} from "./messages.js";
+import { graphContent, graphResultDetails, nodeCounts } from "./messages.js";
 import {
   AgentOutput,
   agentOutput,
@@ -101,9 +96,8 @@ function describeAgent(info: AgentInfo): string {
   const head = `## ${info.name} (${info.state})`;
   const { result, error } = turnResult(info);
   if (error !== undefined) return `${head}\nError: ${error}`;
-  if (info.state === "idle")
-    return `${head}\n${truncateResult(result || "(empty)")}`;
-  return result ? `${head}\n${truncateResult(result)}` : head;
+  if (info.state === "idle") return `${head}\n${result || "(empty)"}`;
+  return result ? `${head}\n${result}` : head;
 }
 
 /** The model-facing summary of a graph: its result once it finished. */

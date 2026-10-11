@@ -10,13 +10,7 @@
  * reports progress. Delivery bookkeeping stays out of receipts.
  */
 
-import {
-  cutResult,
-  type NodeKind,
-  nodeResult,
-  type ResultLimit,
-  turnResult,
-} from "./report.js";
+import { type NodeKind, nodeResult, turnResult } from "./report.js";
 import type {
   AgentInfo,
   AgentState,
@@ -83,12 +77,10 @@ export type ToolReceipt = {
   wait?: WaitEnd;
 };
 
-/** How much of an answer a receipt keeps. */
-const DISPLAY_LIMIT: ResultLimit = {
-  chars: 8_000,
-  lines: 200,
-  hint: "Attach to the agent to read all of it.",
-};
+/** How much of an answer a receipt keeps for display; the model reads
+ * answers whole. */
+const DISPLAY_CHARS = 8_000;
+const DISPLAY_LINES = 200;
 
 export function receipt(
   parts: Partial<Omit<ToolReceipt, "version">> = {},
@@ -111,7 +103,12 @@ function shortModel(model: ModelRef | undefined): string | undefined {
 }
 
 function cut(body: string): string {
-  const { text, omitted } = cutResult(body, DISPLAY_LIMIT);
+  const text = body
+    .split("\n")
+    .slice(0, DISPLAY_LINES)
+    .join("\n")
+    .slice(0, DISPLAY_CHARS);
+  const omitted = body.length - text.length;
   return omitted > 0 ? `${text}\n… ${omitted} more characters` : text;
 }
 

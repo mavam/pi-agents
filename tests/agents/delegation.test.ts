@@ -211,6 +211,24 @@ describe("delegation", () => {
     expect(await service.liveTasks()).toEqual([]);
   });
 
+  test("helpers' results reach their agent whole", async () => {
+    const service = await open();
+    // Together longer than pi-durable's default output limit of 50 KB.
+    const long = (name: string) => `${name} ${"x".repeat(40_000)}`;
+    await service.spawn(
+      lead(
+        delegate([
+          { name: "api", job: long("api") },
+          { name: "tests", job: long("tests") },
+        ]),
+      ),
+    );
+    const outcome = await service.wait(["lead"]);
+    const text = outcome.agents[0]?.result?.text ?? "";
+    expect(text).toContain(`done: ${long("api")}`);
+    expect(text).toContain(`done: ${long("tests")}`);
+  });
+
   test("helpers and other agents can't start helpers", async () => {
     const { models } = scripted();
     const service = await open({ models });

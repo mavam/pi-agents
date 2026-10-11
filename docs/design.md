@@ -239,8 +239,8 @@ without a language.
 
 The extension `pi-agents-delegation` holds one tool, `delegate_graph`, with
 the shape of `agent_spawn_graph` minus `wait`. The call blocks and returns
-the graph's result as the tool result, within a budget below pi-durable's
-tool output limit. It follows Pi's foreground `subagent` tool: what it
+the graph's result as the tool result, whole: the tool lifts pi-durable's
+output limit. It follows Pi's foreground `subagent` tool: what it
 starts belongs to the call's task, and `replay: "safe"` lets a rerun find it.
 
 ```text
@@ -279,8 +279,8 @@ states the guarantees and what's left out. The extension
 `pi-agents-messaging` holds two tools:
 
 - `agent_status` lists the agents a sender can message, finished ones too,
-  with their state and the job each was started with, cut at 4,000
-  characters per agent and 30,000 in all.
+  with their state and the job each was started with, whole: the tool
+  lifts pi-durable's output limit.
 - `agent_send` submits a message to another agent's conversation and
   returns without waiting. Like the parent's messages, it steers a working
   recipient unless `followUp` queues it after the current work.
@@ -340,6 +340,12 @@ graph closes on delivery, and so do its agents that answered, were skipped,
 or that the graph stopped; failed and interrupted agents stay open.
 
 Turns the user starts from the attach view never deliver into the parent.
+
+Results reach the parent whole. No budget cuts what the model reads: not
+result messages, wait results, scripts' structured output, `agent_status`,
+or `delegate_graph`. Limits wait until large results cause problems that
+show what a good mechanism looks like. Only receipts keep a cut of an
+answer, for display.
 
 ### At least once
 
@@ -466,8 +472,7 @@ An agent is its `name`, `state`, `graph`, and what its latest turn produced:
 `error` when it failed, and nothing while it works or waits. A turn never
 reports an earlier turn's answer. A graph is its `state`, `stopped`, and per
 agent its `after`, `end`, and `outcome`, with `result` or `error`; nodes
-carry the answer to the graph's job. Results keep the limit of the text the
-model reads and say when they were cut with `truncated`. `agent_wait`
+carry the answer to the graph's job. `agent_wait`
 returns what it observed after the wait; the other calls return what they
 started.
 

@@ -16,7 +16,6 @@ import {
   nodeNote,
   nodeResult,
   type ReportNode,
-  truncateResult,
 } from "../agents/report.js";
 import type {
   AgentDelivery,
@@ -42,7 +41,7 @@ const COLLAPSED_LINES = 12;
 const COLLAPSED_NODE_LINES = 6;
 
 export type { NodeKind };
-export { nodeCounts, truncateResult };
+export { nodeCounts };
 
 export interface ResultDetails {
   version: 1;

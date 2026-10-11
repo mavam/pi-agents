@@ -365,10 +365,9 @@ describe("output", () => {
     },
   });
 
-  test("long results are cut like the text the model reads", () => {
+  test("long results reach scripts whole", () => {
     const output = agentOutput(info("x".repeat(50_000)), () => undefined);
-    expect(output.result).toHaveLength(40_000);
-    expect(output.truncated).toBe(true);
+    expect(output.result).toHaveLength(50_000);
   });
 
   test("a turn that failed before any output says why", () => {

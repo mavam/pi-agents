@@ -1,13 +1,12 @@
 /**
  * What scripts get from the agent tools: names, states, and results as
  * plain data. Codemode hands a script a tool's structured content and turns
- * its output schema into a declaration. The model still reads the text;
- * results keep the same limit as there.
+ * its output schema into a declaration. The model still reads the text.
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, type TProperties, Type } from "typebox";
-import { cutResult, NODE_KINDS, turnResult } from "../agents/report.js";
+import { NODE_KINDS, turnResult } from "../agents/report.js";
 import {
   AGENT_STATES,
   type AgentInfo,
@@ -21,7 +20,7 @@ function exact<T extends TProperties>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
 }
 
-/** A result cut to the limit of the text the model reads. */
+/** What an agent's turn produced. */
 const resultFields = {
   result: Type.Optional(
     Type.String({
@@ -30,9 +29,6 @@ const resultFields = {
     }),
   ),
   error: Type.Optional(Type.String({ description: "Why it failed" })),
-  truncated: Type.Optional(
-    Type.Boolean({ description: "The result or error was cut to fit" }),
-  ),
 };
 
 export const AgentOutput = exact({
@@ -99,12 +95,8 @@ export type StopOutput = Static<typeof StopOutput>;
 function bodyFields(
   kind: "result" | "error",
   body: string,
-): { result?: string; error?: string; truncated?: boolean } {
-  const { text, omitted } = cutResult(body);
-  const truncated = omitted > 0 ? { truncated: true } : {};
-  return kind === "result"
-    ? { result: text, ...truncated }
-    : { error: text, ...truncated };
+): { result?: string; error?: string } {
+  return kind === "result" ? { result: body } : { error: body };
 }
 
 /** An agent with what its latest turn produced. */

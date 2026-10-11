@@ -389,6 +389,21 @@ describe("messaging", () => {
     ).toEqual(["  ● b faux-1 Keep notes. Then rest."]);
   });
 
+  test("agent_status shows jobs whole", async () => {
+    const service = await open();
+    // Longer than pi-durable's default output limit of 50 KB.
+    const job = `Keep notes. ${"x".repeat(60_000)}`;
+    await service.spawn(spec("b", job));
+    await until(() => service.get("b")?.state === "idle");
+    await service.spawn(spec("a", "status"));
+    await until(() => service.get("a")?.state === "idle");
+    const result = (await entries(service, "a"))
+      .map((entry) => entry.model?.[0])
+      .find((message) => message?.role === "toolResult");
+    if (result?.role !== "toolResult") throw new Error("no status result");
+    expect(textOf(result.content)).toBe(`## b (idle)\nJob:\n${job}`);
+  });
+
   test("a stopped agent refuses messages until the parent messages it", async () => {
     const service = await open();
     await service.spawn(spec("b", "idle"));

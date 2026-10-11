@@ -39,7 +39,7 @@ import {
 import { type Static, Type } from "typebox";
 import { summarizeUsage, sumUsage } from "./derive.js";
 import { GraphTask, type NodeResult, NodeTask } from "./graphs.js";
-import { SEND_TOOL, STATUS_TOOL } from "./messaging.js";
+import { SEND_TOOL, STATUS_TOOL, UNBOUNDED_OUTPUT } from "./messaging.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
 import {
   type AgentReceipt,
@@ -54,12 +54,7 @@ import {
   type GraphRecord,
   GraphsDoc,
 } from "./records.js";
-import {
-  graphReport,
-  type NodeKind,
-  type ReportNode,
-  type ResultLimit,
-} from "./report.js";
+import { graphReport, type NodeKind, type ReportNode } from "./report.js";
 import { endNodes, resolveEdges } from "./topology.js";
 import {
   AgentError,
@@ -90,10 +85,6 @@ export const DELEGATION_LIMITS: DelegationLimits = {
   perAgent: 24,
   active: 16,
 };
-
-/** The text budget of a tool result, below pi-durable's output limit. */
-const RESULT_CHARS = 30_000;
-const RESULT_LINES = 1_500;
 
 const HELPER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
 
@@ -532,8 +523,7 @@ async function startedReceipt(
   );
 }
 
-/** The graph's result as the tool's text, within the output budget, and
- * its receipt. */
+/** The graph's result as the tool's text, and its receipt. */
 async function report(
   api: Api,
   context: Context,
@@ -566,16 +556,7 @@ async function report(
     graph.stopped === true ||
     (settled?.state.status === "terminal" &&
       settled.state.outcome.status === "aborted");
-  const answered = Math.max(
-    1,
-    nodes.filter((node) => node.end && node.kind === "answered").length,
-  );
-  const limit: ResultLimit = {
-    chars: Math.floor(RESULT_CHARS / answered),
-    lines: Math.floor(RESULT_LINES / answered),
-    hint: "Ask for shorter results if you need all of them.",
-  };
-  const text = graphReport(graph.name, nodes, limit);
+  const text = graphReport(graph.name, nodes);
   return {
     text: stopped
       ? `The helpers were stopped before they finished.\n\n${text}`
@@ -669,6 +650,7 @@ export function createDelegationExtension(
         parameters,
         // A rerun finds the graph the interrupted call started.
         replay: "safe",
+        outputLimits: UNBOUNDED_OUTPUT,
         // Calls of earlier builds and models used to them say `task`.
         prepareArguments: (args) => renameTaskToJob(args) as Args,
         execute: (args, api, context) => execute(args, api, context, options),

@@ -61,17 +61,29 @@ its services, and then resumes the harness:
   graph tasks, and delegation; `installAgentExtensions` installs them in any
   registry, the way the session worker installs `CodingTools` and its
   prompt. The core never opens storage or a harness, never closes or
-  resumes one, and never assumes the root conversation. The `AgentService`
-  facade delegates to `store.ts` for bookkeeping commits and snapshots,
-  `observer.ts` for commit observation and harness caches, `message-log.ts`
-  for messages and their statuses, `projection.ts` for derived agent and
-  graph infos, `delivery.ts` for parent results and acknowledgments,
-  `waits.ts` for wait counts and conditions, and `creation.ts` for spawn
-  validation and creating commits, with `context.ts` sharing context and IDs.
+  resumes one, and never assumes the root conversation. `AgentService`
+  (`service.ts`) is a facade: it owns the lifecycle, the queries, the
+  operations, and the refresh after each change, and delegates to one
+  collaborator per concern (see below).
 - **Frontend** (`src/pi`, `src/ui`): tools, commands, and views. They see
   plain data through `AgentService`, like the session worker's presentations
   see `AgentController` and `Transcript`; only the attach view reads a
   conversation's view.
+
+The core's collaborators, each owning one concern and its state. Lower
+modules never import higher ones; where a lower one needs something from
+above, it takes a callback in its constructor options:
+
+| Module | Owns |
+| --- | --- |
+| `store.ts` | `AgentStore`: the commits and snapshots of pi-agents' documents, and submissions. No state in memory. |
+| `observer.ts` | `HarnessObserver`: the commit listener, per-conversation caches it feeds, and cached reads of task outcomes and entries that never change. |
+| `message-log.ts` | `MessageLog`: the messages between agents and the status of each. |
+| `projection.ts` | `Projection`: the records and the `AgentInfo` and `GraphInfo` derived from them, and the settled outcomes of undelivered parent requests. |
+| `delivery.ts` | `Delivery`: what is due to the parent, what is in flight, and acknowledgment. |
+| `waits.ts` | `Waits`: which agents and graphs waits cover, and the conditions that end waits. |
+| `creation.ts` | Validation of spawns and the commits that create agents and graphs. |
+| `context.ts` | The background context and durable ID helpers the collaborators share. |
 
 A durable Pi would host pi-agents in its session worker: install the
 extensions in the worker's registry and pass its harness and the session's

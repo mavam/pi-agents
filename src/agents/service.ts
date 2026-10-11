@@ -44,7 +44,6 @@ import {
   USER_MESSAGE_PREFIX,
   WaitInterrupted,
 } from "./types.js";
-
 import { Waits } from "./waits.js";
 
 const REFRESH_DELAY_MS = 50;

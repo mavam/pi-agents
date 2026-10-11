@@ -17,7 +17,11 @@ manually.
 ## Development
 
 - Use Bun as the runtime and package manager.
-- Keep `README.md` and `docs/design.md` in sync with user-facing changes.
+- Keep the docs in sync with user-facing changes: the manual under `docs/`
+  (`usage.md`, `graphs.md`, `messaging.md`, `profiles.md`,
+  `configuration.md`, `architecture.md`) and `docs/design.md` for the
+  mechanics. `README.md` keeps only installation, demos, example prompts,
+  and the architecture diagram.
 - Only `src/host`, `src/agents`, and the attach view (`src/ui/attach.ts`) may
   import pi-durable; everything else goes through `AgentService`.
 

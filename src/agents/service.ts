@@ -15,20 +15,17 @@
  * parent's waits when the parent is needed.
  */
 
-import type { AttachedReplicatedState, JsonValue } from "@earendil-works/chord";
+import type { AttachedReplicatedState } from "@earendil-works/chord";
 import {
   AgentDoc,
-  type CommitPublication,
   type Conversation,
   type ConversationView,
   configure,
   type AgentState as DurableAgentState,
-  type EntryRecord,
   type Extension,
   type Harness,
   LiveDoc,
   type SubmissionRecord,
-  type TaskOutcome,
   type ToolRegistration,
   UsageDoc,
 } from "@earendil-works/pi-durable";
@@ -36,30 +33,23 @@ import { DEFAULT_AGENT_TOOLS } from "../host/tools.js";
 import { CONTEXT, contextFor, conversationId, taskId } from "./context.js";
 import { DELEGATE_TOOL } from "./delegation.js";
 import {
-  ASSISTANT_KIND,
   activityOf,
   addPartialUsage,
   deriveGraphState,
   deriveState,
-  type EndedTurn,
-  endedTurnOf,
-  GENERATION_KIND,
   resultOf,
-  settlementOf,
   summarizeUsage,
   sumUsage,
-  type TurnSettlement,
 } from "./derive.js";
 import { type AgentExtensions, agentSelection } from "./extensions.js";
 import {
-  GRAPH_TASK,
   GraphTask,
-  NODE_TASK,
   type NodeResult,
   NodeTask,
   nodeRequestId,
 } from "./graphs.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
+import { HarnessObserver } from "./observer.js";
 import type { Parent } from "./parent.js";
 import {
   type AgentRecord,
@@ -71,7 +61,6 @@ import {
   GraphsDoc,
   graphDeliveryId,
   type MessageRecord,
-  MessagesDoc,
   type ParentRequest,
   requestId,
 } from "./records.js";
@@ -167,10 +156,6 @@ function messageStatus(submission: SubmissionRecord): MessageStatus {
   return "delivered";
 }
 
-function isMessageRequest(requestId: string | undefined): boolean {
-  return requestId?.startsWith("message:") === true;
-}
-
 export class AgentService {
   private records: Record<string, AgentRecord> = {};
   /** The message log, oldest first, and each message's status. */
@@ -183,38 +168,13 @@ export class AgentService {
   private readonly graphInfos = new Map<string, GraphInfo>();
   /** Settled outcomes of undelivered parent requests, per agent. */
   private readonly settled = new Map<string, Map<string, RequestOutcome>>();
-  private readonly lastAssistant = new Map<string, EntryRecord>();
-  private readonly activityAt = new Map<string, number>();
-  private readonly settlements = new Map<string, TurnSettlement>();
-  /** Per agent, the latest turn when it ended without an answer. */
-  private readonly endedTurns = new Map<string, EndedTurn>();
-  /** Per agent, its latest generation task and when it ended, which is when
-   * the agent's latest run ended; null when it never ran. */
-  private readonly generations = new Map<
-    string,
-    { task: number; endedAt?: number } | null
-  >();
-  /** Decided outcomes of graph and node tasks, which never change, whether
-   * the task is terminal, which a held outcome is not yet, and when it
-   * became terminal. */
-  private readonly outcomes = new Map<
-    number,
-    { outcome: TaskOutcome<JsonValue>; terminal: boolean; endedAt?: number }
-  >();
-  /** Answer entries of graph agents' jobs; entries never change. */
-  private readonly answers = new Map<number, EntryRecord>();
-  /** Per agent, the entry that answered its job, or null when the job
-   * ended without an answer; settled submissions never change. */
-  private readonly jobAnswers = new Map<string, number | null>();
   private readonly waiters = new Map<string, number>();
   private readonly graphWaiters = new Map<string, number>();
   /** Checks run after every refresh, for waits on graphs and nodes. */
   private readonly checks = new Set<() => void>();
   private readonly listeners = new Set<() => void>();
-  private readonly dirty = new Set<string>();
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshChain: Promise<void> = Promise.resolve();
-  private unsubscribe: (() => void) | undefined;
   private unsubscribeParent: (() => void) | undefined;
   private deliveryChain: Promise<void> = Promise.resolve();
   private deliveryQueued = false;
@@ -230,6 +190,7 @@ export class AgentService {
   private reconciled = false;
   private closed = false;
 
+  private readonly observer: HarnessObserver;
   private readonly store: AgentStore;
   private readonly harness: Harness;
   private readonly anchor: Conversation;
@@ -246,6 +207,24 @@ export class AgentService {
     this.parent = options.parent;
     this.report = options.onReport ?? (() => {});
     this.refreshDelayMs = options.refreshDelayMs ?? REFRESH_DELAY_MS;
+    this.observer = new HarnessObserver({
+      harness: this.harness,
+      store: this.store,
+      graphOfNode: (task) => this.graphOfNode(task),
+      onChange: () => this.scheduleRefresh(),
+      onMessage: (submission) => {
+        this.messageStatuses.set(
+          submission.requestId as string,
+          messageStatus(submission),
+        );
+        this.messagesDirty = true;
+      },
+      onMessagesChanged: () => {
+        this.messagesDirty = true;
+      },
+      isMessagesDirty: () => this.messagesDirty,
+      agentIds: () => Object.keys(this.records),
+    });
     this.extensions.hub.state = (id) => this.infos.get(id)?.state;
   }
 
@@ -267,12 +246,10 @@ export class AgentService {
   // --- Lifecycle ---
 
   private async initialize(): Promise<void> {
-    this.unsubscribe = this.harness.subscribeCommits((publication) =>
-      this.onCommit(publication),
-    );
+    this.observer.start();
     this.records = await this.store.loadAgents();
     for (const id of Object.keys(this.records)) {
-      await this.loadLastAssistant(id);
+      await this.observer.loadLastAssistant(id);
       // A request recorded before a crash may lack its submission.
       await this.store.flushOutbox(id);
     }
@@ -290,7 +267,7 @@ export class AgentService {
     this.closed = true;
     this.extensions.hub.state = () => undefined;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
-    this.unsubscribe?.();
+    this.observer.stop();
     this.unsubscribeParent?.();
     this.listeners.clear();
     for (const check of [...this.checks]) check();
@@ -733,7 +710,7 @@ export class AgentService {
 
   private async stopGraph(graphId: string): Promise<void> {
     const info = this.requireGraph(graphId);
-    const finished = await this.isFinished(Number(graphId));
+    const finished = await this.observer.isFinished(Number(graphId));
     await this.store.stopGraph(graphId, !finished);
     // Aborting the graph aborts its nodes, and they their agents, bottom-up.
     if (!finished) {
@@ -1207,97 +1184,17 @@ export class AgentService {
     });
   }
 
-  private async loadLastAssistant(agentId: string): Promise<void> {
-    const found = await this.store.lastAssistant(agentId);
-    if (found) this.lastAssistant.set(agentId, found);
-  }
-
-  /** Commit listener: record what changed. Must not call Session APIs. */
-  private onCommit(publication: CommitPublication): void {
-    const now = Date.now();
-    let records = false;
-    let graphs = false;
-    // Turns this commit ended, which may settle several inputs of one run.
-    const ended = new Map<string, EndedTurn>();
-    for (const change of publication.changes) {
-      if (change.type === "document") {
-        if (change.record.kind === AgentsDoc.definition.kind) records = true;
-        else if (change.record.kind === GraphsDoc.definition.kind)
-          graphs = true;
-        else if (change.record.kind === MessagesDoc.definition.kind)
-          this.messagesDirty = true;
-        else if (change.conversationId !== undefined)
-          this.touch(String(change.conversationId), now);
-      } else if (change.type === "entry") {
-        const id = String(change.value.conversationId);
-        if (change.value.kind === ASSISTANT_KIND)
-          this.lastAssistant.set(id, change.value);
-        this.touch(id, now);
-      } else if (change.type === "submission") {
-        const id = String(change.value.conversationId);
-        if (isMessageRequest(change.value.requestId)) {
-          this.messageStatuses.set(
-            change.value.requestId as string,
-            messageStatus(change.value),
-          );
-          this.messagesDirty = true;
-        }
-        const settlement = settlementOf(change.value);
-        if (settlement) this.settlements.set(id, settlement);
-        const turn = endedTurnOf(change.value, ended.get(id));
-        if (turn) ended.set(id, turn);
-        else if (settlement === "answered") {
-          ended.delete(id);
-          this.endedTurns.delete(id);
-        }
-        this.touch(id, now);
-      } else if (change.type === "task") {
-        if (change.value.kind === GENERATION_KIND) {
-          // Each run, however fast, ends with its latest generation.
-          const id = String(change.value.conversationId);
-          const task = Number(change.value.id);
-          const known = this.generations.get(id);
-          if (!known || task >= known.task) {
-            const { endedAt } = change.value;
-            this.generations.set(id, {
-              task,
-              ...(endedAt !== undefined ? { endedAt } : {}),
-            });
-            this.dirty.add(id);
-          }
-        } else if (change.value.kind === GRAPH_TASK) graphs = true;
-        else if (change.value.kind === NODE_TASK) {
-          graphs = true;
-          // A node's progress changes its agent's state and that of the
-          // agents waiting for it.
-          const graph = this.graphOfNode(Number(change.value.id));
-          for (const node of graph?.nodes ?? []) this.dirty.add(node.agent);
-        }
-      }
-    }
-    for (const [id, turn] of ended) this.endedTurns.set(id, turn);
-    if (records) for (const id of Object.keys(this.records)) this.dirty.add(id);
-    if (records || graphs || this.messagesDirty || this.dirty.size > 0)
-      this.scheduleRefresh();
-  }
-
   private graphOfNode(task: number): GraphRecord | undefined {
     return Object.values(this.graphRecords).find((graph) =>
       graph.nodes.some((node) => node.task === task),
     );
   }
 
-  private touch(agentId: string, now: number): void {
-    this.dirty.add(agentId);
-    this.activityAt.set(agentId, now);
-  }
-
   private scheduleRefresh(): void {
     if (this.refreshTimer || this.closed) return;
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined;
-      const ids = [...this.dirty];
-      this.dirty.clear();
+      const ids = this.observer.takeDirty();
       void this.refresh(ids).catch(() => {});
     }, this.refreshDelayMs);
   }
@@ -1347,8 +1244,8 @@ export class AgentService {
     for (const [id, graph] of Object.entries(this.graphRecords)) {
       if (!graph.owner || graph.closed) continue;
       if (
-        (await this.isFinished(Number(id))) &&
-        (await this.isFinished(graph.owner.tool))
+        (await this.observer.isFinished(Number(id))) &&
+        (await this.observer.isFinished(graph.owner.tool))
       )
         ended.push(id);
     }
@@ -1394,15 +1291,16 @@ export class AgentService {
 
     const jobAnswer = await this.jobAnswer(id, record);
     const result: AgentResult | undefined = resultOf(
-      this.lastAssistant.get(id),
+      this.observer.lastAssistantOf(id),
       id,
       record.name,
     );
     const state =
       (live?.run === undefined
         ? await this.nodeState(id, record, result)
-        : undefined) ?? deriveState(live, result, this.settlements.get(id));
-    const ended = this.endedTurns.get(id);
+        : undefined) ??
+      deriveState(live, result, this.observer.settlementOf(id));
+    const ended = this.observer.endedTurnOf(id);
     const previous = this.infos.get(id);
     const now = Date.now();
     const endedAt =
@@ -1436,7 +1334,9 @@ export class AgentService {
               ? record.createdAt
               : (result?.at ?? record.createdAt),
       lastActivityAt:
-        this.activityAt.get(id) ?? previous?.lastActivityAt ?? record.createdAt,
+        this.observer.activityAtOf(id) ??
+        previous?.lastActivityAt ??
+        record.createdAt,
       ...(endedAt !== undefined ? { endedAt } : {}),
       usage: addPartialUsage(summarizeUsage(usage), live),
       activity: activityOf(live),
@@ -1478,19 +1378,14 @@ export class AgentService {
     agentId: string,
     record: AgentRecord,
   ): Promise<number | undefined> {
-    let latest = this.generations.get(agentId);
-    if (latest === undefined) {
-      latest = await this.store.latestGeneration(agentId);
-      // A commit may have seen a newer generation meanwhile.
-      const known = this.generations.get(agentId);
-      if (known && (!latest || known.task > latest.task)) latest = known;
-      else this.generations.set(agentId, latest);
-    }
+    const latest = await this.observer.latestGeneration(agentId);
     if (latest) return latest.endedAt;
     const graph =
       record.graph === undefined ? undefined : this.graphRecords[record.graph];
     const node = graph?.nodes.find((each) => each.agent === agentId);
-    return node ? (await this.settledTask(node.task))?.endedAt : undefined;
+    return node
+      ? (await this.observer.settledTask(node.task))?.endedAt
+      : undefined;
   }
 
   /**
@@ -1502,20 +1397,11 @@ export class AgentService {
     agentId: string,
     record: AgentRecord,
   ): Promise<number | undefined> {
-    const cached = this.jobAnswers.get(agentId);
-    if (cached !== undefined) return cached ?? undefined;
     const graph =
       record.graph === undefined ? undefined : this.graphRecords[record.graph];
     const node = graph?.nodes.find((each) => each.agent === agentId);
     const rid = node ? nodeRequestId(node.task) : requestId(1);
-    const submission = await this.store.submission(agentId, rid);
-    if (submission?.type !== "input") return undefined;
-    if (submission.status === "done") {
-      this.jobAnswers.set(agentId, submission.answer);
-      return submission.answer;
-    }
-    if (submission.status === "unanswered") this.jobAnswers.set(agentId, null);
-    return undefined;
+    return this.observer.jobAnswer(agentId, rid);
   }
 
   /**
@@ -1533,11 +1419,11 @@ export class AgentService {
       record.graph === undefined ? undefined : this.graphRecords[record.graph];
     const node = graph?.nodes.find((each) => each.agent === agentId);
     if (!graph || !node) return undefined;
-    const outcome = await this.taskOutcome(node.task);
+    const outcome = await this.observer.taskOutcome(node.task);
     if (outcome === undefined) {
       for (const input of node.after) {
         const task = graph.nodes.find((each) => each.agent === input)?.task;
-        if (task !== undefined && !(await this.isFinished(task)))
+        if (task !== undefined && !(await this.observer.isFinished(task)))
           return "waiting";
       }
       return "working";
@@ -1552,64 +1438,13 @@ export class AgentService {
     return undefined;
   }
 
-  /**
-   * A task's outcome once decided. A task can hold its outcome while work it
-   * owns still runs, such as a user's message to a graph's agent; it is
-   * `terminal` only after that work drained.
-   */
-  private async settledTask(
-    id: number,
-  ): Promise<
-    | { outcome: TaskOutcome<JsonValue>; terminal: boolean; endedAt?: number }
-    | undefined
-  > {
-    const cached = this.outcomes.get(id);
-    if (cached?.terminal) return cached;
-    const record = await this.harness.getTask(taskId(id), CONTEXT);
-    if (!record)
-      return {
-        outcome: { status: "faulted", error: { message: "task missing" } },
-        terminal: true,
-      };
-    const state = record.state;
-    if (state.status !== "completing" && state.status !== "terminal")
-      return undefined;
-    const settled = {
-      outcome: state.outcome as TaskOutcome<JsonValue>,
-      terminal: state.status === "terminal",
-      ...(record.endedAt !== undefined ? { endedAt: record.endedAt } : {}),
-    };
-    this.outcomes.set(id, settled);
-    return settled;
-  }
-
-  /** A task's outcome once decided, even while it is held. */
-  private async taskOutcome(
-    id: number,
-  ): Promise<TaskOutcome<JsonValue> | undefined> {
-    return (await this.settledTask(id))?.outcome;
-  }
-
-  /** Whether a task finished: terminal, with nothing below it running. */
-  private async isFinished(id: number): Promise<boolean> {
-    return (await this.settledTask(id))?.terminal === true;
-  }
-
-  private async answer(entryId: number): Promise<EntryRecord | undefined> {
-    const cached = this.answers.get(entryId);
-    if (cached) return cached;
-    const entry = await this.store.entry(entryId);
-    if (entry) this.answers.set(entryId, entry);
-    return entry;
-  }
-
   /** How a graph agent's node ended, once it did. */
   private async nodeOutcome(
     task: number,
     agentId: string,
     name: string,
   ): Promise<NodeOutcome | undefined> {
-    const outcome = await this.taskOutcome(task);
+    const outcome = await this.observer.taskOutcome(task);
     if (!outcome) return undefined;
     switch (outcome.status) {
       case "completed": {
@@ -1617,7 +1452,7 @@ export class AgentService {
         if (result.kind === "skipped") return { kind: "skipped" };
         if (result.kind !== "answered") return { kind: "interrupted" };
         const answered = resultOf(
-          await this.answer(result.entryId),
+          await this.observer.answer(result.entryId),
           agentId,
           name,
         );
@@ -1640,7 +1475,7 @@ export class AgentService {
     const now = Date.now();
     for (const [id, record] of Object.entries(this.graphRecords)) {
       // A graph works until it is terminal, also while it holds an outcome.
-      const settled = await this.settledTask(Number(id));
+      const settled = await this.observer.settledTask(Number(id));
       const ended = settled?.terminal ? settled.outcome : undefined;
       const endedAt = settled?.terminal ? settled.endedAt : undefined;
       const topology = record.nodes.map((node) => ({

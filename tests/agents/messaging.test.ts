@@ -275,8 +275,14 @@ describe("messaging", () => {
     expect(await transcript(service, "b")).not.toContain("[from a]");
   });
 
-  test("agent_status lists the others with their jobs, as the attach view draws it", async () => {
+  test("agent_status lists whom a send reaches, with their jobs, as the attach view draws it", async () => {
     const service = await open();
+    // An older b that answered and closed; the newer b takes its name, so
+    // only the newer one is listed.
+    await service.spawn(spec("b", "Old job."));
+    await until(() => service.pendingDeliveries().length === 1);
+    await service.acknowledge(service.pendingDeliveries()[0] as never);
+    await until(() => service.list().length === 0);
     await service.spawn(spec("b", "Keep notes. Then rest."));
     await until(() => service.get("b")?.state === "idle");
     await service.spawn(spec("a", "status"));

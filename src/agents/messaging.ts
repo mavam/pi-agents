@@ -118,18 +118,24 @@ function resolve(
   return named.find(([, record]) => !record.closed) ?? named.at(-1);
 }
 
-/** Whom other agents can message: agents that aren't helpers or stopped,
- * open ones first, then the newest. */
+/** Whom other agents can message: what each name addresses, unless it's
+ * the sender or stopped, open agents first, then the newest. An older agent
+ * whose name a newer one took isn't listed, since sending can't reach it. */
 function reachable(
   agents: Readonly<Record<string, AgentRecord>>,
   graphs: Readonly<GraphsState> | undefined,
   self: string,
 ): Array<[string, AgentRecord]> {
-  return Object.entries(agents)
-    .filter(
-      ([id, record]) =>
-        id !== self && !record.stopped && !isHelper(record, graphs),
-    )
+  const names = new Set(
+    Object.values(agents)
+      .filter((record) => !isHelper(record, graphs))
+      .map((record) => record.name),
+  );
+  return [...names]
+    .flatMap((name) => {
+      const target = resolve(agents, graphs, name);
+      return target && target[0] !== self && !target[1].stopped ? [target] : [];
+    })
     .sort(
       ([, left], [, right]) =>
         Number(left.closed) - Number(right.closed) ||

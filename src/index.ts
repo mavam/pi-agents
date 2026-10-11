@@ -15,6 +15,10 @@ import { buildSystemPromptAppendix, profileCatalog } from "./pi/prompt.js";
 import { SessionHost } from "./pi/session.js";
 import { isTrusted } from "./pi/spawn.js";
 import { registerAgentTools } from "./pi/tools.js";
+import {
+  MessageTranscript,
+  registerMessageEntryRenderer,
+} from "./pi/transcript.js";
 import { FocusController } from "./ui/focus.js";
 import { FancyFooterReporter } from "./ui/footer.js";
 import { AgentPanel } from "./ui/panel.js";
@@ -24,6 +28,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
   const host = new SessionHost(parent);
   const panel = new AgentPanel(host);
   const focus = new FocusController(host, panel);
+  const transcript = new MessageTranscript(pi);
   const footer = new FancyFooterReporter(
     pi,
     () => host.current()?.list() ?? [],
@@ -38,9 +43,11 @@ export default function agentExtension(pi: ExtensionAPI): void {
   host.subscribe(() => {
     panel.update();
     footer.update();
+    transcript.sync(host.messaging() ? (host.current()?.messages() ?? []) : []);
   });
 
   registerMessageRenderers(pi);
+  registerMessageEntryRenderer(pi);
   // A steer ends waits for agents, so Pi doesn't hold it back.
   pi.on("input", (event) => {
     if (event.streamingBehavior === "steer") parent.steer();
@@ -84,6 +91,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     track(ctx);
     focus.install(ctx);
     panel.update(ctx);
+    transcript.start(ctx);
     await host.start(ctx);
     panel.update(ctx);
     footer.update();
@@ -97,6 +105,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     panel.dispose();
     parent.clear();
     footer.dispose();
+    transcript.stop();
     await host.stop();
   });
 }

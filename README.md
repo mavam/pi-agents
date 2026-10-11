@@ -218,7 +218,7 @@ rendering. The editor then talks to the agent:
 | Alt+⏎ | Queue a follow-up after the current answer. |
 | Esc | Interrupt a working agent. Queued messages return to the editor. |
 | Ctrl+O | Expand or collapse tool output. |
-| ← | Detach when the editor is empty. |
+| ← or Ctrl+D | Detach when the editor is empty. |
 | Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. |
 
 Messages you send while attached stay between you and the agent. Their
@@ -319,6 +319,7 @@ below the agent, and the divider over its details in `/agents` shows it.
 | --- | --- |
 | `/agents` | Browse all agents and graphs, including ended ones, with their tasks and latest results. Attach to, fold, or stop them. |
 | `/agent <name>` | Attach to an agent. |
+| `/messages` | Read the messages agents sent each other, one thread per pair of agents. |
 
 ### Tools
 
@@ -456,6 +457,45 @@ Requests over the cap wait their turn in order, and agents keep working on
 tools in the meantime. Agents, graphs, and helpers all share the cap. Your
 session's own requests don't count toward it. Without the setting, requests
 aren't limited. Restart Pi after changing it.
+
+### Messages between agents (experimental)
+
+Let agents message each other:
+
+```json
+{
+  "piAgents": {
+    "messaging": true
+  }
+}
+```
+
+Agents started afterwards get `agent_status`, which lists the other agents
+with the tasks they were started with, and `agent_send`, which sends one of
+them a message without waiting. Like your messages, it steers a working
+recipient, so it can change what the recipient answers, unless the sender
+queues it as a follow-up. The recipient's answer stays with it. Helpers can't send or receive messages, and an agent
+you or Pi stopped refuses messages from agents until you or Pi message it.
+Restart Pi after changing the setting.
+
+Messages show in the transcript, where Pi's model doesn't see them, and in
+the panel next to the agents, or below them in terminals narrower than 120
+columns:
+
+```text
+◉ scout · sol · 40s · 8.1k  │ □ scout → notes  bun.lock is 412 KB     ✔
+● notes · terra · 2.0k      │ □ scout → notes  README.md is 18 KB     ◷
+```
+
+`◷` waits in the recipient's queue, `✔` reached its conversation, and `✘`
+was dropped from the queue because you interrupted or stopped the recipient.
+In the focused panel, ↑↓ reach the messages, ⏎ opens a message's thread, `m`
+shows or hides messages, and `v` stacks them below the agents.
+
+`/messages` lists threads, everything two agents sent each other, latest
+first, with the selected thread's messages in full below. ⏎ attaches to one
+of the two agents. In `/agents`, an agent's details list its threads, and `m`
+opens them. A session keeps its latest 1,000 messages.
 
 ### Footer counters
 

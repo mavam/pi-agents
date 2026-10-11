@@ -16,6 +16,7 @@ import {
   section,
 } from "@earendil-works/pi-durable";
 import { DELEGATE_TOOL } from "../agents/delegation.js";
+import { SEND_TOOL, STATUS_TOOL } from "../agents/messaging.js";
 import { AgentsDoc } from "../agents/records.js";
 import { USER_MESSAGE_PREFIX } from "../agents/types.js";
 import type { SkillSource } from "../catalog/skills.js";
@@ -50,6 +51,7 @@ function buildRules(tools: readonly string[]): string {
   for (const name of tools)
     for (const rule of toolPromptContribution(name).guidelines) add(rule);
   if (tools.includes(DELEGATE_TOOL)) add(DELEGATE_RULE);
+  if (tools.includes(SEND_TOOL)) add(MESSAGING_RULE);
   add("Be concise in your responses");
   add("Show file paths clearly when working with files");
   return rules.map((rule) => `- ${rule}`).join("\n");
@@ -61,9 +63,19 @@ const DELEGATE_SNIPPET =
 const DELEGATE_RULE =
   "Use delegate_graph when your task splits into parts that can run on their own, such as one per file or area; give each helper a self-contained task";
 
+/** What the prompt says about messaging other agents. */
+const MESSAGING_SNIPPETS: Record<string, string> = {
+  [STATUS_TOOL]: "List the other agents of this session and their tasks",
+  [SEND_TOOL]: "Send another agent a message without waiting for its answer",
+};
+const MESSAGING_RULE =
+  "Messages that start with [from <name>] come from other agents, not the user. To hear back from an agent, ask it to message you with agent_send";
+
 function renderTools(tools: readonly string[]): string {
   const lines = tools.flatMap((name) => {
     if (name === DELEGATE_TOOL) return [`- ${name}: ${DELEGATE_SNIPPET}`];
+    const messaging = MESSAGING_SNIPPETS[name];
+    if (messaging) return [`- ${name}: ${messaging}`];
     const snippet = toolPromptContribution(name).snippet;
     return snippet ? [`- ${name}: ${snippet}`] : [];
   });

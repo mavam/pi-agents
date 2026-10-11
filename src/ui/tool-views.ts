@@ -18,6 +18,8 @@
 import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  Container,
+  Text,
   truncateToWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
@@ -42,6 +44,7 @@ import {
   STATE_STYLES,
   WAIT_ENDED_STYLE,
 } from "./format.js";
+import { messageCard } from "./messages.js";
 
 /** How a call renders: a title, the explicit arguments, and a body. */
 export interface CallView {
@@ -270,6 +273,11 @@ const AGENT_CALLS: typeof PARENT_CALLS = {
     label: "delegate",
     call: (args) => graphCall(args as GraphArgs, "helpers"),
   },
+  agent_status: {
+    label: "status",
+    call: () => ({ title: "agents" }),
+    empty: "No other agents",
+  },
 };
 
 // --- Results: receipts only ---
@@ -315,6 +323,7 @@ function agentRow(
   agent: AgentReceipt,
   receipt: ToolReceipt,
   color: Colorize,
+  expanded = false,
 ): string {
   const dot = color("dim", " · ");
   const inputs = agent.inputs?.length
@@ -330,6 +339,9 @@ function agentRow(
     agent.profile ? color("dim", agent.profile) : undefined,
     agent.model ? color("dim", agent.model) : undefined,
     usage ? color("dim", usage) : undefined,
+    agent.task && !expanded
+      ? color("dim", oneLine(agent.task, 120))
+      : undefined,
     error,
   ]
     .filter((part): part is string => part !== undefined)
@@ -383,7 +395,16 @@ export function formatReceipt(
 ): string {
   const lines: string[] = [];
   const agentLines = (agent: AgentReceipt, lead: string, indent: string) => {
-    lines.push(`${color("dim", lead)}${agentRow(agent, receipt, color)}`);
+    lines.push(
+      `${color("dim", lead)}${agentRow(agent, receipt, color, expanded)}`,
+    );
+    // Expanded, a task shows in full below its agent.
+    if (expanded && agent.task)
+      lines.push(
+        ...agent.task
+          .split("\n")
+          .map((line) => `${color("dim", indent)}  ${color("muted", line)}`),
+      );
     if (
       expanded &&
       agent.body &&
@@ -523,5 +544,39 @@ function views(
 /** Renderers of the parent's tools in Pi's transcript. */
 export const PARENT_TOOL_VIEWS = views(PARENT_CALLS);
 
-/** Renderers of the agents' own tools in the attach view. */
-export const AGENT_TOOL_VIEWS = views(AGENT_CALLS);
+/**
+ * An agent's `agent_send` call as the message it sent, a card like the
+ * recipient's, and a refusal below it. `sender` names the agent.
+ */
+function sendView(sender: () => string): ToolRenderers & { label: string } {
+  return {
+    label: "send",
+    renderShell: "self",
+    renderCall: (args, theme: Theme, context) =>
+      messageCard(
+        {
+          from: sender(),
+          to: str((args as Args | undefined)?.to) || "?",
+          text: str((args as Args | undefined)?.message),
+        },
+        context.expanded,
+        theme,
+      ),
+    renderResult: (result, _options, theme: Theme, context) =>
+      context.isError
+        ? new Text(
+            theme.fg("error", `  ✘ ${resultText(result) || "not sent"}`),
+            1,
+            0,
+          )
+        : new Container(),
+  };
+}
+
+/** Renderers of the agents' own tools in the attach view of the agent
+ * `self` names. */
+export function agentToolViews(
+  self: () => string,
+): Record<string, ToolRenderers & { label: string }> {
+  return { ...views(AGENT_CALLS), agent_send: sendView(self) };
+}

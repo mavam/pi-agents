@@ -38,6 +38,9 @@ export type AgentRecord = {
   graph?: string;
   /** Whether the agent can start helpers; absent means it can't. */
   delegate?: boolean;
+  /** Stopped by the user or the parent, until one of them messages it
+   * again; other agents can't message it meanwhile. */
+  stopped?: boolean;
 };
 
 export type AgentsState = {
@@ -87,6 +90,42 @@ export const GraphsDoc = defineDoc<GraphsState>({
   scope: "session",
   initial: () => ({ graphs: {} }),
 });
+
+/** A message one agent sent another with `agent_send`. */
+export type MessageRecord = {
+  /** The request ID of the recipient's submission. */
+  id: string;
+  /** Sender and recipient, by conversation ID. */
+  from: string;
+  to: string;
+  text: string;
+  /** Steer a working recipient, or wait until its work ends; absent in
+   * records of earlier builds, which steered. */
+  mode?: "steer" | "followUp";
+  sentAt: number;
+  /** Never submitted: the recipient was stopped or gone when the service
+   * found the message after a crash. */
+  dropped?: true;
+};
+
+export type MessagesState = {
+  /** Oldest first, at most `MESSAGE_MEMORY`. */
+  messages: MessageRecord[];
+  /** How many older messages the log dropped. */
+  dropped?: number;
+};
+
+/** The log of messages between agents, for the UI; delivery doesn't read
+ * it. */
+export const MessagesDoc = defineDoc<MessagesState>({
+  kind: "pi-agents.messages",
+  version: 1,
+  scope: "session",
+  initial: () => ({ messages: [] }),
+});
+
+/** How many messages the log keeps. */
+export const MESSAGE_MEMORY = 1_000;
 
 /** How many delivered answer IDs a record remembers for deduplication. */
 export const DELIVERED_MEMORY = 64;

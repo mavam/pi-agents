@@ -36,6 +36,7 @@ import {
   type Extension,
   type Harness,
   LiveDoc,
+  type SubmissionRecord,
   type TaskId,
   type TaskOutcome,
   type ToolRegistration,
@@ -68,6 +69,7 @@ import {
   NodeTask,
   nodeRequestId,
 } from "./graphs.js";
+import { messageSubmission } from "./messaging.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
 import type { Parent } from "./parent.js";
 import {
@@ -80,6 +82,8 @@ import {
   type GraphRecord,
   GraphsDoc,
   graphDeliveryId,
+  type MessageRecord,
+  MessagesDoc,
   type ParentRequest,
   requestId,
 } from "./records.js";
@@ -96,6 +100,8 @@ import {
   type GraphPolicy,
   type GraphSpec,
   isThinkingLevel,
+  type MessageInfo,
+  type MessageStatus,
   type NodeOutcome,
   type PendingDelivery,
   type RequestOutcome,
@@ -121,6 +127,11 @@ export interface AgentServiceOptions {
   parent: Parent;
   /** Receives failures of background work, such as delivery. */
   onReport?: (error: unknown) => void;
+  /** Whether agents started now may message each other. */
+  messaging?: () => boolean;
+  /** How long the service gathers commits before it refreshes; tests
+   * shorten it. */
+  refreshDelayMs?: number;
 }
 
 export interface WaitOptions {
@@ -170,12 +181,29 @@ function isSettled(
   );
 }
 
+/** Where a message is, from its submission. */
+function messageStatus(submission: SubmissionRecord): MessageStatus {
+  if (submission.status === "queued") return "queued";
+  if (submission.status === "unanswered" && submission.entry === undefined)
+    return "dropped";
+  return "delivered";
+}
+
+function isMessageRequest(requestId: string | undefined): boolean {
+  return requestId?.startsWith("message:") === true;
+}
+
 function contextFor(signal: AbortSignal | undefined): Context {
   return signal ? withAbortSignal(signal, CONTEXT) : CONTEXT;
 }
 
 export class AgentService {
   private records: Record<string, AgentRecord> = {};
+  /** The message log, oldest first, and each message's status. */
+  private messageLog: MessageRecord[] = [];
+  private readonly messageStatuses = new Map<string, MessageStatus>();
+  private messagesDirty = false;
+  private messagesDropped = 0;
   private graphRecords: Record<string, GraphRecord> = {};
   private readonly infos = new Map<string, AgentInfo>();
   private readonly graphInfos = new Map<string, GraphInfo>();
@@ -233,6 +261,8 @@ export class AgentService {
   private readonly extensions: AgentExtensions;
   private readonly parent: Parent;
   private readonly report: (error: unknown) => void;
+  private readonly messaging: () => boolean;
+  private readonly refreshDelayMs: number;
 
   private constructor(options: AgentServiceOptions) {
     this.harness = options.harness;
@@ -240,6 +270,9 @@ export class AgentService {
     this.extensions = options.extensions;
     this.parent = options.parent;
     this.report = options.onReport ?? (() => {});
+    this.messaging = options.messaging ?? (() => false);
+    this.refreshDelayMs = options.refreshDelayMs ?? REFRESH_DELAY_MS;
+    this.extensions.hub.state = (id) => this.infos.get(id)?.state;
   }
 
   /**
@@ -269,6 +302,8 @@ export class AgentService {
       // A request recorded before a crash may lack its submission.
       await this.flushOutbox(id);
     }
+    await this.flushMessages();
+    await this.loadMessages();
     await this.refresh(Object.keys(this.records));
     this.unsubscribeParent = this.parent.subscribe(() =>
       this.scheduleDelivery(),
@@ -279,6 +314,7 @@ export class AgentService {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.extensions.hub.state = () => undefined;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.unsubscribe?.();
     this.unsubscribeParent?.();
@@ -314,6 +350,32 @@ export class AgentService {
     return [...this.graphInfos.values()]
       .filter((info) => options.includeClosed || isGraphVisible(info))
       .sort((left, right) => left.createdAt - right.createdAt);
+  }
+
+  /** How many older messages the log dropped. */
+  droppedMessages(): number {
+    return this.messagesDropped;
+  }
+
+  /** Messages between agents, oldest first. */
+  messages(): MessageInfo[] {
+    return this.messageLog.flatMap((message) => {
+      const from = this.records[message.from];
+      const to = this.records[message.to];
+      if (!from || !to) return [];
+      return [
+        {
+          id: message.id,
+          from: { id: message.from, name: from.name },
+          to: { id: message.to, name: to.name },
+          text: message.text,
+          sentAt: message.sentAt,
+          status: message.dropped
+            ? "dropped"
+            : (this.messageStatuses.get(message.id) ?? "queued"),
+        },
+      ];
+    });
   }
 
   /** A visible agent by name, else the newest closed one, else by ID. */
@@ -633,6 +695,7 @@ export class AgentService {
       const record = state.agents[info.id];
       if (!record) throw new AgentError(`Agent ${info.name} is missing`);
       record.closed = false;
+      delete record.stopped;
       const next = requestId(record.nextRequest);
       record.nextRequest += 1;
       record.requests[next] = request;
@@ -651,6 +714,11 @@ export class AgentService {
       CONTEXT,
     );
     if (!conversation) throw new AgentError(`Agent ${info.name} is missing`);
+    if (this.records[info.id]?.stopped)
+      await this.harness.commit(async (tx) => {
+        const record = (await tx.doc(AgentsDoc)).agents[info.id];
+        if (record) delete record.stopped;
+      }, CONTEXT);
     await conversation.submit(
       {
         type: "input",
@@ -697,14 +765,22 @@ export class AgentService {
     return { kind: "agent", info: this.requireAgent(target.info.id) };
   }
 
+  /**
+   * Stop an agent: record the stop first, in the agent's turn, so a send
+   * from another agent lands before it, and the interrupt withdraws or
+   * aborts it, or after it, and is refused. Then interrupt.
+   */
   private async stopAgent(agentId: string): Promise<void> {
+    await this.extensions.hub.turn(agentId, () =>
+      this.harness.commit(async (tx) => {
+        const record = (await tx.doc(AgentsDoc)).agents[agentId];
+        if (!record) return;
+        record.closed = true;
+        record.stopped = true;
+        record.requests = {};
+      }, CONTEXT),
+    );
     await this.interrupt(agentId);
-    await this.harness.commit(async (tx) => {
-      const record = (await tx.doc(AgentsDoc)).agents[agentId];
-      if (!record) return;
-      record.closed = true;
-      record.requests = {};
-    }, CONTEXT);
     this.settled.delete(agentId);
     await this.refresh([agentId]);
   }
@@ -1114,14 +1190,20 @@ export class AgentService {
     tools: ToolRegistration[],
     delegate: boolean | undefined,
   ): { tools: ToolRegistration[]; extensions: Extension[] } {
+    const messaging = this.messaging();
     const extensions = agentSelection(this.extensions, {
       delegate: !!delegate,
+      messaging,
     });
-    if (!delegate) return { tools, extensions };
-    const tool = this.extensions.delegation.tools?.find(
-      (each) => each.name === DELEGATE_TOOL,
-    );
-    return { tools: tool ? [...tools, tool] : tools, extensions };
+    const extra = [
+      ...(delegate
+        ? (this.extensions.delegation.tools ?? []).filter(
+            (each) => each.name === DELEGATE_TOOL,
+          )
+        : []),
+      ...(messaging ? (this.extensions.messaging.tools ?? []) : []),
+    ];
+    return { tools: [...tools, ...extra], extensions };
   }
 
   private resolveTools(names: string[] | undefined): ToolRegistration[] {
@@ -1239,6 +1321,68 @@ export class AgentService {
     return structuredClone(state?.agents ?? {}) as Record<string, AgentRecord>;
   }
 
+  /**
+   * Submit logged messages that a crash left without a submission, before
+   * the harness resumes their senders. A message for a stopped or missing
+   * recipient is dropped instead.
+   */
+  private async flushMessages(): Promise<void> {
+    const [log, state] = await Promise.all([
+      this.harness.snapshot(MessagesDoc, CONTEXT),
+      this.harness.snapshot(AgentsDoc, CONTEXT),
+    ]);
+    for (const message of log?.messages ?? []) {
+      if (message.dropped) continue;
+      const existing = await this.harness.commit(
+        (tx) => tx.submissionByRequest(conversationId(message.to), message.id),
+        CONTEXT,
+      );
+      if (existing) continue;
+      const recipient = state?.agents[message.to];
+      const conversation = recipient?.stopped
+        ? undefined
+        : await this.harness.conversation(conversationId(message.to), CONTEXT);
+      if (conversation) {
+        const sender = state?.agents[message.from]?.name ?? message.from;
+        await conversation.submit(messageSubmission(message, sender), CONTEXT);
+        continue;
+      }
+      await this.harness.commit(async (tx) => {
+        const known = (await tx.doc(MessagesDoc)).messages.find(
+          (each) => each.id === message.id,
+        );
+        if (known) known.dropped = true;
+      }, CONTEXT);
+    }
+  }
+
+  /** The message log, and the status of messages this process hasn't
+   * seen a submission of. */
+  private async loadMessages(): Promise<void> {
+    this.messagesDirty = false;
+    const state = await this.harness.snapshot(MessagesDoc, CONTEXT);
+    this.messageLog = structuredClone(state?.messages ?? []) as MessageRecord[];
+    this.messagesDropped = state?.dropped ?? 0;
+    const unknown = this.messageLog.filter(
+      (message) => !this.messageStatuses.has(message.id),
+    );
+    if (unknown.length === 0) return;
+    const found = await this.harness.commit(
+      (tx) =>
+        Promise.all(
+          unknown.map((message) =>
+            tx.submissionByRequest(conversationId(message.to), message.id),
+          ),
+        ),
+      CONTEXT,
+    );
+    found.forEach((submission, index) => {
+      const id = unknown[index]?.id;
+      if (id && submission)
+        this.messageStatuses.set(id, messageStatus(submission));
+    });
+  }
+
   private async loadGraphs(): Promise<Record<string, GraphRecord>> {
     const state = await this.harness.snapshot(GraphsDoc, CONTEXT);
     return structuredClone(state?.graphs ?? {}) as Record<string, GraphRecord>;
@@ -1275,6 +1419,8 @@ export class AgentService {
         if (change.record.kind === AgentsDoc.definition.kind) records = true;
         else if (change.record.kind === GraphsDoc.definition.kind)
           graphs = true;
+        else if (change.record.kind === MessagesDoc.definition.kind)
+          this.messagesDirty = true;
         else if (change.conversationId !== undefined)
           this.touch(String(change.conversationId), now);
       } else if (change.type === "entry") {
@@ -1284,6 +1430,13 @@ export class AgentService {
         this.touch(id, now);
       } else if (change.type === "submission") {
         const id = String(change.value.conversationId);
+        if (isMessageRequest(change.value.requestId)) {
+          this.messageStatuses.set(
+            change.value.requestId as string,
+            messageStatus(change.value),
+          );
+          this.messagesDirty = true;
+        }
         const settlement = settlementOf(change.value);
         if (settlement) this.settlements.set(id, settlement);
         const turn = endedTurnOf(change.value, ended.get(id));
@@ -1319,7 +1472,8 @@ export class AgentService {
     }
     for (const [id, turn] of ended) this.endedTurns.set(id, turn);
     if (records) for (const id of Object.keys(this.records)) this.dirty.add(id);
-    if (records || graphs || this.dirty.size > 0) this.scheduleRefresh();
+    if (records || graphs || this.messagesDirty || this.dirty.size > 0)
+      this.scheduleRefresh();
   }
 
   private graphOfNode(task: number): GraphRecord | undefined {
@@ -1340,7 +1494,7 @@ export class AgentService {
       const ids = [...this.dirty];
       this.dirty.clear();
       void this.refresh(ids).catch(() => {});
-    }, REFRESH_DELAY_MS);
+    }, this.refreshDelayMs);
   }
 
   /** Recompute infos for the given agents and every graph, serialized. */
@@ -1349,6 +1503,7 @@ export class AgentService {
       if (this.closed) return;
       this.records = await this.loadRecords();
       this.graphRecords = await this.loadGraphs();
+      if (this.messagesDirty) await this.loadMessages();
       const targets = new Set(ids);
       for (const id of Object.keys(this.records))
         if (!this.infos.has(id)) targets.add(id);

@@ -18,7 +18,8 @@ import type { AgentInfo } from "../agents/types.js";
 import type { SessionHost } from "../pi/session.js";
 import { openAgentPane } from "./attach.js";
 import type { AgentPanel } from "./panel.js";
-import { attachTarget, type Row } from "./rows.js";
+import type { Row } from "./rows.js";
+import { threadKey } from "./threads.js";
 
 /** True for text a user typed: no escape introducer, no control bytes. */
 function isPrintable(data: string): boolean {
@@ -69,6 +70,8 @@ export class FocusController {
   /** Opens `/agents`, at the row with key `select` if given: for ← and
    * Ctrl+Q while the panel is empty, and for Tab from the panel. */
   onBrowse: ((ctx: ExtensionContext, select?: string) => void) | undefined;
+  /** Opens `/messages` at a thread, by key: for ⏎ on a panel message. */
+  onThread: ((ctx: ExtensionContext, thread: string) => void) | undefined;
   /** Invoked after the attach view closes (deliver held results, etc.). */
   onPaneClosed: ((ctx: ExtensionContext) => void) | undefined;
   /** Some terminal stacks hand the same chunk to listeners twice. */
@@ -214,8 +217,14 @@ export class FocusController {
       return { consume: true };
     }
     if (keybindings.matches(data, "tui.select.confirm")) {
-      const row = this.panel.selected();
-      const agentId = row ? attachTarget(row) : undefined;
+      // A message opens its thread; a row attaches.
+      const message = this.panel.selectedMessage();
+      if (message && this.onThread) {
+        this.panel.setFocused(false);
+        this.onThread(ctx, threadKey(message));
+        return { consume: true };
+      }
+      const agentId = this.panel.attachTarget();
       if (agentId) this.attach(ctx, agentId);
       return { consume: true };
     }
@@ -228,6 +237,14 @@ export class FocusController {
       const row = this.panel.selected();
       this.panel.setFocused(false);
       this.onBrowse(ctx, row?.key);
+      return { consume: true };
+    }
+    if (this.host.messaging() && key === "m") {
+      this.panel.toggleMessages();
+      return { consume: true };
+    }
+    if (this.host.messaging() && key === "v") {
+      this.panel.toggleView();
       return { consume: true };
     }
     if (key === "s") {

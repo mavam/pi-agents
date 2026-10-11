@@ -1,6 +1,7 @@
 /**
  * Slash commands: `/agents` opens the agent overlay, `/agent <name>`
- * attaches to an agent.
+ * attaches to an agent, and `/messages` opens the threads of messages
+ * between agents.
  */
 
 import * as os from "node:os";
@@ -14,6 +15,7 @@ import type {
   AgentInfo,
   AgentState,
   GraphInfo,
+  MessageInfo,
   NodeOutcome,
 } from "../agents/types.js";
 import {
@@ -36,6 +38,11 @@ import {
   statusIcon,
 } from "../ui/format.js";
 import {
+  firstLine,
+  MESSAGE_ICON,
+  MESSAGE_STATUS_STYLES,
+} from "../ui/messages.js";
+import {
   type Bold,
   type DetailLine,
   type OverlaySpec,
@@ -50,6 +57,12 @@ import {
   hiddenNote,
   type Row,
 } from "../ui/rows.js";
+import {
+  buildThreads,
+  peerOf,
+  type Thread,
+  threadPair,
+} from "../ui/threads.js";
 import type { SessionHost } from "./session.js";
 
 /** Lines of an agent's task shown in the overlay's detail pane. */
@@ -241,6 +254,8 @@ export function agentDetail(
   agent: AgentInfo,
   color: Colorize,
   now: number = Date.now(),
+  /** The agent's threads, when messaging is on. */
+  threads: readonly Thread[] = [],
 ): DetailLine[] {
   const lines: DetailLine[] = [
     {
@@ -272,7 +287,139 @@ export function agentDetail(
       },
     );
   }
+  if (threads.length > 0) {
+    lines.push({
+      divider: `${color("accent", "Messages")}${color("dim", " · m to read")}`,
+    });
+    for (const thread of threads) {
+      const last = thread.messages.at(-1);
+      const peer = peerOf(thread, agent.id).name;
+      lines.push(
+        `⇄ ${peer}${color(
+          "dim",
+          ` · ${count(thread.messages.length, "message")}${last ? ` · ${firstLine(last.text)}` : ""}`,
+        )}`,
+      );
+    }
+  }
   return lines;
+}
+
+function count(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+/** A message in a thread: who sent it to whom, its status, how long ago,
+ * and its text. */
+export function messageDetail(
+  message: MessageInfo,
+  color: Colorize,
+  bold: Bold,
+  now: number = Date.now(),
+): DetailLine[] {
+  const status = MESSAGE_STATUS_STYLES[message.status];
+  return [
+    `${color("dim", MESSAGE_ICON)} ${bold(message.from.name)}${color("dim", " → ")}${bold(message.to.name)}${color("dim", " · ")}${color(status.color, status.icon)}${color("dim", ` · ${formatElapsed(now - message.sentAt)} ago`)}`,
+    { markdown: message.text, indent: 2 },
+  ];
+}
+
+/**
+ * `/messages`: threads on top, latest first, and the selected thread's
+ * messages below, oldest first. ⏎ attaches to one of the thread's agents,
+ * Tab opens `/agents`.
+ */
+async function openMessagesOverlay(
+  ctx: ExtensionContext,
+  deps: CommandDeps,
+  options: { thread?: string; agent?: string } = {},
+): Promise<void> {
+  const service = await deps.host.ensure(ctx);
+  const agentName = options.agent
+    ? service.agentById(options.agent)?.name
+    : undefined;
+  let after: (() => void) | undefined;
+  const items = () => buildThreads(service.messages(), options.agent);
+  const spec: OverlaySpec<Thread> = {
+    title: agentName ? `Messages · ${agentName}` : "Messages",
+    emptyText: deps.host.messaging()
+      ? "No messages between agents yet."
+      : "Messaging between agents is off. Set piAgents.messaging to turn it on.",
+    footer: "↑↓ thread · ⏎ attach · tab /agents · esc",
+    ...(options.thread ? { initialKey: options.thread } : {}),
+    items,
+    keyOf: (thread) => thread.key,
+    row: (thread, color) => {
+      const width = Math.max(
+        ...items().map((each) => threadPair(each, options.agent).length),
+        4,
+      );
+      const last = thread.messages.at(-1);
+      const queued = thread.messages.some(
+        (message) => message.status === "queued",
+      );
+      const style = MESSAGE_STATUS_STYLES.queued;
+      return [
+        pad(threadPair(thread, options.agent), width),
+        color(
+          "dim",
+          `${count(thread.messages.length, "message")}${last ? ` · last ${formatElapsed(Date.now() - last.sentAt)} ago` : ""}`,
+        ),
+        queued ? color(style.color, style.icon) : "",
+      ]
+        .filter(Boolean)
+        .join("  ");
+    },
+    headerLine: (thread, color) =>
+      color(
+        "dim",
+        `${threadPair(thread, options.agent)} · ${count(thread.messages.length, "message")}`,
+      ),
+    detail: (thread, color, bold) => {
+      const dropped = service.droppedMessages();
+      const lines: DetailLine[] =
+        dropped > 0
+          ? [
+              color(
+                "dim",
+                `This session no longer keeps its ${count(dropped, "oldest message")}.`,
+              ),
+              "",
+            ]
+          : [];
+      thread.messages.forEach((message, index) => {
+        if (index > 0) lines.push("");
+        lines.push(...messageDetail(message, color, bold));
+      });
+      return lines;
+    },
+    onAction: (key, thread) => {
+      if (key === "tab") {
+        after = () =>
+          void openAgentsOverlay(ctx, deps).catch((error) =>
+            ctx.ui.notify(errorText(error), "error"),
+          );
+        return "close";
+      }
+      if (key === "enter") {
+        const [first, second] = thread.agents;
+        after = () =>
+          void ctx.ui
+            .select("Attach to", [first.name, second.name])
+            .then((name) => {
+              const agent = name === second.name ? second : first;
+              if (name) deps.focus.attach(ctx, agent.id);
+            });
+        return "close";
+      }
+      return undefined;
+    },
+    live: () =>
+      service.messages().some((message) => message.status === "queued") ||
+      service.list().some((agent) => agent.state === "working"),
+  };
+  await openOverlay(ctx, spec, deps.panel);
+  after?.();
 }
 
 async function openAgentsOverlay(
@@ -304,7 +451,7 @@ async function openAgentsOverlay(
     emptyText: "No agents yet. Ask Pi to delegate.",
     // Tab returns to the panel only while it shows agents.
     footer: () =>
-      `↑↓ move · space fold · ⏎ attach · s stop${deps.panel.hasRows() ? " · tab panel" : ""} · esc`,
+      `↑↓ move · space fold · ⏎ attach · s stop${deps.host.messaging() ? " · m messages" : ""}${deps.panel.hasRows() ? " · tab panel" : ""} · esc`,
     ...(select ? { initialKey: select } : {}),
     items,
     keyOf: (row) => row.key,
@@ -345,10 +492,25 @@ async function openAgentsOverlay(
     },
     detail: (row, color, bold) =>
       row.kind === "agent"
-        ? agentDetail(row.agent, color)
+        ? agentDetail(
+            row.agent,
+            color,
+            Date.now(),
+            deps.host.messaging()
+              ? buildThreads(service.messages(), row.agent.id)
+              : [],
+          )
         : graphDetail(row.graph, (id) => service.agentById(id), color, bold),
     onAction: (key, row) => {
       if (key === "space") return { select: fold(row, deps.panel.disclosure) };
+      if (key === "m" && deps.host.messaging()) {
+        const agent = row.kind === "agent" ? row.agent.id : undefined;
+        after = () =>
+          void openMessagesOverlay(ctx, deps, agent ? { agent } : {}).catch(
+            (error) => ctx.ui.notify(errorText(error), "error"),
+          );
+        return "close";
+      }
       if (key === "tab") {
         if (!deps.panel.hasRows()) return undefined;
         after = () => deps.focus.focusPanelAt(ctx, row.key);
@@ -394,6 +556,21 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
     void openAgentsOverlay(ctx, deps, select).catch((error) =>
       ctx.ui.notify(errorText(error), "error"),
     );
+  deps.focus.onThread = (ctx, thread) =>
+    void openMessagesOverlay(ctx, deps, { thread }).catch((error) =>
+      ctx.ui.notify(errorText(error), "error"),
+    );
+
+  pi.registerCommand("messages", {
+    description: "Read the messages agents sent each other",
+    handler: async (_args, ctx) => {
+      try {
+        await openMessagesOverlay(ctx, deps);
+      } catch (error) {
+        ctx.ui.notify(errorText(error), "error");
+      }
+    },
+  });
 
   pi.registerCommand("agents", {
     description: "Browse agents: attach to or stop them",

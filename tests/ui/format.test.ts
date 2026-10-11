@@ -11,6 +11,7 @@ import {
   graphShape,
   runtime,
 } from "../../src/ui/format.js";
+import { formatMessageLine, pairWidth } from "../../src/ui/messages.js";
 import { panelCompare, panelOrder } from "../../src/ui/panel.js";
 import {
   attachTarget,
@@ -432,5 +433,33 @@ describe("formatting", () => {
         agent({ state: "idle" }),
       ]),
     ).toBe("2◉ 1●");
+  });
+
+  test("message lines align their text and end with the status", () => {
+    const messages = [
+      {
+        from: "scout",
+        to: "notes",
+        text: "bun.lock is 412 KB\nmore",
+        status: "delivered" as const,
+      },
+      {
+        from: "a",
+        to: "b",
+        text: "a long line ".repeat(10),
+        status: "queued" as const,
+      },
+      { from: "a", to: "b", text: "gone", status: "dropped" as const },
+    ];
+    const column = pairWidth(messages);
+    const lines = messages.map((message) =>
+      formatMessageLine(message, 50, undefined, column),
+    );
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: SGR codes.
+    expect(lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""))).toEqual([
+      "□ scout → notes  bun.lock is 412 KB              ✔",
+      "□ a → b          a long line a long line a long… ◷",
+      "□ a → b          gone                            ✘",
+    ]);
   });
 });

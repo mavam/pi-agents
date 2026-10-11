@@ -245,6 +245,50 @@ delegating agent's conversation
 - The tool result is the graph's delivery; Pi's outbox isn't involved. Once
   the call ended, the service closes the graph and its helpers.
 
+### Messages between agents
+
+Experimental, behind `piAgents.messaging`; `docs/messaging.md` states the
+guarantees and what's left out. The extension `pi-agents-messaging` holds
+two tools:
+
+- `agent_status` lists the agents a sender can message, finished ones too,
+  with their state and the task each was started with, cut at 4,000
+  characters per agent and 30,000 in all.
+- `agent_send` submits a message to another agent's conversation and
+  returns without waiting. Like the parent's messages, it steers a working
+  recipient unless `followUp` queues it after the current work.
+
+Mechanics:
+
+- The first run of a send binds the recipient by conversation ID in a memo
+  of the call's task, with the text, the mode, and the send time; reruns
+  replay the memo and never resolve the name again.
+- Under the recipient's turn in `MessagingHub`, an in-process queue per
+  agent, the send logs the message in `pi-agents.messages` and refuses a
+  stopped recipient in the same commit, then submits it with the request ID
+  `message:<sender>:<tool task>` (`replay: "safe"`), which the recipient
+  admits once. Once logged, the submission ignores the call's cancellation.
+- A stop records `stopped` in the agent's turn, then interrupts. A send that
+  got its turn first is withdrawn or interrupted; one that comes after is
+  refused. The record keeps `stopped` until the parent or the user messages
+  the agent.
+- When the service starts, before the harness resumes, it submits logged
+  messages that a crash left without a submission, or marks them dropped
+  when the recipient is stopped or gone.
+- The recipient sees `[from <name>] <text>`; the prompt says these come from
+  agents, not the user. Its answer creates no delivery: the parent's
+  deliveries follow parent requests only. A steer joins the recipient's
+  current run, so the answer that settles a parent request can include it.
+- Helpers neither send nor receive. Agents started while the setting is on
+  select the extension; the registry always installs it, so turning the
+  setting off later doesn't break them, and new sends are refused.
+- The log keeps the latest 1,000 messages for the UI and counts the ones it
+  dropped. A message's status comes from its submission: queued, delivered
+  once placed, or dropped when an interrupt withdrew it from the inbox or the
+  service dropped it after a crash.
+- `agent_status` lists the agents `agent_send` accepts, with states from the
+  service through `MessagingHub`.
+
 ## Delivery
 
 Parent requests use an outbox: the record stores the request ID and message
@@ -425,7 +469,8 @@ details no version reads show the result's text.
 Pi's transcript and the attach view each have a map from tool name to
 renderers, since the parent's tools and the agents' tools differ: the
 parent's tools use them through their definitions, and the attach view
-draws `delegate_graph` with its own, and Pi's tools with Pi's.
+draws the agents' `delegate_graph`, `agent_status`, and `agent_send`, a
+message card, with its own, and Pi's tools with Pi's.
 
 ## Frontend
 
@@ -456,6 +501,26 @@ draws `delegate_graph` with its own, and Pi's tools with Pi's.
   it works, else until it ended, from durable task end times that survive
   restarts. An agent's detail shows its task and its latest result; a
   graph's detail says its order in words and shows each agent's result.
+- Messages between agents, with messaging on. One line format everywhere:
+  `□ scout → notes  <first line>  ◷`, the kind glyph, sender and recipient in
+  bold in a fixed-width column, the text, and the status at the right edge:
+  `◷` queued, `✔` delivered, `✘` dropped. The glyphs are constants in
+  `src/ui/messages.ts`.
+  - Panel: the latest messages of the agents it shows, in a column to their
+    right from 120 terminal columns, else stacked below them; a dim line
+    counts earlier ones. ↑↓ reach them, ⏎ opens a message's thread, `m`
+    hides them, `v` switches the view, both for the session.
+  - Transcript: one custom entry per message, a card on Pi's message
+    background that Pi's model doesn't see. Entries only append and are
+    deduplicated by message ID and send time; Ctrl+O shows a long message in
+    full.
+  - Attach view: incoming messages as cards, never as the user's input, and
+    queued ones as message lines; the agent's own `agent_send` calls as cards
+    too, with a refusal below.
+  - `/messages`: threads, everything two agents sent each other, latest
+    first, and the selected thread's messages in full. ⏎ asks which of the
+    two agents to attach to, Tab opens `/agents`. An agent's details in
+    `/agents` list its threads, and `m` opens them.
 - pi-durable's task graph stays out of the UI. `AgentService.liveTasks()`
   exposes it for tests and debugging.
 - The fancy-footer integration reports working and idle counts.

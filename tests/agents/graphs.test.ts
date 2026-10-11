@@ -13,7 +13,9 @@ import type {
   SpawnSpec,
 } from "../../src/agents/types.js";
 import {
+  briefly,
   closeService,
+  heldUntilAborted,
   jsonlStorage,
   lastUserText,
   MODEL,
@@ -53,16 +55,16 @@ interface Request {
 }
 
 /**
- * A faux model that fails prompts containing "fail", answers prompts
- * containing "slow" (unless `slow` is false) or "medium" at length, and
- * answers others at once.
+ * A faux model that fails prompts containing "fail", holds prompts
+ * containing "slow" until aborted (unless `slow` is false), works briefly on
+ * prompts containing "medium", and answers others at once.
  */
 function scripted(options: { slow?: boolean } = {}) {
-  const faux = fauxProvider({ tokensPerSecond: 40 });
+  const faux = fauxProvider();
   const models = createModels();
   models.setProvider(faux.provider);
   const requests: Request[] = [];
-  const step: FauxResponseStep = (context) => {
+  const step: FauxResponseStep = async (context, request) => {
     const prompt = lastUserText(context);
     const copies = context.messages.filter(
       (message) =>
@@ -81,10 +83,14 @@ function scripted(options: { slow?: boolean } = {}) {
         stopReason: "error",
         errorMessage: `cannot ${task}`,
       });
-    if (task.includes("slow") && options.slow !== false)
-      return fauxAssistantMessage(`${task} `.repeat(400));
-    if (task.includes("medium"))
+    if (task.includes("slow") && options.slow !== false) {
+      await heldUntilAborted(request?.signal);
+      return fauxAssistantMessage(task);
+    }
+    if (task.includes("medium")) {
+      await briefly(request?.signal);
       return fauxAssistantMessage(`${task} `.repeat(20));
+    }
     return fauxAssistantMessage(`done: ${prompt}`);
   };
   faux.setResponses(Array.from({ length: 200 }, () => step));

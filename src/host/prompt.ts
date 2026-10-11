@@ -26,7 +26,7 @@ const PROMPT_EXTENSION = "pi-agents-prompt";
 
 const AGENT_PREAMBLE = [
   "You are an expert coding assistant operating inside pi, a coding agent harness.",
-  "Another agent gave you a job. It sees only your final message, so make that message a self-contained result with concrete file paths. If you need a decision, ask for it in your final message.",
+  "The agent that started you gave you a job. It sees only your final message, so make that message a self-contained result with concrete file paths. If you need a decision, ask for it in your final message.",
   `Messages that start with ${USER_MESSAGE_PREFIX.trim()} come from the user, who sees your whole conversation. Answer the user directly.`,
 ].join("\n\n");
 

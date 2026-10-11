@@ -212,12 +212,11 @@ color instead of green and says `result queued`, and so does a graph:
 
 Failed and interrupted agents stay until you or Pi stop them.
 
-Unfocused, the panel is a single summary line, with the graph's name when
-one runs alone, how many agents are in each state, and how many messages
-wait:
+Unfocused, the panel is a single summary line with how many agents are in
+each state:
 
 ```text
-luna-message-mesh ◉ 6 working ● 1 idle ✉ 3 · ← agents
+◉ 6 working ● 1 idle · ← agents
 ```
 
 Focus it to see every agent and message. To keep more rows in view, set

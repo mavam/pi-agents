@@ -307,20 +307,14 @@ export class AgentPanel {
     return this.host.panelRows() ?? DEFAULT_ROWS;
   }
 
-  /** One line for all agents: the graph's name when one runs alone, then
-   * how many agents are in each state and how many messages wait. */
+  /** One line for all agents: how many are in each state. */
   private summaryLine(style: MessageStyle): string {
-    const { color, bold } = style;
+    const { color } = style;
     const agents = this.host.current()?.list() ?? [];
-    const roots = this.rows(true).filter((row) => row.parent === undefined);
-    const only = roots.length === 1 ? roots[0] : undefined;
-    const name = only?.kind === "graph" ? `${bold(only.label)} ` : "";
     const counts = stateCounts(agents).map(
       ([state, count]) => `${stateIcon(state, color)} ${count} ${state}`,
     );
-    const queued = this.messages().length;
-    if (queued > 0) counts.push(`✉ ${queued}`);
-    return `${name}${counts.join(" ")}${color("dim", " · ← agents")}`;
+    return `${counts.join(" ")}${color("dim", " · ← agents")}`;
   }
 
   /** The selected row, normalizing a stale selection to the first row;
@@ -435,7 +429,7 @@ export class AgentPanel {
             color("dim", `+${rows.length - kept.length} more · ← agents`),
           );
       }
-      // At 1, the summary line counts the messages instead.
+      // The summary line stands alone, without messages.
       const below = height === 1 || (!columns && stacked === 0);
       return this.withMessages(shown, targets, below ? [] : messages, {
         width,

@@ -496,9 +496,8 @@ message card, with its own, and Pi's tools with Pi's.
   graph's line shows how many of its agents finished, with its agents below
   it as a tree in stages; unfocused, a finished graph folds to its line. ←
   from an empty editor or Ctrl+Q focuses it, or opens `/agents` while it's
-  empty. Unfocused, it's a summary line: the graph's name when one runs
-  alone, counts per state with the state glyphs, and `✉ N` queued
-  messages. `piAgents.panelRows`, 1 to 9, gives it rows instead, ending in
+  empty. Unfocused, it's a summary line: counts per state with the state
+  glyphs, without names or messages. `piAgents.panelRows`, 1 to 9, gives it rows instead, ending in
   `+N more · ← agents` when agents don't fit; stacked messages share them,
   a divider and at most half. Focused, it shows everything. Digits aren't
   keys, so typing still returns to the editor. Space folds a graph or an agent's helpers, ⏎ attaches, `s` stops,

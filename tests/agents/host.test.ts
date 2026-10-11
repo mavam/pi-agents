@@ -31,6 +31,7 @@ import {
   lastUserText,
   MODEL,
   openService,
+  TEST_REFRESH_MS,
   TestParent,
   testExtensions,
 } from "./helpers.js";
@@ -75,6 +76,7 @@ describe("hosts", () => {
       anchor,
       extensions,
       parent: new TestParent(),
+      refreshDelayMs: TEST_REFRESH_MS,
     });
     cleanups.push(() => service.close());
     harness.resume();
@@ -149,6 +151,7 @@ describe("hosts", () => {
       anchor: await harness.root(CONTEXT),
       extensions,
       parent: new TestParent(),
+      refreshDelayMs: TEST_REFRESH_MS,
     });
     cleanups.push(() => service.close());
     harness.resume();

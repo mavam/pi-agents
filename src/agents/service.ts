@@ -129,6 +129,9 @@ export interface AgentServiceOptions {
   onReport?: (error: unknown) => void;
   /** Whether agents started now may message each other. */
   messaging?: () => boolean;
+  /** How long the service gathers commits before it refreshes; tests
+   * shorten it. */
+  refreshDelayMs?: number;
 }
 
 export interface WaitOptions {
@@ -259,6 +262,7 @@ export class AgentService {
   private readonly parent: Parent;
   private readonly report: (error: unknown) => void;
   private readonly messaging: () => boolean;
+  private readonly refreshDelayMs: number;
 
   private constructor(options: AgentServiceOptions) {
     this.harness = options.harness;
@@ -267,6 +271,7 @@ export class AgentService {
     this.parent = options.parent;
     this.report = options.onReport ?? (() => {});
     this.messaging = options.messaging ?? (() => false);
+    this.refreshDelayMs = options.refreshDelayMs ?? REFRESH_DELAY_MS;
     this.extensions.hub.state = (id) => this.infos.get(id)?.state;
   }
 
@@ -1489,7 +1494,7 @@ export class AgentService {
       const ids = [...this.dirty];
       this.dirty.clear();
       void this.refresh(ids).catch(() => {});
-    }, REFRESH_DELAY_MS);
+    }, this.refreshDelayMs);
   }
 
   /** Recompute infos for the given agents and every graph, serialized. */

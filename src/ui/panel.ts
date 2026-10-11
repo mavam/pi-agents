@@ -142,16 +142,13 @@ export class AgentPanel {
     if (!this.shouldShow()) {
       this.stopTicking();
       this.focused = false;
-      if (this.mounted) {
-        context.ui.setWidget(WIDGET_KEY, undefined);
-        this.mounted = false;
-      }
-      return;
+    } else {
+      this.startTicking();
     }
-    this.startTicking();
     if (!this.mounted) {
       // One persistent component that pulls live state per render; remounting
-      // per update desynchronizes Pi's differential renderer.
+      // per update desynchronizes Pi's differential renderer. Keep the empty
+      // widget mounted too, so keyboard guards always have the current TUI.
       context.ui.setWidget(WIDGET_KEY, (tui, theme) => {
         this.lastTui = tui;
         return new PanelLines(() => this.frame(tui, theme));
@@ -176,6 +173,13 @@ export class AgentPanel {
   /** Whether a view in the editor slot hides the panel. */
   isSuppressed(): boolean {
     return this.suppressed;
+  }
+
+  /**
+   * Whether the terminal has a visible overlay, including other extensions'.
+   */
+  hasOverlay(): boolean {
+    return this.lastTui?.hasOverlay() ?? false;
   }
 
   hasRows(): boolean {
@@ -319,6 +323,7 @@ export class AgentPanel {
     if (this.mounted) this.lastContext?.ui.setWidget(WIDGET_KEY, undefined);
     this.mounted = false;
     this.lastContext = undefined;
+    this.lastTui = undefined;
     this.held.clear();
     this.stopTicking();
   }

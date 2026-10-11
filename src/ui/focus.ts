@@ -93,12 +93,26 @@ export class FocusController {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.ctx = undefined;
+    this.lastData = "";
+    this.lastDataAt = 0;
+    this.lastResult = undefined;
+  }
+
+  /** Yield panel navigation to visible overlays, even non-capturing ones. */
+  private yieldToOverlay(): boolean {
+    if (!this.panel.hasOverlay()) return false;
+    this.panel.setFocused(false);
+    this.lastData = "";
+    this.lastDataAt = 0;
+    this.lastResult = undefined;
+    return true;
   }
 
   /** Ctrl+Q: focus the panel, also mid-composition, or browse agents. */
   focusPanel(ctx?: ExtensionContext): void {
     if (ctx) this.ctx = ctx;
-    if (this.paneOpen || this.panel.isSuppressed()) return;
+    if (this.yieldToOverlay() || this.paneOpen || this.panel.isSuppressed())
+      return;
     if (this.panel.hasRows()) this.panel.setFocused(true);
     else if (this.ctx) this.browse(this.ctx);
   }
@@ -106,7 +120,7 @@ export class FocusController {
   /** Tab from `/agents`: focus the panel at the same row, if it shows it. */
   focusPanelAt(ctx: ExtensionContext, key: string): void {
     this.ctx = ctx;
-    if (this.paneOpen || !this.panel.hasRows()) return;
+    if (this.yieldToOverlay() || this.paneOpen || !this.panel.hasRows()) return;
     this.panel.select(key);
     this.panel.setFocused(true);
   }
@@ -146,9 +160,15 @@ export class FocusController {
 
   private handle(data: string): { consume?: boolean } | undefined {
     const ctx = this.ctx;
-    // Another view owns the keys: the attach view, a stop confirmation, or
-    // /agents, which hides the panel.
-    if (!ctx || this.paneOpen || this.confirming || this.panel.isSuppressed())
+    // Raw listeners run before the focused component. Yield to any visible
+    // overlay, as well as our own attach view, confirmation, and /agents.
+    if (
+      !ctx ||
+      this.yieldToOverlay() ||
+      this.paneOpen ||
+      this.confirming ||
+      this.panel.isSuppressed()
+    )
       return undefined;
     // The Kitty keyboard protocol reports releases separately; acting on
     // them would double every step.

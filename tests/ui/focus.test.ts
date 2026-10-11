@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { AgentService } from "../../src/agents/service.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import { FocusController } from "../../src/ui/focus.js";
-import type { AgentPanel } from "../../src/ui/panel.js";
+import { AgentPanel } from "../../src/ui/panel.js";
 
 const LEFT = "\u001b[D";
 
@@ -21,6 +22,7 @@ function setup(state: {
     selected: () => ({ key: "agent:7" }),
     hasRows: () => state.rows,
     isSuppressed: () => state.suppressed,
+    hasOverlay: () => false,
     setFocused: (value: boolean) => {
       state.focused = value;
       focused.push(value);
@@ -84,6 +86,40 @@ describe("focus", () => {
     const open = setup({ rows: true, agents: 2, suppressed: true });
     expect(open.press(LEFT)).toBeUndefined();
     expect(open.focused).toEqual([]);
+  });
+
+  test("the empty panel retains overlay detection without rendering content", () => {
+    let overlay = true;
+    const tui = { hasOverlay: () => overlay } as unknown as TUI;
+    let widget: Component | undefined;
+    const ctx = {
+      mode: "tui",
+      ui: {
+        setWidget: (
+          _key: string,
+          factory: ((tui: TUI, theme: Theme) => Component) | undefined,
+        ) => {
+          widget = factory?.(tui, {} as Theme);
+        },
+      },
+    } as unknown as ExtensionContext;
+    const host = { current: () => undefined } as unknown as SessionHost;
+    const panel = new AgentPanel(host);
+    try {
+      panel.update(ctx);
+      expect(widget?.render(80)).toEqual([]);
+      expect(panel.hasOverlay()).toBe(true);
+      overlay = false;
+      expect(panel.hasOverlay()).toBe(false);
+      overlay = true;
+      panel.setSuppressed(true);
+      expect(widget?.render(80)).toEqual([]);
+      expect(panel.hasOverlay()).toBe(true);
+    } finally {
+      panel.dispose();
+    }
+    expect(widget).toBeUndefined();
+    expect(panel.hasOverlay()).toBe(false);
   });
 
   test("Tab trades the focused panel for /agents at the same row", () => {

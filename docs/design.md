@@ -435,9 +435,18 @@ draws `delegate_graph` with its own, and Pi's tools with Pi's.
   from an empty editor or Ctrl+Q focuses it, or opens `/agents` while it's
   empty. Space folds a graph or an agent's helpers, ⏎ attaches, `s` stops,
   Tab trades the panel for `/agents` at the same row. The panel and
-  `/agents` share what the user folded. Working agents show how long ago they
-  started; finished rows show no time. An idle agent or finished graph with
-  an undelivered result shows `●` in the accent color and `result queued`.
+  `/agents` share what the user folded. Before intercepting input or taking
+  focus, the controller checks `TUI.hasOverlay()` and yields to any visible
+  overlay. This is intentionally conservative: `hasOverlay()` includes
+  visible `nonCapturing` overlays and overlays that released focus to another
+  target. Hidden overlays, including those whose `visible` callback returns
+  false, do not block navigation. Pi's public API does not expose whether an
+  overlay currently owns keyboard focus. The panel's widget stays mounted
+  with empty output while hidden or empty so the check always uses the current
+  TUI. No extension-specific lifecycle events are needed.
+  Working agents show how long ago they started; finished rows show no time. An
+  idle agent or finished graph with an undelivered result shows `●` in the
+  accent color and `result queued`.
 - Attach view: a port of Pi's `ExperimentalChatView`, rendering the agent's
   durable conversation view with Pi's message and tool components. ⏎ prompts
   or steers, Alt+⏎ queues a follow-up, Esc interrupts, Ctrl+O expands tool

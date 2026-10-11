@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   type AgentInfo,
   EMPTY_USAGE,
@@ -447,15 +448,15 @@ describe("formatting", () => {
       age: "3s",
     };
     expect(messageLine(queued, 60, style)).toBe(
-      "scout<dim> → </>notes <dim>bun.lock is 412 KB</><dim> 3s</>",
+      "scout<dim> → </>notes <dim>bun.lock is 412 KB …</><dim> 3s</>",
     );
     // Delivered reads normal, dropped red.
     expect(
       messageLine({ ...queued, status: "dropped", age: "" }, 60, style),
-    ).toContain("<error>bun.lock is 412 KB</>");
+    ).toContain("<error>bun.lock is 412 KB …</>");
   });
 
-  test("a card is ✦ and the line, and expanded, the whole text", () => {
+  test("a card is ✦ and the line, and expanded, the whole text; lines fit", () => {
     const theme = {
       fg: (_name: string, text: string) => text,
       bg: (_name: string, text: string) => text,
@@ -467,7 +468,13 @@ describe("formatting", () => {
         .render(40)
         .map((line) => line.trimEnd())
         .filter(Boolean);
-    expect(card(false)).toEqual([" ✦ beta → gamma first"]);
+    // More lines follow, so the line says so.
+    expect(card(false)).toEqual([" ✦ beta → gamma first …"]);
     expect(card(true)).toEqual([" ✦ beta → gamma", "   first", "   second"]);
+    // Names too long for the width cut the row's end, never overflow it.
+    const long = { from: "a".repeat(30), to: "b".repeat(30), text: "hi\nyo" };
+    for (const expanded of [false, true])
+      for (const line of messageCard(long, expanded, theme as never).render(40))
+        expect(visibleWidth(line)).toBeLessThanOrEqual(40);
   });
 });

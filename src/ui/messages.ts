@@ -66,9 +66,12 @@ export function messagePair(message: { from: string; to: string }): string {
   return `${message.from} → ${message.to}`;
 }
 
-/** The first line of a message, flattened for one row. */
+/** The first line of a message, flattened for one row, with `…` when
+ * more lines follow, so it doesn't read as the whole message. */
 export function firstLine(text: string): string {
-  return sanitizeLine(text.trim().split("\n")[0] ?? "");
+  const [first = "", ...rest] = text.trim().split("\n");
+  const more = rest.some((line) => line.trim() !== "");
+  return `${sanitizeLine(first).trimEnd()}${more ? " …" : ""}`;
 }
 
 /** Colors and bold, from Pi's theme. */
@@ -120,8 +123,12 @@ export function messageLine(
   const head = formatPair(message, style);
   const tail = message.age ? color("dim", ` ${message.age}`) : "";
   const room = width - visibleWidth(head) - visibleWidth(tail) - 1;
-  if (room < 4)
-    return truncateToWidth(`${head}${tail}`, Math.max(1, width), "…");
+  // Too narrow for text: the names, with the age if it fits; past the
+  // row's end, the row is cut.
+  if (room < 4) {
+    const fits = visibleWidth(head) + visibleWidth(tail) <= width;
+    return truncateToWidth(fits ? `${head}${tail}` : head, width, "…");
+  }
   const text = truncateToWidth(firstLine(message.text), room, "…");
   return `${head} ${statusColor(text, message.status, color)}${tail}`;
 }
@@ -144,7 +151,7 @@ class MessageLines implements Component {
     const style = themeStyle(this.theme);
     const { color } = style;
     const mark = `${color("accent", AGENT_ICON)} `;
-    const usable = Math.max(8, width - visibleWidth(mark));
+    const usable = Math.max(1, width - visibleWidth(mark));
     const line = `${mark}${messageLine(this.message, usable, style)}`;
     const text = this.message.text.trim();
     const whole =
@@ -159,7 +166,8 @@ class MessageLines implements Component {
         wrapTextWithAnsi(sanitizeLine(paragraph), Math.max(4, width - 2)),
       )
       .map((part) => `  ${statusColor(part, this.message.status, color)}`);
-    return [`${mark}${who}`, ...body];
+    // Every line fits, so long names are cut at the row's end.
+    return [truncateToWidth(`${mark}${who}`, width, "…"), ...body];
   }
 }
 

@@ -39,6 +39,7 @@ import {
 import { type Static, Type } from "typebox";
 import { summarizeUsage, sumUsage } from "./derive.js";
 import { GraphTask, type NodeResult, NodeTask } from "./graphs.js";
+import { SEND_TOOL, STATUS_TOOL } from "./messaging.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
 import {
   type AgentReceipt,
@@ -614,7 +615,10 @@ async function execute(
       context,
     )) ?? {}) as DurableAgentState;
     const agent = await api.agent(context);
-    const ownTools = agent.tools.filter((tool) => tool.name !== DELEGATE_TOOL);
+    // Helpers can't delegate or message other agents.
+    const ownTools = agent.tools.filter(
+      (tool) => ![DELEGATE_TOOL, SEND_TOOL, STATUS_TOOL].includes(tool.name),
+    );
     let planned: Awaited<ReturnType<typeof plan>>;
     try {
       planned = await plan(

@@ -17,6 +17,7 @@ import type { AgentService } from "../../src/agents/service.js";
 import { agentToolViews } from "../../src/ui/tool-views.js";
 import {
   closeService,
+  heldUntilAborted,
   hostOf,
   jsonlStorage,
   MODEL,
@@ -43,15 +44,15 @@ function textOf(content: unknown): string {
  * A faux model for leads and helpers. A message `delegate <json>` calls
  * delegate_graph with that JSON, and a tool result is answered with
  * `merged: <result>`. Other messages answer `done: <first line>`; first
- * lines with "fail" fail, and with "slow" (unless `slow` is false) answer at
- * length.
+ * lines with "fail" fail, and with "slow" (unless `slow` is false) hold
+ * until aborted.
  */
 function scripted(options: { slow?: boolean } = {}) {
-  const faux = fauxProvider({ tokensPerSecond: 40 });
+  const faux = fauxProvider();
   const models = createModels();
   models.setProvider(faux.provider);
   const prompts: string[] = [];
-  const step: FauxResponseStep = (context) => {
+  const step: FauxResponseStep = async (context, request) => {
     const last = [...context.messages]
       .reverse()
       .find((message) => message.role !== "system");
@@ -70,8 +71,10 @@ function scripted(options: { slow?: boolean } = {}) {
         stopReason: "error",
         errorMessage: `cannot ${first}`,
       });
-    if (first.includes("slow") && options.slow !== false)
-      return fauxAssistantMessage(`${first} `.repeat(400));
+    if (first.includes("slow") && options.slow !== false) {
+      await heldUntilAborted(request?.signal);
+      return fauxAssistantMessage(first);
+    }
     return fauxAssistantMessage(`done: ${first}`);
   };
   faux.setResponses(Array.from({ length: 300 }, () => step));

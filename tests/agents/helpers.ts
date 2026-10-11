@@ -29,6 +29,9 @@ import { type AgentHarness, openAgentHarness } from "../../src/host/harness.js";
 
 export const MODEL = { provider: "faux", modelId: "faux-1" };
 
+/** How long test services gather commits before they refresh. */
+export const TEST_REFRESH_MS = 5;
+
 /** The text of the newest user message in a request. */
 export function lastUserText(
   context: Parameters<
@@ -248,6 +251,7 @@ export async function openService(
       extensions,
       parent,
       messaging: () => options.messaging !== undefined,
+      refreshDelayMs: TEST_REFRESH_MS,
     });
     harness.harness.resume();
     hosts.set(service, { service, harness, extensions, parent });

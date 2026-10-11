@@ -229,7 +229,8 @@ describe("script output", () => {
     const w = { kind: "agent", name: "w", state: "working" };
     // A timeout.
     expect(
-      (await run("agent_spawn", { task: "hold", name: "w", wait: 1 })).output,
+      (await run("agent_spawn", { task: "hold", name: "w", wait: 0.05 }))
+        .output,
     ).toEqual(w);
     // An abort.
     const abort = new AbortController();
@@ -467,7 +468,7 @@ describe("call results", () => {
     const tool = tools().get("agent_spawn_graph");
     const args = {
       name: "audit",
-      wait: 1,
+      wait: 0.5,
       agents: [
         { name: "map", task: "map" },
         { name: "report", task: "hold report", after: ["map"] },
@@ -482,7 +483,7 @@ describe("call results", () => {
       drawFrame(tool, args, { details: progress[0] }, { isPartial: true }),
     ).toEqual([
       "✦ spawn graph audit",
-      "  wait=1s",
+      "  wait=0.5s",
       "  map → report",
       "audit · graph of 2",
       "├─ map · faux-1",
@@ -492,7 +493,7 @@ describe("call results", () => {
     // the agents finish.
     const timedOut = [
       "✦ spawn graph audit",
-      "  wait=1s",
+      "  wait=0.5s",
       "  map → report",
       "⊠ audit · graph 1/2",
       "├─ ● map · faux-1 · 2.1k",

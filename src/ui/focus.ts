@@ -10,7 +10,6 @@
  *   panel  ── shift+tab ──▶ /messages, the cycle backwards
  *   panel  ── m ──▶ /messages at the selected message, or filtered by the
  *                   selected agent's name
- *   panel  ── 0–9 ──▶ panel, with that many rows once unfocused
  *
  * It also owns attaching, so the panel, the overlay, and `/agent` share one
  * path that hides the panel and holds deliveries while attached.
@@ -266,11 +265,6 @@ export class FocusController {
             ? { agent: row.agent.id }
             : {},
       );
-      return { consume: true };
-    }
-    // A digit sets the unfocused panel's height in rows.
-    if (/^[0-9]$/.test(data)) {
-      this.panel.setRows(Number(data));
       return { consume: true };
     }
     if (key === "s") {

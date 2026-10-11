@@ -27,6 +27,8 @@ function agent(id: string, name: string): AgentInfo {
 function mount(
   messages: MessageInfo[] = [],
   agents = [agent("1", "scout"), agent("2", "notes")],
+  /** `piAgents.panelRows`; null without the setting. */
+  rows: number | null = 6,
 ) {
   const service = {
     list: () => agents,
@@ -37,7 +39,7 @@ function mount(
   const host = {
     current: () => service,
     messaging: () => true,
-    panelRows: () => undefined,
+    panelRows: () => rows ?? undefined,
   } as unknown as SessionHost;
   const panel = new AgentPanel(host, () => now);
   const attached: string[] = [];
@@ -108,27 +110,22 @@ describe("panel", () => {
     panel.dispose();
   });
 
-  test("a digit sets the height: 1 is a summary line, 0 hides until an agent starts", () => {
+  test("unfocused, the panel is a summary line; focused, it shows everything", () => {
     const agents = Array.from({ length: 8 }, (_, index) =>
       agent(String(index + 1), `a${index + 1}`),
     );
-    const { panel, render } = mount([], agents);
-    // By default, five agents and how many more there are.
-    expect(render(80)).toHaveLength(6);
-    expect(render(80).at(-1)).toBe("+3 more · ← agents");
-    panel.setRows(3);
-    expect(render(80)).toEqual([
+    const { panel, render } = mount([], agents, null);
+    expect(render(80)).toEqual(["◉ 8 working · ← agents"]);
+    panel.setFocused(true);
+    expect(render(80).filter((line) => /◉ a\d/.test(line))).toHaveLength(8);
+    panel.dispose();
+    // piAgents.panelRows gives it rows, the last saying how many more.
+    const tall = mount([], agents, 3);
+    expect(tall.render(80)).toEqual([
       expect.stringContaining("a1"),
       expect.stringContaining("a2"),
       "+6 more · ← agents",
     ]);
-    panel.setRows(1);
-    expect(render(80)).toEqual(["◉ 8 working · ← agents"]);
-    panel.setRows(0);
-    expect(render(80)).toEqual([]);
-    // A new agent brings the panel back at the height it had.
-    agents.push(agent("9", "a9"));
-    expect(render(80)).toEqual(["◉ 9 working · ← agents"]);
-    panel.dispose();
+    tall.panel.dispose();
   });
 });

@@ -212,19 +212,16 @@ color instead of green and says `result queued`, and so does a graph:
 
 Failed and interrupted agents stay until you or Pi stop them.
 
-The panel is six rows tall; when more agents are open, its last row says
-how many more. Press a digit in the focused panel to change the height.
-`1` is a single summary line, with the graph's name when one runs alone,
-how many agents are in each state, and how many messages wait:
+Unfocused, the panel is a single summary line, with the graph's name when
+one runs alone, how many agents are in each state, and how many messages
+wait:
 
 ```text
 luna-message-mesh ◉ 6 working ● 1 idle ✉ 3 · ← agents
 ```
 
-`0` hides the panel until another agent starts or you focus it. The focused
-panel shows everything, whatever the height. The height lasts until Pi
-exits; set `piAgents.panelRows` to change the default, as described under
-Configuration.
+Focus it to see every agent and message. To keep more rows in view, set
+`piAgents.panelRows`, as described under Configuration.
 
 Press ← in an empty editor or Ctrl+Q to focus the panel. When no agents are
 open, they open `/agents` instead. Then:
@@ -237,7 +234,6 @@ open, they open `/agents` instead. Then:
 | Click | Attach like ⏎, also without focusing the panel first; a message attaches to its recipient. Needs Pi's fullscreen mode, its default. |
 | Tab | Open `/agents` at the same row. Tab cycles the panel, `/agents`, and `/messages`; Shift+Tab goes back. |
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
-| 0–9 | Set the panel's height in rows, used once you leave it: `1` is a summary line, `0` hides it. |
 | Esc | Go back to the editor. |
 
 Attaching shows the agent's conversation with Pi's own message and tool
@@ -492,18 +488,17 @@ aren't limited. Restart Pi after changing it.
 
 ### Panel height
 
-Set how many rows the panel shows, from 0 to 9, instead of 6:
+Show more rows of the unfocused panel, up to 9, instead of the summary line:
 
 ```json
 {
   "piAgents": {
-    "panelRows": 1
+    "panelRows": 6
   }
 }
 ```
 
-`1` is a summary line, and `0` hides the panel until an agent starts. A
-digit in the focused panel overrides it until Pi exits.
+When more agents are open than fit, the last row says how many more.
 
 ### Messages between agents (experimental)
 

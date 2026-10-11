@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { AgentService } from "../../src/agents/service.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import { FocusController } from "../../src/ui/focus.js";
-import type { AgentPanel } from "../../src/ui/panel.js";
+import { AgentPanel } from "../../src/ui/panel.js";
 
 const LEFT = "\u001b[D";
 
@@ -13,6 +14,7 @@ function setup(state: {
   agents: number;
   suppressed: boolean;
   focused?: boolean;
+  overlay?: boolean;
 }) {
   let input: ((data: string) => { consume?: boolean } | undefined) | undefined;
   const focused: boolean[] = [];
@@ -21,6 +23,7 @@ function setup(state: {
     selected: () => ({ key: "agent:7" }),
     hasRows: () => state.rows,
     isSuppressed: () => state.suppressed,
+    hasOverlay: () => state.overlay === true,
     setFocused: (value: boolean) => {
       state.focused = value;
       focused.push(value);
@@ -51,7 +54,14 @@ function setup(state: {
     input?.("\u001b[I");
     return result;
   };
-  return { press, focused, browsed, focus };
+  return {
+    press,
+    focused,
+    browsed,
+    focus,
+    ctx,
+    raw: (data: string) => input?.(data),
+  };
 }
 
 describe("focus", () => {
@@ -86,39 +96,94 @@ describe("focus", () => {
     expect(open.focused).toEqual([]);
   });
 
-  test("the question picker owns keys until it closes", () => {
-    const { press, focused, browsed, focus } = setup({
+  test("a visible overlay owns keys until it closes", () => {
+    const state = {
       rows: true,
       agents: 2,
       suppressed: false,
       focused: true,
-    });
-    focus.setQuestionPickerActive(true);
-    expect(focused).toEqual([false]);
+      overlay: true,
+    };
+    const { press, focused, browsed, focus, ctx } = setup(state);
     for (const key of [LEFT, "\u001b[A", "\u001b[B", "\r", "\t", "s", " "]) {
       expect(press(key)).toBeUndefined();
     }
     focus.focusPanel();
-    expect(focused).toEqual([false]);
+    focus.focusPanelAt(ctx, "agent:7");
+    expect(focused.every((value) => value === false)).toBe(true);
+    expect(state.focused).toBe(false);
     expect(browsed).toEqual([]);
-    focus.setQuestionPickerActive(false);
+    state.overlay = false;
     expect(press(LEFT)).toEqual({ consume: true });
-    expect(focused).toEqual([false, true]);
+    expect(state.focused).toBe(true);
   });
 
-  test("the question picker prevents browsing when the panel is empty", () => {
-    const { press, browsed, focus } = setup({
+  test("an overlay prevents browsing when the panel is empty", () => {
+    const state = {
       rows: false,
       agents: 2,
       suppressed: false,
-    });
-    focus.setQuestionPickerActive(true);
+      overlay: true,
+    };
+    const { press, browsed, focus } = setup(state);
     expect(press(LEFT)).toBeUndefined();
     focus.focusPanel();
     expect(browsed).toEqual([]);
-    focus.setQuestionPickerActive(false);
+    state.overlay = false;
     expect(press(LEFT)).toEqual({ consume: true });
     expect(browsed).toHaveLength(1);
+  });
+
+  test("overlays take precedence over cached duplicate input", () => {
+    const state = {
+      rows: true,
+      agents: 2,
+      suppressed: false,
+      focused: false,
+      overlay: false,
+    };
+    const { raw } = setup(state);
+    expect(raw(LEFT)).toEqual({ consume: true });
+    state.overlay = true;
+    expect(raw(LEFT)).toBeUndefined();
+    expect(state.focused).toBe(false);
+    state.overlay = false;
+    expect(raw(LEFT)).toEqual({ consume: true });
+    expect(state.focused).toBe(true);
+  });
+
+  test("the empty panel retains overlay detection without rendering content", () => {
+    let overlay = true;
+    const tui = { hasOverlay: () => overlay } as unknown as TUI;
+    let widget: Component | undefined;
+    const ctx = {
+      mode: "tui",
+      ui: {
+        setWidget: (
+          _key: string,
+          factory: ((tui: TUI, theme: Theme) => Component) | undefined,
+        ) => {
+          widget = factory?.(tui, {} as Theme);
+        },
+      },
+    } as unknown as ExtensionContext;
+    const host = { current: () => undefined } as unknown as SessionHost;
+    const panel = new AgentPanel(host);
+    try {
+      panel.update(ctx);
+      expect(widget?.render(80)).toEqual([]);
+      expect(panel.hasOverlay()).toBe(true);
+      overlay = false;
+      expect(panel.hasOverlay()).toBe(false);
+      overlay = true;
+      panel.setSuppressed(true);
+      expect(widget?.render(80)).toEqual([]);
+      expect(panel.hasOverlay()).toBe(true);
+    } finally {
+      panel.dispose();
+    }
+    expect(widget).toBeUndefined();
+    expect(panel.hasOverlay()).toBe(false);
   });
 
   test("Tab trades the focused panel for /agents at the same row", () => {

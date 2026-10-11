@@ -24,18 +24,6 @@ export default function agentExtension(pi: ExtensionAPI): void {
   const host = new SessionHost(parent);
   const panel = new AgentPanel(host);
   const focus = new FocusController(host, panel);
-  // rpiv-ask-user-question brackets its picker with this lifecycle event.
-  // Raw terminal listeners run before the picker, so yield while it is open.
-  pi.events.on("rpiv:ask-user:blocked", (payload: unknown) => {
-    if (
-      !payload ||
-      typeof payload !== "object" ||
-      !("active" in payload) ||
-      typeof payload.active !== "boolean"
-    )
-      return;
-    focus.setQuestionPickerActive(payload.active);
-  });
   const footer = new FancyFooterReporter(
     pi,
     () => host.current()?.list() ?? [],

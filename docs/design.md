@@ -435,9 +435,11 @@ draws `delegate_graph` with its own, and Pi's tools with Pi's.
   from an empty editor or Ctrl+Q focuses it, or opens `/agents` while it's
   empty. Space folds a graph or an agent's helpers, ⏎ attaches, `s` stops,
   Tab trades the panel for `/agents` at the same row. The panel and
-  `/agents` share what the user folded. The `rpiv:ask-user:blocked` lifecycle
-  event releases panel focus and suspends keyboard handling while the
-  `rpiv-ask-user-question` picker is active; closing it restores navigation.
+  `/agents` share what the user folded. Before intercepting input or taking
+  focus, the controller checks `TUI.hasOverlay()` and yields to any visible
+  overlay. The panel's widget stays mounted with empty output while hidden
+  or empty so the check always uses the current TUI. No extension-specific
+  lifecycle events are needed.
   Working agents show how long ago they
   started; finished rows show no time. An idle agent or finished graph with
   an undelivered result shows `●` in the accent color and `result queued`.

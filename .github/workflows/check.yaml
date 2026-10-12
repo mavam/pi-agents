@@ -39,9 +39,10 @@ jobs:
           path: .pi-main/*.tgz
           key: pi-main-${{ hashFiles('.pi-main-rev', 'scripts/pi-main.sh') }}
 
+      # The script installs them too; the committed lockfile must not change.
       - name: Build Pi's packages
         if: steps.pi-main.outputs.cache-hit != 'true'
-        run: scripts/pi-main.sh
+        run: scripts/pi-main.sh && git diff --exit-code bun.lock
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

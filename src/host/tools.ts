@@ -109,7 +109,7 @@ function adaptReadOnly(
       );
       const details = toJson(result.details);
       return {
-        content: result.content,
+        output: result.content,
         ...(details === undefined ? {} : { details }),
       };
     },

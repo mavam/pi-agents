@@ -147,7 +147,7 @@ function textResult(
   graph?: GraphReceipt,
 ): ToolExecutionResult {
   return {
-    content: [{ type: "text", text }],
+    output: [{ type: "text", text }],
     ...(isError ? { isError: true } : {}),
     ...(graph
       ? { details: { receipt: receipt({ graphs: [graph], wait: "done" }) } }

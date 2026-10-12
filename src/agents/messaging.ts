@@ -88,7 +88,7 @@ type Binding = {
 };
 
 function textResult(text: string, isError = false): ToolExecutionResult {
-  return { content: [{ type: "text", text }], isError };
+  return { output: [{ type: "text", text }], isError };
 }
 
 function isHelper(
@@ -224,7 +224,7 @@ export function createMessagingExtension(
                   )
                   .join("\n\n");
           return {
-            content: [{ type: "text", text }],
+            output: [{ type: "text", text }],
             details: { receipt: receipt({ agents }) },
           };
         },

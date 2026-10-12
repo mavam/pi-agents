@@ -25,6 +25,24 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
+      # Until the next Pi release, Pi's packages come from the commit in
+      # .pi-main-rev, built and packed into .pi-main/.
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Cache Pi's packages
+        id: pi-main
+        uses: actions/cache@v4
+        with:
+          path: .pi-main/*.tgz
+          key: pi-main-${{ hashFiles('.pi-main-rev', 'scripts/pi-main.sh') }}
+
+      - name: Build Pi's packages
+        if: steps.pi-main.outputs.cache-hit != 'true'
+        run: scripts/pi-main.sh
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 

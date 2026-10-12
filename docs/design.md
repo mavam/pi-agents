@@ -396,8 +396,11 @@ loses a delivery but can repeat one.
   none and follow the default, which Pi's host sets to pi-agents' tools and
   prompt.
 - Tools: `read`, `write`, `edit`, `bash`, and `codemode` from pi-durable,
-  plus `grep`, `find`, and `ls` adapted from Pi's tool definitions. The
-  default set is Pi's: `read`, `bash`, `edit`, `write`. `read` converts and
+  plus `grep`, `find`, and `ls` adapted from Pi's tool definitions.
+  Without tools in the spawn or profile, agents inherit the parent's
+  active tools among these (`src/pi/spawn.ts`), in Pi's order, and helpers
+  their agent's; a parent with none of them gives Pi's default set: `read`,
+  `bash`, `edit`, `write`. `read` converts and
   shrinks images with pi-durable's Photon processor, loaded with the first
   image. `codemode` scripts call the agent's other tools as nested calls,
   each its own task owned by the script's call, so delegations in one

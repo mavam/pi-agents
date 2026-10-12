@@ -4,7 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { discoverSkills } from "../../src/catalog/skills.js";
-import { resolveHelper, resolveSpawn } from "../../src/pi/spawn.js";
+import {
+  inheritedTools,
+  resolveHelper,
+  resolveSpawn,
+} from "../../src/pi/spawn.js";
 
 function skill(dir: string, name: string, frontmatter = ""): void {
   fs.mkdirSync(path.join(dir, name), { recursive: true });
@@ -67,12 +71,22 @@ function context(cwd: string, trusted = true): ExtensionContext {
 }
 
 describe("resolveSpawn", () => {
-  test("ad-hoc agents inherit the parent model and thinking level", async () => {
+  test("ad-hoc agents inherit the parent model, thinking level, and tools", async () => {
     const cwd = project();
+    // The parent's tools that agents can run, in Pi's order.
+    const tools = inheritedTools([
+      "codemode",
+      "agent_spawn",
+      "read",
+      "web_search",
+      "bash",
+    ]);
+    expect(tools).toEqual(["read", "bash", "codemode"]);
     expect(
       await resolveSpawn({ job: "x" }, context(cwd), {
         skills: discoverSkills,
         thinking: "high",
+        ...(tools ? { tools } : {}),
       }),
     ).toEqual({
       job: "x",
@@ -80,7 +94,17 @@ describe("resolveSpawn", () => {
       ambientSkills: true,
       model: { provider: "openai", modelId: "big" },
       thinking: "high",
+      tools: ["read", "bash", "codemode"],
     });
+    // Profiles name their own; a parent without agent tools leaves Pi's
+    // default.
+    const spec = await resolveSpawn(
+      { job: "x", profile: "checker" },
+      context(cwd),
+      { skills: discoverSkills, tools: ["read", "bash"] },
+    );
+    expect(spec.tools).toEqual(["read"]);
+    expect(inheritedTools(["web_search"])).toBeUndefined();
   });
 
   test("profiles supply settings, instructions, and skills", async () => {

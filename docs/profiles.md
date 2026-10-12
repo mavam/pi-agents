@@ -30,7 +30,7 @@ Profile fields:
 | `description` | When to use the profile. Required. |
 | `model` | Model as `provider/id` or `id`. Defaults to the session's model. |
 | `thinking` | Thinking level. Defaults to the session's level. |
-| `tools` | Tool allowlist. Defaults to `read`, `bash`, `edit`, `write`. |
+| `tools` | Tool allowlist. Defaults to the session's active tools that agents can run, or `read`, `bash`, `edit`, `write` if it has none. |
 | `skills` | Skills to apply in full, including those only you can invoke. Without this field, the agent sees your skill catalog. An empty list disables skills. |
 | `delegate` | Whether agents of this profile can start helper agents. Defaults to `false`. |
 

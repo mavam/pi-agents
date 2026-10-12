@@ -48,7 +48,7 @@ import {
   WaitOutput,
 } from "./output.js";
 import type { SessionHost } from "./session.js";
-import { resolveSpawn } from "./spawn.js";
+import { inheritedTools, resolveSpawn } from "./spawn.js";
 
 const PROGRESS_MS = 1_000;
 
@@ -59,6 +59,13 @@ interface AgentToolDetails {
   /** The results the call's wait took instead of their delivery, by ID:
    * stored with the result, they count as delivered. */
   deliveries?: string[];
+}
+
+/** The parent's tools, which agents get unless the call or a profile
+ * names theirs. */
+function inherited(pi: ExtensionAPI): { tools?: string[] } {
+  const tools = inheritedTools(pi.getActiveTools());
+  return tools ? { tools } : {};
 }
 
 function text(content: string, details: AgentToolDetails) {
@@ -370,7 +377,7 @@ const agentFields = {
   ),
   tools: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Tool allowlist from: ${AGENT_TOOL_NAMES.join(", ")}`,
+      description: `Tool allowlist from: ${AGENT_TOOL_NAMES.join(", ")}. Defaults to your own tools among them`,
     }),
   ),
   skills: Type.Optional(
@@ -407,6 +414,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         const spec = await resolveSpawn(params, ctx, {
           skills: host.skills.get,
           thinking: pi.getThinkingLevel(),
+          ...inherited(pi),
         });
         const info = await service.spawn(spec);
         // The call line already names what it started.
@@ -454,6 +462,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       output: GraphOutput,
       async execute(service, params, ctx) {
         const thinking = pi.getThinkingLevel();
+        const tools = inherited(pi);
         const graph = await service.spawnGraph({
           ...(params.name ? { name: params.name } : {}),
           ...(params.failFast ? { failFast: true } : {}),
@@ -463,6 +472,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
               ...(await resolveSpawn(agent, ctx, {
                 skills: host.skills.get,
                 thinking,
+                ...tools,
               })),
               ...(agent.after ? { after: agent.after } : {}),
             })),

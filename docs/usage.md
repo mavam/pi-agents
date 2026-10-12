@@ -37,8 +37,9 @@ interrupted if one was interrupted or stopped, and idle otherwise.
 
 Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`,
 and `codemode`, along with your context files such as `AGENTS.md` and your
-[skills](./usage.md#skills). By default they get `read`, `bash`, `edit`, and
-`write`, like Pi; ask for others by name. `read` shows them images, and
+[skills](./usage.md#skills). By default they get the tools you have active
+among these, so with `codemode` on in Pi they have it too; a profile or a
+spawn can name others. `read` shows them images, and
 `codemode` scripts call their other tools, including `delegate_graph` and
 `agent_send`, and pick up where they were after a restart. They can't use
 MCP servers or tools from other extensions, and they start other agents

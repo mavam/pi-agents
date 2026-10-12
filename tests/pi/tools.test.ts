@@ -47,6 +47,7 @@ function tools(): Map<string, AnyTool> {
   const pi = {
     registerTool: (tool: AnyTool) => registered.set(tool.name, tool),
     getThinkingLevel: () => undefined,
+    getActiveTools: () => [],
   } as unknown as ExtensionAPI;
   const host = {
     ensure: async () => service,

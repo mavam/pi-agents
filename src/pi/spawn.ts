@@ -29,6 +29,7 @@ import {
   inlineSkills,
   type SkillSource,
 } from "../catalog/skills.js";
+import { AGENT_TOOL_NAMES } from "../host/tools.js";
 
 export interface SpawnRequest {
   job: string;
@@ -48,6 +49,8 @@ export interface SpawnSources {
   skills: SkillSource;
   /** Thinking level without one in the request or profile. */
   thinking?: string;
+  /** Tools without any in the request or profile. */
+  tools?: string[];
   /** Working directory and model instead of the parent session's, for
    * helpers that inherit their agent's. */
   cwd?: string;
@@ -56,6 +59,18 @@ export interface SpawnSources {
 
 /** Whether the session trusts its project, which gates project profiles,
  * skills, and context files. */
+/**
+ * The parent's active tools that agents can run, in Pi's order, so agents
+ * inherit the parent's tools; undefined when it has none of them, and
+ * agents get Pi's default tools.
+ */
+export function inheritedTools(
+  active: readonly string[],
+): string[] | undefined {
+  const tools = AGENT_TOOL_NAMES.filter((name) => active.includes(name));
+  return tools.length > 0 ? tools : undefined;
+}
+
 export function isTrusted(ctx: ExtensionContext): boolean {
   return typeof ctx.isProjectTrusted === "function"
     ? ctx.isProjectTrusted()
@@ -204,7 +219,7 @@ export async function resolveSpawn(
   const thinking = request.thinking ?? profile?.thinking ?? sources.thinking;
   if (thinking !== undefined && !isThinkingLevel(thinking))
     throw new AgentError(`Invalid thinking level: ${thinking}`);
-  const tools = request.tools ?? profile?.tools;
+  const tools = request.tools ?? profile?.tools ?? sources.tools;
   const { instructions, ambientSkills } = await instructionsOf(
     profile,
     request.skills,

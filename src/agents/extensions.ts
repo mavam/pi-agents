@@ -38,6 +38,8 @@ export interface AgentExtensions {
   messaging: Extension;
   /** What the messaging tools share with the service. */
   hub: MessagingHub;
+  /** Stop running scripts, after the harness closed. */
+  close(): Promise<void>;
 }
 
 export interface AgentExtensionOptions {
@@ -52,7 +54,7 @@ export interface AgentExtensionOptions {
 export function createAgentExtensions(
   options: AgentExtensionOptions,
 ): AgentExtensions {
-  const tools = createToolsExtension();
+  const { extension: tools, close } = createToolsExtension();
   const prompt = createPromptExtension(options.prompt);
   const hub = new MessagingHub();
   return {
@@ -66,6 +68,7 @@ export function createAgentExtensions(
     }),
     messaging: createMessagingExtension(hub, options.messaging),
     hub,
+    close,
   };
 }
 

@@ -35,10 +35,14 @@ A graph uses the same glyphs: it works until all of its agents finished, then
 shows the state of its last agents: failed if one failed or was skipped,
 interrupted if one was interrupted or stopped, and idle otherwise.
 
-Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, and
-`ls`, along with your context files such as `AGENTS.md` and your
-[skills](./usage.md#skills). They can't use MCP servers or tools from other
-extensions, and they start other agents only when you let them delegate.
+Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`,
+and `codemode`, along with your context files such as `AGENTS.md` and your
+[skills](./usage.md#skills). By default they get `read`, `bash`, `edit`, and
+`write`, like Pi; ask for others by name. `read` shows them images, and
+`codemode` scripts call their other tools, including `delegate_graph` and
+`agent_send`, and pick up where they were after a restart. They can't use
+MCP servers or tools from other extensions, and they start other agents
+only when you let them delegate.
 
 ## Skills
 

@@ -12,9 +12,9 @@ where they stopped.
 > [!CAUTION]
 > Agents can't use MCP servers or tools from other extensions, such as web
 > search. They work with Pi's built-in tools: `read`, `bash`, `edit`, `write`,
-> `grep`, `find`, and `ls`. MCP servers and extension tools live in Pi's
-> session, while agents run on pi-durable. This changes once Pi runs its own
-> session on pi-durable.
+> `grep`, `find`, `ls`, and `codemode`. MCP servers and extension tools live in
+> Pi's session, while agents run on pi-durable. This changes once Pi runs its
+> own session on pi-durable.
 
 <table>
   <tr>
@@ -95,7 +95,7 @@ Pi session, with its own store, kept apart from Pi's session file:
 │ ┊│   ╭─ graph ─────────────────────────╮  agent tools:        │  │
 │ ┊│   │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │  read  bash  edit    │  │
 │ ┊│   │        └─▶ ◉ ui ───┘            │  write  grep         │  │
-│ ┊│   │            └─ ◉ ◉ ◉ helpers     │  find  ls            │  │
+│ ┊│   │            └─ ◉ ◉ ◉ helpers     │  find  ls  codemode  │  │
 │ ┊│   ╰─────────────────────────────────╯                      │  │
 │ ┊│                                                            │  │
 │ ┊│   agents are conversations; turns, tool calls, and graphs  │  │

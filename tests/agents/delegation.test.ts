@@ -43,7 +43,8 @@ function textOf(content: unknown): string {
 /**
  * A faux model for leads and helpers. A message `delegate <json>` calls
  * delegate_graph with that JSON, and a tool result is answered with
- * `merged: <result>`. Other messages answer `done: <first line>`; first
+ * `merged: <result>`. A message `script <code>` calls codemode with that
+ * code. Other messages answer `done: <first line>`; first
  * lines with "fail" fail, and with "slow" (unless `slow` is false) hold
  * until aborted.
  */
@@ -64,6 +65,11 @@ function scripted(options: { slow?: boolean } = {}) {
     if (first.startsWith("delegate "))
       return fauxAssistantMessage(
         [fauxToolCall("delegate_graph", JSON.parse(first.slice(9)))],
+        { stopReason: "toolUse" },
+      );
+    if (first.startsWith("script "))
+      return fauxAssistantMessage(
+        [fauxToolCall("codemode", { code: first.slice(7) })],
         { stopReason: "toolUse" },
       );
     if (first.includes("fail"))
@@ -208,6 +214,28 @@ describe("delegation", () => {
     expect(service.graphs()).toEqual([]);
     expect(service.list()).toEqual([]);
     expect(service.pendingDeliveries()).toEqual([]);
+    expect(await service.liveTasks()).toEqual([]);
+  });
+
+  test("each delegation of a script starts its own helpers", async () => {
+    const service = await open();
+    const call = (name: string) =>
+      `tools.delegate_graph({ agents: [{ name: "${name}", job: "map ${name}" }] })`;
+    const info = await service.spawn(
+      lead(
+        `script return await Promise.all([${call("api")}, ${call("tests")}]);`,
+        { tools: ["codemode"] },
+      ),
+    );
+    const outcome = await service.wait(["lead"]);
+    const text = outcome.agents[0]?.result?.text ?? "";
+    expect(text).toContain("done: map api");
+    expect(text).toContain("done: map tests");
+    const graphs = service.graphs({ includeClosed: true });
+    expect(graphs.map((graph) => graph.owner)).toEqual([info.id, info.id]);
+    expect(
+      graphs.map((graph) => graph.nodes.map((node) => node.name)).sort(),
+    ).toEqual([["lead.api"], ["lead.tests"]]);
     expect(await service.liveTasks()).toEqual([]);
   });
 

@@ -30,7 +30,7 @@ Pi session, with its own store, kept apart from Pi's session file:
 │ ┊│   ╭─ graph ─────────────────────────╮  agent tools:        │  │
 │ ┊│   │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │  read  bash  edit    │  │
 │ ┊│   │        └─▶ ◉ ui ───┘            │  write  grep         │  │
-│ ┊│   │            └─ ◉ ◉ ◉ helpers     │  find  ls            │  │
+│ ┊│   │            └─ ◉ ◉ ◉ helpers     │  find  ls  codemode  │  │
 │ ┊│   ╰─────────────────────────────────╯                      │  │
 │ ┊│                                                            │  │
 │ ┊│   agents are conversations; turns, tool calls, and graphs  │  │

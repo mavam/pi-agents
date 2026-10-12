@@ -395,9 +395,17 @@ loses a delivery but can repeat one.
   and prompt, never reaches agents. Agents stored by earlier versions name
   none and follow the default, which Pi's host sets to pi-agents' tools and
   prompt.
-- Tools: `read`, `write`, `edit`, and `bash` from pi-durable, plus `grep`,
-  `find`, and `ls` adapted from Pi's tool definitions. The default set is
-  Pi's: `read`, `bash`, `edit`, `write`.
+- Tools: `read`, `write`, `edit`, `bash`, and `codemode` from pi-durable,
+  plus `grep`, `find`, and `ls` adapted from Pi's tool definitions. The
+  default set is Pi's: `read`, `bash`, `edit`, `write`. `read` converts and
+  shrinks images with pi-durable's Photon processor, loaded with the first
+  image. `codemode` scripts call the agent's other tools as nested calls,
+  each its own task owned by the script's call, so delegations in one
+  script get their own graphs; pi-durable replays a script after a restart.
+  Its prompt section renders only for agents that have it. Scripts get no
+  `models.*`, whose internal tools agents would have to select as well. One
+  sandbox per host runs the scripts without a deadline, like Pi, and closes
+  with the harness.
 - System prompt: a delegation preamble, tool guidelines, context files such as
   `AGENTS.md`, skills, the working directory and date, and profile
   instructions.

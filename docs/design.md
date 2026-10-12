@@ -440,7 +440,9 @@ loses a delivery but can repeat one.
   directories whose lock names a live process, without taking the lock. Read
   then; an invalid value shows a warning and deletes nothing, and so does an
   absent one.
-- No MCP and no extension tools yet.
+- No MCP and no extension tools yet: pi-durable has no MCP extension
+  (earendil-works/pi#10837) and doesn't host Pi's extensions
+  (earendil-works/pi#10386).
 
 ## Parent tools
 

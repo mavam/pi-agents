@@ -10,11 +10,13 @@ checkpoints every step. When you resume a session, interrupted agents continue
 where they stopped.
 
 > [!CAUTION]
-> Agents can't use MCP servers or tools from other extensions, such as web
-> search. They work with Pi's built-in tools: `read`, `bash`, `edit`, `write`,
-> `grep`, `find`, `ls`, and `codemode`. MCP servers and extension tools live in
-> Pi's session, while agents run on pi-durable. This changes once Pi runs its
-> own session on pi-durable.
+> Agents can't use MCP servers
+> ([earendil-works/pi#10837](https://github.com/earendil-works/pi/issues/10837))
+> or tools from other extensions, such as web search
+> ([earendil-works/pi#10386](https://github.com/earendil-works/pi/issues/10386)).
+> They work with Pi's built-in tools: `read`, `bash`, `edit`, `write`, `grep`,
+> `find`, `ls`, and `codemode`. MCP servers and extension tools live in Pi's
+> session, while agents run on pi-durable.
 
 <table>
   <tr>

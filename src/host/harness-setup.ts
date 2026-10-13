@@ -1,8 +1,7 @@
 /**
- * Harness setup derived from Pi, after Pi's experimental durable coding
- * agent (`experimental/durable/harness-setup.ts` at Pi v1.1.0): Harness settings and
- * execution environments. Pi has configured HTTP already, since agents run
- * in its process.
+ * Harness setup derived from Pi: Harness settings read from Pi's settings,
+ * and execution environments. Pi has configured HTTP already, since agents
+ * run in its process.
  */
 
 import type { Context } from "@earendil-works/chord";

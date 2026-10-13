@@ -91,4 +91,5 @@ Agents' storage lives in `~/.pi/agent/pi-agents/sessions/<session-id>/`,
 with one directory per Pi session, apart from Pi's session file.
 Sessions started with `--no-session` keep agents in memory.
 
-Developers can read [the design document](./design.md) for the mechanics.
+Developers can read [the design document](./design.md) for the design and
+its reasons.

@@ -3,7 +3,7 @@
 Agents of one Pi session send each other one-way messages. This document
 shows how to use messages and states what senders and recipients can rely
 on, what's deliberately left out, and what may come next.
-[docs/design.md](./design.md) describes the mechanics and the UI.
+[docs/design.md](./design.md) explains the design behind them.
 
 ## Using messages
 

@@ -206,6 +206,7 @@ export interface HostOptions {
   delegationLimits?: Partial<DelegationLimits>;
   /** Hooks into messaging between agents. */
   messaging?: MessagingOptions;
+  maxWorkingAgents?: number;
 }
 
 /** What a test host opened for a service: the harness and its anchor. */
@@ -229,6 +230,9 @@ export function testExtensions(options: HostOptions = {}): AgentExtensions {
       ? { delegationLimits: options.delegationLimits }
       : {}),
     ...(options.messaging ? { messaging: options.messaging } : {}),
+    ...(options.maxWorkingAgents
+      ? { maxWorkingAgents: options.maxWorkingAgents }
+      : {}),
   });
 }
 

@@ -1,7 +1,7 @@
 # ⚙️ Configuration
 
-Configure the models agents use, limit concurrent requests, and show agent
-counts in the footer.
+Configure the models agents use, cap how many agents work at once, and show
+agent counts in the footer.
 
 ## Models
 
@@ -14,25 +14,31 @@ Pi learns which names are models from your scoped models, the ones you pick
 with `/scoped-models` or `--models`. Scope the models you want agents to use,
 and Pi picks them by name: "spawn a Luna agent" runs on your scoped Luna.
 
-## Concurrent requests
+## Working agents
 
-Agents work in parallel and each sends its own model requests. A model
-server that handles one request at a time, such as a local LLM, can fall
-behind or time out. Cap how many requests agents send at once in
+Agents work in parallel, and each sends its own model requests. A model
+server that serves one conversation at a time, such as a local LLM with one
+prompt cache, has to reprocess an agent's whole context whenever another
+agent's request comes in between. Cap how many agents work at once in
 `~/.pi/agent/settings.json` or your project's `.pi/settings.json`:
 
 ```json
 {
   "piAgents": {
-    "maxConcurrentRequests": 1
+    "maxWorkingAgents": 1
   }
 }
 ```
 
-Requests over the cap wait their turn in order, and agents keep working on
-tools in the meantime. Agents, graphs, and helpers all share the cap. Your
-session's own requests don't count toward it. Without the setting, requests
-aren't limited. Restart Pi after changing it.
+An agent takes a slot at its first model request and keeps it, tool calls
+included, until its work ends, so its requests follow each other. Agents over
+the cap wait their turn in order and show as working meanwhile. An agent that
+waits for its helpers gives its slot to them until they finish. A message
+that arrives after an agent finished waits for a slot again.
+
+Agents, graphs, and helpers share the cap. Your session's own requests don't
+count toward it. Without the setting, agents aren't capped. Restart Pi after
+changing it.
 
 ## Storage retention
 

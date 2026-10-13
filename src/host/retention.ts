@@ -10,8 +10,8 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { SETTINGS_KEY } from "./limit.js";
 import { lockHolder } from "./lock.js";
+import { readPositiveInteger } from "./settings.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -24,20 +24,8 @@ export function readRetention(settings: unknown): {
   days?: number;
   error?: string;
 } {
-  const section =
-    typeof settings === "object" && settings !== null
-      ? (settings as Record<string, unknown>)[SETTINGS_KEY]
-      : undefined;
-  if (section === undefined) return {};
-  if (typeof section !== "object" || section === null || Array.isArray(section))
-    return { error: `${SETTINGS_KEY} must be an object` };
-  const value = (section as Record<string, unknown>).retentionDays;
-  if (value === undefined) return {};
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1)
-    return {
-      error: `${SETTINGS_KEY}.retentionDays must be a positive integer, not ${JSON.stringify(value)}`,
-    };
-  return { days: value };
+  const { value, error } = readPositiveInteger(settings, "retentionDays");
+  return error ? { error } : value === undefined ? {} : { days: value };
 }
 
 /** The newest mtime of `directory` and the files directly in its `storage/`. */

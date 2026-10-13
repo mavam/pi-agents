@@ -10,6 +10,7 @@
 import type { Extension, Registry } from "@earendil-works/pi-durable";
 import { createPromptExtension, type PromptOptions } from "../host/prompt.js";
 import { createToolsExtension } from "../host/tools.js";
+import { WorkingAgents } from "../host/working.js";
 import {
   createDelegationExtension,
   DELEGATION_LIMITS,
@@ -38,6 +39,9 @@ export interface AgentExtensions {
   messaging: Extension;
   /** What the messaging tools share with the service. */
   hub: MessagingHub;
+  /** The cap on agents that work at once; the host observes its harness
+   * with it. */
+  working?: WorkingAgents;
   /** Stop running scripts, after the harness closed. */
   close(): Promise<void>;
 }
@@ -49,12 +53,22 @@ export interface AgentExtensionOptions {
   /** Tests only: tighter delegation limits. */
   delegationLimits?: Partial<DelegationLimits>;
   messaging?: MessagingOptions;
+  /** How many agents work at once; unlimited when absent. */
+  maxWorkingAgents?: number;
 }
 
 export function createAgentExtensions(
   options: AgentExtensionOptions,
 ): AgentExtensions {
-  const { extension: tools, close } = createToolsExtension();
+  const { extension, close } = createToolsExtension();
+  const working =
+    options.maxWorkingAgents === undefined
+      ? undefined
+      : new WorkingAgents(options.maxWorkingAgents);
+  // Every agent selects the tools, so their hooks hold every request.
+  const tools = working
+    ? { ...extension, hooks: [...(extension.hooks ?? []), ...working.hooks] }
+    : extension;
   const prompt = createPromptExtension(options.prompt);
   const hub = new MessagingHub();
   return {
@@ -65,9 +79,11 @@ export function createAgentExtensions(
       resolve: options.resolveHelper,
       limits: { ...DELEGATION_LIMITS, ...options.delegationLimits },
       extensions: [tools, prompt],
+      ...(working ? { pause: (agentId) => working.pause(agentId) } : {}),
     }),
     messaging: createMessagingExtension(hub, options.messaging),
     hub,
+    ...(working ? { working } : {}),
     close,
   };
 }

@@ -139,6 +139,11 @@ export interface DelegationOptions {
   limits: DelegationLimits;
   /** What helpers select: the extensions of agents, without delegation. */
   extensions: readonly Extension[];
+  /**
+   * The agent waits for its helpers until the returned function is called,
+   * so a cap on working agents lets the helpers work meanwhile.
+   */
+  pause?: (agentId: string) => () => void;
 }
 
 function textResult(
@@ -632,7 +637,12 @@ async function execute(
   const started = await startedReceipt(api, context, graphId);
   if (started)
     await api.details({ receipt: receipt({ graphs: [started] }) }, context);
-  await api.waitForTask(Number(graphId) as TaskId, context);
+  const resume = options.pause?.(id);
+  try {
+    await api.waitForTask(Number(graphId) as TaskId, context);
+  } finally {
+    resume?.();
+  }
   const { text, receipt: helpers } = await report(api, context, graphId);
   return textResult(text, false, helpers);
 }

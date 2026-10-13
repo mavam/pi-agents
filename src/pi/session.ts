@@ -32,15 +32,11 @@ import { AgentError } from "../agents/types.js";
 import { SkillCatalog } from "../catalog/skills.js";
 import { type AgentHarness, openAgentHarness } from "../host/harness.js";
 import { createHarnessSettings } from "../host/harness-setup.js";
-import {
-  limitRequests,
-  RequestLimiter,
-  readRequestLimit,
-} from "../host/limit.js";
 import { acquireLock, type StorageLock } from "../host/lock.js";
 import { resolveModels } from "../host/models.js";
 import { pruneSessions, readRetention } from "../host/retention.js";
 import { openStorage, type Storage } from "../host/storage.js";
+import { readWorkingLimit } from "../host/working.js";
 import { isTrusted, resolveHelper } from "./spawn.js";
 
 function sessionsRoot(): string {
@@ -195,13 +191,11 @@ export class SessionHost {
     let service: AgentService | undefined;
     try {
       const settingsManager = SettingsManager.create(ctx.cwd, getAgentDir());
-      const { limit, error } = readRequestLimit(settingsManager.getSettings());
-      if (error) this.report(new Error(`${error}; requests aren't limited`));
-      const models = limitRequests(
-        await resolveModels(ctx.modelRegistry),
-        new RequestLimiter(limit),
-      );
+      const { limit, error } = readWorkingLimit(settingsManager.getSettings());
+      if (error) this.report(new Error(`${error}; agents aren't capped`));
+      const models = await resolveModels(ctx.modelRegistry);
       const extensions = createAgentExtensions({
+        ...(limit === undefined ? {} : { maxWorkingAgents: limit }),
         prompt: { trusted: () => this.trusted, skills: this.skills.get },
         resolveHelper: (request, defaults) => {
           const current = this.ctx;

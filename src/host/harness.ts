@@ -69,6 +69,8 @@ export async function openAgentHarness(
       },
       CONTEXT,
     );
+    // Before any work starts, so the cap sees every run end.
+    const unobserve = options.extensions.working?.observe(harness);
     // Sessions stored by earlier versions anchor their graphs here too.
     const anchor = await harness.root(CONTEXT);
     const opened = harness;
@@ -79,6 +81,7 @@ export async function openAgentHarness(
         try {
           await opened.close(CONTEXT);
         } finally {
+          unobserve?.();
           try {
             await envs.cleanup(CONTEXT);
           } finally {

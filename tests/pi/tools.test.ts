@@ -496,21 +496,24 @@ describe("call results", () => {
     const timedOut = {
       details: (await run("agent_wait", waitArgs)).details,
     };
+    // Token counts depend on the prompt's context, so only their place counts.
+    const drawWait = (result: { details: unknown }) =>
+      drawFrame(wait, waitArgs, result).map((line) =>
+        line.replace(/ \d+(\.\d+)?k$/, " <tokens>"),
+      );
     const gaveUp = [
       "✦ wait audit timeout=0.3s",
       "  ⊠ audit graph 1/2",
-      "  ├─ ● map faux-1 2.8k",
+      "  ├─ ● map faux-1 <tokens>",
       "  └─ ⊠ report after map faux-1",
       "  Timed out",
     ];
-    expect(drawFrame(wait, waitArgs, timedOut)).toEqual(gaveUp);
+    expect(drawWait(timedOut)).toEqual(gaveUp);
     // Both replay the same after the agents finished.
     release?.();
     await run("agent_wait", { names: ["audit"] });
     expect(drawFrame(spawn, args, structuredClone(started))).toEqual(tree);
-    expect(drawFrame(wait, waitArgs, structuredClone(timedOut))).toEqual(
-      gaveUp,
-    );
+    expect(drawWait(structuredClone(timedOut))).toEqual(gaveUp);
   });
 
   test("collapsed lines end in an ellipsis; expanded ones wrap", () => {

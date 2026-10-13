@@ -41,7 +41,7 @@ export class AgentStatePublisher {
   private sessionId: string | undefined;
   private instanceId: string | undefined;
   private sequence = 0;
-  private lastState: string | undefined;
+  private lastFingerprint: string | undefined;
   private disposed = false;
   private readonly unsubscribe: () => void;
 
@@ -74,7 +74,7 @@ export class AgentStatePublisher {
     this.sessionId = sessionId;
     this.instanceId = randomUUID();
     this.sequence = 0;
-    this.lastState = undefined;
+    this.lastFingerprint = undefined;
     this.update(true);
   }
 
@@ -91,9 +91,9 @@ export class AgentStatePublisher {
       .sort((left, right) =>
         left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
       );
-    const state = JSON.stringify(agents);
-    if (!force && state === this.lastState) return;
-    this.lastState = state;
+    const fingerprint = JSON.stringify(agents);
+    if (!force && fingerprint === this.lastFingerprint) return;
+    this.lastFingerprint = fingerprint;
     this.publish(Object.freeze(agents));
   }
 
@@ -108,7 +108,7 @@ export class AgentStatePublisher {
     // Clear before emitting so requests or repeated stops cannot resurrect it.
     this.sessionId = undefined;
     this.instanceId = undefined;
-    this.lastState = undefined;
+    this.lastFingerprint = undefined;
     this.events.emit(
       AGENTS_STATE_EVENT,
       Object.freeze({

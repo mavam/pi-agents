@@ -111,7 +111,13 @@ type AgentsStateSnapshot = {
   agents: readonly {
     id: string;
     name: string;
-    state: "working" | "waiting" | "idle" | "failed" | "interrupted" | "skipped";
+    state:
+      | "working"
+      | "waiting"
+      | "idle"
+      | "failed"
+      | "interrupted"
+      | "skipped";
     closed: boolean;
   }[];
 };

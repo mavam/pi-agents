@@ -126,7 +126,6 @@ export class Delivery {
     const failures: AgentDelivery[] = [];
     const answers = new Map<number, AgentDelivery>();
     for (const [rid, outcome] of outcomes) {
-      if (outcome.kind === "aborted") continue;
       if (outcome.kind === "failed") {
         failures.push({
           kind: "agent",

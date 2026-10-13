@@ -180,10 +180,16 @@ ID, so a crash between the two resubmits it idempotently.
 
 When a parent request settles, a wait that covers the agent consumes the
 result; otherwise the result is posted to the parent once it takes results.
-Aborted requests deliver nothing, and requests answered by the same entry
-deliver once. A graph delivers once, with its end nodes' results, and its
-agents deliver nothing of their own meanwhile. Turns the user starts from
-the attach view never deliver.
+Requests answered by the same entry deliver once. A graph delivers once,
+with its end nodes' results, and its agents deliver nothing of their own
+meanwhile. Turns the user starts from the attach view don't deliver, except
+to settle an interrupted request.
+
+Interrupting a request doesn't settle it. Users interrupt to correct an
+agent, not to withdraw its job, so the request stays open and the agent's
+next answer settles it, whoever started that turn. Only answers after the
+interrupted request count, so an earlier answer never stands in for it.
+Stopping the agent withdraws its open requests and delivers nothing.
 
 Results reach the parent whole. No budget cuts what the model reads; limits
 wait until large results show what a good mechanism looks like.

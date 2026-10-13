@@ -150,7 +150,10 @@ rendering. The editor then talks to the agent:
 | Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. |
 
 Messages you send while attached stay between you and the agent. Their
-results don't post into the parent conversation.
+results don't post into the parent conversation, with one exception: when
+you interrupt an agent that works for Pi and then steer it to finish, its
+next answer goes to Pi, since Pi still expects one. Stop the agent instead
+if Pi should get nothing.
 
 You can attach to any agent, not only the ones in the panel. `/agents` shows
 how long each agent and graph ran, from its start until it last finished;

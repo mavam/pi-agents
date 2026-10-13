@@ -80,7 +80,6 @@ export interface AgentResult {
 /** What a settled parent request produced. */
 export type RequestOutcome =
   | { kind: "answered"; result: AgentResult }
-  | { kind: "aborted" }
   | { kind: "failed"; reason: string };
 
 /** Live activity of a working agent. */
@@ -303,7 +302,7 @@ export interface AgentDelivery {
   agentId: string;
   name: string;
   requestIds: string[];
-  outcome: Exclude<RequestOutcome, { kind: "aborted" }>;
+  outcome: RequestOutcome;
 }
 
 /** A finished graph whose result the parent still expects. */

@@ -9,7 +9,12 @@ import type {
   SubmissionRecord,
 } from "@earendil-works/pi-durable";
 import { CONTEXT, conversationId } from "./context.js";
-import { ASSISTANT_KIND, GENERATION_KIND, outcomeOf } from "./derive.js";
+import {
+  ASSISTANT_KIND,
+  GENERATION_KIND,
+  outcomeOf,
+  type SubmissionOutcome,
+} from "./derive.js";
 import { messageSubmission } from "./messaging.js";
 import {
   type AgentRecord,
@@ -285,7 +290,7 @@ export class AgentStore {
     agentId: string,
     name: string,
     rid: string,
-  ): Promise<RequestOutcome | undefined> {
+  ): Promise<SubmissionOutcome | undefined> {
     return this.harness.commit(async (tx) => {
       const submission = await tx.submissionByRequest(
         conversationId(agentId),

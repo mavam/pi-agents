@@ -177,26 +177,55 @@ export function resultOf(
   };
 }
 
-/** What a submission settled with; undefined while it is still open. */
+/**
+ * What a submission settled with, or `interrupted` when its turn was
+ * aborted: the request then stays open for a later answer, after the
+ * submission `since`. Undefined while the submission is still open.
+ */
+export type SubmissionOutcome =
+  | RequestOutcome
+  | { kind: "interrupted"; since: number };
+
 export function outcomeOf(
   submission: SubmissionRecord | undefined,
   answer: EntryRecord | undefined,
   agentId: string,
   name: string,
-): RequestOutcome | undefined {
+): SubmissionOutcome | undefined {
   if (submission?.type !== "input") return undefined;
+  const interrupted: SubmissionOutcome = {
+    kind: "interrupted",
+    since: Number(submission.id),
+  };
   if (submission.status === "done") {
     const result = resultOf(answer, agentId, name);
     if (!result) return { kind: "failed", reason: "answer missing" };
-    if (result.stopReason === "aborted") return { kind: "aborted" };
+    if (result.stopReason === "aborted") return interrupted;
     return { kind: "answered", result };
   }
   if (submission.status === "unanswered") {
     return submission.reason === "aborted"
-      ? { kind: "aborted" }
+      ? interrupted
       : { kind: "failed", reason: submission.reason };
   }
   return undefined;
+}
+
+/**
+ * An interrupted request's outcome: the agent's latest answer once a later
+ * turn finished with one, for example after the user resumed the agent.
+ * Interrupting is a correction, not a cancellation; only stopping the agent
+ * withdraws the request. Undefined while the agent runs or has no such answer.
+ */
+export function resumedOutcome(
+  since: number,
+  running: boolean,
+  latest: AgentResult | undefined,
+): RequestOutcome | undefined {
+  if (running || !latest || latest.entryId <= since) return undefined;
+  if (latest.stopReason !== "stop" && latest.stopReason !== "length")
+    return undefined;
+  return { kind: "answered", result: latest };
 }
 
 /**

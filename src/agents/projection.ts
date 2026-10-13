@@ -18,6 +18,7 @@ import {
   deriveGraphState,
   deriveState,
   resultOf,
+  resumedOutcome,
   summarizeUsage,
   sumUsage,
 } from "./derive.js";
@@ -174,7 +175,8 @@ export class Projection {
     return [...all];
   }
 
-  /** Recompute one agent's info; returns aborted request IDs to drop. */
+  /** Recompute one agent's info; returns request IDs whose answer was
+   * already delivered, to drop. */
   private async compute(id: string, record: AgentRecord): Promise<string[]> {
     const cid = conversationId(id);
     const [live, usage, agent] = await Promise.all([
@@ -182,28 +184,32 @@ export class Projection {
       this.harness.snapshot(UsageDoc, cid, CONTEXT),
       this.harness.snapshot(AgentDoc, cid, CONTEXT),
     ]);
+    const result: AgentResult | undefined = resultOf(
+      this.observer.lastAssistantOf(id),
+      id,
+      record.name,
+    );
     const outcomes = new Map<string, RequestOutcome>();
-    const aborted: string[] = [];
+    const delivered: string[] = [];
     for (const rid of Object.keys(record.requests)) {
-      const outcome = await this.store.requestOutcome(id, record.name, rid);
+      const settled = await this.store.requestOutcome(id, record.name, rid);
+      // An interrupted request stays open until a later answer settles it.
+      const outcome =
+        settled?.kind === "interrupted"
+          ? resumedOutcome(settled.since, live?.run !== undefined, result)
+          : settled;
       if (!outcome) continue;
-      if (outcome.kind === "aborted") aborted.push(rid);
-      else if (
+      if (
         outcome.kind === "answered" &&
         record.delivered.includes(outcome.result.entryId)
       )
-        aborted.push(rid);
+        delivered.push(rid);
       else outcomes.set(rid, outcome);
     }
     if (outcomes.size > 0) this.settled.set(id, outcomes);
     else this.settled.delete(id);
 
     const jobAnswer = await this.jobAnswer(id, record);
-    const result: AgentResult | undefined = resultOf(
-      this.observer.lastAssistantOf(id),
-      id,
-      record.name,
-    );
     const state =
       (live?.run === undefined
         ? await this.nodeState(id, record, result)
@@ -274,7 +280,7 @@ export class Projection {
         ? { queued: true }
         : {}),
     });
-    return aborted;
+    return delivered;
   }
 
   /**

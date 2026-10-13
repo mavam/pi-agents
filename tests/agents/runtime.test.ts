@@ -1,13 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { createModels } from "@earendil-works/pi-ai/models";
-import {
-  type FauxResponseStep,
-  fauxAssistantMessage,
-  fauxProvider,
-  fauxToolCall,
-} from "@earendil-works/pi-ai/providers/faux";
 import type { AgentService } from "../../src/agents/service.js";
 import {
   closeService,
@@ -51,47 +42,7 @@ function endedAt(service: AgentService, name: string): number {
   return ended;
 }
 
-/** A 1x1 red BMP, which `read` sends only once converted to PNG. */
-function bmp(): Buffer {
-  const file = Buffer.alloc(58);
-  file.write("BM", 0);
-  file.writeUInt32LE(58, 2);
-  file.writeUInt32LE(54, 10);
-  file.writeUInt32LE(40, 14);
-  file.writeInt32LE(1, 18);
-  file.writeInt32LE(1, 22);
-  file.writeUInt16LE(1, 26);
-  file.writeUInt16LE(24, 28);
-  file.writeUInt32LE(4, 34);
-  file.set([0, 0, 255], 54);
-  return file;
-}
-
 describe("runtime", () => {
-  test("agents read images", async () => {
-    const path = join(tempDir(), "red.bmp");
-    writeFileSync(path, bmp());
-    const faux = fauxProvider();
-    const models = createModels();
-    models.setProvider(faux.provider);
-    const step: FauxResponseStep = (context) => {
-      const last = context.messages.at(-1);
-      if (last?.role !== "toolResult")
-        return fauxAssistantMessage([fauxToolCall("read", { path })], {
-          stopReason: "toolUse",
-        });
-      const images = last.content.flatMap((block) =>
-        block.type === "image" ? [block.mimeType] : [],
-      );
-      return fauxAssistantMessage(`saw ${images.join(", ") || "nothing"}`);
-    };
-    faux.setResponses([step, step]);
-    const service = await open({ models });
-    await service.spawn({ job: "look", name: "w", cwd: ".", model: MODEL });
-    const outcome = await service.wait(["w"]);
-    expect(outcome.agents[0]?.result?.text).toBe("saw image/png");
-  });
-
   test("an agent ends when its answer streamed, also after reopening", async () => {
     const directory = tempDir();
     // About 300ms of streaming after the answer's timestamp.

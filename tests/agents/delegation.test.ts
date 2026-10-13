@@ -447,49 +447,4 @@ describe("delegation durability", () => {
     expect(second.prompts).toEqual(["slow b"]);
     expect(first.prompts.filter((prompt) => prompt === "a")).toHaveLength(1);
   });
-
-  test("a restart mid-script resumes the script without repeating its delegations", async () => {
-    const directory = tempDir();
-    const call = (name: string, job: string) =>
-      `await tools.delegate_graph({ agents: [{ name: "${name}", job: "${job}" }] })`;
-    const first = scripted();
-    const before = await open({
-      storage: await jsonlStorage(directory),
-      models: first.models,
-    });
-    await before.spawn(
-      lead(
-        `script const a = ${call("a", "a")}; const b = ${call("b", "slow b")}; return [a, b];`,
-        { tools: ["codemode"] },
-      ),
-    );
-    await until(
-      () =>
-        before.get("lead.a")?.result?.text === "done: a" &&
-        before.get("lead.b")?.state === "working" &&
-        before.graphs({ includeClosed: true }).length === 2,
-    );
-    const graphs = before
-      .graphs({ includeClosed: true })
-      .map((graph) => graph.id);
-
-    const second = scripted({ slow: false });
-    const after = await reopen(before, {
-      storage: await jsonlStorage(directory),
-      models: second.models,
-    });
-    await until(() => after.pendingDeliveries().length === 1);
-    const [delivery] = after.pendingDeliveries();
-    if (delivery?.kind !== "agent" || delivery.outcome.kind !== "answered")
-      throw new Error("expected the lead's answer");
-    expect(delivery.outcome.result.text).toContain("done: a");
-    expect(delivery.outcome.result.text).toContain("slow b");
-    // The script's graphs are the same; only b's interrupted answer ran
-    // again, and neither a nor the lead's job did.
-    expect(
-      after.graphs({ includeClosed: true }).map((graph) => graph.id),
-    ).toEqual(graphs);
-    expect(second.prompts).toEqual(["slow b"]);
-    expect(first.prompts.filter((prompt) => prompt === "a")).toHaveLength(1);
-  });
 });

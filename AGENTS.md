@@ -29,6 +29,9 @@ manually.
 ## Tests
 
 - Test documented guarantees and user-visible behavior, about one test each.
+- Don't test what Pi or pi-durable already guarantee, such as reading images
+  or replaying codemode scripts; test only pi-agents' own behavior and that
+  it uses upstream features at all.
 - Don't commit storage fixtures or fakes of Pi or pi-durable internals.
 - Delete tests together with the behavior they cover.
 

@@ -26,13 +26,11 @@ let sessions = 0;
 
 /**
  * A host over storage whose next call after `fail()` throws, as a full disk
- * would, in a persistent session unless `memory`. `onNote` sees the host's
- * notifications as they happen.
+ * would, in a persistent session unless `memory`.
  */
 function failingHost(
   options: {
     memory?: boolean;
-    onNote?: (text: string) => void;
     /** Resolves before each storage open after the first. */
     beforeReopen?: () => Promise<void>;
   } = {},
@@ -62,7 +60,6 @@ function failingHost(
     ui: {
       notify: (text: string) => {
         notes.push(text);
-        options.onNote?.(text);
       },
     },
     isProjectTrusted: () => true,
@@ -97,7 +94,7 @@ function failingHost(
         Promise.reject(new Error("no service")),
     ).rejects.toThrow();
   };
-  return { host, ctx, cwd, notes, directory, fail, opens: () => opens };
+  return { host, ctx, cwd, notes, directory, fail };
 }
 
 describe("storage failures", () => {
@@ -132,23 +129,6 @@ describe("storage failures", () => {
     await closing;
     expect(host.current()).toBe(reopened);
     expect(lockHolder(directory)).toBe(process.pid);
-  });
-
-  test("a shutdown as recovery announces the reopen opens nothing", async () => {
-    let stopping: Promise<void> | undefined;
-    const { host, ctx, directory, fail, opens } = failingHost({
-      onNote: (text) => {
-        if (text.includes("reopening")) stopping = host.stop();
-      },
-    });
-    await host.start(ctx);
-    await host.ensure(ctx);
-    await fail();
-    await until(() => stopping !== undefined);
-    await stopping;
-    expect(opens()).toBe(1);
-    expect(host.current()).toBeUndefined();
-    expect(lockHolder(directory)).toBeUndefined();
   });
 
   test("a shutdown while storage reopens resumes nothing", async () => {

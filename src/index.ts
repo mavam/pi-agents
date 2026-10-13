@@ -9,6 +9,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { registerCommands } from "./pi/commands.js";
+import { AgentStatePublisher } from "./pi/events.js";
 import { registerMessageRenderers } from "./pi/messages.js";
 import { PiParent } from "./pi/parent.js";
 import { buildSystemPromptAppendix, profileCatalog } from "./pi/prompt.js";
@@ -26,6 +27,10 @@ import { AgentPanel } from "./ui/panel.js";
 export default function agentExtension(pi: ExtensionAPI): void {
   const parent = new PiParent(pi);
   const host = new SessionHost(parent);
+  const state = new AgentStatePublisher(
+    pi.events,
+    () => host.current()?.list() ?? [],
+  );
   const panel = new AgentPanel(host);
   const focus = new FocusController(host, panel);
   const transcript = new MessageTranscript(pi);
@@ -43,6 +48,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     parent.notify();
   };
   host.subscribe(() => {
+    state.update();
     panel.update();
     footer.update();
     // Messages sent before messaging was turned off still get their cards,
@@ -101,6 +107,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
     panel.update(ctx);
     transcript.start(ctx);
     await host.start(ctx);
+    state.start(ctx.sessionManager.getSessionId());
     panel.update(ctx);
     footer.update();
     parent.notify();
@@ -109,6 +116,7 @@ export default function agentExtension(pi: ExtensionAPI): void {
   pi.on("agent_start", (_event, ctx) => track(ctx));
 
   pi.on("session_shutdown", async () => {
+    state.dispose();
     focus.dispose();
     panel.dispose();
     parent.clear();

@@ -6,6 +6,10 @@
  * has agents opens at session start, so interrupted work resumes; otherwise
  * the service opens on first use. Ephemeral sessions (`--no-session`) cannot
  * resume, so their agents live in memory.
+ *
+ * A storage error closes the harness. The host then pauses the agents,
+ * says so, and reopens the harness, which resumes their work; a second
+ * failure within a minute leaves them paused until the next use.
  */
 
 import * as fs from "node:fs";
@@ -41,6 +45,18 @@ function sessionDirectory(sessionId: string): string {
   return path.join(sessionsRoot(), sessionId);
 }
 
+/** How soon after a storage failure the host reopens again by itself. */
+const REOPEN_INTERVAL_MS = 60_000;
+
+export interface SessionHostOptions {
+  /** Tests only: open the storage of a directory, or memory without one. */
+  openStorage?: (directory: string | undefined) => Promise<Storage>;
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function isPersistent(ctx: ExtensionContext): boolean {
   return ctx.sessionManager.getSessionFile() !== undefined;
 }
@@ -56,12 +72,17 @@ export class SessionHost {
   private readonly listeners = new Set<() => void>();
   private trusted = true;
   private pruned = false;
+  /** When storage last failed, to reopen by itself at most once a minute. */
+  private failedAt: number | undefined;
   /** The skills agents can use, shared by spawns and agent prompts. */
   readonly skills = new SkillCatalog();
   /** Why agents are unavailable in this session, if they are. */
   unavailable: string | undefined;
 
-  constructor(private readonly parent: Parent) {}
+  constructor(
+    private readonly parent: Parent,
+    private readonly options: SessionHostOptions = {},
+  ) {}
 
   /** Session start: remember the context and resume existing agents. */
   async start(ctx: ExtensionContext): Promise<void> {
@@ -142,13 +163,13 @@ export class SessionHost {
       }
       lock = acquired;
       try {
-        storage = await openStorage(directory);
+        storage = await (this.options.openStorage ?? openStorage)(directory);
       } catch (error) {
         lock.release();
         throw error;
       }
     } else {
-      storage = await openStorage(undefined);
+      storage = await (this.options.openStorage ?? openStorage)(undefined);
     }
     let harness: AgentHarness | undefined;
     try {
@@ -188,6 +209,7 @@ export class SessionHost {
       this.harness = harness;
       this.lock = lock;
       this.unsubscribe = service.subscribe(() => this.emit());
+      this.watchFailure(harness);
       this.emit();
       return service;
     } catch (error) {
@@ -200,13 +222,54 @@ export class SessionHost {
     }
   }
 
+  /** Recover once the harness closes because its storage failed. */
+  private watchFailure(harness: AgentHarness): void {
+    void harness.harness.closed.then((end) => {
+      if (end.reason === "failed" && this.harness === harness)
+        void this.recover(end.error);
+    });
+  }
+
+  /**
+   * Pause the agents and reopen their storage, which resumes interrupted
+   * work, unless it failed within the last minute too: then the next use
+   * reopens it.
+   */
+  private async recover(error: unknown): Promise<void> {
+    const ctx = this.ctx;
+    try {
+      await this.stop();
+    } catch {
+      // The failed harness has nothing left to close.
+    }
+    const now = Date.now();
+    const again =
+      this.failedAt !== undefined && now - this.failedAt < REOPEN_INTERVAL_MS;
+    this.failedAt = now;
+    if (again || !ctx) {
+      this.report(
+        new Error(
+          `Agent storage failed again (${message(error)}); agents stay paused until you use them`,
+        ),
+      );
+      return;
+    }
+    this.report(
+      new Error(
+        `Agent storage failed (${message(error)}); reopening it, and agents continue`,
+      ),
+    );
+    try {
+      await this.ensure(ctx);
+    } catch (reopen) {
+      this.report(reopen);
+    }
+  }
+
   private report(error: unknown): void {
     const ctx = this.ctx;
     if (!ctx?.hasUI) return;
-    ctx.ui.notify(
-      `pi-agents: ${error instanceof Error ? error.message : String(error)}`,
-      "warning",
-    );
+    ctx.ui.notify(`pi-agents: ${message(error)}`, "warning");
   }
 
   subscribe(listener: () => void): () => void {

@@ -76,9 +76,15 @@ export async function openAgentHarness(
       harness: opened,
       anchor,
       close: async () => {
-        await opened.close(CONTEXT);
-        await envs.cleanup(CONTEXT);
-        await options.extensions.close();
+        try {
+          await opened.close(CONTEXT);
+        } finally {
+          try {
+            await envs.cleanup(CONTEXT);
+          } finally {
+            await options.extensions.close();
+          }
+        }
       },
     };
   } catch (error) {

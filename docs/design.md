@@ -386,6 +386,11 @@ loses a delivery but can repeat one.
 - A lock file gives one Pi process ownership of a session's agents. Another
   process shows a notice and runs without agents.
 - A session without a file (`--no-session`) keeps its agents in memory.
+- A storage error closes the harness (pi-durable fails the whole Session).
+  The host pauses the agents, notifies the user, and reopens the harness
+  from storage, which resumes interrupted work like a restart. A second
+  failure within a minute leaves the agents paused until the next use
+  reopens them (`src/pi/session.ts`).
 
 ## Agent runtime
 

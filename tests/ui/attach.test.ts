@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import {
+  displayedResult,
   openAgentPane,
   queuedTexts,
   restoredEditorText,
@@ -10,6 +12,27 @@ describe("attach view", () => {
   test("hides the user marker the agent sees", () => {
     expect(withoutUserPrefix("[user] hello")).toBe("hello");
     expect(withoutUserPrefix("review src")).toBe("review src");
+  });
+
+  test("shows a failed command's exit code as Pi does", () => {
+    const result = {
+      role: "toolResult",
+      toolCallId: "1",
+      toolName: "bash",
+      content: [
+        { type: "text", text: "out\n" },
+        {
+          type: "text",
+          text: "<harness>\n[error] Command exited with code 3\n</harness>",
+        },
+      ],
+      isError: true,
+      timestamp: 0,
+    } as ToolResultMessage;
+    expect(displayedResult(result).content).toEqual([
+      { type: "text", text: "out\n" },
+      { type: "text", text: "\nCommand exited with code 3" },
+    ]);
   });
 
   test("restores queued messages, steering first, before the draft", () => {

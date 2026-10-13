@@ -76,6 +76,11 @@ agent gets its job twice. A message from one agent to another reaches its
 recipient once, also when Pi crashes while sending it. A tool call that
 can't safely repeat reports the interruption to the agent instead.
 
+If writing to agent storage fails, for example because the disk is full,
+agents pause and Pi tells you. The storage then reopens, and agents continue
+as after a restart. If it fails again within a minute, agents stay paused
+until you next use them.
+
 Agents of sessions started with `--no-session` live in memory and end with
 the session.
 

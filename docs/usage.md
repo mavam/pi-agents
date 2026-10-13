@@ -151,9 +151,11 @@ rendering. The editor then talks to the agent:
 
 Messages you send while attached stay between you and the agent. Their
 results don't post into the parent conversation, with one exception: when
-you interrupt an agent that works for Pi and then steer it to finish, its
-next answer goes to Pi, since Pi still expects one. Stop the agent instead
-if Pi should get nothing.
+you interrupt an agent while it works on a job or message from Pi and then
+steer it to finish, its next answer goes to Pi, since Pi still expects one.
+Stop the agent instead if Pi should get nothing. A graph's agent is
+different: interrupting it ends its part in the graph, which goes on
+without it.
 
 You can attach to any agent, not only the ones in the panel. `/agents` shows
 how long each agent and graph ran, from its start until it last finished;

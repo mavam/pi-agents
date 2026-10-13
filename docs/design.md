@@ -187,9 +187,13 @@ to settle an interrupted request.
 
 Interrupting a request doesn't settle it. Users interrupt to correct an
 agent, not to withdraw its job, so the request stays open and the agent's
-next answer settles it, whoever started that turn. Only answers after the
-interrupted request count, so an earlier answer never stands in for it.
-Stopping the agent withdraws its open requests and delivers nothing.
+first finished answer after an input from the request on settles it,
+whoever started that turn. An answer to a turn that began before the
+request entered the conversation never stands in for it, and since entries
+never change, the settling answer stays the same through later turns and
+restarts. Stopping the agent withdraws its open requests and delivers
+nothing. A graph agent's job is not a parent request: interrupting it ends
+its node as interrupted.
 
 Results reach the parent whole. No budget cuts what the model reads; limits
 wait until large results show what a good mechanism looks like.

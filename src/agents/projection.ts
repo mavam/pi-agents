@@ -18,7 +18,6 @@ import {
   deriveGraphState,
   deriveState,
   resultOf,
-  resumedOutcome,
   summarizeUsage,
   sumUsage,
 } from "./derive.js";
@@ -59,6 +58,9 @@ export class Projection {
   private graphRecords: Record<string, GraphRecord> = {};
   private readonly agentInfos = new Map<string, AgentInfo>();
   private readonly graphInfoById = new Map<string, GraphInfo>();
+  /** Answers that settled interrupted requests, by agent and request ID;
+   * entries never change, so neither does a found answer. */
+  private readonly resumed = new Map<string, AgentResult>();
   /** Settled outcomes of undelivered parent requests, per agent. */
   private readonly settled = new Map<string, Map<string, RequestOutcome>>();
   private readonly harness: Harness;
@@ -117,6 +119,7 @@ export class Projection {
 
   deleteSettled(agentId: string, rid: string): void {
     this.settled.get(agentId)?.delete(rid);
+    this.resumed.delete(`${agentId}:${rid}`);
   }
 
   async reload(): Promise<void> {
@@ -175,6 +178,24 @@ export class Projection {
     return [...all];
   }
 
+  /** A parent request's outcome. An interrupted request stays open until a
+   * later answer settles it. */
+  private async outcome(
+    id: string,
+    name: string,
+    rid: string,
+  ): Promise<RequestOutcome | undefined> {
+    const key = `${id}:${rid}`;
+    const known = this.resumed.get(key);
+    if (known) return { kind: "answered", result: known };
+    const settled = await this.store.requestOutcome(id, name, rid);
+    if (settled?.kind !== "interrupted") return settled;
+    const result = await this.store.resumedAnswer(id, name, settled.since);
+    if (!result) return undefined;
+    this.resumed.set(key, result);
+    return { kind: "answered", result };
+  }
+
   /** Recompute one agent's info; returns request IDs whose answer was
    * already delivered, to drop. */
   private async compute(id: string, record: AgentRecord): Promise<string[]> {
@@ -192,12 +213,7 @@ export class Projection {
     const outcomes = new Map<string, RequestOutcome>();
     const delivered: string[] = [];
     for (const rid of Object.keys(record.requests)) {
-      const settled = await this.store.requestOutcome(id, record.name, rid);
-      // An interrupted request stays open until a later answer settles it.
-      const outcome =
-        settled?.kind === "interrupted"
-          ? resumedOutcome(settled.since, live?.run !== undefined, result)
-          : settled;
+      const outcome = await this.outcome(id, record.name, rid);
       if (!outcome) continue;
       if (
         outcome.kind === "answered" &&

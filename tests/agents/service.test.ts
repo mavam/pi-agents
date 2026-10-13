@@ -8,10 +8,13 @@ import {
 import type { AgentService } from "../../src/agents/service.js";
 import { WaitInterrupted } from "../../src/agents/types.js";
 import {
+  briefly,
   closeService,
   createFaux,
   createGatedFaux,
+  heldUntilAborted,
   jsonlStorage,
+  lastUserText,
   MODEL,
   openService,
   parentOf,
@@ -201,6 +204,42 @@ describe("AgentService", () => {
     await until(() => service.get("w")?.closed === true);
     expect(service.pendingDeliveries()).toEqual([]);
     expect(service.list()).toEqual([]);
+  });
+
+  test("an earlier answer never settles an interrupted request", async () => {
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    faux.setResponses(
+      Array.from({ length: 20 }, () => async (context, options) => {
+        const prompt = lastUserText(context);
+        if (prompt.includes("slow")) await briefly(options?.signal);
+        if (prompt.includes("block")) await heldUntilAborted(options?.signal);
+        return fauxAssistantMessage(`done: ${prompt}`);
+      }),
+    );
+    const service = await open({ models });
+    await service.spawn({ job: "slow", name: "w", cwd: ".", model: MODEL });
+    await until(() => service.get("w")?.state === "working");
+    // Queued while the job runs: admitted before the job's answer.
+    await service.send("w", "block", "followUp");
+    await until(() => service.get("w")?.result?.text === "done: slow");
+    await until(() => service.get("w")?.state === "working");
+    await service.interrupt("w");
+    await until(() => service.get("w")?.state === "interrupted");
+    await until(() => service.pendingDeliveries().length === 1);
+    const [job] = service.pendingDeliveries();
+    expect(job?.requestIds).toEqual(["parent:1"]);
+    if (job) await service.acknowledge(job);
+    expect(service.get("w")?.closed).toBe(false);
+
+    await service.prompt("w", "continue", "auto");
+    await until(() => service.pendingDeliveries().length === 1);
+    const [resumed] = service.pendingDeliveries();
+    expect(resumed?.requestIds).toEqual(["parent:2"]);
+    expect(
+      resumed?.outcome.kind === "answered" && resumed.outcome.result.text,
+    ).toBe("done: [user] continue");
   });
 
   test("interrupt aborts work without delivering", async () => {

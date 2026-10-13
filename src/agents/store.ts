@@ -13,6 +13,7 @@ import {
   ASSISTANT_KIND,
   GENERATION_KIND,
   outcomeOf,
+  resumedAnswer,
   type SubmissionOutcome,
 } from "./derive.js";
 import { messageSubmission } from "./messaging.js";
@@ -27,7 +28,12 @@ import {
   type ParentRequest,
   requestId,
 } from "./records.js";
-import { AgentError, type GraphNode, type RequestOutcome } from "./types.js";
+import {
+  AgentError,
+  type AgentResult,
+  type GraphNode,
+  type RequestOutcome,
+} from "./types.js";
 
 export class AgentStore {
   private readonly harness: Harness;
@@ -358,6 +364,33 @@ export class AgentStore {
           ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
         }
       : null;
+  }
+
+  /** The answer that settles a request interrupted at `since`, if any. */
+  async resumedAnswer(
+    agentId: string,
+    name: string,
+    since: number,
+  ): Promise<AgentResult | undefined> {
+    const conversation = await this.harness.conversation(
+      conversationId(agentId),
+      CONTEXT,
+    );
+    if (!conversation) return undefined;
+    const entries: EntryRecord[] = [];
+    let cursor: Parameters<typeof conversation.entries>[2];
+    for (;;) {
+      const page = await conversation.entries(
+        { minEntryId: since as EntryRecord["id"], order: "ascending" },
+        64,
+        cursor,
+        CONTEXT,
+      );
+      entries.push(...page.items);
+      const found = resumedAnswer(entries, since, agentId, name);
+      if (found || page.next === undefined) return found;
+      cursor = page.next;
+    }
   }
 
   /** The newest assistant entry, paging newest-first through the conversation. */

@@ -16,10 +16,11 @@ conversations. Graphs compose them: agents that pass results to each other.
 - The host owns the harness. The core runs on whatever harness and anchor
   its host hands it, so it can later run inside Pi's durable session worker
   with a different host and the same core.
-- Follow Pi's experimental durable code (`packages/coding-agent/src/experimental/`
-  in Pi's repository) where pi-agents does the same thing: its harness
-  setup, its session worker's split of host and services, and its
-  `subagent` tool.
+- pi-agents followed Pi's experimental durable coding agent
+  (`packages/coding-agent/src/experimental/` in Pi's repository, at tag
+  `v1.1.0`; Pi 1.2.0 removed it) for its harness setup, its session
+  worker's split of host and services, and its `subagent` tool. Its
+  structure stays, so a future upstream durable session can host the core.
 
 ## Core abstractions
 
@@ -390,7 +391,11 @@ loses a delivery but can repeat one.
   The host pauses the agents, notifies the user, and reopens the harness
   from storage, which resumes interrupted work like a restart. A second
   failure within a minute leaves the agents paused until the next use
-  reopens them (`src/pi/session.ts`).
+  reopens them, and memory storage can't reopen, so a `--no-session`
+  session reports its agents lost (`src/pi/session.ts`). Closing and
+  opening are ordered: an open waits until earlier closes released the
+  lock and storage, and a shutdown or session start ends the recovery's
+  epoch, so a recovery never reopens after either.
 
 ## Agent runtime
 

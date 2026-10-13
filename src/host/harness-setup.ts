@@ -1,6 +1,6 @@
 /**
  * Harness setup derived from Pi, after Pi's experimental durable coding
- * agent (`experimental/durable/harness-setup.ts`): Harness settings and
+ * agent (`experimental/durable/harness-setup.ts` at Pi v1.1.0): Harness settings and
  * execution environments. Pi has configured HTTP already, since agents run
  * in its process.
  */

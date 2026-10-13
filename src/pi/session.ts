@@ -9,7 +9,13 @@
  *
  * A storage error closes the harness. The host then pauses the agents,
  * says so, and reopens the harness, which resumes their work; a second
- * failure within a minute leaves them paused until the next use.
+ * failure within a minute leaves them paused until the next use. Memory
+ * storage can't reopen, so an ephemeral session's agents are lost.
+ *
+ * Opening, closing, and recovering are ordered: closing releases the lock
+ * it took over, opening waits until earlier closes are done, and a
+ * shutdown or session start ends the epoch a recovery belongs to, so the
+ * recovery stops instead of reopening.
  */
 
 import * as fs from "node:fs";
@@ -72,7 +78,16 @@ export class SessionHost {
   private readonly listeners = new Set<() => void>();
   private trusted = true;
   private pruned = false;
-  /** When storage last failed, to reopen by itself at most once a minute. */
+  /** Whether the open storage persists, so a failure can reopen it. */
+  private persistent = false;
+  /** Bumped by session start and shutdown, which end recoveries. */
+  private epoch = 0;
+  /** Closes in progress, in order; opening waits for them. */
+  private closing: Promise<void> = Promise.resolve();
+  /** The recovery from a storage failure, while it runs. */
+  private recovering: Promise<void> | undefined;
+  /** When this session's storage last failed, to reopen by itself at most
+   * once a minute. */
   private failedAt: number | undefined;
   /** The skills agents can use, shared by spawns and agent prompts. */
   readonly skills = new SkillCatalog();
@@ -86,6 +101,8 @@ export class SessionHost {
 
   /** Session start: remember the context and resume existing agents. */
   async start(ctx: ExtensionContext): Promise<void> {
+    this.epoch++;
+    this.failedAt = undefined;
     this.ctx = ctx;
     this.sessionId = ctx.sessionManager.getSessionId();
     this.trusted = isTrusted(ctx);
@@ -150,6 +167,8 @@ export class SessionHost {
   }
 
   private async open(ctx: ExtensionContext): Promise<AgentService> {
+    // The previous harness releases its lock and storage first.
+    await this.closing;
     const sessionId = this.sessionId ?? ctx.sessionManager.getSessionId();
     this.sessionId = sessionId;
     let lock: StorageLock | undefined;
@@ -208,6 +227,7 @@ export class SessionHost {
       this.service = service;
       this.harness = harness;
       this.lock = lock;
+      this.persistent = isPersistent(ctx);
       this.unsubscribe = service.subscribe(() => this.emit());
       this.watchFailure(harness);
       this.emit();
@@ -224,28 +244,39 @@ export class SessionHost {
 
   /** Recover once the harness closes because its storage failed. */
   private watchFailure(harness: AgentHarness): void {
+    const epoch = this.epoch;
     void harness.harness.closed.then((end) => {
-      if (end.reason === "failed" && this.harness === harness)
-        void this.recover(end.error);
+      if (end.reason !== "failed" || this.harness !== harness) return;
+      if (this.epoch !== epoch || this.recovering) return;
+      this.recovering = this.recover(end.error, epoch).finally(() => {
+        this.recovering = undefined;
+      });
     });
   }
 
   /**
    * Pause the agents and reopen their storage, which resumes interrupted
    * work, unless it failed within the last minute too: then the next use
-   * reopens it.
+   * reopens it. Memory storage is gone with its harness.
    */
-  private async recover(error: unknown): Promise<void> {
-    const ctx = this.ctx;
-    try {
-      await this.stop();
-    } catch {
-      // The failed harness has nothing left to close.
+  private async recover(error: unknown, epoch: number): Promise<void> {
+    const persistent = this.persistent;
+    await this.close({ failed: true });
+    // A shutdown or another session took over meanwhile.
+    if (this.epoch !== epoch) return;
+    if (!persistent) {
+      this.report(
+        new Error(
+          `Agent storage failed (${message(error)}); this session keeps agents in memory, so they are lost`,
+        ),
+      );
+      return;
     }
     const now = Date.now();
     const again =
       this.failedAt !== undefined && now - this.failedAt < REOPEN_INTERVAL_MS;
     this.failedAt = now;
+    const ctx = this.ctx;
     if (again || !ctx) {
       this.report(
         new Error(
@@ -281,26 +312,58 @@ export class SessionHost {
     for (const listener of this.listeners) listener();
   }
 
-  /** Session shutdown: pause agents and release the storage. */
+  /** Session shutdown: pause agents and release the storage. A recovery
+   * underway stops instead of reopening. */
   async stop(): Promise<void> {
-    const opening = this.opening;
-    if (opening) await opening.catch(() => {});
+    this.epoch++;
+    // Without a recovery or an open underway, the harness leaves at once,
+    // so a use right after this call opens a new one.
+    if (this.recovering) await this.recovering;
+    if (this.opening) await this.opening.catch(() => {});
+    await this.close();
+  }
+
+  /**
+   * Close the open harness, if any, after earlier closes. Closing takes
+   * over the harness's service and lock, so a harness opened meanwhile
+   * keeps its own. `failed`: the harness closed itself after a storage
+   * error, so closing it again may throw.
+   */
+  private close(options: { failed?: boolean } = {}): Promise<void> {
     const service = this.service;
     const harness = this.harness;
+    const lock = this.lock;
+    const unsubscribe = this.unsubscribe;
     this.service = undefined;
     this.harness = undefined;
-    this.unsubscribe?.();
+    this.lock = undefined;
     this.unsubscribe = undefined;
-    try {
-      await service?.close();
-    } finally {
+    // A failed harness has nothing left to close, so its close may throw.
+    const closeHarness = async () => {
       try {
         await harness?.close();
+      } catch (error) {
+        if (!options.failed) throw error;
+      }
+    };
+    const closing = this.closing.then(async () => {
+      unsubscribe?.();
+      try {
+        try {
+          await service?.close();
+        } catch (error) {
+          // The harness goes in any case; the service's error stands.
+          await closeHarness().catch(() => {});
+          throw error;
+        }
+        await closeHarness();
       } finally {
-        this.lock?.release();
-        this.lock = undefined;
+        lock?.release();
         this.emit();
       }
-    }
+    });
+    // Later opens wait for this close, but not for its errors.
+    this.closing = closing.catch(() => {});
+    return closing;
   }
 }

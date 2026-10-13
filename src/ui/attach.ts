@@ -3,7 +3,7 @@
  * message and tool components, plus an editor that talks to the agent.
  *
  * `ChatView` ports Pi's `ExperimentalChatView` (coding-agent
- * `src/experimental/client-tui-chat.ts`), which renders a pi-durable
+ * `src/experimental/client-tui-chat.ts` at Pi v1.1.0), which renders a pi-durable
  * `ConversationView`. It keeps that structure so an upstream export can
  * replace it. This module is the one frontend place that reads pi-durable
  * view types.

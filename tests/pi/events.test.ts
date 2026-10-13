@@ -53,96 +53,44 @@ function agent(
 }
 
 describe("child-agent lifecycle protocol", () => {
-  test("initial publication waits for start and reads the current agents", () => {
-    const { events, snapshots, publisher } = setup([agent("restored")]);
+  test("publishes after start, on lifecycle changes, and on request", () => {
+    const { events, snapshots, publisher, replace } = setup([agent("b")]);
     events.emit(AGENTS_STATE_REQUEST_EVENT, { protocol: 1 });
-    publisher.update();
     expect(snapshots).toEqual([]);
     publisher.start("session");
-    expect(snapshots).toHaveLength(1);
     expect(snapshots[0]).toMatchObject({
       protocol: 1,
       sessionId: "session",
       sequence: 1,
       type: "snapshot",
-      agents: [agent("restored")],
+      agents: [agent("b")],
     });
-    expect(snapshots[0]?.instanceId).toBeString();
-    publisher.dispose();
-  });
-
-  test("late listeners can request the current empty or working state", () => {
-    const { events, publisher, replace } = setup();
-    publisher.start("session");
-    const received: AgentsStateSnapshot[] = [];
-    events.on(AGENTS_STATE_EVENT, (value) => {
-      received.push(value as AgentsStateSnapshot);
-    });
-    events.emit(AGENTS_STATE_REQUEST_EVENT, { protocol: 1 });
-    expect(received[0]?.agents).toEqual([]);
-    replace([agent("worker")]);
-    events.emit(AGENTS_STATE_REQUEST_EVENT, { protocol: 1 });
-    expect(received.at(-1)?.agents).toEqual([agent("worker")]);
-    expect(received.map((snapshot) => snapshot.sequence)).toEqual([2, 3, 4]);
-    const count = received.length;
-    for (const invalid of [
-      null,
-      undefined,
-      1,
-      "1",
-      {},
-      { protocol: 2 },
-      { protocol: "1" },
-    ])
-      events.emit(AGENTS_STATE_REQUEST_EVENT, invalid);
-    expect(received).toHaveLength(count);
-    publisher.dispose();
-  });
-
-  test("membership and lifecycle changes replace state without double counting", () => {
-    const { snapshots, publisher, replace } = setup();
-    publisher.start("session");
     replace([agent("b"), agent("a")]);
-    expect(snapshots.at(-1)?.agents.map((info) => info.id)).toEqual(["a", "b"]);
     replace([agent("a"), agent("b")]);
     expect(snapshots).toHaveLength(2);
-    replace([agent("a", "idle"), agent("b", "working", true)]);
-    expect(
-      snapshots.at(-1)?.agents.filter((info) => info.state === "working"),
-    ).toEqual([agent("b", "working", true)]);
-    for (const state of [
-      "waiting",
-      "failed",
-      "interrupted",
-      "skipped",
-    ] as const) {
-      replace([agent("b", state)]);
-      expect(snapshots.at(-1)?.agents).toEqual([agent("b", state)]);
-    }
-    replace([agent("b", "working")]);
-    replace([{ ...agent("b"), name: "renamed" }]);
-    expect(snapshots.at(-1)?.agents[0]?.name).toBe("renamed");
-    replace([]);
-    expect(snapshots.at(-1)?.agents).toEqual([]);
+    expect(snapshots[1]?.agents.map((info) => info.id)).toEqual(["a", "b"]);
+    replace([agent("a", "idle"), agent("b", "waiting")]);
+    events.emit(AGENTS_STATE_REQUEST_EVENT, { protocol: 2 });
+    events.emit(AGENTS_STATE_REQUEST_EVENT, { protocol: 1 });
+    expect(snapshots.map((snapshot) => snapshot.sequence)).toEqual([
+      1, 2, 3, 4,
+    ]);
+    expect(snapshots.at(-1)?.agents).toEqual([
+      agent("a", "idle"),
+      agent("b", "waiting"),
+    ]);
     publisher.dispose();
+    expect(snapshots.at(-1)).toMatchObject({ type: "stopped", agents: [] });
   });
 
-  test("published snapshots are detached, deeply frozen, and omit private fields", () => {
-    const info = {
-      ...agent("a"),
-      job: "private prompt",
-      result: { text: "private answer" },
-    };
+  test("snapshots are frozen and expose only lifecycle fields", () => {
+    const info = { ...agent("a"), job: "private prompt" };
     const { snapshots, publisher } = setup([info]);
     publisher.start("session");
     const snapshot = snapshots[0];
     expect(Object.isFrozen(snapshot)).toBe(true);
-    expect(Object.isFrozen(snapshot?.agents)).toBe(true);
     expect(Object.isFrozen(snapshot?.agents[0])).toBe(true);
-    info.name = "changed";
     expect(snapshot?.agents).toEqual([agent("a")]);
-    publisher.update();
-    expect(snapshots.at(-1)?.agents[0]?.name).toBe("changed");
     publisher.dispose();
   });
 

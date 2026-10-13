@@ -152,11 +152,15 @@ Requests before initialization are satisfied by the initial snapshot.
 Malformed requests and unsupported protocol versions are ignored. This
 supports both extension load orders and consumers that attach mid-session.
 The protocol is notification-only: it does not resume or stop agents.
+Don't emit a request from inside a `pi-agents:state` listener: the reply
+arrives synchronously and would trigger the listener again.
 
 For a terminal status integration, keep the pane working while the parent
-is active **or** any child's state is `working`. A graph node's `waiting`
-state means waiting for dependencies, not waiting for human approval, so it
-must not be interpreted as a blocked user dialog.
+is active **or** any child's state is `working` or `waiting`. A graph
+node's `waiting` state means its work is still pending on its inputs, which
+can outlast every `working` child, for example while stored work resumes.
+It does not mean waiting for the user, so it must not be interpreted as a
+blocked user dialog.
 
 Developers can read [the design document](./design.md) for the design and
 its reasons.

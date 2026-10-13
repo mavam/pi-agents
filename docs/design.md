@@ -56,10 +56,12 @@ pi-agents has three layers:
   depend on higher ones.
 - **Frontend:** Pi's tools, commands, and views. They see plain data
   through the service; only the attach view reads a conversation directly.
-  `AgentStatePublisher` (`src/pi/events.ts`) publishes the host subscription's
-  lifecycle state as detached snapshots on Pi's event bus, independently of
-  the UI. It starts after session restoration and clears ownership when the
-  extension runtime shuts down. See the
+  The frontend also publishes the agents' lifecycle state on Pi's event
+  bus, so other extensions can follow children without parsing views.
+  Snapshots carry only names and states, never conversations, and each
+  replaces the last, so a listener that joins late needs only one. They
+  start once the session is restored and end with an explicit reset at
+  shutdown, which says nothing about whether stored work finished. See the
   [extension event protocol](./architecture.md#extension-lifecycle-events).
 
 Everything the core needs from the parent goes through one interface:

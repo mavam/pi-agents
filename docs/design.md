@@ -395,7 +395,10 @@ loses a delivery but can repeat one.
   session reports its agents lost (`src/pi/session.ts`). Closing and
   opening are ordered: an open waits until earlier closes released the
   lock and storage, and a shutdown or session start ends the recovery's
-  epoch, so a recovery never reopens after either.
+  epoch, so a recovery never reopens after either; an open that the epoch
+  ended meanwhile closes again without resuming work. Recovery reports its
+  own failures, such as a lock it can't remove, so shutdown can wait for
+  it.
 
 ## Agent runtime
 

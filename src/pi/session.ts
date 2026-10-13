@@ -167,6 +167,7 @@ export class SessionHost {
   }
 
   private async open(ctx: ExtensionContext): Promise<AgentService> {
+    const epoch = this.epoch;
     // The previous harness releases its lock and storage first.
     await this.closing;
     const sessionId = this.sessionId ?? ctx.sessionManager.getSessionId();
@@ -191,6 +192,7 @@ export class SessionHost {
       storage = await (this.options.openStorage ?? openStorage)(undefined);
     }
     let harness: AgentHarness | undefined;
+    let service: AgentService | undefined;
     try {
       const settingsManager = SettingsManager.create(ctx.cwd, getAgentDir());
       const { limit, error } = readRequestLimit(settingsManager.getSettings());
@@ -215,13 +217,17 @@ export class SessionHost {
         settings: createHarnessSettings(settingsManager),
         onReport: (error) => this.report(error),
       });
-      const service = await AgentService.start({
+      service = await AgentService.start({
         harness: harness.harness,
         anchor: harness.anchor,
         extensions,
         parent: this.parent,
         onReport: (error) => this.report(error),
       });
+      // A shutdown or session start meanwhile: don't resume work for a
+      // session that is gone.
+      if (this.epoch !== epoch)
+        throw new AgentError("The session ended while agents opened");
       // Work a previous process left unfinished continues now.
       harness.harness.resume();
       this.service = service;
@@ -234,9 +240,13 @@ export class SessionHost {
       return service;
     } catch (error) {
       try {
-        await harness?.close();
+        await service?.close();
       } finally {
-        lock?.release();
+        try {
+          await harness?.close();
+        } finally {
+          lock?.release();
+        }
       }
       throw error;
     }
@@ -248,9 +258,12 @@ export class SessionHost {
     void harness.harness.closed.then((end) => {
       if (end.reason !== "failed" || this.harness !== harness) return;
       if (this.epoch !== epoch || this.recovering) return;
-      this.recovering = this.recover(end.error, epoch).finally(() => {
-        this.recovering = undefined;
-      });
+      // Recovery reports its own failures, so shutdown can wait for it.
+      this.recovering = this.recover(end.error, epoch)
+        .catch((failure) => this.report(failure))
+        .finally(() => {
+          this.recovering = undefined;
+        });
     });
   }
 
@@ -261,7 +274,15 @@ export class SessionHost {
    */
   private async recover(error: unknown, epoch: number): Promise<void> {
     const persistent = this.persistent;
-    await this.close({ failed: true });
+    try {
+      await this.close({ failed: true });
+    } catch (failure) {
+      this.report(
+        new Error(
+          `Closing the failed agent storage failed: ${message(failure)}`,
+        ),
+      );
+    }
     // A shutdown or another session took over meanwhile.
     if (this.epoch !== epoch) return;
     if (!persistent) {
@@ -290,10 +311,13 @@ export class SessionHost {
         `Agent storage failed (${message(error)}); reopening it, and agents continue`,
       ),
     );
+    // Pi may shut the session down as it shows the notice.
+    if (this.epoch !== epoch) return;
     try {
       await this.ensure(ctx);
     } catch (reopen) {
-      this.report(reopen);
+      // An open that a shutdown ended needs no notice.
+      if (this.epoch === epoch) this.report(reopen);
     }
   }
 
@@ -358,8 +382,11 @@ export class SessionHost {
         }
         await closeHarness();
       } finally {
-        lock?.release();
-        this.emit();
+        try {
+          lock?.release();
+        } finally {
+          this.emit();
+        }
       }
     });
     // Later opens wait for this close, but not for its errors.

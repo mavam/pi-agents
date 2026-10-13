@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -29,7 +30,12 @@ let sessions = 0;
  * notifications as they happen.
  */
 function failingHost(
-  options: { memory?: boolean; onNote?: (text: string) => void } = {},
+  options: {
+    memory?: boolean;
+    onNote?: (text: string) => void;
+    /** Resolves before each storage open after the first. */
+    beforeReopen?: () => Promise<void>;
+  } = {},
 ) {
   const { models } = createFaux();
   let failNext = false;
@@ -68,8 +74,12 @@ function failingHost(
     },
     modelRegistry: { runtime: models, getAvailable: () => [] },
   } as unknown as ExtensionContext;
+  let opens = 0;
   const host = new SessionHost(new TestParent(), {
-    openStorage: async (directory) => failing(await openStorage(directory)),
+    openStorage: async (directory) => {
+      if (++opens > 1) await options.beforeReopen?.();
+      return failing(await openStorage(directory));
+    },
   });
   hosts.push(host);
   const directory = path.join(
@@ -87,7 +97,7 @@ function failingHost(
         Promise.reject(new Error("no service")),
     ).rejects.toThrow();
   };
-  return { host, ctx, cwd, notes, directory, fail };
+  return { host, ctx, cwd, notes, directory, fail, opens: () => opens };
 }
 
 describe("storage failures", () => {
@@ -124,10 +134,9 @@ describe("storage failures", () => {
     expect(lockHolder(directory)).toBe(process.pid);
   });
 
-  test("a shutdown during recovery leaves agents paused", async () => {
-    // Pi shuts the session down as the recovery announces the reopen.
+  test("a shutdown as recovery announces the reopen opens nothing", async () => {
     let stopping: Promise<void> | undefined;
-    const { host, ctx, directory, fail } = failingHost({
+    const { host, ctx, directory, fail, opens } = failingHost({
       onNote: (text) => {
         if (text.includes("reopening")) stopping = host.stop();
       },
@@ -137,9 +146,57 @@ describe("storage failures", () => {
     await fail();
     await until(() => stopping !== undefined);
     await stopping;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(opens()).toBe(1);
     expect(host.current()).toBeUndefined();
     expect(lockHolder(directory)).toBeUndefined();
+  });
+
+  test("a shutdown while storage reopens resumes nothing", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reopening = false;
+    const { host, ctx, directory, fail } = failingHost({
+      beforeReopen: () => {
+        reopening = true;
+        return gate;
+      },
+    });
+    await host.start(ctx);
+    const first = await host.ensure(ctx);
+    let published = false;
+    host.subscribe(() => {
+      if (![undefined, first].includes(host.current())) published = true;
+    });
+    await fail();
+    await until(() => reopening);
+    const stopping = host.stop();
+    release();
+    await stopping;
+    expect(published).toBe(false);
+    expect(host.current()).toBeUndefined();
+    expect(lockHolder(directory)).toBeUndefined();
+  });
+
+  test("a failed cleanup during recovery is reported", async () => {
+    const { host, ctx, notes, directory, fail } = failingHost();
+    await host.start(ctx);
+    await host.ensure(ctx);
+    // The lock can't be removed, as on a read-only directory.
+    fs.chmodSync(directory, 0o500);
+    try {
+      await fail();
+      await until(() =>
+        notes.some((note) =>
+          note.startsWith(
+            "pi-agents: Closing the failed agent storage failed: EACCES",
+          ),
+        ),
+      );
+    } finally {
+      fs.chmodSync(directory, 0o700);
+    }
   });
 
   test("a second failure within a minute waits for the next use", async () => {

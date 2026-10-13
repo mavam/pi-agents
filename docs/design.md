@@ -266,8 +266,11 @@ but can repeat one.
   and leaves the parent alone. It holds per agent, not per request: an
   agent keeps its slot from its first request until its work ends, so a
   server that serves one conversation at a time keeps its cache instead of
-  switching between agents at every tool call. An agent waiting for its
-  helpers gives its slot up, or a cap of one would deadlock.
+  switching between agents at every tool call. Its compactions keep the
+  slot until they end. An agent waiting for its helpers gives its slot up
+  and doesn't take it back until they finish, or a cap of one would
+  deadlock. Slots are taken before requests and before compactions
+  summarize, so a summary that a restart resumes runs without one.
 - Storage of old sessions is deleted after a configurable retention, in the
   background and never for sessions a live process holds.
 

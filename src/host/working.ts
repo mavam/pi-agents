@@ -6,6 +6,10 @@
  * stays warm. A follow-up run queues again. Agents over the cap wait in
  * order of arrival. An agent that waits for its helpers gives its slot up
  * meanwhile, so the helpers can work.
+ *
+ * Slots are taken in the hooks before generation requests and before
+ * compactions summarize. A compaction that a restart resumes mid-summary
+ * passes no hook and runs without a slot.
  */
 
 import type { Context } from "@earendil-works/chord";
@@ -13,6 +17,7 @@ import {
   CompactionTask,
   GenerationTask,
   type Harness,
+  type HookApi,
   type HookRegistration,
   hook,
   LiveDoc,
@@ -33,6 +38,14 @@ export function readWorkingLimit(settings: unknown): {
   return error ? { error } : value === undefined ? {} : { limit: value };
 }
 
+/** What the cap knows of an agent from its `LiveDoc`. */
+interface Live {
+  /** The first input of its current run, which names the run. */
+  run?: string;
+  /** Whether a compaction of it runs or waits for a slot. */
+  compacting: boolean;
+}
+
 /** Slots of one harness; agents are keyed by their conversation IDs. */
 export class WorkingAgents {
   private readonly holders = new Set<string>();
@@ -40,27 +53,22 @@ export class WorkingAgents {
   private readonly waiting = new Map<string, Set<() => void>>();
   /** Agents waiting for their helpers, with how many waits each has. */
   private readonly paused = new Map<string, number>();
-  /** Per agent, the first input of its current run, which names the run. */
-  private readonly runs = new Map<string, string>();
+  private readonly live = new Map<string, Live>();
 
   /** Hooks that hold model requests until their agent has a slot. */
   readonly hooks: readonly HookRegistration[];
 
   constructor(readonly limit: number) {
+    const acquire = async (api: HookApi, context: Context) => {
+      await this.acquire(String(api.conversationId), context);
+      return undefined;
+    };
     this.hooks = [
       hook(GenerationTask, {
-        beforeRequest: async (_request, api, context) => {
-          await this.acquire(String(api.conversationId), context);
-          return undefined;
-        },
+        beforeRequest: (_request, api, context) => acquire(api, context),
       }),
       hook(CompactionTask, {
-        beforeCompact: async (_compaction, api, context) => {
-          const id = String(api.conversationId);
-          // Taking a slot back would keep it from the helpers.
-          if (!this.paused.has(id)) await this.acquire(id, context);
-          return undefined;
-        },
+        beforeCompact: (_compaction, api, context) => acquire(api, context),
       }),
     ];
   }
@@ -77,11 +85,12 @@ export class WorkingAgents {
 
   /**
    * Give up the agent's slot while it waits for its helpers, until the
-   * returned function is called. Its next request queues again.
+   * returned function is called: once its compactions end, and without
+   * taking it back meanwhile. Its next request queues again.
    */
   pause(agentId: string): () => void {
     this.paused.set(agentId, (this.paused.get(agentId) ?? 0) + 1);
-    this.release(agentId);
+    this.settle(agentId);
     let resumed = false;
     return () => {
       if (resumed) return;
@@ -89,6 +98,7 @@ export class WorkingAgents {
       const count = (this.paused.get(agentId) ?? 1) - 1;
       if (count > 0) this.paused.set(agentId, count);
       else this.paused.delete(agentId);
+      this.pump();
     };
   }
 
@@ -112,16 +122,34 @@ export class WorkingAgents {
     });
   }
 
-  private onLive(agentId: string, live: LiveState | null): void {
-    const run = live?.run?.inputs[0];
-    const previous = this.runs.get(agentId);
-    if (run === undefined) this.runs.delete(agentId);
-    else this.runs.set(agentId, String(run));
-    const busy = run !== undefined || (live?.compactions?.length ?? 0) > 0;
-    // A queued follow-up can replace a run in the commit that ends it.
+  private onLive(agentId: string, state: LiveState | null): void {
+    const first = state?.run?.inputs[0];
+    const run = first === undefined ? undefined : String(first);
+    const previous = this.live.get(agentId)?.run;
+    const compacting = (state?.compactions?.length ?? 0) > 0;
+    if (run === undefined && !compacting) this.live.delete(agentId);
+    else
+      this.live.set(agentId, {
+        ...(run === undefined ? {} : { run }),
+        compacting,
+      });
+    // A queued follow-up can replace a run in the commit that ends it; it
+    // queues again, unless a compaction keeps the slot and the follow-up
+    // with it.
     const replaced =
-      previous !== undefined && run !== undefined && String(run) !== previous;
-    if (!busy || replaced) this.release(agentId);
+      previous !== undefined && run !== undefined && run !== previous;
+    this.settle(agentId, replaced);
+  }
+
+  /** Release the agent's slot unless its run or compactions still use it. */
+  private settle(agentId: string, replaced = false): void {
+    if (!this.holders.has(agentId)) return;
+    const live = this.live.get(agentId);
+    if (live?.compacting) return;
+    if (live?.run !== undefined && !replaced && !this.paused.has(agentId))
+      return;
+    this.holders.delete(agentId);
+    this.pump();
   }
 
   private acquire(agentId: string, context: Context): Promise<void> {
@@ -148,13 +176,11 @@ export class WorkingAgents {
     });
   }
 
-  private release(agentId: string): void {
-    if (this.holders.delete(agentId)) this.pump();
-  }
-
+  /** Admit waiting agents in order; paused ones keep their place. */
   private pump(): void {
     for (const [agentId, waiters] of this.waiting) {
       if (this.holders.size >= this.limit) return;
+      if (this.paused.has(agentId)) continue;
       this.waiting.delete(agentId);
       this.holders.add(agentId);
       for (const admit of waiters) admit();

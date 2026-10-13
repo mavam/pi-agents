@@ -16,7 +16,6 @@ manually.
 
 ## Development
 
-- Use Bun as the runtime and package manager.
 - Keep the docs in sync with user-facing changes: the manual under `docs/`
   (`usage.md`, `graphs.md`, `messaging.md`, `profiles.md`,
   `configuration.md`, `architecture.md`) and `docs/design.md` for design
@@ -28,12 +27,9 @@ manually.
 
 ## Tests
 
-- Test documented guarantees and user-visible behavior, about one test each.
-- Don't test what Pi or pi-durable already guarantee, such as reading images
-  or replaying codemode scripts; test only pi-agents' own behavior and that
-  it uses upstream features at all.
+- Keep tests minimal; avoid overly specific regression tests.
+- Don't test what Pi or pi-durable already guarantee.
 - Don't commit storage fixtures or fakes of Pi or pi-durable internals.
-- Delete tests together with the behavior they cover.
 
 ## Release engineering
 

@@ -37,6 +37,7 @@ import { resolveModels } from "../host/models.js";
 import { pruneSessions, readRetention } from "../host/retention.js";
 import { openStorage, type Storage } from "../host/storage.js";
 import { readWorkingLimit } from "../host/working.js";
+import { notify } from "./notify.js";
 import { isTrusted, resolveHelper } from "./spawn.js";
 
 function sessionsRoot(): string {
@@ -107,11 +108,7 @@ export class SessionHost {
       try {
         await this.ensure(ctx);
       } catch (error) {
-        if (ctx.hasUI)
-          ctx.ui.notify(
-            `pi-agents: ${error instanceof Error ? error.message : String(error)}`,
-            "warning",
-          );
+        notify(ctx, `pi-agents: ${message(error)}`);
       }
     }
     this.prune(ctx);
@@ -125,10 +122,15 @@ export class SessionHost {
     if (this.pruned) return;
     this.pruned = true;
     const current = this.sessionId;
+    const epoch = this.epoch;
+    // Pi invalidates the context when it replaces the session.
+    const cwd = ctx.cwd;
     void (async () => {
       // Off the startup path: settings and storage are read afterwards.
       await new Promise((resolve) => setImmediate(resolve));
-      const settings = SettingsManager.create(ctx.cwd, getAgentDir());
+      // The session ended meanwhile; the next one prunes by itself.
+      if (this.epoch !== epoch) return;
+      const settings = SettingsManager.create(cwd, getAgentDir());
       const { days, error } = readRetention(settings.getSettings());
       if (error) this.report(new Error(`${error}; storage is kept`));
       if (days === undefined) return;
@@ -164,13 +166,18 @@ export class SessionHost {
 
   private async open(ctx: ExtensionContext): Promise<AgentService> {
     const epoch = this.epoch;
+    // Pi invalidates the context when it replaces the session, so read it
+    // before waiting.
+    const { cwd, modelRegistry } = ctx;
+    const persistent = isPersistent(ctx);
+    const fallback = ctx.sessionManager.getSessionId();
     // The previous harness releases its lock and storage first.
     await this.closing;
-    const sessionId = this.sessionId ?? ctx.sessionManager.getSessionId();
+    const sessionId = this.sessionId ?? fallback;
     this.sessionId = sessionId;
     let lock: StorageLock | undefined;
     let storage: Storage;
-    if (isPersistent(ctx)) {
+    if (persistent) {
       const directory = sessionDirectory(sessionId);
       const acquired = acquireLock(directory);
       if ("owner" in acquired) {
@@ -190,10 +197,10 @@ export class SessionHost {
     let harness: AgentHarness | undefined;
     let service: AgentService | undefined;
     try {
-      const settingsManager = SettingsManager.create(ctx.cwd, getAgentDir());
+      const settingsManager = SettingsManager.create(cwd, getAgentDir());
       const { limit, error } = readWorkingLimit(settingsManager.getSettings());
       if (error) this.report(new Error(`${error}; agents aren't capped`));
-      const models = await resolveModels(ctx.modelRegistry);
+      const models = await resolveModels(modelRegistry);
       const extensions = createAgentExtensions({
         ...(limit === undefined ? {} : { maxWorkingAgents: limit }),
         prompt: { trusted: () => this.trusted, skills: this.skills.get },
@@ -206,7 +213,7 @@ export class SessionHost {
       harness = await openAgentHarness({
         storage,
         models,
-        cwd: ctx.cwd,
+        cwd,
         extensions,
         settings: createHarnessSettings(settingsManager),
         onReport: (error) => this.report(error),
@@ -227,7 +234,7 @@ export class SessionHost {
       this.service = service;
       this.harness = harness;
       this.lock = lock;
-      this.persistent = isPersistent(ctx);
+      this.persistent = persistent;
       this.unsubscribe = service.subscribe(() => this.emit());
       this.watchFailure(harness);
       this.emit();
@@ -315,10 +322,9 @@ export class SessionHost {
     }
   }
 
+  /** Report a failure; never throws, as it often runs in error handlers. */
   private report(error: unknown): void {
-    const ctx = this.ctx;
-    if (!ctx?.hasUI) return;
-    ctx.ui.notify(`pi-agents: ${message(error)}`, "warning");
+    notify(this.ctx, `pi-agents: ${message(error)}`);
   }
 
   subscribe(listener: () => void): () => void {

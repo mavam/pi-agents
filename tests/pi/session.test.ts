@@ -6,6 +6,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { Storage } from "@earendil-works/pi-durable";
 import { lockHolder } from "../../src/host/lock.js";
 import { openStorage } from "../../src/host/storage.js";
+import { notify } from "../../src/pi/notify.js";
 import { SessionHost } from "../../src/pi/session.js";
 import {
   createFaux,
@@ -209,5 +210,51 @@ describe("storage failures", () => {
     );
     expect(host.current()).toBeUndefined();
     expect((await host.ensure(ctx)).get("w")).toBeUndefined();
+  });
+});
+
+describe("session replacement", () => {
+  /** A context that throws on any use once Pi replaced its session, as
+   * Pi's does, and records those uses. */
+  function replaceable() {
+    let stale = false;
+    const uses: string[] = [];
+    const live = {
+      cwd: tempDir(),
+      hasUI: true,
+      ui: { notify: () => {} },
+      isProjectTrusted: () => true,
+      sessionManager: {
+        getSessionId: () => `replaced-${++sessions}`,
+        getSessionFile: () => undefined,
+        getEntries: () => [],
+      },
+    };
+    const ctx = new Proxy(live, {
+      get(target, key) {
+        if (!stale) return Reflect.get(target, key);
+        uses.push(String(key));
+        throw new Error("This extension ctx is stale");
+      },
+    }) as unknown as ExtensionContext;
+    return { ctx, uses, replace: () => (stale = true) };
+  }
+
+  test("right after start leaves the old context alone", async () => {
+    const { ctx, uses, replace } = replaceable();
+    const host = new SessionHost(new TestParent());
+    hosts.push(host);
+    await host.start(ctx);
+    await host.stop();
+    replace();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(uses).toEqual([]);
+  });
+
+  test("late notices go nowhere", () => {
+    const { ctx, replace } = replaceable();
+    replace();
+    expect(() => notify(ctx, "late")).not.toThrow();
   });
 });

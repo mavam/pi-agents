@@ -49,6 +49,7 @@ import {
   type Row,
 } from "../ui/rows.js";
 import { openMessageStream } from "../ui/stream.js";
+import { notify } from "./notify.js";
 import type { SessionHost } from "./session.js";
 
 /** Lines of an agent's job shown in the overlay's detail pane. */
@@ -298,7 +299,7 @@ async function openMessagesOverlay(
   const agentName = options.agent
     ? service.agentById(options.agent)?.name
     : undefined;
-  const fail = (error: unknown) => ctx.ui.notify(errorText(error), "error");
+  const fail = (error: unknown) => notify(ctx, errorText(error), "error");
   const agents = () => void openAgentsOverlay(ctx, deps).catch(fail);
   await openMessageStream(
     ctx,
@@ -412,7 +413,7 @@ async function openAgentsOverlay(
       }
       after = () =>
         void openMessagesOverlay(ctx, deps).catch((error) =>
-          ctx.ui.notify(errorText(error), "error"),
+          notify(ctx, errorText(error), "error"),
         );
       return "close";
     },
@@ -422,7 +423,7 @@ async function openAgentsOverlay(
         const agent = row.kind === "agent" ? row.agent.id : undefined;
         after = () =>
           void openMessagesOverlay(ctx, deps, agent ? { agent } : {}).catch(
-            (error) => ctx.ui.notify(errorText(error), "error"),
+            (error) => notify(ctx, errorText(error), "error"),
           );
         return "close";
       }
@@ -442,7 +443,7 @@ async function openAgentsOverlay(
         if (target.state !== "working") {
           void service
             .stop(target.id)
-            .catch((error) => ctx.ui.notify(errorText(error), "error"));
+            .catch((error) => notify(ctx, errorText(error), "error"));
           return undefined;
         }
         after = () => void confirmAndStop(ctx, deps.host, target);
@@ -472,11 +473,11 @@ function inTerminal(ctx: ExtensionContext, command: string): boolean {
 export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
   deps.focus.onBrowse = (ctx, select) =>
     void openAgentsOverlay(ctx, deps, select).catch((error) =>
-      ctx.ui.notify(errorText(error), "error"),
+      notify(ctx, errorText(error), "error"),
     );
   deps.focus.onMessages = (ctx, options) =>
     void openMessagesOverlay(ctx, deps, options).catch((error) =>
-      ctx.ui.notify(errorText(error), "error"),
+      notify(ctx, errorText(error), "error"),
     );
 
   pi.registerCommand("messages", {
@@ -486,7 +487,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       try {
         await openMessagesOverlay(ctx, deps);
       } catch (error) {
-        ctx.ui.notify(errorText(error), "error");
+        notify(ctx, errorText(error), "error");
       }
     },
   });
@@ -498,7 +499,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       try {
         await openAgentsOverlay(ctx, deps);
       } catch (error) {
-        ctx.ui.notify(errorText(error), "error");
+        notify(ctx, errorText(error), "error");
       }
     },
   });
@@ -528,7 +529,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
       const name = args.trim();
       if (!name) {
         await openAgentsOverlay(ctx, deps).catch((error) =>
-          ctx.ui.notify(errorText(error), "error"),
+          notify(ctx, errorText(error), "error"),
         );
         return;
       }

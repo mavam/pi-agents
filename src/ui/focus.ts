@@ -18,6 +18,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, isKeyRelease, parseKey } from "@earendil-works/pi-tui";
 import type { AgentInfo } from "../agents/types.js";
+import { notify } from "../pi/notify.js";
 import type { SessionHost } from "../pi/session.js";
 import { openAgentPane } from "./attach.js";
 import type { AgentPanel } from "./panel.js";
@@ -39,7 +40,8 @@ export function stopTarget(row: Row): Pick<AgentInfo, "id" | "name" | "state"> {
   return row.kind === "agent" ? row.agent : row.graph;
 }
 
-/** Stop an agent or a graph, confirming first while it still works. */
+/** Stop an agent or a graph, confirming first while it still works. Never
+ * rejects, so callers needn't wait: failures show as notices. */
 export async function confirmAndStop(
   ctx: ExtensionContext,
   host: SessionHost,
@@ -47,18 +49,18 @@ export async function confirmAndStop(
 ): Promise<boolean> {
   const service = host.current();
   if (!service) return false;
-  if (agent.state === "working") {
-    const proceed = await ctx.ui.confirm(
-      `Stop ${agent.name}?`,
-      `${agent.name} is still working.`,
-    );
-    if (!proceed) return false;
-  }
   try {
+    if (agent.state === "working") {
+      const proceed = await ctx.ui.confirm(
+        `Stop ${agent.name}?`,
+        `${agent.name} is still working.`,
+      );
+      if (!proceed) return false;
+    }
     await service.stop(agent.id);
     return true;
   } catch (error) {
-    ctx.ui.notify(errorText(error), "error");
+    notify(ctx, errorText(error), "error");
     return false;
   }
 }
@@ -165,7 +167,7 @@ export class FocusController {
     this.panel.setSuppressed(true);
     this.paneOpen = true;
     void openAgentPane(ctx, service, agentId)
-      .catch((error) => ctx.ui.notify(errorText(error), "error"))
+      .catch((error) => notify(ctx, errorText(error), "error"))
       .finally(() => {
         this.paneOpen = false;
         this.panel.setSuppressed(false);

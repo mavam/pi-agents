@@ -3,6 +3,8 @@ title: Parent editor focus after pasting or typing
 type: bugfix
 authors:
   - mavam
+prs:
+  - 98
 created: 2026-10-14T19:55:42.032769Z
 ---
 

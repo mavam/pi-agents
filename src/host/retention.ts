@@ -54,13 +54,15 @@ async function lastWrite(directory: string): Promise<number> {
  * Delete the session directories in `root` whose last write is older than
  * `days` days, except `current` and those whose lock a live process holds.
  * A failure for one directory goes to `onError` and doesn't stop the
- * others. Returns the names of the deleted directories.
+ * others; one already gone is skipped. Stops early once
+ * `stopped` returns true. Returns the names of the deleted directories.
  */
 export async function pruneSessions(options: {
   root: string;
   days: number;
   current?: string;
   now?: number;
+  stopped?: () => boolean;
   onError?: (error: Error) => void;
 }): Promise<string[]> {
   const { root, days, current } = options;
@@ -78,6 +80,7 @@ export async function pruneSessions(options: {
   }
   const deleted: string[] = [];
   for (const entry of entries) {
+    if (options.stopped?.()) break;
     if (!entry.isDirectory() || entry.name === current) continue;
     const directory = path.join(root, entry.name);
     try {
@@ -86,6 +89,8 @@ export async function pruneSessions(options: {
       await fs.rm(directory, { recursive: true, force: true });
       deleted.push(entry.name);
     } catch (error) {
+      // Another process pruned it first.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       report(
         new Error(
           `Could not delete old agent storage ${directory}: ${error instanceof Error ? error.message : String(error)}`,

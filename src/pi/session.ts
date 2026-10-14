@@ -115,12 +115,12 @@ export class SessionHost {
   }
 
   /**
-   * Once per Pi process, delete the storage of sessions older than
-   * `piAgents.retentionDays`, in the background.
+   * Once per host, delete the storage of sessions older than
+   * `piAgents.retentionDays`, in the background. Pi starts a new host for
+   * every session it replaces.
    */
   private prune(ctx: ExtensionContext): void {
     if (this.pruned) return;
-    this.pruned = true;
     const current = this.sessionId;
     const epoch = this.epoch;
     // Pi invalidates the context when it replaces the session.
@@ -128,8 +128,10 @@ export class SessionHost {
     void (async () => {
       // Off the startup path: settings and storage are read afterwards.
       await new Promise((resolve) => setImmediate(resolve));
-      // The session ended meanwhile; the next one prunes by itself.
-      if (this.epoch !== epoch) return;
+      // A later start prunes instead, and after a shutdown the next
+      // session's host does.
+      if (this.pruned || this.epoch !== epoch) return;
+      this.pruned = true;
       const settings = SettingsManager.create(cwd, getAgentDir());
       const { days, error } = readRetention(settings.getSettings());
       if (error) this.report(new Error(`${error}; storage is kept`));
@@ -138,6 +140,7 @@ export class SessionHost {
         root: sessionsRoot(),
         days,
         current,
+        stopped: () => this.epoch !== epoch,
         onError: (failure) => this.report(failure),
       });
     })().catch((error) => this.report(error));

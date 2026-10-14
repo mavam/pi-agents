@@ -4,7 +4,7 @@
  * Pi hands to extensions before the focused component:
  *
  *   editor ── ← (empty editor) / ctrl+q ──▶ panel, or /agents if it's empty
- *   panel  ── esc / → / typing ──▶ editor
+ *   panel  ── esc / → / typing / pasting ──▶ editor
  *   panel  ── ⏎ ──▶ attach view (ctx.ui.custom owns focus until it closes)
  *   panel  ── tab ──▶ /agents ── tab ──▶ /messages ── tab ──▶ panel
  *   panel  ── shift+tab ──▶ /messages, the cycle backwards
@@ -16,7 +16,12 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, isKeyRelease, parseKey } from "@earendil-works/pi-tui";
+import {
+  decodeKittyPrintable,
+  getKeybindings,
+  isKeyRelease,
+  parseKey,
+} from "@earendil-works/pi-tui";
 import type { AgentInfo } from "../agents/types.js";
 import { notify } from "../pi/notify.js";
 import type { SessionHost } from "../pi/session.js";
@@ -24,10 +29,11 @@ import { openAgentPane } from "./attach.js";
 import type { AgentPanel } from "./panel.js";
 import type { Row } from "./rows.js";
 
-/** True for text a user typed: no escape introducer, no control bytes. */
+/** Text can arrive raw, encoded as a key, or wrapped in paste markers. */
 function isPrintable(data: string): boolean {
-  if (data.length === 0) return false;
-  const code = data.codePointAt(0) ?? 0;
+  if (data.includes("\u001b[200~")) return true;
+  const text = decodeKittyPrintable(data) ?? data;
+  const code = text.codePointAt(0) ?? 0;
   return code >= 0x20 && code !== 0x7f;
 }
 
@@ -207,7 +213,8 @@ export class FocusController {
     data: string,
   ): { consume?: boolean } | undefined {
     const keybindings = getKeybindings();
-    const key = parseKey(data) ?? data;
+    const parsedKey = parseKey(data);
+    const key = parsedKey ?? data;
     if (!this.panel.isFocused()) {
       // Only from an empty editor, so ← keeps moving the cursor while typing.
       if (key !== "left" || ctx.ui.getEditorText() !== "") return undefined;
@@ -281,9 +288,11 @@ export class FocusController {
       }
       return { consume: true };
     }
-    // Typing returns focus to the editor and lands there. Escape sequences
-    // and terminal replies pass through without touching focus.
-    if (isPrintable(data)) this.panel.setFocused(false);
+    // Input we leave to the editor must also give it keyboard ownership,
+    // including encoded text, pastes, and editing shortcuts. Otherwise the
+    // next Enter attaches instead of submitting. Terminal replies aren't keys.
+    if (parsedKey !== undefined || isPrintable(data))
+      this.panel.setFocused(false);
     return undefined;
   }
 }

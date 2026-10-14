@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import { type Component, Editor, type TUI } from "@earendil-works/pi-tui";
 import type { AgentService } from "../../src/agents/service.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import { FocusController } from "../../src/ui/focus.js";
@@ -14,6 +14,7 @@ function setup(state: {
   agents: number;
   suppressed: boolean;
   focused?: boolean;
+  editorText?: () => string;
 }) {
   let input: ((data: string) => { consume?: boolean } | undefined) | undefined;
   const focused: boolean[] = [];
@@ -41,7 +42,7 @@ function setup(state: {
         input = listener;
         return () => {};
       },
-      getEditorText: () => "",
+      getEditorText: () => state.editorText?.() ?? "",
     },
   } as unknown as ExtensionContext;
   const focus = new FocusController(host, panel);
@@ -70,6 +71,61 @@ describe("focus", () => {
     expect(press(LEFT)).toEqual({ consume: true });
     expect(focused).toEqual([true]);
     expect(browsed).toEqual([]);
+  });
+
+  test.each([
+    ["plain text", "hello", "hello"],
+    [
+      "paste",
+      "\u001b[200~send instructions\nmore context\u001b[201~",
+      "send instructions\nmore context",
+    ],
+    ["Kitty text", "\u001b[104u", "h"],
+    ["Kitty Unicode text", "\u001b[252u", "ü"],
+    ["modifyOtherKeys text", "\u001b[27;2;72~", "H"],
+  ])("%s returns input to the parent before Enter", (_label, data, text) => {
+    const identity = (value: string) => value;
+    const editor = new Editor({ requestRender() {} } as TUI, {
+      borderColor: identity,
+      selectList: {
+        selectedPrefix: identity,
+        selectedText: identity,
+        description: identity,
+        scrollInfo: identity,
+        noMatch: identity,
+      },
+    });
+    const submitted: string[] = [];
+    editor.onSubmit = (value) => submitted.push(value);
+    const ui = setup({
+      rows: true,
+      agents: 2,
+      suppressed: false,
+      editorText: () => editor.getText(),
+    });
+    const press = (input: string) => {
+      if (!ui.press(input)?.consume) editor.handleInput(input);
+    };
+    press(LEFT);
+    press(data);
+    expect(editor.getText()).toBe(text);
+    expect(ui.focused).toEqual([true, false]);
+    press("\r");
+    expect(submitted).toEqual([text]);
+  });
+
+  test("terminal reports and key releases leave panel focus alone", () => {
+    const ui = setup({ rows: true, agents: 2, suppressed: false });
+    ui.press(LEFT);
+    for (const data of [
+      "\u001b[I",
+      "\u001b[O",
+      "\u001b[4;20;10t",
+      "\u001b[104;1:3u",
+    ]) {
+      expect(ui.press(data)).toBeUndefined();
+    }
+    expect(ui.focused).toEqual([true]);
   });
 
   test("← opens /agents when the panel is empty", () => {

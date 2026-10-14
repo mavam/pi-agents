@@ -301,6 +301,10 @@ Each surface has one job: the panel shows live state, the transcript and
 the message list show history, and the attach view shows one agent's
 conversation. One module draws messages for all of them.
 
+Panel navigation gives way to typing, pasting, and editor shortcuts, so Enter
+submits to the parent after editing rather than opening an agent. Terminal
+reports and agent updates don't change keyboard ownership.
+
 ## Deferred
 
 Composition beyond graphs (result schemas, loops, conditions, races), edges

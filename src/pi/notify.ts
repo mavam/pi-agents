@@ -1,4 +1,10 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import {
+  type ExtensionContext,
+  getAgentDir,
+} from "@earendil-works/pi-coding-agent";
 import type { AgentInfo, GraphInfo } from "../agents/types.js";
 
 /**
@@ -48,4 +54,32 @@ export function pausedNotice(
   if (names.length === 0) return undefined;
   const [verb, them] = names.length === 1 ? ["is", "it"] : ["are", "them"];
   return `pi-agents: ${names.join(", ")} ${verb} paused with the previous session. Resume that session to continue ${them} and receive results.`;
+}
+
+/**
+ * Notices for the session that replaces this one. Pi replaces the screen
+ * along with the session, so a notice shown while the old session shuts
+ * down disappears at once; the new session shows it instead.
+ */
+function noticeFile(sessionFile: string): string {
+  const key = createHash("sha256").update(sessionFile).digest("hex");
+  return path.join(getAgentDir(), "pi-agents", "notices", `${key}.txt`);
+}
+
+export function leaveNotice(sessionFile: string, text: string): void {
+  const file = noticeFile(sessionFile);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+}
+
+/** The notice a replaced session left for this one, read once. */
+export function takeNotice(sessionFile: string): string | undefined {
+  const file = noticeFile(sessionFile);
+  try {
+    const text = fs.readFileSync(file, "utf8");
+    fs.rmSync(file, { force: true });
+    return text;
+  } catch {
+    return undefined;
+  }
 }

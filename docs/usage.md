@@ -170,8 +170,8 @@ after the graph finished, and after you resume a session.
 
 Agents belong to the Pi session that started them. Switching to another
 session, such as with `/new`, `/resume`, or a move to another worktree,
-pauses them, and Pi names the agents that were still working or had results
-waiting. Resume the original session to continue them and receive their
+pauses them, and the new session names the agents that were still working
+or had results waiting, so Pi knows they don't continue there. Resume the original session to continue them and receive their
 results.
 
 ## Commands

@@ -11,7 +11,7 @@ import type {
 import { registerCommands } from "./pi/commands.js";
 import { AgentStatePublisher } from "./pi/events.js";
 import { registerMessageRenderers } from "./pi/messages.js";
-import { notify, pausedNotice } from "./pi/notify.js";
+import { leaveNotice, notify, pausedNotice, takeNotice } from "./pi/notify.js";
 import { PiParent } from "./pi/parent.js";
 import { buildSystemPromptAppendix, profileCatalog } from "./pi/prompt.js";
 import { SessionHost } from "./pi/session.js";
@@ -122,6 +122,18 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     track(ctx);
+    // Agents the previous session paused: tell the user, and Pi, so it
+    // doesn't assume they still work.
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    const paused = sessionFile ? takeNotice(sessionFile) : undefined;
+    if (paused) {
+      notify(ctx, paused, "warning");
+      pi.sendMessage({
+        customType: "pi-agents-paused",
+        content: paused,
+        display: true,
+      });
+    }
     focus.install(ctx);
     panel.update(ctx);
     transcript.start(ctx);
@@ -135,12 +147,18 @@ export default function agentExtension(pi: ExtensionAPI): void {
   pi.on("agent_start", (_event, ctx) => track(ctx));
 
   pi.on("session_shutdown", async (event, ctx) => {
-    // Switching away pauses this session's agents; quitting does too, but
-    // then nothing is left to tell.
+    // Switching away pauses this session's agents; the next session tells
+    // about them. Quitting pauses them too, but then nobody is left to tell.
     const service = host.current();
-    if (service && event.reason !== "quit" && event.reason !== "reload") {
+    if (service && event.targetSessionFile && event.reason !== "reload") {
       const notice = pausedNotice(service.list(), service.graphs());
-      if (notice) notify(ctx, notice, "warning");
+      if (notice) {
+        try {
+          leaveNotice(event.targetSessionFile, notice);
+        } catch {
+          notify(ctx, notice, "warning");
+        }
+      }
     }
     state.dispose();
     focus.dispose();

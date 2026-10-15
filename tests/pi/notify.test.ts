@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentInfo, GraphInfo } from "../../src/agents/types.js";
-import { pausedNotice } from "../../src/pi/notify.js";
+import { leaveNotice, pausedNotice, takeNotice } from "../../src/pi/notify.js";
+import { tempDir } from "../agents/helpers.js";
 
 const agent = (info: Partial<AgentInfo>) =>
   ({ name: "a", state: "idle", ...info }) as AgentInfo;
@@ -25,5 +26,19 @@ describe("paused notice", () => {
     ).toBe(
       "pi-agents: reviewer, notes, review are paused with the previous session. Resume that session to continue them and receive results.",
     );
+  });
+
+  test("the next session takes the notice once", () => {
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = tempDir();
+    try {
+      leaveNotice("/sessions/next.jsonl", "paused");
+      expect(takeNotice("/sessions/other.jsonl")).toBeUndefined();
+      expect(takeNotice("/sessions/next.jsonl")).toBe("paused");
+      expect(takeNotice("/sessions/next.jsonl")).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+    }
   });
 });

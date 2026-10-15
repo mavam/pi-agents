@@ -150,7 +150,14 @@ export default function agentExtension(pi: ExtensionAPI): void {
     // Switching away pauses this session's agents; the next session tells
     // about them. Quitting pauses them too, but then nobody is left to tell.
     const service = host.current();
-    if (service && event.targetSessionFile && event.reason !== "reload") {
+    // Agents of a session without a file end with it; there's nothing to
+    // resume.
+    if (
+      service &&
+      ctx.sessionManager.getSessionFile() &&
+      event.targetSessionFile &&
+      event.reason !== "reload"
+    ) {
       const notice = pausedNotice(service.list(), service.graphs());
       if (notice) {
         try {

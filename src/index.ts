@@ -23,6 +23,7 @@ import {
 } from "./pi/transcript.js";
 import { FocusController } from "./ui/focus.js";
 import { FancyFooterReporter } from "./ui/footer.js";
+import { statusOf } from "./ui/format.js";
 import { AgentPanel } from "./ui/panel.js";
 
 export default function agentExtension(pi: ExtensionAPI): void {
@@ -51,7 +52,9 @@ export default function agentExtension(pi: ExtensionAPI): void {
       .list({ includeClosed: true })
       .filter(
         (agent) =>
-          !agent.closed || !agent.graph || !helperGraphs.has(agent.graph),
+          statusOf(agent) !== "closed" ||
+          !agent.graph ||
+          !helperGraphs.has(agent.graph),
       );
   });
 

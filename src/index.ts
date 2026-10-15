@@ -11,6 +11,7 @@ import type {
 import { registerCommands } from "./pi/commands.js";
 import { AgentStatePublisher } from "./pi/events.js";
 import { registerMessageRenderers } from "./pi/messages.js";
+import { notify, pausedNotice } from "./pi/notify.js";
 import { PiParent } from "./pi/parent.js";
 import { buildSystemPromptAppendix, profileCatalog } from "./pi/prompt.js";
 import { SessionHost } from "./pi/session.js";
@@ -130,7 +131,14 @@ export default function agentExtension(pi: ExtensionAPI): void {
 
   pi.on("agent_start", (_event, ctx) => track(ctx));
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (event, ctx) => {
+    // Switching away pauses this session's agents; quitting does too, but
+    // then nothing is left to tell.
+    const service = host.current();
+    if (service && event.reason !== "quit" && event.reason !== "reload") {
+      const notice = pausedNotice(service.list(), service.graphs());
+      if (notice) notify(ctx, notice, "warning");
+    }
     state.dispose();
     focus.dispose();
     panel.dispose();

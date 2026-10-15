@@ -168,6 +168,12 @@ one, and continue where it left off; its time then counts on from its start,
 pauses included. This also works for a graph's agents
 after the graph finished, and after you resume a session.
 
+Agents belong to the Pi session that started them. Switching to another
+session, such as with `/new`, `/resume`, or a move to another worktree,
+pauses them, and Pi names the agents that were still working or had results
+waiting. Resume the original session to continue them and receive their
+results.
+
 ## Commands
 
 | Command | Action |

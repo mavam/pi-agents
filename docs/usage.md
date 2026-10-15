@@ -194,6 +194,10 @@ as your request, and acknowledges results briefly while other agents still
 work. To get several results together, start a graph: it reports as one
 message.
 
+Failed result cards include the error message when one is available, not
+just a category such as `model_error`. Long error messages collapse like
+answers; press Ctrl+O to expand them. Pi still receives the full error text.
+
 Only `agent_wait` blocks: until the agents answer, or at most its `timeout`
 in seconds. Pi calls it only when a turn must combine results, or in a
 single-shot run such as `pi --print`, which ends with Pi's answer and would

@@ -107,6 +107,11 @@ describe("AgentService", () => {
     await until(() => service.pendingDeliveries().length === 1);
     const [delivery] = service.pendingDeliveries();
     if (delivery) await service.acknowledge(delivery);
+    expect(delivery?.outcome).toEqual({
+      kind: "failed",
+      reason: "model_error",
+      detail: "boom",
+    });
     expect(service.get("w")?.state).toBe("failed");
     expect(service.list().map((agent) => agent.name)).toEqual(["w"]);
   });

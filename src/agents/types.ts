@@ -80,7 +80,7 @@ export interface AgentResult {
 /** What a settled parent request produced. */
 export type RequestOutcome =
   | { kind: "answered"; result: AgentResult }
-  | { kind: "failed"; reason: string };
+  | { kind: "failed"; reason: string; detail?: string };
 
 /** Live activity of a working agent. */
 export interface AgentActivity {

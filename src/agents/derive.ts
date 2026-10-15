@@ -209,7 +209,13 @@ export function outcomeOf(
   if (submission.status === "unanswered") {
     return submission.reason === "aborted"
       ? interrupted
-      : { kind: "failed", reason: submission.reason };
+      : {
+          kind: "failed",
+          reason: submission.reason,
+          ...(typeof submission.detail === "string"
+            ? { detail: submission.detail }
+            : {}),
+        };
   }
   return undefined;
 }

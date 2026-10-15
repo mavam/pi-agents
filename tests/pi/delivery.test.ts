@@ -11,6 +11,7 @@ import { PiParent } from "../../src/pi/parent.js";
 import {
   closeService,
   createFaux,
+  createGatedFaux,
   jsonlStorage,
   MODEL,
   openService,
@@ -173,6 +174,33 @@ describe("delivery to Pi", () => {
     parent.notify();
     await settle();
     expect(sent).toHaveLength(2);
+  });
+
+  test("delivers the original failure detail after a later turn answers", async () => {
+    const state = { idle: false };
+    const { sent, parent } = setup(state);
+    const current = await openService({
+      parent,
+      models: createGatedFaux().models,
+    });
+    service = current;
+    await current.spawn({
+      job: "fail first",
+      name: "a",
+      cwd: ".",
+      model: MODEL,
+    });
+    await until(() => current.pendingDeliveries().length === 1);
+    await current.send("a", "second", "auto");
+    await until(() => current.pendingDeliveries().length === 2);
+
+    state.idle = true;
+    parent.notify();
+    await until(() => sent.length === 2);
+    expect(sent.map((message) => message.content)).toEqual([
+      "Agent a failed: model_error\n\ncannot fail first",
+      "Agent a answered:\n\ndone: second",
+    ]);
   });
 
   test("posts one message per graph with its end agent's answer", async () => {

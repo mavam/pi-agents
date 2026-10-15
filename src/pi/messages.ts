@@ -89,7 +89,9 @@ export function resultDetails(
         ? outcome.result.stopReason === "error"
           ? (outcome.result.errorMessage ?? (outcome.result.text || "error"))
           : outcome.result.text
-        : outcome.reason,
+        : outcome.detail && outcome.detail !== outcome.reason
+          ? `${outcome.reason}\n\n${outcome.detail}`
+          : outcome.reason,
     ...(info?.profile ? { profile: info.profile } : {}),
     ...(info ? { model: shortModel(info) } : {}),
     ...(usage ? { usage } : {}),
@@ -286,7 +288,12 @@ const renderGraphResult: MessageRenderer = (message, options, theme) => {
         others
           .map((node) => {
             const nodeStyle = STATE_STYLES[KIND_STATES[node.kind]];
-            return `${color(nodeStyle.color, nodeStyle.icon)} ${node.name} ${color(node.kind === "failed" ? "error" : "dim", nodeNote(node))}`;
+            const note = collapseLines(
+              nodeNote(node),
+              options.expanded,
+              COLLAPSED_NODE_LINES,
+            );
+            return `${color(nodeStyle.color, nodeStyle.icon)} ${node.name} ${color(node.kind === "failed" ? "error" : "dim", note)}`;
           })
           .join("\n"),
         0,
@@ -322,7 +329,11 @@ const renderResult: MessageRenderer = (message, options, theme) => {
             0,
             getMarkdownTheme(),
           )
-        : new Text(color("error", details.body), 0, 0),
+        : new Text(
+            color("error", collapse(details.body, options.expanded)),
+            0,
+            0,
+          ),
     );
   }
   return card;

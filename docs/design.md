@@ -202,8 +202,11 @@ restarts. Stopping the agent withdraws its open requests and delivers
 nothing. A graph agent's job is not a parent request: interrupting it ends
 its node as interrupted.
 
-Results reach the parent whole. No budget cuts what the model reads; limits
-wait until large results show what a good mechanism looks like.
+Results reach the parent whole. Failures retain the error text from the
+request that failed, rather than looking it up from the agent's latest
+turn, which may have changed before delivery. Cards may collapse long
+errors, but no budget cuts what the model reads; limits wait until large
+results show what a good mechanism looks like.
 
 ### At least once
 

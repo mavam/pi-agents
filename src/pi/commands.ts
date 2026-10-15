@@ -31,11 +31,12 @@ import {
   graphNote,
   QUEUED_NOTE,
   runtime,
-  STATE_STYLES,
+  STATUS_STYLES,
   shortModel,
   shortName,
   stateIcon,
   statusIcon,
+  statusOf,
 } from "../ui/format.js";
 import type { Bold, DetailLine } from "../ui/frame.js";
 import { type OverlaySpec, openOverlay } from "../ui/overlay.js";
@@ -521,7 +522,7 @@ export function registerCommands(pi: ExtensionAPI, deps: CommandDeps): void {
         : matches.map((agent) => ({
             value: agent.name,
             label: agent.name,
-            description: `${STATE_STYLES[agent.state].icon} ${agent.job.replace(/\s+/g, " ").slice(0, 60)}`,
+            description: `${STATUS_STYLES[statusOf(agent)].icon} ${agent.job.replace(/\s+/g, " ").slice(0, 60)}`,
           }));
     },
     handler: async (args, ctx) => {

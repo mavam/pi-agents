@@ -5,7 +5,7 @@ import {
   EMPTY_USAGE,
   type GraphInfo,
 } from "../../src/agents/types.js";
-import { formatFooterSummary } from "../../src/ui/footer.js";
+import { footerSpans, formatFooterSummary } from "../../src/ui/footer.js";
 import {
   type Colorize,
   formatAgentLine,
@@ -97,11 +97,11 @@ describe("formatting", () => {
     );
   });
 
-  test("queued results show in the accent color with a note", () => {
+  test("queued results show ◐ in the accent color with a note", () => {
     const color = (name: string, text: string) => `<${name}>${text}`;
     expect(
       formatAgentLine(agent({ state: "idle", queued: true }), 5_000, color),
-    ).toBe("<accent>● reviewer <dim>terra <dim>result queued");
+    ).toBe("<accent>◐ reviewer <dim>terra <dim>result queued");
     expect(formatAgentLine(agent({ state: "idle" }), 5_000, color)).toBe(
       "<success>● reviewer <dim>terra",
     );
@@ -115,7 +115,7 @@ describe("formatting", () => {
         0,
         color,
       ),
-    ).toBe("<accent>● review <dim>graph 2/2 <dim>result queued");
+    ).toBe("<accent>◐ review <dim>graph 2/2 <dim>result queued");
   });
 
   test("silent working agents show a stall hint", () => {
@@ -185,7 +185,7 @@ describe("formatting", () => {
         }),
         92_000,
       ),
-    ).toBe("✗ review graph 3/3 1 failed, 1 skipped");
+    ).toBe("⊗ review graph 3/3 1 failed, 1 skipped");
     expect(
       formatGraphLine(graph({ state: "interrupted", stopped: true }), 0),
     ).toBe("⊘ review graph 0/3 stopped");
@@ -426,15 +426,23 @@ describe("formatting", () => {
     ).toBe("◉ lead terra 2s delegating helpers 1/2");
   });
 
-  test("footer counts states", () => {
+  test("footer counts statuses, closed agents included", () => {
     expect(formatFooterSummary([])).toBe("");
     expect(
       formatFooterSummary([
         agent({ state: "working" }),
-        agent({ state: "working" }),
+        agent({ state: "working", closed: true }),
         agent({ state: "idle" }),
+        agent({ state: "idle", queued: true }),
+        agent({ state: "idle", closed: true }),
+        agent({ state: "idle", queued: true, closed: true }),
+        agent({ state: "failed", closed: true }),
       ]),
-    ).toBe("2◉ 1●");
+    ).toBe("2◉ 2◐ 1● 2◌");
+    expect(footerSpans([agent({ state: "failed" })])).toEqual([
+      { text: "1" },
+      { text: "⊗", color: "error" },
+    ]);
   });
 
   test("message lines show who, the text, and its age; color is status", () => {

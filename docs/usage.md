@@ -25,15 +25,18 @@ An agent is in one of these states:
 | State | Meaning |
 | --- | --- |
 | ◉ `working` | The agent works on its job or a message. |
+| ◐ `queued` | The agent answered, and its result waits for Pi to take it. |
 | ● `idle` | The agent answered and waits for messages. |
-| ✗ `failed` | The last answer ended with an error. |
+| ⊗ `failed` | The last answer ended with an error. |
 | ⊘ `interrupted` | The last answer was interrupted before it finished. |
 | ○ `waiting` | In a graph: the agent waits for the agents whose results it needs. |
 | ⊖ `skipped` | In a graph: the agent never started because none of the agents it waited for answered. |
+| ◌ `closed` | The agent ended: its answer reached Pi, or it was stopped. Messaging it starts it again. |
 
 A graph uses the same glyphs: it works until all of its agents finished, then
 shows the state of its last agents: failed if one failed or was skipped,
-interrupted if one was interrupted or stopped, and idle otherwise.
+interrupted if one was interrupted or stopped, and idle otherwise. Once its
+result reaches Pi, it shows ◌ as well.
 
 Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`,
 and `codemode`, along with your context files such as `AGENTS.md` and your
@@ -92,7 +95,7 @@ Have three reviewer agents review this branch: correctness, tests, and docs.
 A line above the editor shows how many agents are in each state:
 
 ```text
-◉ 3 working ✗ 1 failed · ← agents
+◉ 3 working ⊗ 1 failed · ← agents
 ```
 
 Press ← in an empty editor, Ctrl+Q, or click the line to focus the panel. It
@@ -105,7 +108,7 @@ dim:
 
 ```text
 ◉ reviewer explorer terra 1m32s 15.5k Using grep
-✗ docs sol 8.0k $0.02 rate limit exceeded
+⊗ docs sol 8.0k $0.02 rate limit exceeded
 ◉ review graph 1/4 40s 12.0k
 ├─ ● api terra 4.0k
 ├─ ◉ tests sol 40s 8.0k Using grep
@@ -115,11 +118,11 @@ dim:
 
 An agent leaves the panel once its answer reaches Pi, and a graph once its
 result does. Pi takes results only between turns and while you aren't
-attached, so until then an agent that answered Pi shows `●` in the accent
-color instead of green and says `result queued`, and so does a graph:
+attached, so until then an agent that answered Pi shows `◐` and says
+`result queued`, and so does a graph:
 
 ```text
-● series-review sol 1.1m $0.42 result queued
+◐ series-review sol 1.1m $0.42 result queued
 ```
 
 Failed and interrupted agents stay until you or Pi stop them.

@@ -25,7 +25,7 @@ export const STATE_STYLES = {
   working: { icon: "◉", color: "warning" },
   waiting: { icon: "○", color: "dim" },
   idle: { icon: "●", color: "success" },
-  failed: { icon: "✗", color: "error" },
+  failed: { icon: "⊗", color: "error" },
   interrupted: { icon: "⊘", color: "dim" },
   skipped: { icon: "⊖", color: "muted" },
 } as const satisfies Record<
@@ -33,36 +33,63 @@ export const STATE_STYLES = {
   { icon: string; color: Parameters<Colorize>[0] }
 >;
 
-/** The order states show in when counted. */
-const STATE_ORDER: AgentState[] = [
+/**
+ * What an agent or a graph shows: its state, except that an idle one whose
+ * result waits for the parent is `queued`, and a closed one that doesn't
+ * work is `closed`, which messaging an agent undoes.
+ */
+export type Status = AgentState | "queued" | "closed";
+
+export const STATUS_STYLES = {
+  ...STATE_STYLES,
+  queued: { icon: "◐", color: "accent" },
+  closed: { icon: "◌", color: "muted" },
+} as const satisfies Record<
+  Status,
+  { icon: string; color: Parameters<Colorize>[0] }
+>;
+
+/** The order statuses show in when counted. */
+const STATUS_ORDER: Status[] = [
   "working",
   "waiting",
+  "queued",
   "idle",
   "failed",
   "interrupted",
   "skipped",
+  "closed",
 ];
 
-/** How many agents are in each state, in display order, without the
- * states no agent is in. */
-export function stateCounts(
-  agents: readonly AgentInfo[],
-): Array<[AgentState, number]> {
-  const counts = new Map<AgentState, number>();
-  for (const agent of agents)
-    counts.set(agent.state, (counts.get(agent.state) ?? 0) + 1);
-  return STATE_ORDER.flatMap((state) => {
-    const count = counts.get(state);
-    return count ? [[state, count] as [AgentState, number]] : [];
+export function statusOf(item: {
+  state: AgentState;
+  queued?: boolean;
+  closed?: boolean;
+}): Status {
+  if (item.queued && item.state === "idle") return "queued";
+  if (item.closed && item.state !== "working") return "closed";
+  return item.state;
+}
+
+/** How many items have each status, in display order, without the
+ * statuses no item has. */
+export function statusCounts(
+  items: readonly Parameters<typeof statusOf>[0][],
+): Array<[Status, number]> {
+  const counts = new Map<Status, number>();
+  for (const item of items) {
+    const status = statusOf(item);
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+  }
+  return STATUS_ORDER.flatMap((status) => {
+    const count = counts.get(status);
+    return count ? [[status, count] as [Status, number]] : [];
   });
 }
 
 /** What a call's wait gave up on before it finished: the call's outcome
  * for it, which stays true. */
 export const WAIT_ENDED_STYLE = { icon: "⊠", color: "warning" } as const;
-
-/** An answer that waits for the parent: idle, but not done yet. */
-export const QUEUED_STYLE = { icon: "●", color: "accent" } as const;
 
 /** The note on agents and graphs whose result waits for the parent. */
 export const QUEUED_NOTE = "result queued";
@@ -77,15 +104,17 @@ export function stateIcon(state: AgentState, color: Colorize): string {
   return color(style.color, style.icon);
 }
 
-/** The glyph of an agent or a graph; an idle one with a queued result
- * differs from one whose result reached the parent. */
+export function statusGlyph(status: Status, color: Colorize): string {
+  const style = STATUS_STYLES[status];
+  return color(style.color, style.icon);
+}
+
+/** The glyph of an agent or a graph, by its status. */
 export function statusIcon(
-  item: { state: AgentState; queued?: boolean },
+  item: Parameters<typeof statusOf>[0],
   color: Colorize,
 ): string {
-  if (item.queued && item.state === "idle")
-    return color(QUEUED_STYLE.color, QUEUED_STYLE.icon);
-  return stateIcon(item.state, color);
+  return statusGlyph(statusOf(item), color);
 }
 
 export function formatElapsed(ms: number): string {
@@ -180,7 +209,7 @@ function activityText(info: AgentInfo, now: number): string | undefined {
  * One agent line for the panel and tool results; the glyph carries the state
  * and working agents show how long they have worked:
  * `◉ reviewer explorer terra 1m32s 15.5k Using grep`, the details dim. An idle
- * agent whose answer waits for the parent shows `●` in the accent color and
+ * agent whose answer waits for the parent shows `◐` in the accent color and
  * `result queued`.
  */
 export function formatAgentLine(

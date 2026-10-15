@@ -689,7 +689,7 @@ class AgentPane implements Component {
       : ["", ` ${color("dim", "esc back")}`];
     const failure =
       info?.state === "failed" && info.result?.errorMessage
-        ? [color("error", `✗ ${info.result.errorMessage}`)]
+        ? [color("error", `⊗ ${info.result.errorMessage}`)]
         : [];
     const flash = this.flash ? [color("error", `⚠ ${this.flash.text}`)] : [];
     const rows = this.tui.terminal?.rows ?? 24;

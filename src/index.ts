@@ -34,10 +34,25 @@ export default function agentExtension(pi: ExtensionAPI): void {
   const panel = new AgentPanel(host);
   const focus = new FocusController(host, panel);
   const transcript = new MessageTranscript(pi);
-  const footer = new FancyFooterReporter(
-    pi,
-    () => host.current()?.list() ?? [],
-  );
+  // The footer counts the agents Pi can reach: open ones, and closed ones
+  // that messaging opens again. Nobody can message helpers, so closed
+  // helpers drop out.
+  const footer = new FancyFooterReporter(pi, () => {
+    const service = host.current();
+    if (!service) return [];
+    const helperGraphs = new Set(
+      service
+        .graphs({ includeClosed: true })
+        .filter((graph) => graph.owner)
+        .map((graph) => graph.id),
+    );
+    return service
+      .list({ includeClosed: true })
+      .filter(
+        (agent) =>
+          !agent.closed || !agent.graph || !helperGraphs.has(agent.graph),
+      );
+  });
 
   // A click on a panel row attaches, like ⏎.
   panel.onAttach = (agentId) => focus.attachTo(agentId);

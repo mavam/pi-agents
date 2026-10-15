@@ -122,7 +122,7 @@ describe("/agents detail", () => {
       "  - High: x breaks.",
       "    Fix: guard it.",
       "",
-      "✗ b sol 2.0k",
+      "⊗ b sol 2.0k",
       "  rate limited",
       "",
       "⊘ c sol 2.0k stopped",
@@ -151,7 +151,7 @@ describe("/agents detail", () => {
     expect(lines).toEqual([
       "The result waits until Pi's turn ends.",
       "",
-      "✗ lead.a sol 2.0k",
+      "⊗ lead.a sol 2.0k",
       "  rate limited",
     ]);
   });

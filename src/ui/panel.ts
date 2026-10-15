@@ -52,8 +52,8 @@ import {
   formatElapsed,
   formatGraphLine,
   sanitizeLine,
-  stateCounts,
-  stateIcon,
+  statusCounts,
+  statusGlyph,
 } from "./format.js";
 import { fitHints } from "./frame.js";
 import {
@@ -301,8 +301,8 @@ export class AgentPanel {
   private summaryLine(style: MessageStyle): string {
     const { color } = style;
     const agents = this.host.current()?.list() ?? [];
-    const counts = stateCounts(agents).map(
-      ([state, count]) => `${stateIcon(state, color)} ${count} ${state}`,
+    const counts = statusCounts(agents).map(
+      ([status, count]) => `${statusGlyph(status, color)} ${count} ${status}`,
     );
     return `${counts.join(" ")}${color("dim", " · ← agents")}`;
   }

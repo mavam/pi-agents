@@ -22,7 +22,7 @@ results in between stay in the graph, where you can attach to read them:
 ```text
 ● review › merge answered opus 6.2k
   Three issues stand out: …
-✗ host failed: rate limit exceeded
+⊗ host failed: rate limit exceeded
 ```
 
 When an agent that others wait for fails, they still start with the results

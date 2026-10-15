@@ -65,5 +65,7 @@ forever. Changes apply the next time Pi starts.
 ## Footer counters
 
 With [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) installed,
-pi-agents can show open agents by state, such as `✦ 2◉ 1●`. Enable the
-`agents` widget through `/fancy-footer`.
+pi-agents can show the session's agents by state left of the model, such as
+`2◉ 1● 3◌`, each glyph in its status color. The count includes closed agents
+(◌), since messaging one starts it again, but not closed helpers, which
+nobody can message. Enable the `agents` widget through `/fancy-footer`.

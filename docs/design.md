@@ -83,7 +83,12 @@ or `skipped` when none of them answered.
 Stopping an agent closes it: a flag that hides it, while storage keeps it.
 An agent also closes on its own once its answer is delivered or consumed by
 a wait and no parent request remains; failed and interrupted agents stay
-open. Messaging a closed agent opens it again. Names are unique among
+open. Messaging a closed agent opens it again. Closed is a status of its
+own, shown with one glyph wherever an agent's status appears: the panel
+hides closed agents, while `/agents` and the footer count keep them,
+because Pi can still reach them. Closed helpers drop out of the footer,
+since nobody can message them. Graph details and tool results show how an
+agent's work ended instead, so they keep the outcome's glyph. Names are unique among
 visible agents and graphs, claimed in the commit that creates them, so
 agents started at once can't share one.
 

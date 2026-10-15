@@ -4,7 +4,7 @@
  * Pi hands to extensions before the focused component:
  *
  *   editor ── ← (empty editor) / ctrl+q ──▶ panel, or /agents if it's empty
- *   panel  ── esc / → / typing / pasting ──▶ editor
+ *   panel  ── esc / → / any key it doesn't use ──▶ editor
  *   panel  ── ⏎ ──▶ attach view (ctx.ui.custom owns focus until it closes)
  *   panel  ── tab ──▶ /agents ── tab ──▶ /messages ── tab ──▶ panel
  *   panel  ── shift+tab ──▶ /messages, the cycle backwards

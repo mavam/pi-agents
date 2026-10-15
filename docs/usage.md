@@ -135,7 +135,7 @@ focused panel:
 | Click | Attach like ⏎; a message attaches to its recipient. Needs Pi's fullscreen mode, its default. |
 | Tab | Open `/agents` at the same row. Tab cycles the panel, `/agents`, and `/messages`; Shift+Tab goes back. |
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
-| Esc or → | Go back to the editor. Typing or pasting goes back too, with the text you enter. |
+| Esc or → | Go back to the editor. Other keys go back too and act there, so typed or pasted text lands in the editor. |
 
 Attaching shows the agent's conversation with Pi's own message and tool
 rendering. The editor then talks to the agent:

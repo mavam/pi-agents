@@ -3,6 +3,8 @@ title: Error details in failed agent results
 type: bugfix
 authors:
   - mavam
+prs:
+  - 99
 created: 2026-10-15T06:26:30.138551Z
 ---
 

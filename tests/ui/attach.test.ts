@@ -5,6 +5,7 @@ import {
   openAgentPane,
   queuedTexts,
   restoredEditorText,
+  wheelScrollBack,
   withoutUserPrefix,
 } from "../../src/ui/attach.js";
 
@@ -47,6 +48,13 @@ describe("attach view", () => {
     expect(restoredEditorText(queued, "draft")).toBe(
       "focus on errors\n\nthen tests\n\ndraft",
     );
+  });
+
+  test("scrolls back on wheel up and forward on wheel down, within bounds", () => {
+    expect(wheelScrollBack(0, 10, -3)).toBe(3);
+    expect(wheelScrollBack(3, 10, 2)).toBe(1);
+    expect(wheelScrollBack(8, 10, -5)).toBe(10);
+    expect(wheelScrollBack(1, 10, 3)).toBe(0);
   });
 
   describe("working loader", () => {

@@ -3,6 +3,8 @@ title: Mouse-wheel scrolling in the attached view
 type: feature
 authors:
   - mavam
+prs:
+  - 103
 created: 2026-10-16T19:42:52.758534Z
 ---
 

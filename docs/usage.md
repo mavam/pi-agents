@@ -156,6 +156,7 @@ rendering. The editor then talks to the agent:
 | Ctrl+O | Expand or collapse tool output. |
 | ← or Ctrl+D | Detach when the editor is empty. |
 | Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. |
+| Mouse wheel | Scroll in fullscreen mode, with the pointer over the attached view. |
 
 Messages you send while attached stay between you and the agent. Their
 results don't post into the parent conversation, with one exception: when

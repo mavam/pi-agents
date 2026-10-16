@@ -44,9 +44,14 @@ and `codemode`, along with your context files such as `AGENTS.md` and your
 among these, so with `codemode` on in Pi they have it too; a profile or a
 spawn can name others. `read` shows them images, and
 `codemode` scripts call their other tools, including `delegate_graph` and
-`agent_send`, and pick up where they were after a restart. They can't use
-MCP servers or tools from other extensions, and they start other agents
-only when you let them delegate.
+`agent_send`, and pick up where they were after a restart. As in Pi,
+scripts also get [`models`](https://pi.dev/docs/latest/codemode#models):
+they list the models you can use, run classifiers with `models.classify()`,
+and generate images with `models.generateImages()`. These calls count
+toward the agent's usage, and agents without `codemode` can't make them.
+Agents can't use MCP servers or
+tools from other extensions, and they start other agents only when you let
+them delegate.
 
 ## Skills
 

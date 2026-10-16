@@ -257,8 +257,15 @@ but can repeat one.
   names tools; without any, they get Pi's default set.
 - `codemode` scripts call the agent's other tools as nested calls, each a
   task of its own owned by the script's call, so a script's delegations get
-  their own graphs, and pi-durable replays a script after a restart. Scripts
-  get no model calls of their own.
+  their own graphs, and pi-durable replays a script after a restart.
+- `codemode` scripts get `models.*` as in Pi. pi-durable runs classifier
+  and image calls as internal tools only scripts can call, so each is a
+  nested call with its own usage and replay policy. An agent enables them
+  exactly when it has `codemode`, and a helper gets them only with
+  `codemode` and only when its agent has them, so they never widen what an
+  agent can do. Nobody selects them by name, and tool lists don't show
+  them. Opening a session gives every stored agent with `codemode` these
+  tools before its work resumes, so it holds for agents of any age.
 - `read` shows agents images, converted and shrunk to the model's limits.
 - MCP servers and tools of other extensions live in Pi's session, which
   pi-durable can't reach yet (earendil-works/pi#10837,

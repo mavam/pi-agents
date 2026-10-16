@@ -4,14 +4,20 @@
  */
 
 import {
+  AgentDoc,
   type Conversation,
   configure,
   type Extension,
   type Harness,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
-import { DEFAULT_AGENT_TOOLS } from "../host/tools.js";
-import { CONTEXT } from "./context.js";
+import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
+import {
+  DEFAULT_AGENT_TOOLS,
+  isCodemodeModelTool,
+  withCodemodeModels,
+} from "../host/tools.js";
+import { CONTEXT, conversationId } from "./context.js";
 import { DELEGATE_TOOL } from "./delegation.js";
 import { type AgentExtensions, agentSelection } from "./extensions.js";
 import { GraphTask, NodeTask } from "./graphs.js";
@@ -235,7 +241,9 @@ function resolveTools(
   deps: CreationDeps,
   names: string[] | undefined,
 ): ToolRegistration[] {
-  const available = [...(deps.extensions.tools.tools ?? [])];
+  const all = deps.extensions.tools.tools ?? [];
+  // Agents get the internal tools of codemode with it, never by name.
+  const available = all.filter((tool) => !isCodemodeModelTool(tool.name));
   const wanted = names ?? [...DEFAULT_AGENT_TOOLS];
   const unknown = wanted.filter(
     (name) => !available.some((tool) => tool.name === name),
@@ -244,7 +252,49 @@ function resolveTools(
     throw new AgentError(
       `Unknown tools: ${unknown.join(", ")}. Available: ${available.map((tool) => tool.name).join(", ")}`,
     );
-  return wanted.map(
-    (name) => available.find((tool) => tool.name === name) as ToolRegistration,
+  return withCodemodeModels(
+    wanted.map(
+      (name) =>
+        available.find((tool) => tool.name === name) as ToolRegistration,
+    ),
+    all,
   );
+}
+
+/**
+ * Enable the internal tools of `codemode` for agents stored before its
+ * scripts had `models.*`, so every agent with `codemode` can call
+ * `models.classify()` and `models.generateImages()`. Agents without
+ * `codemode` stay as they are.
+ */
+export async function enableCodemodeModels(
+  deps: CreationDeps,
+  ids: readonly string[],
+): Promise<void> {
+  const internal = (deps.extensions.tools.tools ?? [])
+    .map((tool) => tool.name)
+    .filter(isCodemodeModelTool);
+  const lacking: string[] = [];
+  for (const id of ids) {
+    const agent = await deps.harness.snapshot(
+      AgentDoc,
+      conversationId(id),
+      CONTEXT,
+    );
+    const tools = agent?.tools;
+    if (
+      Array.isArray(tools) &&
+      tools.includes(CODEMODE_TOOL_NAME) &&
+      internal.some((name) => !tools.includes(name))
+    )
+      lacking.push(id);
+  }
+  if (lacking.length === 0) return;
+  await deps.harness.commit(async (tx) => {
+    for (const id of lacking) {
+      const { tools } = await tx.doc(AgentDoc, conversationId(id));
+      if (!Array.isArray(tools)) continue;
+      for (const name of internal) if (!tools.includes(name)) tools.push(name);
+    }
+  }, CONTEXT);
 }

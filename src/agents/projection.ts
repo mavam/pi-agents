@@ -10,6 +10,7 @@ import {
   LiveDoc,
   UsageDoc,
 } from "@earendil-works/pi-durable";
+import { isCodemodeModelTool } from "../host/tools.js";
 import { CONTEXT, conversationId } from "./context.js";
 import { DELEGATE_TOOL } from "./delegation.js";
 import {
@@ -240,7 +241,9 @@ export class Projection {
         : await this.agentEndedAt(id, record);
     const durable = (agent ?? {}) as DurableAgentState;
     const tools = Array.isArray(durable.tools)
-      ? durable.tools.filter((tool) => tool !== DELEGATE_TOOL)
+      ? durable.tools.filter(
+          (tool) => tool !== DELEGATE_TOOL && !isCodemodeModelTool(tool),
+        )
       : undefined;
     this.agentInfos.set(id, {
       id,

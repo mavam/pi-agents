@@ -18,6 +18,7 @@ import {
   type CreationDeps,
   createAgent,
   createGraph,
+  enableCodemodeModels,
   prepare,
 } from "./creation.js";
 import { Delivery } from "./delivery.js";
@@ -181,6 +182,10 @@ export class AgentService {
   private async initialize(): Promise<void> {
     this.observer.start();
     await this.projection.reload();
+    await enableCodemodeModels(
+      this.creation,
+      Object.keys(this.projection.agents()),
+    );
     for (const id of Object.keys(this.projection.agents())) {
       await this.observer.loadLastAssistant(id);
       // A request recorded before a crash may lack its submission.

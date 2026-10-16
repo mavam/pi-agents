@@ -1,7 +1,8 @@
 /**
  * The tools agents work with: pi-durable's `read`, `write`, `edit`, `bash`,
  * and `codemode`, plus Pi's `grep`, `find`, and `ls` adapted to pi-durable.
- * The adapted tools only read, so a rerun after a crash is safe.
+ * The adapted tools only read, so a rerun after a crash is safe. Behind
+ * `codemode` come its internal model tools, which only scripts call.
  */
 
 import type { JsonValue } from "@earendil-works/chord";
@@ -156,16 +157,46 @@ export interface ToolsExtension {
   close(): Promise<void>;
 }
 
+/** pi-durable reserves these names for the internal tools of `codemode`. */
+const CODEMODE_INTERNAL_PREFIX = "pi.codemode.";
+
+/**
+ * The internal tools behind `models.classify()` and `models.generateImages()`
+ * in `codemode` scripts. Only tools call them, so the model never sees them,
+ * but an agent must enable them for its scripts to reach them.
+ */
+export function isCodemodeModelTool(name: string): boolean {
+  return name.startsWith(CODEMODE_INTERNAL_PREFIX);
+}
+
+/**
+ * `tools` with the `codemode` model tools among `available` when `tools`
+ * has `codemode`, so an agent's scripts get `models.*` exactly when it has
+ * `codemode`.
+ */
+export function withCodemodeModels(
+  tools: readonly ToolRegistration[],
+  available: readonly ToolRegistration[],
+): ToolRegistration[] {
+  const own = tools.filter((tool) => !isCodemodeModelTool(tool.name));
+  if (!own.some((tool) => tool.name === CODEMODE_TOOL_NAME)) return own;
+  return [
+    ...own,
+    ...available.filter((tool) => isCodemodeModelTool(tool.name)),
+  ];
+}
+
 /**
  * The tools of agents. `codemode` scripts call the agent's other tools as
  * nested calls, which pi-durable replays after a restart. Its prompt
  * section lists those tools only for agents that have `codemode`. Scripts
- * get no `models.*`, whose internal tools agents would have to select too.
+ * also get `models.*`; their classifier and image calls run as internal
+ * tools, which agents with `codemode` enable along with it.
  */
 export function createToolsExtension(): ToolsExtension {
   // Like Pi, scripts have no deadline unless they ask for one.
   const sandbox = new CodemodeSandbox({ timeoutMs: Number.POSITIVE_INFINITY });
-  const codemode = createCodemodeExtension({ sandbox, models: false });
+  const codemode = createCodemodeExtension({ sandbox });
   const sections = (codemode.sections ?? []).map(
     (each): PromptSection => ({
       ...each,

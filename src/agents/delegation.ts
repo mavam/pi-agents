@@ -37,6 +37,7 @@ import {
   UsageDoc,
 } from "@earendil-works/pi-durable";
 import { type Static, Type } from "typebox";
+import { withCodemodeModels } from "../host/tools.js";
 import { summarizeUsage, sumUsage } from "./derive.js";
 import { GraphTask, type NodeResult, NodeTask } from "./graphs.js";
 import { SEND_TOOL, STATUS_TOOL, UNBOUNDED_OUTPUT } from "./messaging.js";
@@ -204,6 +205,7 @@ async function plan(
   options: DelegationOptions,
   defaults: HelperDefaults,
   own: readonly ToolRegistration[],
+  callable: readonly ToolRegistration[],
 ): Promise<{ helpers: Planned[]; inputs: number[][] }> {
   if (args.agents.length > options.limits.perCall)
     throw new AgentError(
@@ -254,8 +256,13 @@ async function plan(
       throw new AgentError(
         `Helper ${name} asks for tools you don't have: ${missing.join(", ")}. Your tools: ${own.map((tool) => tool.name).join(", ") || "none"}`,
       );
-    const tools = wanted.map(
-      (tool) => own.find((each) => each.name === tool) as ToolRegistration,
+    // With codemode, helpers get the internal tools of its models.* that
+    // their agent's scripts can call.
+    const tools = withCodemodeModels(
+      wanted.map(
+        (tool) => own.find((each) => each.name === tool) as ToolRegistration,
+      ),
+      callable,
     );
     helpers.push({ name, spec, tools });
   }
@@ -618,6 +625,7 @@ async function execute(
             : {}),
         },
         ownTools,
+        agent.callable,
       );
     } catch (error) {
       return textResult(errorText(error), true);

@@ -116,9 +116,9 @@ export class FocusController {
     this.lastResult = undefined;
   }
 
-  /** Yield panel navigation to visible overlays, even non-capturing ones. */
-  private yieldToOverlay(): boolean {
-    if (!this.panel.hasOverlay()) return false;
+  /** Selectors can replace the editor without opening an overlay. */
+  private yieldToOtherView(): boolean {
+    if (!this.panel.hasOverlay() && this.panel.isEditorFocused()) return false;
     this.panel.setFocused(false);
     this.lastData = "";
     this.lastDataAt = 0;
@@ -129,7 +129,7 @@ export class FocusController {
   /** Ctrl+Q: focus the panel, also mid-composition, or browse agents. */
   focusPanel(ctx?: ExtensionContext): void {
     if (ctx) this.ctx = ctx;
-    if (this.yieldToOverlay() || this.paneOpen || this.panel.isSuppressed())
+    if (this.yieldToOtherView() || this.paneOpen || this.panel.isSuppressed())
       return;
     if (this.panel.hasRows()) this.panel.setFocused(true);
     else if (this.ctx) this.browse(this.ctx);
@@ -138,7 +138,8 @@ export class FocusController {
   /** Tab from `/agents`: focus the panel at the same row, if it shows it. */
   focusPanelAt(ctx: ExtensionContext, key: string): void {
     this.ctx = ctx;
-    if (this.yieldToOverlay() || this.paneOpen || !this.panel.hasRows()) return;
+    if (this.yieldToOtherView() || this.paneOpen || !this.panel.hasRows())
+      return;
     this.panel.select(key);
     this.panel.setFocused(true);
   }
@@ -183,11 +184,11 @@ export class FocusController {
 
   private handle(data: string): { consume?: boolean } | undefined {
     const ctx = this.ctx;
-    // Raw listeners run before the focused component. Yield to any visible
-    // overlay, as well as our own attach view, confirmation, and /agents.
+    // Raw listeners run before the focused component. Leave other views'
+    // keys alone, even when the underlying prompt editor is empty.
     if (
       !ctx ||
-      this.yieldToOverlay() ||
+      this.yieldToOtherView() ||
       this.paneOpen ||
       this.confirming ||
       this.panel.isSuppressed()

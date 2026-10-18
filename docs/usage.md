@@ -132,8 +132,10 @@ attached, so until then an agent that answered Pi shows `◐` and says
 
 Failed and interrupted agents stay until you or Pi stop them.
 
-When no agents are open, ← and Ctrl+Q open `/agents` instead. In the
-focused panel:
+When no agents are open, ← and Ctrl+Q open `/agents` instead. These
+shortcuts apply while Pi's prompt editor has focus. Selectors such as the
+session tree opened with double-Esc keep their own keyboard navigation.
+In the focused panel:
 
 | Key | Action |
 | --- | --- |

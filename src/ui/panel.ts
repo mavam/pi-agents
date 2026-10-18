@@ -282,6 +282,31 @@ export class AgentPanel {
     return this.lastTui?.hasOverlay() ?? false;
   }
 
+  /** Whether an editor owns terminal input, rather than a selector or dialog. */
+  isEditorFocused(): boolean {
+    const tui = this.lastTui;
+    // Pi's renderers expose this query, but the shared TUI interface doesn't.
+    if (
+      !tui ||
+      !("getFocusedComponent" in tui) ||
+      typeof tui.getFocusedComponent !== "function"
+    )
+      return false;
+    // Don't guess where input will go after a dynamically hidden overlay:
+    // Pi restores that focus after raw listeners, so yield until it has.
+    const component: Component | null = tui.getFocusedComponent();
+    // Use the EditorComponent contract: custom editors needn't extend Editor,
+    // and instanceof isn't reliable across Pi's extension loader boundaries.
+    return (
+      component !== null &&
+      "getText" in component &&
+      typeof component.getText === "function" &&
+      "setText" in component &&
+      typeof component.setText === "function" &&
+      typeof component.handleInput === "function"
+    );
+  }
+
   hasRows(): boolean {
     return this.rows().length > 0;
   }

@@ -319,7 +319,10 @@ conversation. One module draws messages for all of them.
 The focused panel keeps only its own keys. Any other key, including typed,
 pasted, or encoded text, returns focus to the editor where it lands, so Enter
 after editing submits to the parent rather than opening an agent. Terminal
-reports aren't keys and leave focus alone.
+reports aren't keys and leave focus alone. Panel navigation applies only
+while the prompt editor owns input. Selectors and dialogs keep their keys,
+whether they appear as overlays or replace the editor, so an empty prompt
+doesn't let the panel intercept another view's navigation.
 
 ## Deferred
 

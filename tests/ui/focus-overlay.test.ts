@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  Editor,
   type Terminal,
   type TUI,
   TuiMainScreen,
@@ -51,7 +52,25 @@ function setup({ closed = false } = {}) {
     setProgramStatus: () => {},
   };
   const tui = new TuiMainScreen(terminal);
-  const editor = receiver("editor");
+  const identity = (text: string) => text;
+  const editor = {
+    component: new Editor(tui, {
+      borderColor: identity,
+      selectList: {
+        selectedPrefix: identity,
+        selectedText: identity,
+        description: identity,
+        scrollInfo: identity,
+        noMatch: identity,
+      },
+    }),
+    inputs: [] as string[],
+  };
+  const handleEditorInput = editor.component.handleInput.bind(editor.component);
+  editor.component.handleInput = (data) => {
+    editor.inputs.push(data);
+    handleEditorInput(data);
+  };
   tui.addChild(editor.component);
   tui.setFocus(editor.component);
   const agent: AgentInfo = {
@@ -81,7 +100,7 @@ function setup({ closed = false } = {}) {
     ui: {
       onTerminalInput: (listener: Parameters<TUI["addInputListener"]>[0]) =>
         tui.addInputListener(listener),
-      getEditorText: () => "",
+      getEditorText: () => editor.component.getText(),
       setWidget: (
         key: string,
         factory: ((tui: TUI, theme: Theme) => Component) | undefined,
@@ -116,7 +135,40 @@ function setup({ closed = false } = {}) {
   };
 }
 
-describe("real overlay input dispatch", () => {
+describe("real focus and overlay input dispatch", () => {
+  test.each([false, true])(
+    "an editor-replacing selector keeps navigation (closed agents: %s)",
+    (closed) => {
+      const ui = setup({ closed });
+      const browsed: ExtensionContext[] = [];
+      ui.focus.onBrowse = (ctx) => browsed.push(ctx);
+      try {
+        // Pi's session tree replaces the editor instead of using an overlay.
+        const selector = receiver("selector");
+        ui.tui.removeChild(ui.editor.component);
+        ui.tui.addChild(selector.component);
+        ui.tui.setFocus(selector.component);
+        expect(ui.tui.hasOverlay()).toBe(false);
+        ui.press(LEFT);
+        ui.press(RIGHT);
+        ui.focus.focusPanel(ui.ctx);
+        expect(selector.inputs).toEqual([LEFT, RIGHT]);
+        expect(ui.editor.inputs).toEqual([]);
+        expect(ui.panel.isFocused()).toBe(false);
+        expect(browsed).toEqual([]);
+
+        ui.tui.removeChild(selector.component);
+        ui.tui.addChild(ui.editor.component);
+        ui.tui.setFocus(ui.editor.component);
+        ui.press(LEFT);
+        expect(ui.panel.isFocused()).toBe(!closed);
+        expect(browsed).toEqual(closed ? [ui.ctx] : []);
+      } finally {
+        ui.close();
+      }
+    },
+  );
+
   test("a capturing overlay receives navigation before panel navigation resumes", () => {
     const ui = setup();
     try {
@@ -162,7 +214,7 @@ describe("real overlay input dispatch", () => {
     }
   });
 
-  test("hidden overlays do not block panel navigation", () => {
+  test("hidden overlays allow panel navigation after Pi restores editor focus", () => {
     const ui = setup();
     let visible = true;
     try {
@@ -174,6 +226,11 @@ describe("real overlay input dispatch", () => {
       expect(picker.inputs).toEqual([LEFT]);
       visible = false;
       expect(ui.tui.hasOverlay()).toBe(false);
+      // Dynamic visibility restores focus during dispatch, after raw listeners.
+      // Let Pi route that first key; only then does the editor own input again.
+      ui.press(LEFT);
+      expect(ui.editor.inputs).toEqual([LEFT]);
+      expect(ui.panel.isFocused()).toBe(false);
       ui.press(LEFT);
       expect(ui.panel.isFocused()).toBe(true);
       expect(picker.inputs).toEqual([LEFT]);

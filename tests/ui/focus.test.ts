@@ -24,6 +24,7 @@ function setup(state: {
     hasRows: () => state.rows,
     isSuppressed: () => state.suppressed,
     hasOverlay: () => false,
+    isEditorFocused: () => true,
     setFocused: (value: boolean) => {
       state.focused = value;
       focused.push(value);

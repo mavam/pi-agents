@@ -146,7 +146,8 @@ focused panel:
 | Esc or → | Go back to the editor. Other keys go back too and act there, so typed or pasted text lands in the editor. |
 
 Attaching shows the agent's conversation with Pi's own message and tool
-rendering. The editor then talks to the agent:
+rendering, set off from Pi's view by a line on top. The editor's top border
+names the agent and shows its status. The editor then talks to the agent:
 
 | Key | Action |
 | --- | --- |

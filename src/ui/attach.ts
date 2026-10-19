@@ -705,10 +705,17 @@ class AgentPane implements Component {
         ? [color("error", `⊗ ${info.result.errorMessage}`)]
         : [];
     const flash = this.flash ? [color("error", `⚠ ${this.flash.text}`)] : [];
+    // An unlabelled rule like the editor's bottom border sets the pane off
+    // from Pi above; the editor's badge stays the only label.
+    const separator = this.theme.fg("borderMuted", "─".repeat(width));
     const rows = this.tui.terminal?.rows ?? 24;
     const budget = Math.max(4, rows - 6);
     const fixed =
-      editorLines.length + statusLines.length + failure.length + flash.length;
+      1 +
+      editorLines.length +
+      statusLines.length +
+      failure.length +
+      flash.length;
     const content = Math.max(1, budget - fixed);
     const queued = fitQueuedLines(
       queuedLines(
@@ -725,6 +732,7 @@ class AgentPane implements Component {
       Math.max(1, content - queued.length),
     );
     return [
+      separator,
       ...transcript.map((line) => fitLine(line, width)),
       ...statusLines.map((line) => fitLine(line, width)),
       ...failure.map((line) => fitLine(line, width)),

@@ -7,7 +7,8 @@
  *
  * Tool calls draw with Pi's renderers for Pi's tools and with
  * `agentToolViews` for the agents' own tools, such as `agent_spawn` and
- * `agent_send`.
+ * `agent_send`, and for codemode, whose running calls come from the live
+ * nested calls.
  *
  * Messages, received and sent, show as the same cards as in Pi's
  * transcript, never as the user's input; everything queued shows dim below
@@ -88,7 +89,7 @@ import {
   messageLine,
   themeStyle,
 } from "./messages.js";
-import { agentToolViews } from "./tool-views.js";
+import { agentToolViews, type ScriptCall } from "./tool-views.js";
 
 const PANE_REFRESH_MS = 250;
 const FLASH_MS = 5_000;
@@ -202,6 +203,42 @@ function queuedLines(
   });
 }
 
+const ARGS_PREVIEW_CHARS = 200;
+
+/**
+ * The tool calls a running codemode call made so far, from the live nested
+ * calls it owns directly, in the shape its result's details list them.
+ */
+export function liveScriptCalls(live: LiveState, callId: string): ScriptCall[] {
+  return (live.nestedTools ?? [])
+    .filter((slot) => slot.parentCallId === callId)
+    .map((slot) => {
+      const args = JSON.stringify(slot.arguments ?? {});
+      const summary = slot.summary;
+      return {
+        name: slot.name,
+        args:
+          args === "{}"
+            ? ""
+            : args.length > ARGS_PREVIEW_CHARS
+              ? `${args.slice(0, ARGS_PREVIEW_CHARS - 1)}…`
+              : args,
+        status:
+          summary === undefined
+            ? slot.status === "done"
+              ? "ok"
+              : "running"
+            : summary.isError
+              ? "error"
+              : "ok",
+        ...(summary?.durationMs !== undefined
+          ? { durationMs: summary.durationMs }
+          : {}),
+        ...(summary?.error !== undefined ? { error: summary.error } : {}),
+      };
+    });
+}
+
 /** Queued messages first, then the draft, separated by blank lines. */
 export function restoredEditorText(
   queued: readonly string[],
@@ -252,12 +289,15 @@ class ChatView {
       component.setArgsComplete();
       if (slot.status !== "running") continue;
       component.markExecutionStarted();
+      // A script's tool calls so far, drawn like the calls its result lists.
+      const calls = liveScriptCalls(live, slot.callId);
+      const details = calls.length > 0 ? { calls } : slot.details;
       // Progress: output so far, and details such as what a call started.
-      if (slot.output !== undefined || slot.details !== undefined) {
+      if (slot.output !== undefined || details !== undefined) {
         component.updateResult(
           {
             content: [{ type: "text", text: slot.output ?? "" }],
-            details: slot.details,
+            details,
             isError: false,
           },
           true,

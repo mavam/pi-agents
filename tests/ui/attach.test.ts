@@ -7,6 +7,7 @@ import {
 } from "../../src/agents/inputs.js";
 import {
   displayedResult,
+  liveScriptCalls,
   openAgentPane,
   queuedTexts,
   restoredEditorText,
@@ -85,6 +86,41 @@ describe("attach view", () => {
     expect(restoredEditorText(queued, "draft")).toBe(
       "focus on errors\n\nthen tests\n\ndraft",
     );
+  });
+
+  test("shows a running script's own calls from the live nested calls", () => {
+    const slot = (callId: string, parentCallId: string, extra = {}) => ({
+      callId,
+      parentCallId,
+      parentTaskId: 1,
+      taskId: 2,
+      name: "read",
+      status: "running",
+      arguments: { path: "a" },
+      ...extra,
+    });
+    const live = {
+      nestedTools: [
+        slot("s/c1", "s", {
+          status: "done",
+          summary: { isError: true, durationMs: 5, error: "missing" },
+        }),
+        slot("s/c2", "s"),
+        // A call of a nested call, and another script's call.
+        slot("s/c2/c1", "s/c2"),
+        slot("t/c1", "t"),
+      ],
+    };
+    expect(liveScriptCalls(live as never, "s")).toEqual([
+      {
+        name: "read",
+        args: '{"path":"a"}',
+        status: "error",
+        durationMs: 5,
+        error: "missing",
+      },
+      { name: "read", args: '{"path":"a"}', status: "running" },
+    ]);
   });
 
   test("scrolls back on wheel up and forward on wheel down, within bounds", () => {

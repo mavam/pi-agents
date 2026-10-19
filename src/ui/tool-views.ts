@@ -648,10 +648,160 @@ function sendView(sender: () => string): ToolRenderers & { label: string } {
   };
 }
 
+/** One tool call of a codemode script, as its result's details list it
+ * and as the attach view builds it from the live calls while it runs. */
+export interface ScriptCall {
+  name: string;
+  /** Compact JSON of the arguments, cut for display. */
+  args: string;
+  status: "running" | "ok" | "error" | "cancelled";
+  durationMs?: number;
+  error?: string;
+}
+
+const SCRIPT_CODE_LINES = 10;
+const SCRIPT_CALLS = 8;
+const SCRIPT_OUTPUT_LINES = 5;
+const SCRIPT_ARGS_CHARS = 80;
+const SCRIPT_HEADER =
+  /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:(\n|$)/;
+/** The failure text's list of calls, which the call lines already show. */
+const SCRIPT_CALLS_NOTE =
+  /\n*(No tool calls were made\.|Tool calls made before the failure \(they are not undone\): .*)$/;
+
+/** The calls a codemode result's details list, if they are a list. */
+export function scriptCalls(details: unknown): ScriptCall[] {
+  const calls = (details as { calls?: unknown } | undefined)?.calls;
+  if (!Array.isArray(calls)) return [];
+  return calls.flatMap((call) => {
+    const { name, args, status, durationMs, error } = (call ?? {}) as Record<
+      string,
+      unknown
+    >;
+    if (typeof name !== "string") return [];
+    return [
+      {
+        name,
+        args: typeof args === "string" ? args : "",
+        status:
+          status === "running" || status === "error" || status === "cancelled"
+            ? status
+            : "ok",
+        ...(typeof durationMs === "number" ? { durationMs } : {}),
+        ...(typeof error === "string" ? { error } : {}),
+      },
+    ];
+  });
+}
+
+function formatDuration(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+const CALL_GLYPHS: Record<
+  ScriptCall["status"],
+  [Parameters<Colorize>[0], string]
+> = {
+  running: ["warning", "…"],
+  ok: ["success", "✓"],
+  error: ["error", "✗"],
+  cancelled: ["muted", "⊘"],
+};
+
+/** `✓ read {"path":"src"} 12ms`, with the error below when expanded. */
+export function formatScriptCall(
+  call: ScriptCall,
+  expanded: boolean,
+  color: Colorize,
+): string {
+  const [style, glyph] = CALL_GLYPHS[call.status];
+  const args =
+    !expanded && call.args.length > SCRIPT_ARGS_CHARS
+      ? `${call.args.slice(0, SCRIPT_ARGS_CHARS - 1)}…`
+      : call.args;
+  const parts = [
+    `${color(style, glyph)} ${call.name}`,
+    args ? color("muted", args) : "",
+    call.durationMs !== undefined
+      ? color("dim", formatDuration(call.durationMs))
+      : "",
+  ].filter(Boolean);
+  const line = parts.join(" ");
+  return expanded && call.error
+    ? `${line}\n${call.error
+        .split("\n")
+        .map((each) => `  ${color("error", each)}`)
+        .join("\n")}`
+    : line;
+}
+
+/** Lines of `text`, the first `max` unless expanded, then how many more. */
+function preview(
+  text: string,
+  max: number,
+  expanded: boolean,
+  color: Colorize,
+): string[] {
+  const lines = text.split("\n");
+  if (expanded || lines.length <= max) return lines;
+  return [
+    ...lines.slice(0, max),
+    color("muted", `… ${lines.length - max} more lines (ctrl+o to expand)`),
+  ];
+}
+
+/**
+ * A codemode call: the script, then the tool calls it made, newest last,
+ * and its output without the header. While it runs, the attach view passes
+ * the live calls as the result's details, so they draw the same.
+ */
+const codemodeView: ToolRenderers & { label: string } = {
+  label: "codemode",
+  renderCall(args, theme: Theme, context) {
+    const color: Colorize = (name, value) => theme.fg(name, value);
+    const code = str((args as Args | undefined)?.code).trimEnd();
+    const lines = [theme.bold("codemode")];
+    if (code)
+      lines.push(
+        ...preview(code, SCRIPT_CODE_LINES, context.expanded, color).map(
+          (line) => `  ${color("muted", line)}`,
+        ),
+      );
+    return new FitLines(lines.join("\n"), context.expanded);
+  },
+  renderResult(result, options, theme: Theme, context) {
+    const color: Colorize = (name, value) => theme.fg(name, value);
+    const calls = scriptCalls(result.details);
+    const shown = options.expanded ? calls : calls.slice(-SCRIPT_CALLS);
+    const lines = shown.map((call) =>
+      formatScriptCall(call, options.expanded, color),
+    );
+    if (shown.length < calls.length)
+      lines.unshift(
+        color("muted", `… ${calls.length - shown.length} earlier calls`),
+      );
+    let output = options.isPartial
+      ? ""
+      : resultText(result).replace(SCRIPT_HEADER, "").trim();
+    if (calls.length > 0) output = output.replace(SCRIPT_CALLS_NOTE, "").trim();
+    if (output)
+      lines.push(
+        ...preview(output, SCRIPT_OUTPUT_LINES, options.expanded, color).map(
+          (line) => color(context.isError ? "error" : "dim", line),
+        ),
+      );
+    return new FitLines(indent(lines.join("\n")), options.expanded);
+  },
+};
+
 /** Renderers of the agents' own tools in the attach view of the agent
- * `self` names. */
+ * `self` names, and of codemode, which Pi draws with renderers of its own. */
 export function agentToolViews(
   self: () => string,
 ): Record<string, ToolRenderers & { label: string }> {
-  return { ...views(AGENT_CALLS), agent_send: sendView(self) };
+  return {
+    ...views(AGENT_CALLS),
+    agent_send: sendView(self),
+    codemode: codemodeView,
+  };
 }

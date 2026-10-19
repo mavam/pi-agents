@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { receipt, type ToolReceipt } from "../../src/agents/receipts.js";
 import { EMPTY_USAGE } from "../../src/agents/types.js";
-import { PARENT_TOOL_VIEWS } from "../../src/ui/tool-views.js";
+import { agentToolViews, PARENT_TOOL_VIEWS } from "../../src/ui/tool-views.js";
 
 const plainTheme = {
   fg: (_name: string, text: string) => text,
@@ -86,5 +86,68 @@ describe("tool results", () => {
     expect(
       draw("agent_wait", { receipt: { version: 99 } }, { text: "x" }),
     ).toEqual(["x"]);
+  });
+});
+
+describe("codemode in the attach view", () => {
+  const view = agentToolViews(() => "self").codemode;
+  function drawScript(
+    details: unknown,
+    text: string,
+    { isError = false, isPartial = false } = {},
+  ): string[] {
+    return (
+      view
+        ?.renderResult?.(
+          { content: [{ type: "text", text }], details },
+          { expanded: false, isPartial },
+          // biome-ignore lint/suspicious/noExplicitAny: a plain test theme.
+          plainTheme as any,
+          // biome-ignore lint/suspicious/noExplicitAny: renderers read isError.
+          { isError, state: {} } as any,
+        )
+        .render(80)
+        .map((line) => line.replace(/^ {2}/, "")) ?? []
+    );
+  }
+
+  test("lists the script's calls once, then its output", () => {
+    const calls = [
+      {
+        id: 1,
+        name: "read",
+        args: '{"path":"a"}',
+        status: "ok",
+        durationMs: 12,
+      },
+      { id: 2, name: "bash", args: '{"command":"x"}', status: "error" },
+    ];
+    expect(
+      drawScript({ calls }, "Script failed\nWall time 0.1 seconds\nOutput:\n", {
+        isError: true,
+      }),
+    ).toEqual(['✓ read {"path":"a"} 12ms', '✗ bash {"command":"x"}']);
+    expect(
+      drawScript(
+        { calls },
+        "Script failed\nWall time 0.1 seconds\nOutput:\n\nScript error:\nError: boom\n\nTool calls made before the failure (they are not undone): read (ok), bash (error)",
+        { isError: true },
+      ),
+    ).toEqual([
+      '✓ read {"path":"a"} 12ms',
+      '✗ bash {"command":"x"}',
+      "Script error:",
+      "Error: boom",
+    ]);
+    // While it runs, the live calls draw the same, without output.
+    expect(
+      drawScript(
+        { calls: [{ name: "read", args: "", status: "running" }] },
+        "",
+        {
+          isPartial: true,
+        },
+      ),
+    ).toEqual(["… read"]);
   });
 });

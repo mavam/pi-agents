@@ -149,8 +149,10 @@ In the focused panel:
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
 | Esc or → | Go back to the editor. Other keys go back too and act there, so typed or pasted text lands in the editor. |
 
-Attaching opens the agent's conversation. The editor names the agent and
-sends your input to it:
+Attaching opens the agent's conversation. A `codemode` call shows its
+script, then each tool call the script made with its status, as the calls
+run and after the script finished, and then the script's output. The
+editor names the agent and sends your input to it:
 
 | Key | Action |
 | --- | --- |

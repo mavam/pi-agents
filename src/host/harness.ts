@@ -61,6 +61,7 @@ export async function openAgentHarness(
         options.lifecycle.hooks,
       )
     : undefined;
+  const extensions = agentSelection(options.extensions);
   let harness: Harness | undefined;
   let unobserve: (() => void) | undefined;
   try {
@@ -69,11 +70,12 @@ export async function openAgentHarness(
       {
         models: requests?.models ?? options.models,
         registry,
-        settings: {
+        // Read at each use, so getters of the given settings are too.
+        settings: () => ({
           ...options.settings,
           // Agents select their own extensions; the anchor uses this default.
-          extensions: agentSelection(options.extensions),
-        },
+          extensions,
+        }),
         env: envs.env,
         ...(options.onReport ? { onReport: options.onReport } : {}),
       },

@@ -54,6 +54,19 @@ working-agent cap. The lifetime limit includes completed and cancelled
 children and never replenishes. See
 [agents that spawn agents](./graphs.md#agents-that-spawn-agents).
 
+## Pi settings agents follow
+
+Agents follow your Pi settings for provider retries and timeouts, retries
+after errors, compaction, and how steering and follow-up messages queue.
+They read them when the session first uses agents, so restart Pi after
+changing them.
+
+Compaction follows Pi's per-model token settings too: an agent on a model
+listed in `compaction.modelOverrides` compacts with that entry's
+`reserveTokens` and `keepRecentTokens`, keyed by the exact
+`provider/modelId`. Pi's [settings reference](https://pi.dev/docs/latest/settings#per-model-compaction-overrides)
+describes them.
+
 ## Storage retention
 
 [Agent storage](./architecture.md#storage) remains after Pi deletes its

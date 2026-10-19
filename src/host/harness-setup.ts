@@ -6,8 +6,46 @@
 
 import type { Context } from "@earendil-works/chord";
 import type { SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { EnvTarget, HarnessSettings } from "@earendil-works/pi-durable";
+import type {
+  CompactionSettings,
+  EnvTarget,
+  HarnessSettings,
+} from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+
+type CompactionOverrides = NonNullable<CompactionSettings["modelOverrides"]>;
+
+/**
+ * Pi's per-model compaction token settings (`compaction.modelOverrides`),
+ * keyed by exact `provider/modelId` as pi-durable keys them. Values Pi
+ * would reject are left out, so the harness-wide setting applies instead.
+ */
+export function compactionOverrides(
+  settings: unknown,
+): CompactionOverrides | undefined {
+  const raw = (settings as { compaction?: { modelOverrides?: unknown } })
+    ?.compaction?.modelOverrides;
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const valid = (value: unknown): value is number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  const overrides: Record<
+    string,
+    { reserveTokens?: number; keepRecentTokens?: number }
+  > = {};
+  for (const [model, entry] of Object.entries(raw)) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { reserveTokens, keepRecentTokens } = entry as Record<
+      string,
+      unknown
+    >;
+    const override = {
+      ...(valid(reserveTokens) ? { reserveTokens } : {}),
+      ...(valid(keepRecentTokens) ? { keepRecentTokens } : {}),
+    };
+    if (Object.keys(override).length > 0) overrides[model] = override;
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
 
 /** Harness settings read at every use from pi's settings as loaded at startup. */
 export function createHarnessSettings(
@@ -26,7 +64,13 @@ export function createHarnessSettings(
       };
     },
     get compaction() {
-      return settingsManager.getCompactionSettings();
+      // Without a model, Pi resolves the harness-wide values; pi-durable
+      // applies the per-model ones itself, for the model it compacts for.
+      const modelOverrides = compactionOverrides(settingsManager.getSettings());
+      return {
+        ...settingsManager.getCompactionSettings(),
+        ...(modelOverrides ? { modelOverrides } : {}),
+      };
     },
     get retry() {
       return settingsManager.getRetrySettings();

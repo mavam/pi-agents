@@ -198,6 +198,10 @@ judgment the models can't make, so models see the stall but get no tool
 for it. Work this version can't run, such as a task of an extension it
 lacks, shows as stalled the same way.
 
+Reports from the harness name what failed: the agent or graph a task
+belongs to, and the extension or host callback whose code failed. A storage
+failure reports once, through the recovery.
+
 ## Views
 
 The panel shows live state; the transcript and message list show history;

@@ -27,6 +27,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { createAgentExtensions } from "../agents/extensions.js";
+import type { HarnessReport } from "../agents/failures.js";
 import type { Parent } from "../agents/parent.js";
 import { AgentService } from "../agents/service.js";
 import { AgentError } from "../agents/types.js";
@@ -215,6 +216,14 @@ export class SessionHost {
     }
     let harness: AgentHarness | undefined;
     let service: AgentService | undefined;
+    // Reports name agents once the service knows them; the harness reports
+    // tasks it parks as it opens, before.
+    let describe: AgentService | undefined;
+    const early: HarnessReport[] = [];
+    const onReport = (report: HarnessReport) => {
+      if (describe) this.reportHarness(describe, report);
+      else early.push(report);
+    };
     try {
       const settingsManager = SettingsManager.create(cwd, getAgentDir());
       const { limit, error } = readWorkingLimit(settingsManager.getSettings());
@@ -237,7 +246,7 @@ export class SessionHost {
         extensions,
         settings: createHarnessSettings(settingsManager),
         lifecycle: { sessionId, hooks: this.hooks },
-        onReport: (error) => this.report(error),
+        onReport,
       });
       service = await AgentService.start({
         harness: harness.harness,
@@ -256,6 +265,8 @@ export class SessionHost {
         },
         onReport: (error) => this.report(error),
       });
+      describe = service;
+      for (const report of early.splice(0)) this.reportHarness(service, report);
       // A shutdown or session start meanwhile: don't resume work for a
       // session that is gone.
       if (this.epoch !== epoch)
@@ -271,6 +282,8 @@ export class SessionHost {
       this.emit();
       return service;
     } catch (error) {
+      for (const report of early.splice(0))
+        if (report.type !== "session_failed") this.report(report.error);
       try {
         await service?.close();
       } finally {
@@ -350,6 +363,16 @@ export class SessionHost {
     } catch (reopen) {
       // An open that a shutdown ended needs no notice.
       if (this.epoch === epoch) this.report(reopen);
+    }
+  }
+
+  /** Report what the harness reports, naming the agent it is about. */
+  private reportHarness(service: AgentService, report: HarnessReport): void {
+    try {
+      const text = service.describeReport(report);
+      if (text !== undefined) this.report(new Error(text));
+    } catch {
+      this.report(report.error);
     }
   }
 

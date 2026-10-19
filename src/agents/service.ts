@@ -20,6 +20,7 @@ import { CONTEXT, contextFor, conversationId, taskId } from "./context.js";
 import { type CreationDeps, createGraph } from "./creation.js";
 import { Delivery } from "./delivery.js";
 import type { AgentExtensions } from "./extensions.js";
+import { describeReport, type HarnessReport } from "./failures.js";
 import { userInput } from "./inputs.js";
 import { MessageLog } from "./message-log.js";
 import { queuedMessages } from "./messaging.js";
@@ -567,6 +568,28 @@ export class AgentService {
         `${target.info.name} can't run with this version of pi-agents; stop it instead`,
       );
     return retried;
+  }
+
+  /**
+   * A harness report as a notice that names the agent or graph it is
+   * about; undefined when another notice covers it.
+   */
+  describeReport(report: HarnessReport): string | undefined {
+    return describeReport(report, ({ conversation, task }) => {
+      const agent =
+        conversation === undefined
+          ? undefined
+          : this.projection.info(conversation);
+      if (agent) return `Agent ${agent.name}`;
+      if (task === undefined) return undefined;
+      const graph = this.projection.graphInfo(task);
+      if (graph) return `Graph ${graph.name}`;
+      const node = this.projection
+        .graphOfNode(Number(task))
+        ?.nodes.find((each) => each.task === Number(task));
+      const owner = node ? this.projection.info(node.agent) : undefined;
+      return owner ? `Agent ${owner.name}` : undefined;
+    });
   }
 
   /** Abort the agent's current work and withdraw its queued messages. */

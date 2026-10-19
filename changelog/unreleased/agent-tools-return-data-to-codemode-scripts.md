@@ -3,6 +3,8 @@ title: Agent tools return data to codemode scripts
 type: feature
 authors:
   - mavam
+prs:
+  - 108
 created: 2026-10-19T07:15:04.514368Z
 ---
 

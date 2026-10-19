@@ -3,6 +3,8 @@ title: Per-model compaction settings for agents
 type: feature
 authors:
   - mavam
+prs:
+  - 108
 created: 2026-10-19T07:19:42.044722Z
 ---
 

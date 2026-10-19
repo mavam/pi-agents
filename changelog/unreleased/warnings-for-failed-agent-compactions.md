@@ -3,6 +3,8 @@ title: Warnings for failed agent compactions
 type: feature
 authors:
   - mavam
+prs:
+  - 108
 created: 2026-10-19T07:16:42.755447Z
 ---
 

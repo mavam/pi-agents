@@ -3,6 +3,8 @@ title: Attach view tells messages from your input by their sender
 type: bugfix
 authors:
   - mavam
+prs:
+  - 108
 created: 2026-10-19T07:12:10.937314Z
 ---
 

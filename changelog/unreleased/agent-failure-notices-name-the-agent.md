@@ -3,6 +3,8 @@ title: Agent failure notices name the agent
 type: change
 authors:
   - mavam
+prs:
+  - 108
 created: 2026-10-19T08:00:13.527245Z
 ---
 

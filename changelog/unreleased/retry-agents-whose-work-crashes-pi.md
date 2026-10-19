@@ -3,6 +3,8 @@ title: Retry agents whose work crashes Pi
 type: feature
 authors:
   - mavam
+prs:
+  - 108
 created: 2026-10-19T07:59:01.839941Z
 ---
 

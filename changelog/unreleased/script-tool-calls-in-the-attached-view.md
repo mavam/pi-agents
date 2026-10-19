@@ -3,6 +3,8 @@ title: Script tool calls in the attached view
 type: feature
 authors:
   - mavam
+prs:
+  - 108
 created: 2026-10-19T07:18:13.677188Z
 ---
 

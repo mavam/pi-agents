@@ -1,18 +1,47 @@
 import { describe, expect, test } from "bun:test";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import {
+  agentMessageInput,
+  inputOrigin,
+  userInput,
+} from "../../src/agents/inputs.js";
+import {
   displayedResult,
   openAgentPane,
   queuedTexts,
   restoredEditorText,
   wheelScrollBack,
-  withoutUserPrefix,
 } from "../../src/ui/attach.js";
 
 describe("attach view", () => {
-  test("hides the user marker the agent sees", () => {
-    expect(withoutUserPrefix("[user] hello")).toBe("hello");
-    expect(withoutUserPrefix("review src")).toBe("review src");
+  test("tells inputs apart by their entry", () => {
+    const user = userInput("hello");
+    expect(inputOrigin(user.entry, user.content)).toEqual({
+      kind: "user",
+      text: "hello",
+    });
+    // A user's text that looks like a message stays the user's.
+    const quoted = userInput("[from api] done");
+    expect(inputOrigin(quoted.entry, quoted.content)).toEqual({
+      kind: "user",
+      text: "[from api] done",
+    });
+    const message = agentMessageInput("api", "done");
+    expect(inputOrigin(message.entry, message.content)).toEqual({
+      kind: "message",
+      from: "api",
+      text: "done",
+    });
+    // A plain input is the parent's, whatever its text.
+    const plain = { kind: "pi.user" };
+    expect(inputOrigin(plain, "[from api] done")).toEqual({
+      kind: "parent",
+      text: "[from api] done",
+    });
+    expect(inputOrigin(plain, "review src")).toEqual({
+      kind: "parent",
+      text: "review src",
+    });
   });
 
   test("shows a failed command's exit code as Pi does", () => {
@@ -39,11 +68,17 @@ describe("attach view", () => {
   test("restores queued messages, steering first, before the draft", () => {
     const queued = queuedTexts({
       items: [
-        { id: 1, mode: "followUp", content: "[user] then tests" },
-        { id: 2, mode: "steer", content: "[user] focus on errors" },
+        { id: 1, mode: "followUp", ...userInput("then tests") },
+        { id: 2, mode: "steer", ...userInput("focus on errors") },
         { id: 3, mode: "write", entry: {} },
         // Results of agents it spawned come again after an interrupt.
-        { id: 4, mode: "followUp", content: "[results] scout answered" },
+        {
+          id: 4,
+          mode: "followUp",
+          content: "[results] scout answered",
+          entry: { kind: "pi-agents.results", data: { groups: [] } },
+        },
+        { id: 5, mode: "steer", ...agentMessageInput("api", "done") },
       ],
     } as never);
     expect(queued).toEqual(["focus on errors", "then tests"]);

@@ -20,6 +20,7 @@ import { CONTEXT, contextFor, conversationId, taskId } from "./context.js";
 import { type CreationDeps, createGraph } from "./creation.js";
 import { Delivery } from "./delivery.js";
 import type { AgentExtensions } from "./extensions.js";
+import { userInput } from "./inputs.js";
 import { MessageLog } from "./message-log.js";
 import { queuedMessages } from "./messaging.js";
 import {
@@ -53,7 +54,6 @@ import {
   type Target,
   type TargetRef,
   type TaskNode,
-  USER_MESSAGE_PREFIX,
   WaitInterrupted,
   whenBusyOf,
 } from "./types.js";
@@ -528,7 +528,7 @@ export class AgentService {
     await conversation.submit(
       {
         type: "input",
-        content: `${USER_MESSAGE_PREFIX}${text}`,
+        ...userInput(text),
         whenBusy: mode === "followUp" ? "followUp" : "steer",
       },
       CONTEXT,

@@ -54,6 +54,7 @@ import {
 import { Type } from "typebox";
 import { nodeRequestId } from "./graphs.js";
 import type { MessagingHub } from "./hub.js";
+import { agentMessageInput } from "./inputs.js";
 import { RESULTS_ENTRY } from "./obligations.js";
 import { type AgentReceipt, receipt, stateOutcome } from "./receipts.js";
 import {
@@ -70,7 +71,6 @@ import {
 import {
   MESSAGE_MODES,
   type MessageMode,
-  messageInput,
   messageMode,
   whenBusyOf,
 } from "./types.js";
@@ -164,7 +164,7 @@ export function messageSubmission(
 ): InputSubmissionDraft {
   return {
     type: "input",
-    content: messageInput(sender, message.text),
+    ...agentMessageInput(sender, message.text),
     whenBusy: message.mode,
     requestId: message.id,
   };

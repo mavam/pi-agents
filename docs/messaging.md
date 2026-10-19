@@ -91,6 +91,10 @@ appear in red. A session keeps its latest 1,000 messages.
   or stop of the recipient came while it was still queued. Delivered
   means it arrived, not that the recipient handled it: a turn that fails
   after a message arrived is the recipient's state, not the message's.
+- **Known sender.** The recipient's model reads the sender from the
+  `[from <name>]` marker. The conversation also stores the sender with the
+  message, so the attach view tells messages from your own input even when
+  your text starts like a marker.
 
 ## Limitations
 

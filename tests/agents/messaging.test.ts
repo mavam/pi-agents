@@ -14,7 +14,6 @@ import type { ConversationId, Storage } from "@earendil-works/pi-durable";
 import type { MessagingOptions } from "../../src/agents/messaging.js";
 import { AgentsDoc } from "../../src/agents/records.js";
 import type { AgentService } from "../../src/agents/service.js";
-import { parseMessageInput } from "../../src/agents/types.js";
 import { agentToolViews } from "../../src/ui/tool-views.js";
 import {
   briefly,
@@ -81,8 +80,9 @@ function scripted(lingering?: { aborted: () => void; promise: Promise<void> }) {
       await lingering?.promise;
     }
     if (text.includes("briefly")) await briefly(options?.signal, 300);
-    const message = parseMessageInput(text);
-    if (message) return fauxAssistantMessage(`got: ${message.text}`);
+    // The model reads the sender from the marker.
+    const message = /^\[from [^\]\s]+\] ([\s\S]*)$/.exec(text);
+    if (message) return fauxAssistantMessage(`got: ${message[1]}`);
     return fauxAssistantMessage(`done: ${text}`);
   };
   faux.setResponses(Array.from({ length: 100 }, () => step));

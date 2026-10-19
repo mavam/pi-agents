@@ -64,14 +64,15 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { RESULTS_ENTRY, RESULTS_PREFIX } from "../agents/obligations.js";
+import {
+  INPUT_KINDS,
+  type InputEntry,
+  type InputOrigin,
+  inputOrigin,
+} from "../agents/inputs.js";
 import type { AgentService } from "../agents/service.js";
 import { WAIT_TOOL } from "../agents/spawning.js";
-import {
-  type AgentInfo,
-  parseMessageInput,
-  USER_MESSAGE_PREFIX,
-} from "../agents/types.js";
+import type { AgentInfo } from "../agents/types.js";
 import {
   type Colorize,
   fitLine,
@@ -143,19 +144,14 @@ export function displayedResult(result: ToolResultMessage): ToolResultMessage {
   return changed ? { ...result, content } : result;
 }
 
-/** The text as the user typed it, without the marker the agent sees. */
-export function withoutUserPrefix(text: string): string {
-  return text.startsWith(USER_MESSAGE_PREFIX)
-    ? text.slice(USER_MESSAGE_PREFIX.length)
-    : text;
-}
+type InboxItem = Exclude<InboxState["items"][number], { mode: "write" }>;
 
-/** The results of agents the agent spawned, without their marker; else
- * nothing. */
-function resultsText(text: string): string | undefined {
-  return text.startsWith(RESULTS_PREFIX)
-    ? text.slice(RESULTS_PREFIX.length)
-    : undefined;
+/** Who sent a queued input, and its text. */
+function queuedOrigin(item: InboxItem): InputOrigin {
+  return inputOrigin(
+    item.entry as InputEntry | undefined,
+    userText(item.content as UserMessage["content"]),
+  );
 }
 
 /** Queued texts of an inbox that Esc returns to the editor, steering
@@ -166,9 +162,9 @@ export function queuedTexts(inbox: InboxState): string[] {
   const followUp: string[] = [];
   for (const item of inbox.items) {
     if (item.mode === "write") continue;
-    const raw = userText(item.content as UserMessage["content"]);
-    if (parseMessageInput(raw) || resultsText(raw) !== undefined) continue;
-    (item.mode === "steer" ? steer : followUp).push(withoutUserPrefix(raw));
+    const origin = queuedOrigin(item);
+    if (origin.kind === "message" || origin.kind === "results") continue;
+    (item.mode === "steer" ? steer : followUp).push(origin.text);
   }
   return [...steer, ...followUp];
 }
@@ -185,26 +181,24 @@ function queuedLines(
   const { color } = style;
   return inbox.items.flatMap((item) => {
     if (item.mode === "write") return [];
-    const raw = userText(item.content as UserMessage["content"]);
-    const message = parseMessageInput(raw);
-    if (message)
+    const origin = queuedOrigin(item);
+    if (origin.kind === "message")
       return [
         messageLine(
           {
-            from: message.from,
+            from: origin.from,
             to: recipient,
-            text: message.text,
+            text: origin.text,
             status: "queued",
           },
           width,
           style,
         ),
       ];
-    const results = resultsText(raw);
-    if (results !== undefined)
-      return [color("dim", `Results: ${firstLine(results)}`)];
+    if (origin.kind === "results")
+      return [color("dim", `Results: ${firstLine(origin.text)}`)];
     const mode = item.mode === "steer" ? "Steer" : "Follow-up";
-    return [color("dim", `${mode}: ${firstLine(withoutUserPrefix(raw))}`)];
+    return [color("dim", `${mode}: ${firstLine(origin.text)}`)];
   });
 }
 
@@ -310,10 +304,13 @@ class ChatView {
   private addEntry(entry: EntryRecord): void {
     const message = entry.model?.[0];
     const input =
-      entry.kind === "pi.user" && message?.role === "user"
-        ? parseMessageInput(userText(message.content))
+      INPUT_KINDS.has(entry.kind) && message?.role === "user"
+        ? inputOrigin(
+            { kind: entry.kind, data: entry.data },
+            userText(message.content),
+          )
         : undefined;
-    if (input) {
+    if (input?.kind === "message") {
       // The same card as in Pi's transcript, without the time: `/messages`
       // has it. Ctrl+O shows the whole text, as for tool output.
       this.transcript.addChild(new Spacer(1));
@@ -324,24 +321,20 @@ class ChatView {
           this.theme,
         ),
       );
-    } else if (entry.kind === RESULTS_ENTRY && message?.role === "user") {
+    } else if (input?.kind === "results") {
       // The results of agents it spawned, as a message to it.
-      const text = userText(message.content);
       this.transcript.addChild(new Spacer(1));
       this.transcript.addChild(
         messageCard(
-          { from: "results", to: this.name(), text: resultsText(text) ?? text },
+          { from: "results", to: this.name(), text: input.text },
           () => this.expanded,
           this.theme,
         ),
       );
-    } else if (entry.kind === "pi.user" && message?.role === "user") {
+    } else if (input) {
       this.transcript.addChild(new Spacer(1));
       this.transcript.addChild(
-        new UserMessageComponent(
-          withoutUserPrefix(userText(message.content)),
-          getMarkdownTheme(),
-        ),
+        new UserMessageComponent(input.text, getMarkdownTheme()),
       );
     } else if (entry.kind === "pi.assistant" && message?.role === "assistant") {
       const component =

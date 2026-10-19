@@ -392,16 +392,6 @@ export function messageInput(from: string, text: string): string {
   return `[from ${from}] ${text}`;
 }
 
-/** The sender and text of a message from another agent, if it is one. */
-export function parseMessageInput(
-  input: string,
-): { from: string; text: string } | undefined {
-  const match = /^\[from ([^\]\s]+)\] ([\s\S]*)$/.exec(input);
-  return match
-    ? { from: match[1] as string, text: match[2] as string }
-    : undefined;
-}
-
 export class AgentError extends Error {}
 
 /** A wait that ended before its agents answered: its caller cancelled it,

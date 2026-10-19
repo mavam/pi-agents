@@ -722,6 +722,10 @@ class AgentPane implements Component {
       info?.state === "failed" && info.result?.errorMessage
         ? [color("error", `⊗ ${info.result.errorMessage}`)]
         : [];
+    const compaction =
+      info?.compactionFailure !== undefined
+        ? [color("warning", `⚠ Compaction failed: ${info.compactionFailure}`)]
+        : [];
     const flash = this.flash ? [color("error", `⚠ ${this.flash.text}`)] : [];
     // An unlabelled rule like the editor's bottom border sets the pane off
     // from Pi above; the editor's badge stays the only label.
@@ -733,6 +737,7 @@ class AgentPane implements Component {
       editorLines.length +
       statusLines.length +
       failure.length +
+      compaction.length +
       flash.length;
     const content = Math.max(1, budget - fixed);
     const queued = fitQueuedLines(
@@ -754,6 +759,7 @@ class AgentPane implements Component {
       ...transcript.map((line) => fitLine(line, width)),
       ...statusLines.map((line) => fitLine(line, width)),
       ...failure.map((line) => fitLine(line, width)),
+      ...compaction.map((line) => fitLine(line, width)),
       ...queued.map((line) => fitLine(line, width)),
       ...flash.map((line) => fitLine(line, width)),
       ...editorLines,

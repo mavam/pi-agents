@@ -91,6 +91,9 @@ export function statusCounts(
  * for it, which stays true. */
 export const WAIT_ENDED_STYLE = { icon: "⊠", color: "warning" } as const;
 
+/** The note on agents whose latest compaction failed. */
+export const COMPACTION_FAILED = "compaction failed";
+
 /** The note on agents and graphs whose result waits for the parent. */
 export const QUEUED_NOTE = "result queued";
 
@@ -236,6 +239,9 @@ export function formatAgentLine(
     usage ? color("dim", usage) : undefined,
     activity
       ? color(info.state === "failed" ? "error" : "dim", oneLine(activity, 120))
+      : undefined,
+    info.compactionFailure !== undefined
+      ? color("warning", COMPACTION_FAILED)
       : undefined,
   ]
     .filter((part): part is string => part !== undefined)

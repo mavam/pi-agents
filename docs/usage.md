@@ -39,6 +39,12 @@ then shows the state of its last agents: failed if one failed or was skipped,
 interrupted if one was interrupted or stopped, and idle otherwise. Once its
 result reaches its owner, it shows ◌ as well.
 
+When an agent's context compaction fails, the agent keeps its state and
+keeps working, but its line shows `compaction failed`, and `/agents` and
+the attach view show the error. The warning stays until a later compaction
+succeeds, since the agent's context may overflow meanwhile. Pi sees it in
+`agent_status` too.
+
 ## Tools available to agents
 
 Agents use `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, and

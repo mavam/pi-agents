@@ -134,6 +134,9 @@ export interface AgentInfo {
   owner?: string;
   /** An answer waits for delivery to the parent, which is still busy. */
   queued?: boolean;
+  /** Why the latest compaction failed; stays until a compaction succeeds.
+   * The agent keeps working, but its context may overflow. */
+  compactionFailure?: string;
 }
 
 /** Where a message between agents is: waiting in the recipient's queue,

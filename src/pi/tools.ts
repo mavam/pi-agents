@@ -145,7 +145,11 @@ function statusLine(service: AgentService, info: AgentInfo): string {
       : owner
         ? `, spawned by ${owner.name}`
         : "";
-  return `${info.name} (${state}${where}): ${oneLine(info.job, 120)}`;
+  const compaction =
+    info.compactionFailure !== undefined
+      ? `, its last compaction failed: ${oneLine(info.compactionFailure, 120)}`
+      : "";
+  return `${info.name} (${state}${where}${compaction}): ${oneLine(info.job, 120)}`;
 }
 
 /** Status lines of graphs; a graph of one agent has its agent's line

@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import {
   fauxAssistantMessage,
   fauxProvider,
 } from "@earendil-works/pi-ai/providers/faux";
+import type { ConversationId } from "@earendil-works/pi-durable";
 import type { AgentService } from "../../src/agents/service.js";
 import { WaitInterrupted } from "../../src/agents/types.js";
 import { formatAgentLine } from "../../src/ui/format.js";
@@ -16,6 +18,7 @@ import {
   createFaux,
   createGatedFaux,
   heldUntilAborted,
+  hostOf,
   jsonlStorage,
   lastUserText,
   MODEL,
@@ -306,6 +309,54 @@ describe("AgentService", () => {
         resumed.outcome.kind === "answered" &&
         resumed.outcome.result.text,
     ).toBe("done: [user] continue");
+  });
+
+  test("a failed compaction warns until one succeeds, and the agent stays usable", async () => {
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    let failSummaries = true;
+    faux.setResponses(
+      Array.from({ length: 20 }, () => (context) => {
+        const summary = context.messages.some(
+          (message) =>
+            message.role === "system" &&
+            String(message.content).includes("context summarization"),
+        );
+        if (summary && failSummaries)
+          return fauxAssistantMessage("", {
+            stopReason: "error",
+            errorMessage: "summary refused",
+          });
+        return fauxAssistantMessage(
+          summary ? "## Goal\nsummary" : `done: ${lastUserText(context)}`,
+        );
+      }),
+    );
+    const service = await open({
+      models,
+      // Keep almost nothing, so a short conversation has something to
+      // summarize.
+      settings: {
+        retry: { enabled: false },
+        compaction: { keepRecentTokens: 1 },
+      },
+    });
+    await service.spawnGraph({
+      agents: [{ job: "first", name: "w", cwd: ".", model: MODEL }],
+    });
+    await service.wait(["w"]);
+    const conversation = await hostOf(service).harness.harness.conversation(
+      Number(service.get("w")?.id) as ConversationId,
+      BACKGROUND_CONTEXT,
+    );
+    await conversation?.compact(undefined, BACKGROUND_CONTEXT);
+    await until(() => service.get("w")?.compactionFailure !== undefined);
+    expect(service.get("w")?.compactionFailure).toContain("summary refused");
+    expect(service.get("w")?.state).toBe("idle");
+    failSummaries = false;
+    await conversation?.compact(undefined, BACKGROUND_CONTEXT);
+    await until(() => service.get("w")?.compactionFailure === undefined);
   });
 
   test("interrupt aborts work without delivering", async () => {

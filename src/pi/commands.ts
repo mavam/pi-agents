@@ -284,6 +284,11 @@ export function agentDetail(
       },
     );
   }
+  if (agent.compactionFailure !== undefined)
+    lines.push(
+      { divider: color("warning", "Compaction failed") },
+      color("warning", agent.compactionFailure),
+    );
   return lines;
 }
 

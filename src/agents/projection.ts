@@ -290,6 +290,9 @@ export class Projection {
       ...(endedAt !== undefined ? { endedAt } : {}),
       usage: addPartialUsage(summarizeUsage(usage), live),
       activity: activityOf(live),
+      ...(live?.compactionFailure
+        ? { compactionFailure: live.compactionFailure.error }
+        : {}),
       ...(result ? { result } : {}),
       ...(ended && (state === "interrupted" || state === "failed")
         ? {

@@ -3,14 +3,19 @@ title: Optional agent lifecycle hooks
 type: feature
 authors:
   - mavam
-created: 2026-10-20T16:08:44.431683Z
+prs:
+  - 110
+created: 2026-10-20T16:11:06.82767Z
 ---
 
 Co-loaded extensions can now capture persistent state when agents are created and customize their model requests through optional lifecycle hooks:
 
 ```ts
-pi.events.on("pi-agents:hooks:discover", (hooks) => {
-  if (hooks.protocol !== 1) return;
+import type { AgentHooksDiscovery } from "pi-agents/hooks";
+
+pi.events.on("pi-agents:hooks:discover", (value) => {
+  const hooks = value as AgentHooksDiscovery | undefined;
+  if (hooks?.protocol !== 1) return;
   hooks.register({
     namespace: "my-extension",
     onAgentCreate: () => ({ version: 1, enabled: true }),

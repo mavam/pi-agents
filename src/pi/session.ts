@@ -21,6 +21,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  type ExtensionAPI,
   type ExtensionContext,
   getAgentDir,
   SettingsManager,
@@ -30,6 +31,7 @@ import type { Parent } from "../agents/parent.js";
 import { AgentService } from "../agents/service.js";
 import { AgentError } from "../agents/types.js";
 import { SkillCatalog } from "../catalog/skills.js";
+import type { AgentHooks } from "../hooks.js";
 import { type AgentHarness, openAgentHarness } from "../host/harness.js";
 import { createHarnessSettings } from "../host/harness-setup.js";
 import { acquireLock, type StorageLock } from "../host/lock.js";
@@ -37,6 +39,7 @@ import { resolveModels } from "../host/models.js";
 import { pruneSessions, readRetention } from "../host/retention.js";
 import { openStorage, type Storage } from "../host/storage.js";
 import { readWorkingLimit } from "../host/working.js";
+import { captureAgentState, discoverAgentHooks } from "./hooks.js";
 import { notify } from "./notify.js";
 import { isTrusted, resolveHelper } from "./spawn.js";
 
@@ -52,6 +55,7 @@ function sessionDirectory(sessionId: string): string {
 const REOPEN_INTERVAL_MS = 60_000;
 
 export interface SessionHostOptions {
+  events?: Pick<ExtensionAPI["events"], "emit">;
   /** Tests only: open the storage of a directory, or memory without one. */
   openStorage?: (directory: string | undefined) => Promise<Storage>;
 }
@@ -74,6 +78,7 @@ export class SessionHost {
   private unsubscribe: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
   private trusted = true;
+  private hooks: readonly AgentHooks[] = [];
   private pruned = false;
   /** Whether the open storage persists, so a failure can reopen it. */
   private persistent = false;
@@ -104,6 +109,15 @@ export class SessionHost {
     this.sessionId = ctx.sessionManager.getSessionId();
     this.trusted = isTrusted(ctx);
     this.unavailable = undefined;
+    try {
+      this.hooks = this.options.events
+        ? discoverAgentHooks(this.options.events)
+        : [];
+    } catch (error) {
+      this.unavailable = `Agent hook discovery failed: ${message(error)}`;
+      notify(ctx, this.unavailable);
+      return;
+    }
     if (isPersistent(ctx) && fs.existsSync(sessionDirectory(this.sessionId))) {
       try {
         await this.ensure(ctx);
@@ -219,6 +233,7 @@ export class SessionHost {
         cwd,
         extensions,
         settings: createHarnessSettings(settingsManager),
+        lifecycle: { sessionId, hooks: this.hooks },
         onReport: (error) => this.report(error),
       });
       service = await AgentService.start({
@@ -226,6 +241,16 @@ export class SessionHost {
         anchor: harness.anchor,
         extensions,
         parent: this.parent,
+        captureExtensionState: (spec) => {
+          const current = this.ctx;
+          if (
+            this.epoch !== epoch ||
+            !current ||
+            current.sessionManager.getSessionId() !== sessionId
+          )
+            throw new AgentError("The spawning session has ended");
+          return captureAgentState(this.hooks, current, spec);
+        },
         onReport: (error) => this.report(error),
       });
       // A shutdown or session start meanwhile: don't resume work for a

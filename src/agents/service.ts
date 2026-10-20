@@ -50,6 +50,8 @@ import { Waits } from "./waits.js";
 const REFRESH_DELAY_MS = 50;
 
 export interface AgentServiceOptions {
+  /** Host-owned creation hooks, outside the durable transaction. */
+  captureExtensionState?: CreationDeps["captureExtensionState"];
   /** The harness the host opened, with `extensions` installed. */
   harness: Harness;
   /** The conversation that owns the graphs the parent starts. */
@@ -156,6 +158,7 @@ export class AgentService {
       harness: this.harness,
       anchor: options.anchor,
       extensions: this.extensions,
+      captureExtensionState: options.captureExtensionState,
       takenNames: () => this.takenNames(),
       workingClosed: () => this.workingClosed(),
     };

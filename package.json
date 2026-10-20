@@ -26,6 +26,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./hooks": "./src/hooks.ts",
     "./package.json": "./package.json"
   },
   "engines": {

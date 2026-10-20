@@ -97,6 +97,26 @@ session. Only waits block; every other operation returns at once, and
 results arrive as messages. Agents start other agents only when they may
 delegate.
 
+## Extension hooks
+
+Co-loaded Pi extensions can capture immutable, namespaced JSON state when
+an agent is created and transform its outgoing model requests. The host
+connects these hooks to the agent runtime; the core stores opaque state
+without interpreting another extension\u0027s settings.
+
+Creation captures a snapshot, rather than a live link to the parent. Changes
+to the parent affect future agents, not existing ones. Graph nodes capture
+before the graph starts, and helpers copy their creator\u0027s state without
+recapturing it. State is committed with creation and survives retries,
+compaction, stop/reopen, and session recovery.
+
+Request hooks use the actual dispatched model, so routing and a child\u0027s
+choice of provider do not accidentally apply the parent\u0027s model policy.
+Missing extensions leave their stored state intact but do not apply it.
+The integration is optional: it does not turn consumer extensions into
+runtime dependencies. Hook failures fail creation or the affected request,
+rather than silently dispatching a request without its intended policy.
+
 ## Graphs
 
 A graph runs on pi-durable's tasks and ownership tree, so its bookkeeping is

@@ -97,6 +97,14 @@ Co-loaded extensions can observe child agents through `pi.events`, without
 parsing the panel or footer. These events describe children, not the parent
 Pi session's `agent_start` and `agent_settled` lifecycle.
 
+### Creation and request hooks
+
+Extensions can also initialize persistent, namespaced state at agent creation
+and transform child model requests with `onAgentCreate` and `onAgentRequest`.
+These callbacks are separate from the notification events described here.
+See [Agent extension hooks](./hooks.md) for the optional protocol, inheritance,
+and error handling.
+
 ### State snapshots
 
 `pi-agents:state` publishes this protocol in every Pi mode:

@@ -16,6 +16,7 @@
  */
 
 import { defineDoc } from "@earendil-works/pi-durable";
+import type { AgentExtensionState } from "../hooks.js";
 import type { GraphPolicy } from "./types.js";
 
 export type ParentRequest = {
@@ -31,6 +32,8 @@ export type AgentRecord = {
   createdAt: number;
   closed: boolean;
   ambientSkills: boolean;
+  /** Immutable, namespaced snapshots supplied by co-loaded extensions. */
+  extensionState?: AgentExtensionState;
   /** Next parent request number. */
   nextRequest: number;
   /** Undelivered parent requests by request ID. */

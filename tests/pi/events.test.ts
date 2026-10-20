@@ -8,6 +8,10 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import {
+  AGENT_HOOKS_DISCOVER,
+  type AgentHooksDiscovery,
+} from "../../src/hooks.js";
 import agentExtension from "../../src/index.js";
 import {
   AGENTS_STATE_EVENT,
@@ -102,7 +106,15 @@ describe("child-agent lifecycle protocol", () => {
       events.on(AGENTS_STATE_EVENT, (value) => {
         snapshots.push(value as AgentsStateSnapshot);
       });
+      let discoveries = 0;
       const consumer: ExtensionFactory = (pi) => {
+        pi.events.on(AGENT_HOOKS_DISCOVER, (message) => {
+          discoveries++;
+          (message as AgentHooksDiscovery).register({
+            namespace: "test.lifecycle",
+            onAgentCreate: () => ({ version: 1 }),
+          });
+        });
         pi.on("session_start", () => {
           pi.events.emit(AGENTS_STATE_REQUEST_EVENT, { protocol: 1 });
         });
@@ -146,6 +158,7 @@ describe("child-agent lifecycle protocol", () => {
         });
         // Let the host's deferred startup maintenance run before invalidation.
         await new Promise((resolve) => setImmediate(resolve));
+        expect(discoveries).toBe(1);
         const first = snapshots[0];
         expect(first).toMatchObject({
           sessionId: runtime.session.sessionManager.getSessionId(),
@@ -193,6 +206,7 @@ describe("child-agent lifecycle protocol", () => {
           onError: (error) => errors.push(error),
         });
         await new Promise((resolve) => setImmediate(resolve));
+        expect(discoveries).toBe(3); // Initial load, reload, and new session.
         const replacement = snapshots[beforeReplacement + 1];
         expect(replacement).toMatchObject({ sequence: 1, type: "snapshot" });
         expect(replacement?.sessionId).not.toBe(first?.sessionId);

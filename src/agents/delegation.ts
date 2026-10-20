@@ -377,6 +377,9 @@ async function start(
         createdAt,
         closed: false,
         ambientSkills: helper.spec.ambientSkills ?? true,
+        ...(delegator.record.extensionState
+          ? { extensionState: structuredClone(delegator.record.extensionState) }
+          : {}),
         nextRequest: 1,
         requests: {},
         delivered: [],

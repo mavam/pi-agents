@@ -22,10 +22,18 @@ import {
   type Handover,
   type Parent,
 } from "../../src/agents/parent.js";
-import { AgentService } from "../../src/agents/service.js";
+import {
+  AgentService,
+  type AgentServiceOptions,
+} from "../../src/agents/service.js";
 import type { HelperResolver } from "../../src/agents/types.js";
 import type { SkillSource } from "../../src/catalog/skills.js";
-import { type AgentHarness, openAgentHarness } from "../../src/host/harness.js";
+import type { AgentHooks } from "../../src/hooks.js";
+import {
+  type AgentHarness,
+  type AgentHarnessOptions,
+  openAgentHarness,
+} from "../../src/host/harness.js";
 
 export const MODEL = { provider: "faux", modelId: "faux-1" };
 
@@ -196,6 +204,9 @@ export class TestParent implements Parent {
 }
 
 export interface HostOptions {
+  settings?: AgentHarnessOptions["settings"];
+  hooks?: readonly AgentHooks[];
+  captureExtensionState?: AgentServiceOptions["captureExtensionState"];
   storage?: Storage;
   models?: ReturnType<typeof createFaux>["models"];
   /** The parent; a `TestParent` by default. */
@@ -246,6 +257,8 @@ export async function openService(
     models: options.models ?? createFaux().models,
     cwd: process.cwd(),
     extensions,
+    lifecycle: { sessionId: "test-parent", hooks: options.hooks ?? [] },
+    settings: options.settings,
   });
   const parent = options.parent ?? new TestParent();
   try {
@@ -255,6 +268,7 @@ export async function openService(
       extensions,
       parent,
       refreshDelayMs: TEST_REFRESH_MS,
+      captureExtensionState: options.captureExtensionState,
     });
     harness.harness.resume();
     hosts.set(service, { service, harness, extensions, parent });

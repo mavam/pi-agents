@@ -14,6 +14,17 @@ Pi learns which names are models from your scoped models, the ones you pick
 with `/scoped-models` or `--models`. Scope the models you want agents to use,
 and Pi picks them by name: "spawn a Luna agent" runs on your scoped Luna.
 
+## Settings from other extensions
+
+Co-loaded extensions can opt into [agent creation and request hooks](./hooks.md).
+Their settings are captured when an agent is created, retained across resumes,
+and inherited by its helpers. Later changes in the parent affect future
+agents only. Existing parent request hooks are not inherited automatically.
+
+For example, a compatible pi-service-tier version can pass its provider-specific
+service tiers and `/fast` overrides to children. Neither extension requires
+the other. Without a consumer extension, its stored state has no effect.
+
 ## Working agents
 
 Agents work in parallel, and each sends its own model requests. A model

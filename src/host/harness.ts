@@ -22,7 +22,9 @@ import {
   agentSelection,
   installAgentExtensions,
 } from "../agents/extensions.js";
+import type { AgentHooks } from "../hooks.js";
 import { ExecutionEnvs } from "./harness-setup.js";
+import { AgentRequestHooks } from "./hooks.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
 
@@ -33,6 +35,7 @@ export interface AgentHarnessOptions {
   cwd: string;
   extensions: AgentExtensions;
   settings?: HarnessSettings;
+  lifecycle?: { sessionId: string; hooks: readonly AgentHooks[] };
   onReport?: (error: unknown) => void;
 }
 
@@ -51,12 +54,20 @@ export async function openAgentHarness(
   const registry = createRegistry();
   installAgentExtensions(registry, options.extensions);
   const envs = new ExecutionEnvs(options.cwd);
+  const requests = options.lifecycle?.hooks.some((hook) => hook.onAgentRequest)
+    ? new AgentRequestHooks(
+        options.models,
+        options.lifecycle.sessionId,
+        options.lifecycle.hooks,
+      )
+    : undefined;
   let harness: Harness | undefined;
+  let unobserve: (() => void) | undefined;
   try {
     harness = await Harness.open(
       options.storage,
       {
-        models: options.models,
+        models: requests?.models ?? options.models,
         registry,
         settings: {
           ...options.settings,
@@ -69,8 +80,9 @@ export async function openAgentHarness(
       },
       CONTEXT,
     );
+    await requests?.start(harness);
     // Before any work starts, so the cap sees every run end.
-    const unobserve = options.extensions.working?.observe(harness);
+    unobserve = options.extensions.working?.observe(harness);
     // Sessions stored by earlier versions anchor their graphs here too.
     const anchor = await harness.root(CONTEXT);
     const opened = harness;
@@ -82,6 +94,7 @@ export async function openAgentHarness(
           await opened.close(CONTEXT);
         } finally {
           unobserve?.();
+          requests?.dispose();
           try {
             await envs.cleanup(CONTEXT);
           } finally {
@@ -91,9 +104,17 @@ export async function openAgentHarness(
       },
     };
   } catch (error) {
-    await harness?.close(CONTEXT);
-    await envs.cleanup(CONTEXT);
-    await options.extensions.close();
+    try {
+      await harness?.close(CONTEXT);
+    } finally {
+      unobserve?.();
+      requests?.dispose();
+      try {
+        await envs.cleanup(CONTEXT);
+      } finally {
+        await options.extensions.close();
+      }
+    }
     throw error;
   }
 }

@@ -28,7 +28,7 @@ import { AgentPanel } from "./ui/panel.js";
 
 export default function agentExtension(pi: ExtensionAPI): void {
   const parent = new PiParent(pi);
-  const host = new SessionHost(parent);
+  const host = new SessionHost(parent, { events: pi.events });
   const state = new AgentStatePublisher(
     pi.events,
     () => host.current()?.list() ?? [],

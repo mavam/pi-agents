@@ -3,6 +3,8 @@ title: Tool calls and messages without the leading mark
 type: change
 authors:
   - mavam
+prs:
+  - 114
 created: 2026-10-21T07:53:12.087496Z
 ---
 

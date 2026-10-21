@@ -1,107 +1,35 @@
 # Architecture
 
-Pi-agents runs agents in durable tasks with storage separate from Pi's
-session file.
-
-## Overview
-
-Agents run inside your Pi process. Pi-agents is a thin bridge from Pi to
-pi-durable: it keeps one pi-durable harness per Pi session, with its own store,
-kept apart from Pi's session file:
-
-```text
-╭─ Pi process ─────────────────────────────────────────────────────╮
-│                                                                  │
-│  ╭──────────────────╮ ╭────────────────────╮ ╭────────────────╮  │
-│ ╭┤ ◆ Pi session:    │ │ ◇ optional         │ │ ▤ panel        │  │
-│ ┊│   MCP, extension │ │   extensions, e.g. │ │ ⇄ attach view  │  │
-│ ┊│   tools          │ │   pi-service-tier  │ │ ≡ /agents      │  │
-│ ┊│                  │ │                    │ │ ✉ /messages    │  │
-│ ┊╰───┬─────────▲────╯ ╰─────────┬──────────╯ ╰────────▲───────╯  │
-│ ┊    │ agent_* │ results        ╎ hooks: capture at   │          │
-│ ┊    │         │                ╎ spawn, hold calls,  │          │
-│ ┊    ▼         │                ▼ adapt requests      │          │
-│ ┊╭─────────────┴──────────────────────────────────────┴───────╮  │
-│ ┊│  ✦ pi-agents: a thin bridge from Pi to pi-durable          │  │
-│ ┊╰───┬─────────▲──────────────────────────────────────────────╯  │
-│ ┊    │ start   │ state                                           │
-│ ┊    │ message │ results                                         │
-│ ┊    ▼ stop    │                                                 │
-│ ┊╭─────────────┴──────────────────────────────────────────────╮  │
-│ ┊│  pi-durable harness                                        │  │
-│ ┊│                                                            │  │
-│ ┊│   ◉ scout ─── message ──▶ ● notes                          │  │
-│ ┊│                                                            │  │
-│ ┊│   ╭─ graph ─────────────────────────╮  agent tools:        │  │
-│ ┊│   │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │  read  bash  edit    │  │
-│ ┊│   │        └─▶ ◉ ui ───┘            │  write  grep         │  │
-│ ┊│   │            └─ ◉ ◉ ◉ helpers     │  find  ls  codemode  │  │
-│ ┊│   ╰─────────────────────────────────╯                      │  │
-│ ┊│                                                            │  │
-│ ┊│   agents are conversations; turns, tool calls, and graphs  │  │
-│ ┊│   are durable tasks that own what they start; model        │  │
-│ ┊│   requests pass the hooks with each agent's snapshot       │  │
-│ ┊╰─────────────────────────────┬──────────────────────────────╯  │
-╰─┬──────────────────────────────┬─────────────────────────────────╯
-  ┊ saves                        │ checkpoint every step
-  ▼                              ▼
-╭──────────────────────╮    ╭──────────────────────────────╮
-│ ▤ Pi's session file  │    │ ▤ pi-agents store, one per   │
-│   your conversation, │    │   session: agents and their  │
-│   saved results, and │    │   hook snapshots, graphs,    │
-│   message cards      │    │   messages, tasks            │
-╰──────────────────────╯    ╰──────────────────────────────╯
-```
-
-Each agent is a conversation in the harness. The work on agents runs as
-durable tasks: each turn of an agent, each tool call, and each graph with one
-task per agent in it. A task owns what it starts, so stopping a graph reaches
-all of its agents, and an agent that delegates starts its helpers as a graph
-owned by the tool call that waits for them. A message from one agent to
-another is an input to the recipient's conversation, sent by the sender's
-tool call.
-
-Agents run outside Pi's extension runner, so Pi's extension events, such as
-`before_provider_request`, don't see their requests. Optional extensions reach
-them through [creation and request hooks](#creation-and-request-hooks)
-instead: a snapshot captured when an agent is created, stored with the agent,
-and applied to each of its model requests.
-
-Every step is a commit to the pi-agents store. When you resume a session,
-tasks continue where they stopped: agents that finished don't work again, and
-a call that already started something finds it instead of starting it twice.
-Results reach your conversation through Pi's session file, a separate store,
-so a result counts as delivered once Pi saved it there (see
-[Durability](./architecture.md#durability)). Agents use your Pi logins and
-models, so they need no separate setup.
+Agents run inside your Pi process on
+[pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable),
+using your Pi logins and models. See the [overview diagram](../README.md#-architecture)
+and [design rationale](./design.md).
 
 ## Durability
 
-Agents belong to the Pi session that started them. When you quit Pi or it
-crashes, agents pause. When you resume the session, for example with `pi -c`,
-interrupted work continues and results that haven't arrived yet post into the
-conversation. A result has arrived once Pi saved it in the session, so a crash
-never loses one; a result that Pi showed but hadn't saved yet posts again, and
-after a crash, so may a result that a codemode script waited for. A graph
-continues too: its agents that already finished don't work again, and no
-agent gets its job twice. A message from one agent to another reaches its
-recipient once, also when Pi crashes while sending it. A tool call that
-can't safely repeat reports the interruption to the agent instead.
+Agents belong to the Pi session that started them. Quitting, crashing, or
+switching sessions pauses them. Resume the original session, for example
+with `pi -c`, to continue interrupted work and receive pending results.
 
-If writing to agent storage fails, for example because the disk is full,
-agents pause and Pi tells you. The storage then reopens, and agents continue
-as after a restart. If it fails again within a minute, agents stay paused
-until you next use them. Sessions started with `--no-session` keep agents
-in memory, so a storage failure loses them, and Pi says so.
+Finished graph nodes don't run again, and messages between agents enter
+their recipient's conversation once. In-flight model calls or tool effects
+may repeat; a tool call that can't safely repeat reports its interruption
+to the agent instead.
 
-Agents of sessions started with `--no-session` live in memory and end with
-the session.
+Pending results aren't lost, but can arrive more than once after a crash
+if Pi hadn't saved them, including results a codemode script waited for.
+
+If agent storage fails, agents pause and Pi tells you. They resume when
+storage reopens. A second failure within a minute leaves them paused until
+you next use them. Sessions started with `--no-session` keep agents in
+memory: they end with the session and can't recover from a storage failure.
 
 ## Storage
 
 Agents' storage lives in `~/.pi/agent/pi-agents/sessions/<session-id>/`,
-with one directory per Pi session, apart from Pi's session file.
-Sessions started with `--no-session` keep agents in memory.
+with one directory per Pi session, apart from Pi's session file. See
+[storage retention](./configuration.md#storage-retention) to limit how long
+inactive stores remain.
 
 ## Extension lifecycle events
 
@@ -111,13 +39,9 @@ Pi session's `agent_start` and `agent_settled` lifecycle.
 
 ### Creation and request hooks
 
-Extensions can also initialize persistent, namespaced state at agent creation,
-hold child model calls, and transform child model requests with
-`onAgentCreate`, `beforeAgentRequest`, and `onAgentRequest`. These callbacks
-are separate from the notification events described here. They carry JSON
-state and provider payloads and can make a call wait; they don't give agents
-tools. See [Agent extension hooks](./hooks.md) for the optional protocol,
-inheritance, and error handling.
+To capture settings, hold model calls, or transform requests, use
+[agent extension hooks](./hooks.md). Unlike the notification events below,
+these callbacks can change agent behavior; they don't give agents tools.
 
 ### State snapshots
 
@@ -183,6 +107,3 @@ node's `waiting` state means its work is still pending on its inputs, which
 can outlast every `working` child, for example while stored work resumes.
 It does not mean waiting for the user, so it must not be interpreted as a
 blocked user dialog.
-
-Developers can read [the design document](./design.md) for the design and
-its reasons.

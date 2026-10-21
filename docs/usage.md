@@ -38,20 +38,19 @@ shows the state of its last agents: failed if one failed or was skipped,
 interrupted if one was interrupted or stopped, and idle otherwise. Once its
 result reaches Pi, it shows ◌ as well.
 
-Agents use Pi's tools `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`,
-and `codemode`, along with your context files such as `AGENTS.md` and your
-[skills](./usage.md#skills). By default they get the tools you have active
-among these, so with `codemode` on in Pi they have it too; a profile or a
-spawn can name others. `read` shows them images, and
-`codemode` scripts call their other tools, including `delegate_graph` and
-`agent_send`, and pick up where they were after a restart. As in Pi,
-scripts also get [`models`](https://pi.dev/docs/latest/codemode#models):
-they list the models you can use, run classifiers with `models.classify()`,
-and generate images with `models.generateImages()`. These calls count
-toward the agent's usage, and agents without `codemode` can't make them.
-Agents can't use MCP servers or
-tools from other extensions, and they start other agents only when you let
-them delegate.
+## Tools available to agents
+
+Agents use `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, and
+`codemode`, plus your context files such as `AGENTS.md` and
+[skills](#skills). They inherit your active tools from this set unless a
+profile or spawn specifies others. They can't use MCP servers or tools
+from other extensions.
+
+`read` supports images. Codemode scripts can call the agent's other tools
+and use [`models`](https://pi.dev/docs/latest/codemode#models) to list models,
+run classifiers, and generate images. These calls count toward the agent's
+usage. Agents start helpers only when you let them
+[delegate](./graphs.md#agents-that-delegate).
 
 ## Skills
 
@@ -103,13 +102,10 @@ A line above the editor shows how many agents are in each state:
 ◉ 3 working ⊗ 1 failed · ← agents
 ```
 
-Press ← in an empty editor, Ctrl+Q, or click the line to focus the panel. It
-then shows one line per open agent or graph, with a graph's agents below it
-as a tree. The glyph shows the state, working agents show how long ago they
-started, a graph shows how many of its agents finished, and `after` names
-the agents whose results an agent receives, `after all` when it waits for
-every other agent of its graph. Names are in the normal color and details
-dim:
+Press ← in an empty editor, Ctrl+Q, or click the line to focus the panel.
+It shows open agents and graphs, with their states, elapsed time, usage,
+and progress. Graphs and helpers appear as trees; `after` names an agent's
+dependencies:
 
 ```text
 ◉ reviewer explorer terra 1m32s 15.5k Using grep
@@ -121,20 +117,13 @@ dim:
 └─ ○ merge after all opus
 ```
 
-An agent leaves the panel once its answer reaches Pi, and a graph once its
-result does. Pi takes results only between turns and while you aren't
-attached, so until then an agent that answered Pi shows `◐` and says
-`result queued`, and so does a graph:
-
-```text
-◐ series-review sol 1.1m $0.42 result queued
-```
-
-Failed and interrupted agents stay until you or Pi stop them.
+Agents and graphs leave the panel once their results reach Pi. Until Pi
+can take a result—between turns and while you aren't attached—it shows
+`◐ result queued`. Failed and interrupted agents stay until stopped.
 
 When no agents are open, ← and Ctrl+Q open `/agents` instead. These
-shortcuts apply while Pi's prompt editor has focus. Selectors such as the
-session tree opened with double-Esc keep their own keyboard navigation.
+shortcuts apply only while Pi's prompt editor has focus.
+
 In the focused panel:
 
 | Key | Action |
@@ -147,9 +136,8 @@ In the focused panel:
 | `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
 | Esc or → | Go back to the editor. Other keys go back too and act there, so typed or pasted text lands in the editor. |
 
-Attaching shows the agent's conversation with Pi's own message and tool
-rendering, set off from Pi's view by a line on top. The editor's top border
-names the agent and shows its status. The editor then talks to the agent:
+Attaching opens the agent's conversation. The editor names the agent and
+sends your input to it:
 
 | Key | Action |
 | --- | --- |
@@ -169,19 +157,13 @@ Stop the agent instead if Pi should get nothing. A graph's agent is
 different: interrupting it ends its part in the graph, which goes on
 without it.
 
-You can attach to any agent, not only the ones in the panel. `/agents` shows
-how long each agent and graph ran, from its start until it last finished;
-that time stays put once it finished. Agents that
-finished or were stopped keep their whole conversation: open `/agents`, select
-one, and continue where it left off; its time then counts on from its start,
-pauses included. This also works for a graph's agents
-after the graph finished, and after you resume a session.
+Open `/agents` to attach to finished or stopped agents, including agents
+from completed graphs. Their conversations remain available after you
+resume a session.
 
-Agents belong to the Pi session that started them. Switching to another
-session, such as with `/new`, `/resume`, or a move to another worktree,
-pauses them, and the new session names the agents that were still working
-or had results waiting, so Pi knows they don't continue there. Resume the original session to continue them and receive their
-results.
+Switching sessions pauses the original session's agents. Resume that
+session to continue them and receive results; they don't follow you to
+the new session.
 
 ## Commands
 
@@ -204,31 +186,16 @@ Pi uses these tools to work with agents:
 | `agent_status` | Show agent and graph states. |
 | `agent_stop` | Stop an agent or a graph. |
 
-`agent_spawn`, `agent_spawn_graph`, and `agent_send` return at once. Agents
-work in the background, and each result arrives on its own as a message that
-starts Pi's next turn, so you can keep talking to Pi meanwhile. Results reach
-Pi whole, without a size limit. Pi treats a result as an agent's report, not
-as your request, and acknowledges results briefly while other agents still
-work. To get several results together, start a graph: it reports as one
-message.
+`agent_spawn`, `agent_spawn_graph`, and `agent_send` return at once.
+Results arrive as messages that start Pi's next turn. A graph groups its
+results into one message. Pi receives complete results and error messages
+without a size limit.
 
-Long agent and graph replies show a preview. In Pi's fullscreen mode, click
-a reply card to expand it; click again to collapse it. A graph card expands
-all of its displayed results and errors together. Ctrl+O still expands or
-collapses all cards and tool output, including in regular terminal mode,
-where clicking isn't available.
-
-Failed result cards include the error message when one is available, not
-just a category such as `model_error`. Long errors collapse like answers.
-These previews only affect the display; Pi still receives the full text.
-
-Only `agent_wait` blocks: until the agents answer, or at most its `timeout`
-in seconds. Pi calls it only when a turn must combine results, or in a
-single-shot run such as `pi --print`, which ends with Pi's answer and would
-otherwise pause the agents before they report. A
-result that a wait returns doesn't post again as a message. Cancelling a
-wait leaves the agents working, and so does a message you send to Pi while
-it waits: Pi stops waiting and answers you right away.
+Only `agent_wait` blocks, up to its `timeout` in seconds. Use it when a
+turn must combine results, or in a single-shot run such as `pi --print`,
+which would otherwise end before agents report. Results returned by a wait
+don't also post as messages. Cancelling a wait or sending Pi a message ends
+the wait, not the agents' work.
 
 With [codemode](https://pi.dev/docs/latest/codemode), scripts get the
 results as data instead of text: an agent's `name`, `state`, and `result`
@@ -247,13 +214,3 @@ return { failed: agents.filter((a) => a.state === "failed"), pending };
 ```
 
 Names in `pending` keep working, and their results arrive as messages.
-
-Each tool call shows the arguments Pi chose, dim, after its title:
-
-```text
-✦ spawn lister profile=explorer thinking=low tools=[read,ls]
-  List the files in src and summarize them.
-```
-
-A call that fails shows the reason below it, for example `terminated` when
-the model's response broke off before Pi could run the call.

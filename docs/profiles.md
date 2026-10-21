@@ -37,7 +37,6 @@ Profile fields:
 The Markdown body extends the agent's system prompt. Arguments that Pi passes
 to `agent_spawn` override profile settings.
 
-Pi-agents reads profiles from `~/.pi/agent/agents` and, when you trust the
-project, from `.pi/agents` in the directory where you started Pi, the same
-place Pi reads the project's skills and settings from. Project profiles win
-over user profiles with the same name.
+Pi-agents reads profiles from `~/.pi/agent/agents` and, for trusted
+projects, `.pi/agents` in the directory where you started Pi. Project
+profiles override user profiles with the same name.

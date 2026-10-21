@@ -40,10 +40,9 @@ the graph works joins its work; if the agent answers it separately, that
 answer arrives after the graph's result. A queued follow-up to a graph's agent
 holds back the graph until the agent answered it as well.
 
-Graphs replace the workflow language of earlier versions with something
-smaller: edges carry final messages, and there are no references, schemas,
-loops, or conditions. For repeated rounds, such as review and fix, Pi can
-message the agents again.
+Edges carry final messages; there are no references, schemas, loops, or
+conditions. For repeated rounds, such as review and fix, message the agents
+again.
 
 ## Agents that delegate
 
@@ -66,10 +65,9 @@ The panel draws the helpers below their agent, which shows their progress:
    └─ ○ merge after all haiku
 ```
 
-Helpers leave the panel once their agent has their results; `/agents` keeps
-them, and you can attach to them like any agent. A helper's full name starts
-with its agent's, such as `mapper.models`; the tree leaves that part out
-below the agent, and the divider over its details in `/agents` shows it.
+Helpers leave the panel once their agent has their results; you can still
+attach to them through `/agents`. Their full names include their agent's
+name, such as `mapper.models`.
 
 - Helpers run on their agent's model, thinking level, and working directory
   unless the agent picks others, and get only tools their agent has.

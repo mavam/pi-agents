@@ -16,22 +16,17 @@ and Pi picks them by name: "spawn a Luna agent" runs on your scoped Luna.
 
 ## Settings from other extensions
 
-Co-loaded extensions can opt into [agent creation and request hooks](./hooks.md).
-Their settings are captured when an agent is created, retained across resumes,
-and inherited by its helpers. Later changes in the parent affect future
-agents only. Existing parent request hooks are not inherited automatically.
-
-For example, a compatible pi-service-tier version can pass its provider-specific
-service tiers and `/fast` overrides to children. Neither extension requires
-the other. Without a consumer extension, its stored state has no effect.
+Extensions must opt into [agent hooks](./hooks.md); parent request hooks
+aren't inherited automatically. For example, a compatible pi-service-tier
+version can pass its service tiers and `/fast` overrides to agents.
+Captured settings survive resumes and pass to helpers. Later parent
+changes affect future agents only.
 
 ## Working agents
 
-Agents work in parallel, and each sends its own model requests. A model
-server that serves one conversation at a time, such as a local LLM with one
-prompt cache, has to reprocess an agent's whole context whenever another
-agent's request comes in between. Cap how many agents work at once in
-`~/.pi/agent/settings.json` or your project's `.pi/settings.json`:
+Cap parallel work to reduce contention, for example on a local model
+server. Set the limit in `~/.pi/agent/settings.json` or your project's
+`.pi/settings.json`:
 
 ```json
 {
@@ -41,11 +36,9 @@ agent's request comes in between. Cap how many agents work at once in
 }
 ```
 
-An agent takes a slot at its first model request and keeps it, tool calls
-included, until its work ends, so its requests follow each other. Agents over
-the cap wait their turn in order and show as working meanwhile. An agent that
-waits for its helpers gives its slot to them until they finish. A message
-that arrives after an agent finished waits for a slot again.
+An agent keeps its slot until its work ends, including tool calls, but
+yields it while waiting for helpers. Agents over the cap wait in order and
+show as working. A later message to a finished agent waits for a new slot.
 
 Agents, graphs, and helpers share the cap. Your session's own requests don't
 count toward it. Without the setting, agents aren't capped. Restart Pi after
@@ -53,11 +46,9 @@ changing it.
 
 ## Storage retention
 
-Pi-agents keeps each session's agents in its own store in
-`~/.pi/agent/pi-agents/sessions/<session-id>/`, apart from Pi's session
-file, and keeps it after Pi deletes that file. To delete stores you no longer
-use, set how many days to keep them in `~/.pi/agent/settings.json` or your
-project's `.pi/settings.json`:
+[Agent storage](./architecture.md#storage) remains after Pi deletes its
+session file. To remove inactive stores, set a retention period in
+`~/.pi/agent/settings.json` or your project's `.pi/settings.json`:
 
 ```json
 {
@@ -75,8 +66,6 @@ forever. Changes apply the next time Pi starts.
 
 ## Footer counters
 
-With [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer) installed,
-pi-agents can show the session's agents by state left of the model, such as
-`2◉ 1● 3◌`, each glyph in its status color. The count includes closed agents
-(◌), since messaging one starts it again, but not closed helpers, which
-nobody can message. Enable the `agents` widget through `/fancy-footer`.
+With [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer), enable the
+`agents` widget through `/fancy-footer` to show counts by state, such as
+`2◉ 1● 3◌`. Counts include closed agents, but not closed helpers.

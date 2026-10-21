@@ -1,12 +1,8 @@
 # Agent extension hooks
 
-Co-loaded Pi extensions can capture state when agents are created, hold their
-model calls, and modify their model requests. Pi-agents has no dependency on
-any consumer extension. With no registrations, agent behavior stays
-unchanged.
-
-The hooks carry data and wait; they don't decide anything. Policy, such as
-when to hold calls, why, and how users override it, stays in your extension.
+Co-loaded Pi extensions can capture state when agents are created, hold
+model calls, and modify requests. Policy and user controls stay in your
+extension; registration is optional.
 
 ## Register hooks
 
@@ -56,15 +52,13 @@ ignored namespace behaves like an absent extension.
 
 ## Capture state
 
-`onAgentCreate(ctx)` runs synchronously once per spawn, after spawn
-validation and before the creation commit. A single agent and a whole graph
-are one spawn each, so a graph's nodes share one snapshot. It receives:
+`onAgentCreate(ctx)` runs synchronously once per spawn, after validation.
+A single agent or a whole graph counts as one spawn. It receives:
 
 - `ctx.parent.sessionId`: the owning Pi session.
 - `ctx.parent.branch`: a detached, frozen snapshot of its active branch at
   creation, including custom entries. Use this rather than cached
-  `session_start` state to recover branch-local settings. Pi-agents copies
-  the branch only when a callback reads it, and then once for all callbacks.
+  `session_start` state to recover branch-local settings.
 
 The context describes the parent, not the new agent: its model and provider
 are known only per request, possibly after routing.
@@ -81,8 +75,7 @@ namespace map to 8 KiB per agent. Returned values are detached before storage.
 
 Creation callbacks are snapshot operations, not exactly-once side effects:
 a failed spawn can be attempted again. A thrown error or invalid state fails
-creation. For graphs, callbacks run before the single creation commit, so
-failure creates no partial graph.
+creation without creating a partial graph.
 
 ### Inheritance
 
@@ -111,11 +104,9 @@ The context contains:
 | `state` | Your namespace's detached, deeply frozen JSON, or `undefined` |
 | `signal` | The child request's abort signal, when available |
 
-Hooks run in lexicographic namespace order, and each sees the preceding
-result. Should the agent runtime ever pass a payload callback of its own, that
-callback runs before them. Request hooks run even without stored state, which
-supports stateless integrations. Stateful consumers should explicitly handle
-`undefined`.
+Hooks run in lexicographic namespace order, each seeing the preceding
+result. Request hooks run even without stored state; stateful consumers
+must handle `undefined`.
 
 Hook errors fail the request instead of silently sending the original payload.
 The agent's error names the namespace and hook and includes the message of a
@@ -160,9 +151,8 @@ The context contains:
 Holding isn't stopping. A held agent stays working: it receives messages,
 and tools it already called finish. Only the held call waits.
 
-Pi-agents keeps nothing about holds: no reasons, schedules, timers, manual
-overrides, or status. Your extension owns them, for example with a command
-that toggles a hold and a status entry that shows why agents wait.
+Your extension owns hold state and controls, such as a command to release
+holds and a status entry explaining why agents wait.
 
 - **Cancellation.** Stopping or interrupting the agent, stopping its graph,
   and shutting down end the wait, even if the callback ignores the signal.
@@ -193,8 +183,3 @@ ever wrote. Reject an unknown state `version` explicitly, but within a known
 version ignore fields and values you don't recognize. An older consumer then
 still reads what a newer one wrote, and no agent fails every request over
 state nobody can repair.
-
-For example, a compatible pi-service-tier version can capture the parent's
-provider-specific defaults and `/fast` overrides at creation and apply them
-to each child's actual provider. Tier names, mappings, and configuration stay
-entirely in that extension; pi-agents only stores and supplies its state.

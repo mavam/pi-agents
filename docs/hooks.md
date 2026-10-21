@@ -142,12 +142,3 @@ For example, a compatible pi-service-tier version can capture the parent's
 provider-specific defaults and `/fast` overrides at creation and apply them
 to each child's actual provider. Tier names, mappings, and configuration stay
 entirely in that extension; pi-agents only stores and supplies its state.
-
-## Future work: tools
-
-These hooks carry JSON state and provider payloads; they can't give agents
-tools. Don't declare tools in a request payload: agents run only the tools
-pi-durable knows, so the model's call to such a tool fails. Bringing
-extension or MCP tools to agents needs a separate bridge that registers
-durable tools, with their own replay, cancellation, and trust rules. Pi-agents
-doesn't offer one yet.

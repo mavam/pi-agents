@@ -11,6 +11,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, type TSchema, Type } from "typebox";
+import { droppedNote, messageModeParameter } from "../agents/messaging.js";
 import {
   observed,
   receipt,
@@ -25,6 +26,7 @@ import {
   checkSpawnShape,
   GRAPH_SIZE,
   type GraphInfo,
+  messageMode,
   type Target,
   type TargetRef,
   THINKING_LEVELS,
@@ -495,12 +497,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     message: Type.String({
       description: "What to tell the agent; it receives it as your input",
     }),
-    followUp: Type.Optional(
-      Type.Boolean({
-        description:
-          "Wait until the agent's current work ends; by default, a working agent receives the message as steering",
-      }),
-    ),
+    mode: messageModeParameter("agent"),
   });
   pi.registerTool(
     defineAgentTool(host, {
@@ -511,20 +508,20 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       output: AgentOutput,
       async execute(service, params) {
         const before = service.get(params.name);
-        const sent = await service.send(
-          params.name,
-          params.message,
-          params.followUp ? "followUp" : "auto",
-        );
-        const info = service.agentById(sent.id) as AgentInfo;
-        const verb =
-          before?.state === "working"
-            ? params.followUp
-              ? "Queued for"
-              : "Steered"
-            : "Sent to";
+        // Calls from before `mode` existed set `followUp`.
+        const mode = messageMode(params);
+        const sent = await service.send(params.name, params.message, mode);
+        const info = service.agentById(sent.agent.id) as AgentInfo;
+        const working = before?.state === "working";
+        const sentText = !working
+          ? `Sent to ${info.name}.`
+          : mode === "interrupt"
+            ? `Interrupted ${info.name} and sent the message.`
+            : mode === "followUp"
+              ? `Queued for ${info.name}.`
+              : `Steered ${info.name}.`;
         return {
-          content: `${verb} ${info.name}.`,
+          content: `${sentText}${droppedNote(sent.dropped)}`,
           details: { receipt: receipt() },
           output: agentNow(service, info.id),
         };

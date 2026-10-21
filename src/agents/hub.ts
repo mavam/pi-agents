@@ -5,6 +5,8 @@
  * its stops.
  */
 
+import type { Context } from "@earendil-works/chord";
+import { awaitWithContext } from "@earendil-works/chord/context";
 import type { AgentState, TargetRef } from "./types.js";
 
 export class MessagingHub {
@@ -36,21 +38,35 @@ export class MessagingHub {
     return true;
   }
 
-  /** Run `work` once the recipient's earlier turns ended. */
-  async turn<T>(agentId: string, work: () => Promise<T>): Promise<T> {
+  /**
+   * Run `work` once the recipient's earlier turns ended. Cancelling
+   * `context` while it waits gives up the turn without running `work`, so
+   * a caller whose own work is being aborted never holds up the abort;
+   * later turns still wait for the earlier ones.
+   */
+  async turn<T>(
+    agentId: string,
+    work: () => Promise<T>,
+    context?: Context,
+  ): Promise<T> {
+    // Stored turns never reject.
     const previous = this.turns.get(agentId) ?? Promise.resolve();
-    const run = previous.catch(() => {}).then(work);
-    const settled = run.catch(() => {});
+    const ready = context ? awaitWithContext(previous, context) : previous;
+    const run = ready.then(work);
+    // A turn ends once its work and the turns before it ended, also when
+    // its caller gave up waiting.
+    const settled = Promise.allSettled([previous, run]).then(() => {});
     this.turns.set(agentId, settled);
     try {
       return await run;
     } finally {
-      if (this.turns.get(agentId) === settled) {
+      void previous.then(() => {
+        if (this.turns.get(agentId) !== settled) return;
         this.turns.delete(agentId);
         const retry = this.retries.get(agentId);
         this.retries.delete(agentId);
         retry?.();
-      }
+      });
     }
   }
 }

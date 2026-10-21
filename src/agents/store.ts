@@ -20,7 +20,7 @@ import {
   resultOf,
   type SubmissionOutcome,
 } from "./derive.js";
-import { awaitsJob, messageSubmission } from "./messaging.js";
+import { awaitsJob, markInterrupted, messageSubmission } from "./messaging.js";
 import {
   coveringAnswer,
   isFinalAnswer,
@@ -39,7 +39,6 @@ import {
   type MessagesState,
   type ParentRequest,
   requestId,
-  resultsRequestId,
 } from "./records.js";
 import {
   AgentError,
@@ -132,6 +131,28 @@ async function answeredSince(
     if (page.next === undefined) return false;
     cursor = page.next;
   }
+}
+
+/** Record a parent request, reopening the agent; inside a commit. */
+async function addRequest(
+  tx: Tx,
+  agentId: string,
+  name: string,
+  request: ParentRequest,
+): Promise<string> {
+  const state = await tx.doc(AgentsDoc);
+  const record = state.agents[agentId];
+  if (!record) throw new AgentError(`Agent ${name} is missing`);
+  if (await awaitsJob(tx, agentId, record))
+    throw new AgentError(
+      `${name} waits for the agents its job needs and hasn't started; message it once it works`,
+    );
+  record.closed = false;
+  delete record.stopped;
+  const next = requestId(record.nextRequest);
+  record.nextRequest += 1;
+  record.requests[next] = request;
+  return next;
 }
 
 export class AgentStore {
@@ -365,34 +386,7 @@ export class AgentStore {
   /** The user interrupted the agent: results it is owed wait until it
    * answered after its newest entry. */
   async markInterrupted(agentId: string): Promise<void> {
-    await this.harness.commit(async (tx) => {
-      const record = (await tx.doc(AgentsDoc)).agents[agentId];
-      if (!record) return;
-      const page = await tx.scanEntries(
-        { conversationId: conversationId(agentId), order: "descending" },
-        1,
-      );
-      record.interrupted = Number(page.items[0]?.id ?? 0);
-      // Capture withdrawal while still in the interrupt's turn, not when
-      // refresh eventually notices it after a corrective answer.
-      for (const [id, graph] of Object.entries(
-        (await tx.doc(GraphsDoc)).graphs,
-      )) {
-        if (
-          graph.owner?.agent !== agentId ||
-          graph.attempt === undefined ||
-          graph.presented !== undefined ||
-          graph.cancelled
-        )
-          continue;
-        const submission = await tx.submissionByRequest(
-          conversationId(agentId),
-          resultsRequestId(id, graph, graph.attempt),
-        );
-        if (submission?.status === "unanswered")
-          graph.withdrawn = record.interrupted;
-      }
-    }, CONTEXT);
+    await this.harness.commit((tx) => markInterrupted(tx, agentId), CONTEXT);
   }
 
   /** The owner's entry that presented the group's result. */
@@ -514,20 +508,22 @@ export class AgentStore {
     name: string,
     request: ParentRequest,
   ): Promise<string> {
+    return this.harness.commit(
+      (tx) => addRequest(tx, agentId, name, request),
+      CONTEXT,
+    );
+  }
+
+  /** The parent interrupted the agent, which it just aborted, to send it a
+   * request: the interrupt's watermark and the request in one commit. */
+  async addInterruptingRequest(
+    agentId: string,
+    name: string,
+    request: ParentRequest,
+  ): Promise<string> {
     return this.harness.commit(async (tx) => {
-      const state = await tx.doc(AgentsDoc);
-      const record = state.agents[agentId];
-      if (!record) throw new AgentError(`Agent ${name} is missing`);
-      if (await awaitsJob(tx, agentId, record))
-        throw new AgentError(
-          `${name} waits for the agents its job needs and hasn't started; message it once it works`,
-        );
-      record.closed = false;
-      delete record.stopped;
-      const next = requestId(record.nextRequest);
-      record.nextRequest += 1;
-      record.requests[next] = request;
-      return next;
+      await markInterrupted(tx, agentId);
+      return addRequest(tx, agentId, name, request);
     }, CONTEXT);
   }
 

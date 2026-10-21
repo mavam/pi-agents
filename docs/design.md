@@ -146,6 +146,17 @@ blocked wait, so a child asking its waiting spawner for clarification can't
 make progress through that exchange until the wait ends. Asynchronous
 results avoid this limitation; waits aren't a general coordination loop.
 
+A message can interrupt its recipient first, so a correction doesn't wait
+for work it makes pointless. The interrupt belongs to the send, not to a
+separate authority: whoever may message an agent may interrupt it, and
+stopped agents refuse both. The message is recorded together with the
+interrupt, after the abort, so a send that resumes after a crash knows
+whether it already interrupted and never aborts the work its own message
+started. The abort waits for the recipient's work to end, so a sender
+that is itself interrupted meanwhile gives up instead of waiting; two
+agents interrupting each other can't deadlock, at the price that the
+recipient may stay interrupted without the message.
+
 Messages between agents are visible to the user but don't start parent
 turns. Parent results and peer messages serve different audiences; see
 [messaging](./messaging.md) for delivery guarantees and limitations.
@@ -161,7 +172,8 @@ reaches its agent one way, never both.
 
 Interrupting an agent means correcting its work, not withdrawing the job.
 The parent's request, or the agent's job in its graph, stays open for a
-later answer. Stopping the agent withdraws it.
+later answer. Stopping the agent withdraws it. Pi can interrupt with the
+correcting message in one send, which keeps that answer open the same way.
 
 Pi's session and agent storage are separate, so result delivery is
 **at least once**: a crash can repeat a result, but doesn't lose it.

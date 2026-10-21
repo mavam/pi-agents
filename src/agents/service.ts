@@ -8,18 +8,20 @@
  */
 
 import type { AttachedReplicatedState } from "@earendil-works/chord";
-import type {
-  Conversation,
-  ConversationView,
-  Cursor,
-  Harness,
-  TaskId,
+import {
+  type Conversation,
+  type ConversationView,
+  type Cursor,
+  type Harness,
+  InboxDoc,
+  type TaskId,
 } from "@earendil-works/pi-durable";
 import { CONTEXT, contextFor, conversationId, taskId } from "./context.js";
 import { type CreationDeps, createGraph } from "./creation.js";
 import { Delivery } from "./delivery.js";
 import type { AgentExtensions } from "./extensions.js";
 import { MessageLog } from "./message-log.js";
+import { queuedMessages } from "./messaging.js";
 import {
   obligationsOf,
   RESULTS_ENTRY,
@@ -44,13 +46,16 @@ import {
   type GraphInfo,
   type GraphSpec,
   type MessageInfo,
+  type MessageMode,
   type PendingDelivery,
   type SendMode,
+  type SendResult,
   type Target,
   type TargetRef,
   type TaskNode,
   USER_MESSAGE_PREFIX,
   WaitInterrupted,
+  whenBusyOf,
 } from "./types.js";
 import { Waits } from "./waits.js";
 
@@ -437,12 +442,20 @@ export class AgentService {
     return this.requireGraph(created.id);
   }
 
-  /** Message an agent on behalf of the parent model. */
+  /**
+   * Message an agent on behalf of the parent model. An interrupt first
+   * aborts the agent's work, as the user's interrupt does, and drops its
+   * queued messages; the request follows under the same turn, recorded with
+   * the interrupt's watermark, so no message from another agent lands in
+   * between. The agent keeps its job and the agents it spawned. A crash
+   * after the abort can leave the agent interrupted without the request.
+   * Returns the agent and how many queued messages the interrupt dropped.
+   */
   async send(
     nameOrId: string,
     message: string,
-    mode: SendMode,
-  ): Promise<AgentInfo> {
+    mode: MessageMode,
+  ): Promise<SendResult> {
     const target = this.requireTarget(nameOrId);
     if (target.kind === "graph")
       throw new AgentError(
@@ -453,12 +466,39 @@ export class AgentService {
     if (!text) throw new AgentError("The message must not be empty");
     const request: ParentRequest = {
       message: text,
-      whenBusy: mode === "followUp" ? "followUp" : "steer",
+      whenBusy: whenBusyOf(mode),
     };
-    const rid = await this.store.addRequest(info.id, info.name, request);
-    await this.store.submit(info.id, rid, request);
-    await this.refresh([info.id]);
-    return this.requireAgent(info.id);
+    if (mode !== "interrupt") {
+      const rid = await this.store.addRequest(info.id, info.name, request);
+      await this.store.submit(info.id, rid, request);
+      await this.refresh([info.id]);
+      return { agent: this.requireAgent(info.id), dropped: 0 };
+    }
+    const conversation = await this.harness.conversation(
+      conversationId(info.id),
+      CONTEXT,
+    );
+    if (!conversation) throw new AgentError(`Agent ${info.name} is missing`);
+    let dropped = 0;
+    await this.extensions.hub.turn(info.id, async () => {
+      // Refuse before aborting anything.
+      if (await this.store.awaitsJob(info.id))
+        throw new AgentError(
+          `${info.name} waits for the agents its job needs and hasn't started; message it once it works`,
+        );
+      dropped = queuedMessages(
+        await this.harness.snapshot(InboxDoc, conversationId(info.id), CONTEXT),
+      );
+      await conversation.abort(CONTEXT);
+      const rid = await this.store.addInterruptingRequest(
+        info.id,
+        info.name,
+        request,
+      );
+      await this.store.submit(info.id, rid, request);
+    });
+    await this.refresh(this.projection.withHelpers([info.id]));
+    return { agent: this.requireAgent(info.id), dropped };
   }
 
   /** Message an agent on behalf of the user; results stay in the agent. */

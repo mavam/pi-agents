@@ -10,7 +10,7 @@ Ask Pi to start agents: [see the example prompts](../README.md#-usage).
 | --- | --- |
 | Agent | A separate Pi agent with its own name, model, working directory, and conversation. It keeps its conversation after it answers. |
 | Job | The instructions an agent starts with. They must stand on their own, because the agent doesn't see your conversation. |
-| Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done. |
+| Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done; an *interrupt* stops the current work first. |
 | Result | The agent's final message after its job or a message. |
 | Group | One spawn's runtime-owned set of agents, with one result for whoever spawned it. A group of one looks like its agent, but has a separate group ID. |
 | Graph | The `after` dependencies within a group: some agents run in parallel, others start after their inputs finish. |
@@ -159,6 +159,14 @@ Stop the agent instead if Pi should get nothing. The same holds for a
 graph's agent, whose job in the graph stays open until it answers again,
 and for an agent's own agents, which keep working after an interrupt.
 
+Pi and agents can do the same in one step: `agent_send` with
+`mode: "interrupt"` interrupts a working agent and sends the message that
+corrects it. Its queued messages are dropped, and the result says how many.
+If the message can't be sent, for example to an agent that still waits for
+the agents its job needs, nothing is interrupted. A crash between the
+interrupt and Pi's message can leave the agent interrupted without it;
+message it again.
+
 Open `/agents` to attach to finished or stopped agents, including agents
 from completed graphs. Their conversations remain available after you
 resume a session.
@@ -182,7 +190,7 @@ Pi uses these tools to work with agents:
 | Tool | Purpose |
 | --- | --- |
 | `agent_spawn` | Start one group of 1 to 12 agents, optionally with `after` dependencies or permission to spawn. |
-| `agent_send` | Message an agent: prompt, steer, or queue a follow-up. |
+| `agent_send` | Message an agent: prompt, steer, queue a follow-up, or interrupt its work first. |
 | `agent_wait` | Block until agents or groups answer and return their results. |
 | `agent_status` | Show agent and group states. |
 | `agent_stop` | Stop an agent or a group. |

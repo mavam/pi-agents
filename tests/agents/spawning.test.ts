@@ -183,7 +183,7 @@ describe("spawning", () => {
     await service.spawnGraph({ agents: [lead("idle")] });
     const first = await resultOf(service, "lead");
     await service.acknowledge(first);
-    await service.send("lead", spawnJob([{ name: "s", job: "look" }]), "auto");
+    await service.send("lead", spawnJob([{ name: "s", job: "look" }]), "steer");
     const outcome = await service.wait(["lead"]);
     expect(outcome.agents[0]?.result?.text).toBe(
       "final: [results] s answered:",
@@ -236,6 +236,24 @@ describe("spawning", () => {
     expect(service.graphById(nested?.id ?? "")?.cancelled).toBe(true);
   });
 
+  test("the parent's interrupt aborts work, drops queued messages, and keeps the job and agents", async () => {
+    const { models, prompts } = scripted();
+    const service = await open({ models });
+    await service.spawnGraph({
+      agents: [lead(spawnJob([{ name: "slow", job: "hold on" }]))],
+    });
+    await until(() => service.get("lead")?.result?.text === "checking");
+    await service.send("lead", "hold me", "steer");
+    await until(() => service.get("lead")?.state === "working");
+    await service.send("lead", "later", "followUp");
+    const sent = await service.send("lead", "go on", "interrupt");
+    expect(sent.dropped).toBe(1);
+    await until(() => service.get("lead")?.result?.text === "done: go on");
+    expect(prompts).not.toContain("later");
+    expect(service.get("lead")?.closed).toBe(false);
+    expect(service.get("lead.slow")?.state).toBe("working");
+  });
+
   test("after an interrupt, results wait until the agent answered again", async () => {
     const service = await open();
     await service.spawnGraph({
@@ -265,7 +283,7 @@ describe("spawning", () => {
     await service.send(
       "lead.child",
       spawnJob([{ name: "grand", job: "hold grand" }]),
-      "auto",
+      "steer",
     );
     await until(() => service.get("lead.child.grand")?.state === "working");
     await service.stop("lead");
@@ -395,7 +413,7 @@ describe("spawning", () => {
       agents: [lead(spawnJob([{ name: "a", job: "a" }]))],
     });
     await service.acknowledge(await resultOf(service, "lead"));
-    await service.send("lead", spawnJob([{ name: "b", job: "b" }]), "auto");
+    await service.send("lead", spawnJob([{ name: "b", job: "b" }]), "steer");
     const outcome = await service.wait(["lead"]);
     expect(outcome.agents[0]?.result?.text).toBe(
       "final: You can spawn 1 agents in total and spawned 1, so 1 more is too many.",
@@ -423,7 +441,7 @@ describe("spawning", () => {
         true,
       );
       // Reopening the same agent must not reset its budget.
-      await service.send("lead", job, "auto");
+      await service.send("lead", job, "steer");
     }
     const outcome = await service.wait(["lead"]);
     expect(outcome.agents[0]?.result?.text).toBe(

@@ -33,6 +33,7 @@ import {
 } from "../agents/receipts.js";
 import type { NodeKind } from "../agents/report.js";
 import { shapeLine } from "../agents/topology.js";
+import { messageMode } from "../agents/types.js";
 import {
   type Colorize,
   formatInputs,
@@ -76,6 +77,13 @@ export function positiveSeconds(value: unknown): number | undefined {
   return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
     ? seconds
     : undefined;
+}
+
+/** A send's mode for its call line, also of calls from before `mode`
+ * existed, which set `followUp`; nothing for the default. */
+function sendModePair(args: Args): string | undefined {
+  const mode = messageMode(args);
+  return mode === "steer" ? undefined : mode;
 }
 
 /** `120s` for a call line; nothing for seconds a call ignores. */
@@ -290,7 +298,7 @@ const PARENT_CALLS: Record<string, ToolView> = {
     starts: true,
     call: (args) => ({
       title: str(args.name),
-      pairs: { followUp: args.followUp, wait: seconds(args.wait) },
+      pairs: { mode: sendModePair(args), wait: seconds(args.wait) },
       body: str(args.message),
     }),
   },

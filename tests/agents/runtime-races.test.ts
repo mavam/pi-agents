@@ -127,7 +127,7 @@ test.each(["error", "continued answer", "missing model"] as const)(
     try {
       const graph = await service.spawnGraph({ agents: [lead("initial")] });
       await service.wait(["lead"]);
-      await service.send("lead", "spawn then fail", "auto");
+      await service.send("lead", "spawn then fail", "steer");
       await toolsFinished.promise;
       const id = Number(graph.nodes[0]?.agentId) as ConversationId;
       const conversation = await harness.conversation(id, CONTEXT);
@@ -209,7 +209,7 @@ for (const { restart, initialJob } of [
         await until(() => service.pendingDeliveries().length > 0);
         for (const delivery of service.pendingDeliveries())
           await service.acknowledge(delivery);
-        await service.send("lead", "earlier request", "auto");
+        await service.send("lead", "earlier request", "steer");
       }
       await until(
         () =>
@@ -217,7 +217,7 @@ for (const { restart, initialJob } of [
           service.get("lead.c")?.state === "working",
       );
       expect(service.pendingDeliveries()).toHaveLength(0);
-      await service.send("lead", "unrelated failure", "auto");
+      await service.send("lead", "unrelated failure", "steer");
       await until(() => service.get("lead")?.state === "failed");
       if (directory) {
         await closeService(service);
@@ -367,7 +367,7 @@ test("returned agent and graph IDs cannot be shadowed by numeric names", async (
     kind: "graph",
     info: { id: original.id },
   });
-  expect((await service.send(id, "follow up", "auto")).id).toBe(id);
+  expect((await service.send(id, "follow up", "steer")).agent.id).toBe(id);
   const waited = await service.wait([id]);
   expect(waited.agents.map((agent) => agent.id)).toEqual([id]);
   expect((await service.stop(id)).info.id).toBe(id);

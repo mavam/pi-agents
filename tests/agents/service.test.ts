@@ -118,7 +118,7 @@ describe("AgentService", () => {
     });
     await service.wait(["w"]);
     expect(service.get("w")?.closed).toBe(true);
-    await service.send("w", "second", "auto");
+    await service.send("w", "second", "steer");
     expect(service.get("w")?.closed).toBe(false);
     await until(() => service.pendingDeliveries().length === 1);
     const [delivery] = service.pendingDeliveries();
@@ -156,7 +156,7 @@ describe("AgentService", () => {
     await service.wait(["w"]);
     const first = service.get("w");
     expect(first?.jobAnswer).toBe(first?.result?.entryId);
-    await service.send("w", "second", "auto");
+    await service.send("w", "second", "steer");
     const second = (await service.wait(["w"])).agents[0];
     expect(second?.result?.text).toBe("done: second");
     expect(second?.jobAnswer).toBe(first?.result?.entryId);

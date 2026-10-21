@@ -325,7 +325,39 @@ export type HelperResolver = (
   defaults: HelperDefaults,
 ) => Promise<SpawnSpec>;
 
+/** How the user's input reaches a working agent: as steering, or after
+ * its current work. */
 export type SendMode = "auto" | "followUp";
+
+/** How a message reaches a working agent: `steer` joins its current work
+ * at its next step, `followUp` waits until that work ends, and
+ * `interrupt` aborts that work first. */
+export const MESSAGE_MODES = ["steer", "followUp", "interrupt"] as const;
+
+export type MessageMode = (typeof MESSAGE_MODES)[number];
+
+/** A send's mode from its arguments: `mode`, else calls from before it
+ * existed, which set `followUp`, else `steer`. */
+export function messageMode(args: {
+  mode?: unknown;
+  followUp?: unknown;
+}): MessageMode {
+  if ((MESSAGE_MODES as readonly unknown[]).includes(args.mode))
+    return args.mode as MessageMode;
+  return args.followUp === true ? "followUp" : "steer";
+}
+
+/** A message the parent sent: the agent, and how many queued messages
+ * an interrupt dropped. */
+export interface SendResult {
+  agent: AgentInfo;
+  dropped: number;
+}
+
+/** What a message's mode leaves queued while its recipient works. */
+export function whenBusyOf(mode: MessageMode): "steer" | "followUp" {
+  return mode === "followUp" ? "followUp" : "steer";
+}
 
 /** Settled parent requests that still need delivery to the parent. Several
  * requests answered by one entry deliver together. */

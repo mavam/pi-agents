@@ -202,7 +202,7 @@ describe("delivery to Pi", () => {
       ],
     });
     await until(() => current.pendingDeliveries().length === 1);
-    await current.send("a", "second", "auto");
+    await current.send("a", "second", "steer");
     await until(() => current.get("a")?.result?.text === "done: second");
 
     state.idle = true;

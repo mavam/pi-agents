@@ -2,9 +2,10 @@
  * Messages between agents: `agent_send` submits a message to another agent
  * of the session. Like the parent's messages, it steers a working recipient,
  * which sees it at its next step, unless the sender queues it as a
- * follow-up for after the current work. The sender doesn't wait, and the
- * recipient's answer stays with the recipient; a steer can still shape the
- * answer the recipient is working on, such as its job's.
+ * follow-up for after the current work, or interrupts that work first. The
+ * sender doesn't wait, and the recipient's answer stays with the
+ * recipient; a steer can still shape the answer the recipient is working
+ * on, such as its job's.
  *
  * A send is safe to repeat. Its first run binds the recipient by identity in
  * a memo of the call's tool task, so a rerun after a restart never resolves the
@@ -14,12 +15,20 @@
  * recipient admits once. When the service starts, it submits logged
  * messages that a crash left without a submission.
  *
+ * An interrupt aborts the recipient's work under its turn before the
+ * message is logged, and logs it together with the interrupt's watermark,
+ * so the log entry records that the abort happened: a rerun that finds the
+ * message logged or submitted never aborts again, which would abort the
+ * work the message started. A crash between the abort and the log leaves
+ * an interrupted recipient, and the rerun aborts again before it logs.
+ *
  * Agents reach the agent that spawned them, the others it spawned with
  * them, and the agents they spawned; the parent's agents reach each other.
  */
 
 import type { Context } from "@earendil-works/chord";
 import { withoutAbortSignal } from "@earendil-works/chord/context";
+import { StringEnum } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
   type ConversationId,
@@ -27,6 +36,8 @@ import {
   defineExtension,
   defineTool,
   type Extension,
+  InboxDoc,
+  type InboxState,
   type InputSubmissionDraft,
   type TaskId,
   type ToolExecutionApi,
@@ -36,6 +47,7 @@ import {
 import { Type } from "typebox";
 import { nodeRequestId } from "./graphs.js";
 import type { MessagingHub } from "./hub.js";
+import { RESULTS_ENTRY } from "./obligations.js";
 import { type AgentReceipt, receipt, stateOutcome } from "./receipts.js";
 import {
   type AgentRecord,
@@ -46,8 +58,15 @@ import {
   MESSAGE_MEMORY,
   type MessageRecord,
   MessagesDoc,
+  resultsRequestId,
 } from "./records.js";
-import { messageInput } from "./types.js";
+import {
+  MESSAGE_MODES,
+  type MessageMode,
+  messageInput,
+  messageMode,
+  whenBusyOf,
+} from "./types.js";
 
 export const MESSAGING_EXTENSION = "pi-agents-messaging";
 export const SEND_TOOL = "agent_send";
@@ -65,6 +84,70 @@ export interface MessagingOptions {
   /** Tests only: runs after the message is logged and before it's
    * submitted, under the recipient's turn. */
   afterLog?: (context: Context) => Promise<void>;
+}
+
+/** The `mode` parameter of `agent_send`, for the parent's and agents'
+ * tools. */
+export function messageModeParameter(recipient: string) {
+  return Type.Optional(
+    StringEnum(MESSAGE_MODES, {
+      description: `How a working ${recipient} gets the message: "steer" (default) joins its current work at its next step, which can change its current answer; "followUp" waits until that work ends; "interrupt" first aborts that work and drops the messages queued for it, keeping its job and the agents it started`,
+    }),
+  );
+}
+
+/** What a send's result adds when its interrupt dropped queued
+ * messages. */
+export function droppedNote(dropped: number): string {
+  return dropped > 0
+    ? ` Dropped ${dropped} queued message${dropped === 1 ? "" : "s"}.`
+    : "";
+}
+
+/** How many inputs an interrupt would drop from the inbox: what the user,
+ * the parent, and other agents sent, not results, which come again. */
+export function queuedMessages(
+  inbox: Readonly<InboxState> | undefined,
+): number {
+  return (inbox?.items ?? []).filter(
+    (item) => item.mode !== "write" && item.entry?.kind !== RESULTS_ENTRY,
+  ).length;
+}
+
+/**
+ * The agent was interrupted: results it is owed wait until it answered
+ * after its newest entry, so they don't restart the work the interrupt
+ * stopped. Inside a commit, right after the abort, under its turn.
+ */
+export async function markInterrupted(
+  tx: Pick<Tx, "doc" | "scanEntries" | "submissionByRequest">,
+  agentId: string,
+): Promise<void> {
+  const record = (await tx.doc(AgentsDoc)).agents[agentId];
+  if (!record) return;
+  const conversation = Number(agentId) as ConversationId;
+  const page = await tx.scanEntries(
+    { conversationId: conversation, order: "descending" },
+    1,
+  );
+  record.interrupted = Number(page.items[0]?.id ?? 0);
+  // Capture withdrawal while still in the interrupt's turn, not when
+  // refresh eventually notices it after a corrective answer.
+  for (const [id, graph] of Object.entries((await tx.doc(GraphsDoc)).graphs)) {
+    if (
+      graph.owner?.agent !== agentId ||
+      graph.attempt === undefined ||
+      graph.presented !== undefined ||
+      graph.cancelled
+    )
+      continue;
+    const submission = await tx.submissionByRequest(
+      conversation,
+      resultsRequestId(id, graph, graph.attempt),
+    );
+    if (submission?.status === "unanswered")
+      graph.withdrawn = record.interrupted;
+  }
 }
 
 /** The submission of a logged message. */
@@ -88,9 +171,29 @@ type Binding = {
   to: string;
   recipient: string;
   text: string;
-  mode: "steer" | "followUp";
+  mode: MessageMode;
   sentAt: number;
 };
+
+/** Whether a send may go ahead: `new` if it may, `logged` if an earlier
+ * run already logged or submitted it, else why not. Inside a commit. */
+async function admit(
+  tx: Tx,
+  bound: Binding,
+): Promise<"new" | "logged" | "missing" | "stopped" | "blocked"> {
+  const known = (await tx.doc(MessagesDoc)).messages.find(
+    (message) => message.id === bound.id,
+  );
+  if (known) return known.dropped ? "stopped" : "logged";
+  // The bounded log may have forgotten it.
+  const to = Number(bound.to) as ConversationId;
+  if (await tx.submissionByRequest(to, bound.id)) return "logged";
+  const recipient = (await tx.doc(AgentsDoc)).agents[bound.to];
+  if (!recipient) return "missing";
+  if (recipient.stopped) return "stopped";
+  if (await awaitsJob(tx, bound.to, recipient)) return "blocked";
+  return "new";
+}
 
 function textResult(text: string, isError = false): ToolExecutionResult {
   return { output: [{ type: "text", text }], isError };
@@ -193,7 +296,7 @@ export async function awaitsJob(
 
 /** The first run of a send: check it and bind its recipient. */
 async function bind(
-  args: { name: string; message: string; followUp?: boolean },
+  args: { name: string; message: string; mode?: unknown; followUp?: unknown },
   api: ToolExecutionApi,
   context: Context,
 ): Promise<Binding | string> {
@@ -220,7 +323,7 @@ async function bind(
       to,
       recipient: recipient.name,
       text,
-      mode: args.followUp ? "followUp" : "steer",
+      mode: messageMode(args),
       sentAt: Date.now(),
     },
     context,
@@ -294,12 +397,7 @@ export function createMessagingExtension(
             description:
               "What to tell the agent; it arrives as input that starts with [from <your name>]",
           }),
-          followUp: Type.Optional(
-            Type.Boolean({
-              description:
-                "Wait until the recipient's current work ends; by default, a working recipient sees the message at its next step, which can change its current answer",
-            }),
-          ),
+          mode: messageModeParameter("recipient"),
         }),
         replay: "safe",
         async execute(args, api, context) {
@@ -309,23 +407,43 @@ export function createMessagingExtension(
             (await bind(args, api, context));
           if (typeof bound === "string") return textResult(bound, true);
           await options.afterBind?.(context);
-          const outcome = await hub.turn(bound.to, async () => {
-            const logged = await api.commit(async (tx) => {
-              const log = await tx.doc(MessagesDoc);
-              const known = log.messages.find(
-                (message) => message.id === bound.id,
+          const to = Number(bound.to) as ConversationId;
+          // What this run's interrupt found: whether the recipient worked,
+          // and how many queued messages it dropped.
+          let interrupted: { working: boolean; dropped: number } | undefined;
+          const work = async () => {
+            if (bound.mode === "interrupt") {
+              const admitted = await api.commit(
+                (tx) => admit(tx, bound),
+                context,
               );
-              if (known) return known.dropped ? "stopped" : "logged";
-              const recipient = (await tx.doc(AgentsDoc)).agents[bound.to];
-              if (!recipient) return "missing";
-              if (recipient.stopped) return "stopped";
-              if (await awaitsJob(tx, bound.to, recipient)) return "blocked";
+              if (admitted !== "new" && admitted !== "logged") return admitted;
+              if (admitted === "new") {
+                const conversation = await api.conversation(to, context);
+                if (!conversation) return "missing";
+                interrupted = {
+                  working: hub.state(bound.to) === "working",
+                  dropped: queuedMessages(
+                    await api.snapshot(InboxDoc, to, context),
+                  ),
+                };
+                // Bound to this call: aborting this call, such as by an
+                // interrupt of its own agent, ends the wait.
+                await conversation.abort(context);
+              }
+            }
+            const logged = await api.commit(async (tx) => {
+              const admitted = await admit(tx, bound);
+              if (admitted !== "new") return admitted;
+              if (bound.mode === "interrupt")
+                await markInterrupted(tx, bound.to);
+              const log = await tx.doc(MessagesDoc);
               log.messages.push({
                 id: bound.id,
                 from: bound.from,
                 to: bound.to,
                 text: bound.text,
-                mode: bound.mode,
+                mode: whenBusyOf(bound.mode),
                 sentAt: bound.sentAt,
               });
               const over = log.messages.length - MESSAGE_MEMORY;
@@ -340,17 +458,20 @@ export function createMessagingExtension(
             // Once logged, the message is submitted, also when the call is
             // cancelled meanwhile.
             const durable = withoutAbortSignal(context);
-            const conversation = await api.conversation(
-              Number(bound.to) as ConversationId,
-              durable,
-            );
+            const conversation = await api.conversation(to, durable);
             if (!conversation) return "missing";
             await conversation.submit(
-              messageSubmission(bound, bound.sender),
+              messageSubmission(
+                { ...bound, mode: whenBusyOf(bound.mode) },
+                bound.sender,
+              ),
               durable,
             );
             return "sent";
-          });
+          };
+          // A call aborted while it waits for the recipient's turn gives
+          // it up, so its own agent's abort never waits on a turn.
+          const outcome = await hub.turn(bound.to, work, context);
           if (outcome === "missing")
             return textResult(`No agent named ${bound.recipient}.`, true);
           if (outcome === "stopped")
@@ -363,7 +484,10 @@ export function createMessagingExtension(
               `${bound.recipient} waits for the agents its job needs and hasn't started; message it once it works.`,
               true,
             );
-          return textResult(`Sent to ${bound.recipient}.`);
+          const sent = interrupted?.working
+            ? `Interrupted ${bound.recipient} and sent the message.`
+            : `Sent to ${bound.recipient}.`;
+          return textResult(`${sent}${droppedNote(interrupted?.dropped ?? 0)}`);
         },
       }),
     ],

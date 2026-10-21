@@ -300,7 +300,7 @@ describe("graphs", () => {
     expect(answered?.kind).toBe("answered");
     if (answered?.kind === "answered")
       expect(service.get("g-1")?.jobAnswer).toBe(answered.result.entryId);
-    await service.send("g-1", "again", "auto");
+    await service.send("g-1", "again", "steer");
     expect(service.get("g-1")?.closed).toBe(false);
     await until(() => service.pendingDeliveries().length === 1);
     const [delivery] = service.pendingDeliveries();
@@ -322,7 +322,7 @@ describe("graphs", () => {
     const service = await open({ models: scripted().models });
     await service.spawnGraph({ name: "g", agents: agents("medium a", "b") });
     await until(() => service.get("g-1")?.state === "working");
-    await service.send("g-1", "steer here", "auto");
+    await service.send("g-1", "steer here", "steer");
     await until(() => service.pendingDeliveries().length > 0);
     const deliveries = service.pendingDeliveries();
     expect(deliveries.map((delivery) => delivery.kind)).toEqual(["graph"]);
@@ -359,7 +359,7 @@ describe("graphs", () => {
         agents: [{ job: "x", name: "graph", cwd: ".", model: MODEL }],
       }),
     ).rejects.toThrow("already exists");
-    await expect(service.send("graph", "hi", "auto")).rejects.toThrow(
+    await expect(service.send("graph", "hi", "steer")).rejects.toThrow(
       "graph is a graph. Message its agents instead: graph-1, graph-2",
     );
   });

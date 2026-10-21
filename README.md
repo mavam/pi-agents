@@ -16,7 +16,8 @@ where they stopped.
 > ([earendil-works/pi#10386](https://github.com/earendil-works/pi/issues/10386)).
 > They work with Pi's built-in tools: `read`, `bash`, `edit`, `write`, `grep`,
 > `find`, `ls`, and `codemode`. MCP servers and extension tools live in Pi's
-> session, while agents run on pi-durable.
+> session, while agents run on pi-durable. Extension hooks adapt agents' model
+> requests, but don't bring them tools.
 
 <table>
   <tr>
@@ -72,8 +73,9 @@ agents, graphs, delegation, messaging, profiles, and configuration.
 
 ## 🏗️ Architecture
 
-Agents run inside your Pi process. Pi-agents keeps one pi-durable harness per
-Pi session, with its own store, kept apart from Pi's session file:
+Agents run inside your Pi process. Pi-agents is a thin bridge from Pi to
+pi-durable: it keeps one pi-durable harness per Pi session, with its own store,
+kept apart from Pi's session file, and lends agents your Pi logins and models:
 
 ```text
 ╭─ Pi process ─────────────────────────────────────────────────────╮
@@ -85,9 +87,11 @@ Pi session, with its own store, kept apart from Pi's session file:
 │ ┊    ▼          │                        │  ✉ /messages       │  │
 │ ┊╭──────────────┴───╮                    ╰─────────▲──────────╯  │
 │ ┊│  ✦ pi-agents     ├◀─────────────────────────────╯             │
-│ ┊╰───┬──────────▲───╯                                            │
-│ ┊    │ start    │ state                                          │
-│ ┊    │ message  │ results                                        │
+│ ┊│    thin bridge   │           ╭─────────────────────────────╮  │
+│ ┊│    to pi-durable │◀╌ hooks ╌╌┤ ◇ optional extensions, e.g. │  │
+│ ┊╰───┬──────────▲───╯           │   pi-service-tier: capture  │  │
+│ ┊    │ start    │ state         │   at spawn, adapt requests  │  │
+│ ┊    │ message  │ results       ╰─────────────────────────────╯  │
 │ ┊    ▼ stop     │                                                │
 │ ┊╭──────────────┴─────────────────────────────────────────────╮  │
 │ ┊│  pi-durable harness                                        │  │
@@ -101,21 +105,30 @@ Pi session, with its own store, kept apart from Pi's session file:
 │ ┊│   ╰─────────────────────────────────╯                      │  │
 │ ┊│                                                            │  │
 │ ┊│   agents are conversations; turns, tool calls, and graphs  │  │
-│ ┊│   are durable tasks that own what they start               │  │
+│ ┊│   are durable tasks that own what they start; model        │  │
+│ ┊│   requests pass the hooks with each agent's snapshot       │  │
 │ ┊╰─────────────────────────────┬──────────────────────────────╯  │
 ╰─┬──────────────────────────────┬─────────────────────────────────╯
   ┊ saves                        │ checkpoint every step
   ▼                              ▼
 ╭──────────────────────╮    ╭──────────────────────────────╮
 │ ▤ Pi's session file  │    │ ▤ pi-agents store, one per   │
-│   your conversation, │    │   session: agents, graphs,   │
-│   saved results, and │    │   messages, tasks            │
-│   message cards      │    │                              │
+│   your conversation, │    │   session: agents and their  │
+│   saved results, and │    │   hook snapshots, graphs,    │
+│   message cards      │    │   messages, tasks            │
 ╰──────────────────────╯    ╰──────────────────────────────╯
 ```
 
+Because agents run on pi-durable, Pi's extension events never see their model
+requests. Other extensions can opt in through two customization points
+instead: they capture state when an agent is created, and adapt each of its
+model requests to the provider it actually uses. For example,
+[pi-service-tier](https://github.com/mavam/pi-service-tier) passes your
+`/fast` setting on to new agents. Without such extensions, nothing changes.
+
 [docs/architecture.md](docs/architecture.md) explains how agents, graphs,
-and results stay durable across crashes and restarts.
+and results stay durable across crashes and restarts, and
+[docs/hooks.md](docs/hooks.md) describes the customization points.
 
 ## 📚 Documentation
 
@@ -125,3 +138,5 @@ and results stay durable across crashes and restarts.
 - [Agent profiles](docs/profiles.md): reusable settings and instructions.
 - [Configuration](docs/configuration.md): models, requests, and footer counts.
 - [Architecture](docs/architecture.md): durable tasks, recovery, and storage.
+- [Extension hooks](docs/hooks.md): capturing state for agents and adapting
+  their model requests from other extensions.

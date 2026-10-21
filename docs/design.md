@@ -21,6 +21,30 @@ This document explains the design and why it is so. The
 - The host owns the harness, so the same core could later run inside a
   durable Pi session with a different host.
 
+## Scope
+
+pi-agents brings durability to Pi. Its core is durable agent execution and
+durable messaging: between agents, and from agents back to the parent.
+Graphs, delegation, and waits compose these primitives, and the views let
+users watch them. Everything else is a customization point, not a feature.
+
+- **Policy lives outside.** Pricing windows, budgets, quotas, approvals,
+  routing, scheduling, and notifications belong to the extensions and users
+  that want them. pi-agents offers hooks, events, profiles, and settings at
+  its durable boundaries, and the policy sits behind them.
+- **Hooks carry data and wait; they don't decide.** pi-agents keeps no
+  state, timers, reasons, commands, or views for another extension's
+  policy. A hook's contract is its context and when it runs.
+- **The smallest hook wins.** A need that extensions can't meet yet gets
+  the narrowest hook at an existing durable boundary, preferably one that
+  pi-durable already provides, not a mechanism that solves the need inside
+  pi-agents.
+- **Built-in policy isn't precedent.** Settings such as the working-agent
+  cap don't justify adding more policy beside them.
+
+A request that fits none of this is out of scope, even when it is easy to
+build. Saying no keeps the core small enough to stay durable.
+
 ## Concepts
 
 pi-agents calls the instructions an agent starts with its *job*. *Task*
@@ -355,6 +379,6 @@ doesn't let the panel intercept another view's navigation.
 ## Deferred
 
 Composition beyond graphs (result schemas, loops, conditions, races), edges
-to agents outside a graph, asynchronous delegation, budgets, MCP, extension
-tools, forking agents, a daemon or CLI, agents shared across sessions, and
-model changes for running agents.
+to agents outside a graph, asynchronous delegation, MCP, extension tools,
+forking agents, a daemon or CLI, agents shared across sessions, and model
+changes for running agents.

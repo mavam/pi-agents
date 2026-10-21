@@ -3,8 +3,9 @@
  * presentation draws calls and results; it doesn't run them, and it never
  * looks at live agents:
  *
- * - The call draws its arguments only: a title, a dim line of `key=value`
- *   pairs, and the body, such as a job.
+ * - The call draws its arguments only: the tool's name in bold, as Pi draws
+ *   its own tools, a title, a dim line of `key=value` pairs, and the body,
+ *   such as a job.
  * - The result draws its receipt only (see `src/agents/receipts.ts`):
  *   progress draws what the call started, the final result how agents and
  *   graphs were when the call looked, and why its wait ended.
@@ -37,7 +38,6 @@ import type { NodeKind } from "../agents/report.js";
 import { shapeLine } from "../agents/topology.js";
 import type { AgentInfo, GraphInfo } from "../agents/types.js";
 import {
-  AGENT_ICON,
   type Colorize,
   formatInputs,
   formatUsage,
@@ -121,20 +121,21 @@ export class FitLines implements Component {
 }
 
 /**
- * A call: its title with the explicit arguments dim after it, then the
- * body, indented. Expanded, the body shows in full.
+ * A call: its name, styled by `name`, and its title with the explicit
+ * arguments dim after it, then the body, indented. Expanded, the body
+ * shows in full.
  */
 export function formatCall(
   label: string,
   view: CallView,
   expanded: boolean,
   color: Colorize,
-  bold: (text: string) => string = (text) => text,
+  name: (text: string) => string = (text) => text,
 ): string {
   // The explicit arguments follow the title, dim, on the same line.
   const pairs = formatPairs(view.pairs);
   const lines = [
-    `${color("accent", AGENT_ICON)} ${bold(label)} ${view.title}${pairs ? ` ${color("dim", pairs)}` : ""}`,
+    `${name(label)} ${view.title}${pairs ? ` ${color("dim", pairs)}` : ""}`,
   ];
   if (view.body) {
     if (expanded)
@@ -558,7 +559,8 @@ function toolRenderers({
           call((args ?? {}) as Args),
           context.expanded,
           color,
-          (value) => theme.bold(value),
+          // Pi's own tools draw their names this way.
+          (value) => theme.fg("toolTitle", theme.bold(value)),
         ),
         context.expanded,
       );

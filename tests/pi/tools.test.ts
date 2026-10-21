@@ -439,7 +439,7 @@ describe("call results", () => {
         { expanded: true, state: {} },
       );
     expect(call?.render(80)).toEqual([
-      "✦ spawn graph g",
+      "spawn graph g",
       "  a → b",
       "  a: Steps:",
       "    1. read  the code",
@@ -448,6 +448,20 @@ describe("call results", () => {
       "",
       "  b after a: Merge.",
     ]);
+  });
+
+  test("a call's name is bold, as Pi draws its own tools", () => {
+    const theme = {
+      fg: (name: string, text: string) => `<${name}>${text}</>`,
+      bold: (text: string) => `*${text}*`,
+    };
+    const call = tools()
+      .get("agent_stop")
+      ?.renderCall?.({ name: "scout" }, theme, {
+        expanded: false,
+        state: {},
+      });
+    expect(call?.render(80)).toEqual(["<toolTitle>*stop*</> scout"]);
   });
 
   test("an error result shows its reason", () => {
@@ -485,7 +499,7 @@ describe("call results", () => {
     // A spawn shows what it started, which stays true as the agents work.
     const started = { details: (await run("agent_spawn_graph", args)).details };
     const tree = [
-      "✦ spawn graph audit",
+      "spawn graph audit",
       "  ├─ map faux-1",
       "  └─ report after map faux-1",
     ];
@@ -502,7 +516,7 @@ describe("call results", () => {
         line.replace(/ \d+(\.\d+)?k$/, " <tokens>"),
       );
     const gaveUp = [
-      "✦ wait audit timeout=0.3s",
+      "wait audit timeout=0.3s",
       "  ⊠ audit graph 1/2",
       "  ├─ ● map faux-1 <tokens>",
       "  └─ ⊠ report after map faux-1",

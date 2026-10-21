@@ -464,7 +464,7 @@ describe("formatting", () => {
     ).toContain("<error>bun.lock is 412 KB …</>");
   });
 
-  test("a card is ✦ and the line, and expanded, the whole text; lines fit", () => {
+  test("a card is the line, and expanded, the whole text; lines fit", () => {
     const theme = {
       fg: (_name: string, text: string) => text,
       bg: (_name: string, text: string) => text,
@@ -477,8 +477,8 @@ describe("formatting", () => {
         .map((line) => line.trimEnd())
         .filter(Boolean);
     // More lines follow, so the line says so.
-    expect(card(false)).toEqual([" ✦ beta → gamma first …"]);
-    expect(card(true)).toEqual([" ✦ beta → gamma", "   first", "   second"]);
+    expect(card(false)).toEqual([" beta → gamma first …"]);
+    expect(card(true)).toEqual([" beta → gamma", "   first", "   second"]);
     // Names too long for the width cut the row's end, never overflow it.
     const long = { from: "a".repeat(30), to: "b".repeat(30), text: "hi\nyo" };
     for (const expanded of [false, true])

@@ -94,8 +94,6 @@ export const WAIT_ENDED_STYLE = { icon: "⊠", color: "warning" } as const;
 /** The note on agents and graphs whose result waits for the parent. */
 export const QUEUED_NOTE = "result queued";
 
-export const AGENT_ICON = "✦";
-
 /** A working agent counts as silent after this much time without progress. */
 const STALL_AFTER_MS = 60_000;
 

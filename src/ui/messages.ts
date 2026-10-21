@@ -3,18 +3,18 @@
  * on it.
  *
  *   scout → notes bun.lock is 412 KB 3s                  a line
- *   ✦ scout → notes bun.lock is 412 KB                   a card
+ *   scout → notes bun.lock is 412 KB                     a card
  *
  * A line is who, sender and recipient in bold, then the first line of the
  * text, with `…` when more follow, whose color is its status (normal once
  * delivered, dim while queued, red once dropped), then, for live views,
  * how long it waited. The panel shows lines.
  *
- * A card is a message in a conversation: `✦`, pi-agents' mark, then the
- * line, on Pi's message background. Collapsed, it's one line; expanded
- * (Ctrl+O), a text the line cuts shows in full below who. Pi's transcript
- * and the attach view show cards, for received and sent messages alike:
- * the names say who sent what. Every line fits its width.
+ * A card is a message in a conversation: the line on Pi's message
+ * background. Collapsed, it's one line; expanded (Ctrl+O), a text the line
+ * cuts shows in full below who. Pi's transcript and the attach view show
+ * cards, for received and sent messages alike: the names say who sent
+ * what. Every line fits its width.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -26,12 +26,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { MessageInfo, MessageStatus } from "../agents/types.js";
-import {
-  AGENT_ICON,
-  type Colorize,
-  plainColorize,
-  sanitizeLine,
-} from "./format.js";
+import { type Colorize, plainColorize, sanitizeLine } from "./format.js";
 
 /** A message text's color by status: normal once delivered, dim while
  * queued, red once dropped. */
@@ -132,9 +127,8 @@ export function messageLine(
   return `${head} ${statusColor(text, message.status, color)}${tail}`;
 }
 
-/** A card's lines: `✦` and the message's line; expanded, when the line
- * cuts the text, `✦` and who, then the whole text below. `/messages` has
- * the times. */
+/** A card's lines: the message's line; expanded, when the line cuts the
+ * text, who, then the whole text below. `/messages` has the times. */
 class MessageLines implements Component {
   constructor(
     private readonly message: MessageParts,
@@ -149,14 +143,11 @@ class MessageLines implements Component {
   render(width: number): string[] {
     const style = themeStyle(this.theme);
     const { color } = style;
-    const mark = `${color("accent", AGENT_ICON)} `;
-    const usable = Math.max(1, width - visibleWidth(mark));
-    const line = `${mark}${messageLine(this.message, usable, style)}`;
+    const line = messageLine(this.message, width, style);
     const text = this.message.text.trim();
     const whole =
       !text.includes("\n") &&
-      visibleWidth(messagePair(this.message)) + visibleWidth(text) + 1 <=
-        usable;
+      visibleWidth(messagePair(this.message)) + visibleWidth(text) + 1 <= width;
     if (!this.expanded() || whole) return [line];
     const who = formatPair(this.message, style);
     const body = text
@@ -166,7 +157,7 @@ class MessageLines implements Component {
       )
       .map((part) => `  ${statusColor(part, this.message.status, color)}`);
     // Every line fits, so long names are cut at the row's end.
-    return [truncateToWidth(`${mark}${who}`, width, "…"), ...body];
+    return [truncateToWidth(who, width, "…"), ...body];
   }
 }
 

@@ -86,8 +86,8 @@ kept apart from Pi's session file, and lends agents your Pi logins and models:
 │ ┊│   tools          │ │   pi-service-tier  │ │ ≡ /agents      │  │
 │ ┊│                  │ │                    │ │ ✉ /messages    │  │
 │ ┊╰───┬─────────▲────╯ ╰─────────┬──────────╯ ╰────────▲───────╯  │
-│ ┊    │ agent_* │ results        ╎ hooks:              │          │
-│ ┊    │         │                ╎ capture at spawn,   │          │
+│ ┊    │ agent_* │ results        ╎ hooks: capture at   │          │
+│ ┊    │         │                ╎ spawn, hold calls,  │          │
 │ ┊    ▼         │                ▼ adapt requests      │          │
 │ ┊╭─────────────┴──────────────────────────────────────┴───────╮  │
 │ ┊│  ✦ pi-agents: a thin bridge from Pi to pi-durable          │  │

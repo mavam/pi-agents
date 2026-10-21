@@ -4,17 +4,17 @@ import {
   BACKGROUND_CONTEXT,
   withAbortSignal,
 } from "@earendil-works/chord/context";
-import { createModels } from "@earendil-works/pi-ai/models";
 import {
   type FauxResponseStep,
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import type { AgentService } from "../../src/agents/service.js";
 import {
   closeService,
+  fauxModels,
+  gate,
   type HostOptions,
   heldUntilAborted,
   hostOf,
@@ -22,6 +22,7 @@ import {
   MODEL,
   openService,
   tempDir,
+  textOf,
   until,
 } from "./helpers.js";
 
@@ -32,23 +33,6 @@ afterEach(async () => {
   for (const service of services) await closeService(service);
   services = [];
 });
-
-function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
-  return (
-    (content as Array<{ type: string; text?: string }> | undefined)
-      ?.flatMap((block) => (block.type === "text" ? [block.text ?? ""] : []))
-      .join("") ?? ""
-  );
-}
-
-function modelsOf(step: FauxResponseStep) {
-  const faux = fauxProvider();
-  const models = createModels();
-  models.setProvider(faux.provider);
-  faux.setResponses(Array.from({ length: 100 }, () => step));
-  return models;
-}
 
 async function open(options: HostOptions): Promise<AgentService> {
   const service = await openService(options);
@@ -85,22 +69,16 @@ const messagingStep: FauxResponseStep = (context) => {
 };
 
 test("interrupting agent_stop does not wait for the stop's refresh", async () => {
-  let childStarted!: () => void;
-  const started = new Promise<void>((resolve) => {
-    childStarted = resolve;
-  });
-  let releaseChild!: () => void;
-  const released = new Promise<void>((resolve) => {
-    releaseChild = resolve;
-  });
+  const started = gate();
+  const released = gate();
   let stopping = false;
-  const models = modelsOf(async (context, request) => {
+  const models = fauxModels(async (context, request) => {
     const last = context.messages
       .filter((message) => message.role !== "system")
       .at(-1);
     const text = textOf(last?.content);
     if (last?.role === "toolResult" && last.toolName === "agent_spawn") {
-      await started;
+      await started.promise;
       return fauxAssistantMessage(
         [fauxToolCall("agent_stop", { name: "child" })],
         { stopReason: "toolUse" },
@@ -116,10 +94,10 @@ test("interrupting agent_stop does not wait for the stop's refresh", async () =>
         { stopReason: "toolUse" },
       );
     if (text === "child") {
-      childStarted();
+      started.release();
       await heldUntilAborted(request?.signal);
       stopping = true;
-      await released;
+      await released.promise;
     }
     return fauxAssistantMessage("done");
   });
@@ -135,7 +113,7 @@ test("interrupting agent_stop does not wait for the stop's refresh", async () =>
       withAbortSignal(AbortSignal.timeout(2_000), CONTEXT),
     );
     expect(service.get("lead")?.state).toBe("interrupted");
-    releaseChild();
+    released.release();
     await until(() => service.get("lead.child")?.closed === true);
     await until(async () =>
       (await service.liveTasks()).every((task) => task.kind !== "pi.tool"),
@@ -143,7 +121,7 @@ test("interrupting agent_stop does not wait for the stop's refresh", async () =>
     expect(service.get("lead")?.state).toBe("interrupted");
     expect(service.pendingDeliveries()).toEqual([]);
   } finally {
-    releaseChild();
+    released.release();
   }
 }, 10_000);
 
@@ -151,7 +129,7 @@ test("agent_send prefers IDs to numeric names and replays a logged send only onc
   const directory = tempDir();
   let logged = false;
   const before = await open({
-    models: modelsOf(messagingStep),
+    models: fauxModels(messagingStep),
     storage: await jsonlStorage(directory),
     messaging: {
       afterLog: async (context) => {
@@ -176,7 +154,7 @@ test("agent_send prefers IDs to numeric names and replays a logged send only onc
   await closeService(before);
   services = services.filter((service) => service !== before);
   const after = await open({
-    models: modelsOf(messagingStep),
+    models: fauxModels(messagingStep),
     storage: await jsonlStorage(directory),
   });
   await until(
@@ -205,7 +183,7 @@ test("agent_send prefers IDs to numeric names and replays a logged send only onc
 }, 10_000);
 
 test("agent IDs do not bypass messaging reachability", async () => {
-  const service = await open({ models: modelsOf(messagingStep) });
+  const service = await open({ models: fauxModels(messagingStep) });
   const outside = await service.spawnGraph({
     agents: [spec("outside", "idle")],
   });

@@ -21,6 +21,7 @@ import {
   MODEL,
   openService,
   tempDir,
+  textOf,
   until,
 } from "./helpers.js";
 
@@ -32,13 +33,6 @@ afterEach(async () => {
   for (const service of services) await closeService(service);
   services = [];
 });
-
-function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
-  return (content as Array<{ type: string; text?: string }>)
-    .flatMap((block) => (block.type === "text" ? [block.text ?? ""] : []))
-    .join("");
-}
 
 /**
  * A faux model for agents that spawn. A job `spawn <json>` calls

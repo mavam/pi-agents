@@ -1,50 +1,54 @@
 import { afterEach, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels } from "@earendil-works/pi-ai/models";
 import {
   type FauxResponseStep,
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import {
   type ConversationId,
   GenerationTask,
-  type HookRegistration,
+  type Harness,
   hook,
-  MemoryStorage,
-  type Storage,
   type TaskId,
   ToolTask,
 } from "@earendil-works/pi-durable";
-import { createAgentExtensions } from "../../src/agents/extensions.js";
 import { GraphsDoc } from "../../src/agents/records.js";
-import { AgentService } from "../../src/agents/service.js";
-import { openAgentHarness } from "../../src/host/harness.js";
+import type { AgentService } from "../../src/agents/service.js";
 import {
+  closeService,
+  fauxModels,
+  gate,
+  type HostOptions,
   heldUntilAborted,
-  inheritHelper,
+  hostOf,
   jsonlStorage,
   MODEL,
-  TestParent,
+  openService,
   tempDir,
+  textOf,
   until,
 } from "./helpers.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
-const cleanups: Array<() => Promise<void>> = [];
+const services: AgentService[] = [];
 
 afterEach(async () => {
-  for (const close of cleanups.splice(0).reverse()) await close();
+  for (const service of services.splice(0).reverse())
+    await closeService(service);
 });
 
-function gate() {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
+/** A service whose models answer with `step`, without retries, so a
+ * failed request fails its run. */
+async function open(step: FauxResponseStep, options: HostOptions = {}) {
+  const service = await openService({
+    models: fauxModels(step),
+    settings: { retry: { enabled: false } },
+    ...options,
   });
-  return { promise, release };
+  services.push(service);
+  return { service, harness: hostOf(service).harness.harness };
 }
 
 async function within<T>(work: Promise<T>): Promise<T> {
@@ -61,162 +65,52 @@ async function within<T>(work: Promise<T>): Promise<T> {
   }
 }
 
-function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
-  return ((content ?? []) as Array<{ type: string; text?: string }>)
-    .flatMap((block) => (block.type === "text" ? [block.text ?? ""] : []))
-    .join("");
-}
-
-async function open(
-  step: FauxResponseStep,
-  options: {
-    hooks?: HookRegistration[];
-    storage?: Storage;
-    refreshDelayMs?: number;
-  } = {},
-) {
-  const faux = fauxProvider();
-  const models = createModels();
-  models.setProvider(faux.provider);
-  faux.setResponses(Array.from({ length: 200 }, () => step));
-  const extensions = createAgentExtensions({
-    prompt: { trusted: () => false, skills: async () => [] },
-    resolveHelper: inheritHelper,
-    hooks: options.hooks,
-  });
-  const host = await openAgentHarness({
-    storage: options.storage ?? new MemoryStorage(),
-    models,
-    cwd: process.cwd(),
-    extensions,
-    settings: { retry: { enabled: false } },
-  });
-  const service = await AgentService.start({
-    harness: host.harness,
-    anchor: host.anchor,
-    extensions,
-    parent: new TestParent(),
-    refreshDelayMs: options.refreshDelayMs ?? 5,
-  });
-  host.harness.resume();
-  let closed = false;
-  const close = async () => {
-    if (closed) return;
-    closed = true;
-    await service.close();
-    await host.close();
-  };
-  cleanups.push(close);
-  return { service, harness: host.harness, close };
+/** The groups agents spawned, oldest first. */
+async function spawned(harness: Harness) {
+  const graphs = (await harness.snapshot(GraphsDoc, CONTEXT))?.graphs ?? {};
+  return Object.values(graphs).filter((graph) => graph.owner !== undefined);
 }
 
 function lead(job: string) {
   return { name: "lead", job, spawn: true, cwd: ".", model: MODEL };
 }
 
-test("a quick correction cannot hide a failed run's spawned work", async () => {
-  const fail = gate();
-  const entered = gate();
-  const { service, harness } = await open(
-    async (context, request) => {
-      const last = context.messages.at(-1);
-      const text = textOf(last?.content);
-      if (text === "do work")
-        return fauxAssistantMessage(
-          [
-            fauxToolCall("agent_spawn", {
-              agents: [{ name: "child", job: "hold" }],
-            }),
-          ],
-          { stopReason: "toolUse" },
-        );
-      if (text === "hold") {
-        await heldUntilAborted(request?.signal);
-        return fauxAssistantMessage("aborted child");
-      }
-      if (last?.role === "toolResult" && last.toolName === "agent_spawn") {
-        entered.release();
-        await Promise.race([fail.promise, heldUntilAborted(request?.signal)]);
-        return fauxAssistantMessage("", {
-          stopReason: "error",
-          errorMessage: "failed request",
-        });
-      }
-      return fauxAssistantMessage(`final: ${text}`);
-    },
-    { refreshDelayMs: 50 },
-  );
-  try {
-    const root = await service.spawnGraph({ agents: [lead("initial")] });
-    await until(() => service.pendingDeliveries().length > 0);
-    for (const delivery of service.pendingDeliveries())
-      await service.acknowledge(delivery);
-    await service.send("lead", "do work", "auto");
-    await entered.promise;
-    const record = await harness.commit(
-      (tx) =>
-        tx.submissionByRequest(
-          Number(root.nodes[0]?.agentId) as ConversationId,
-          "parent:1",
-        ),
-      CONTEXT,
-    );
-    if (!record) throw new Error("Missing parent request");
-    const submission = await harness.submission(record.id, CONTEXT);
-    if (!submission) throw new Error("Missing submission");
-    fail.release();
-    await submission.wait(CONTEXT);
-    await service.prompt("lead", "retry", "auto");
-    await until(
-      () => service.get("lead")?.result?.text === "final: [user] retry",
-    );
-    await until(async () => {
-      const graphs = await harness.snapshot(GraphsDoc, CONTEXT);
-      return Object.values(graphs?.graphs ?? {}).some(
-        (graph) => graph.owner && graph.cancelled,
-      );
-    });
-    await until(async () => (await service.liveTasks()).length === 0);
-  } finally {
-    fail.release();
-  }
-});
+const spawn = (agents: Array<{ name: string; job: string }>) =>
+  fauxAssistantMessage([fauxToolCall("agent_spawn", { agents })], {
+    stopReason: "toolUse",
+  });
 
-test.each(["continued answer", "missing model"] as const)(
-  "cancellation follows the failed submission after a %s",
-  async (failure) => {
+const failure = (errorMessage: string) =>
+  fauxAssistantMessage("", { stopReason: "error", errorMessage });
+
+/** The run that spawns fails: right after the spawn, after an answer it
+ * continues past, or for want of a model. A quick correction must not hide
+ * that failure from the group it spawned. */
+test.each(["error", "continued answer", "missing model"] as const)(
+  "a run that fails after a %s withdraws its group despite a quick correction",
+  async (mode) => {
     const toolsFinished = gate();
     const continueRun = gate();
-    const host = await open(
+    const { service, harness } = await open(
       async (context, request) => {
         const last = context.messages.at(-1);
         const text = textOf(last?.content);
         if (text === "spawn then fail")
-          return fauxAssistantMessage(
-            [
-              fauxToolCall("agent_spawn", {
-                agents: [{ name: "child", job: "hold" }],
-              }),
-            ],
-            { stopReason: "toolUse" },
-          );
+          return spawn([{ name: "child", job: "hold" }]);
         if (text === "hold") {
           await heldUntilAborted(request?.signal);
           return fauxAssistantMessage("aborted");
         }
         if (last?.role === "toolResult")
-          return fauxAssistantMessage("not the end of the run");
-        if (text === "continue to failure")
-          return fauxAssistantMessage("", {
-            stopReason: "error",
-            errorMessage: "continued run failed",
-          });
+          return mode === "error"
+            ? failure("run failed")
+            : fauxAssistantMessage("not the end of the run");
+        if (text === "continue to failure") return failure("continued failed");
         return fauxAssistantMessage(`answer: ${text}`);
       },
       {
         refreshDelayMs: 50,
-        hooks: [
+        taskHooks: [
           hook(GenerationTask, {
             afterTools: async () => {
               toolsFinished.release();
@@ -231,21 +125,19 @@ test.each(["continued answer", "missing model"] as const)(
       },
     );
     try {
-      const graph = await host.service.spawnGraph({
-        agents: [lead("initial")],
-      });
-      await host.service.wait(["lead"]);
-      await host.service.send("lead", "spawn then fail", "auto");
+      const graph = await service.spawnGraph({ agents: [lead("initial")] });
+      await service.wait(["lead"]);
+      await service.send("lead", "spawn then fail", "auto");
       await toolsFinished.promise;
       const id = Number(graph.nodes[0]?.agentId) as ConversationId;
-      const conversation = await host.harness.conversation(id, CONTEXT);
-      const record = await host.harness.commit(
+      const conversation = await harness.conversation(id, CONTEXT);
+      const record = await harness.commit(
         (tx) => tx.submissionByRequest(id, "parent:1"),
         CONTEXT,
       );
       if (!conversation || !record) throw new Error("Missing request");
-      const submission = await host.harness.submission(record.id, CONTEXT);
-      if (failure === "missing model")
+      const submission = await harness.submission(record.id, CONTEXT);
+      if (mode === "missing model")
         await conversation.configure(
           { model: { provider: "missing", modelId: "missing" } },
           CONTEXT,
@@ -253,20 +145,16 @@ test.each(["continued answer", "missing model"] as const)(
       continueRun.release();
       expect((await submission?.wait(CONTEXT))?.status).toBe("unanswered");
       await conversation.configure({ model: MODEL }, CONTEXT);
-      await host.service.prompt("lead", "rapid correction", "auto");
+      await service.prompt("lead", "rapid correction", "auto");
       await until(
         () =>
-          host.service.get("lead")?.result?.text ===
+          service.get("lead")?.result?.text ===
           "answer: [user] rapid correction",
       );
       await until(async () =>
-        Object.values(
-          (await host.harness.snapshot(GraphsDoc, CONTEXT))?.graphs ?? {},
-        ).some(
-          (graph) => graph.owner !== undefined && graph.cancelled === true,
-        ),
+        (await spawned(harness)).some((graph) => graph.cancelled),
       );
-      await until(async () => (await host.service.liveTasks()).length === 0);
+      await until(async () => (await service.liveTasks()).length === 0);
     } finally {
       continueRun.release();
     }
@@ -274,20 +162,132 @@ test.each(["continued answer", "missing model"] as const)(
   15_000,
 );
 
+for (const { restart, initialJob } of [
+  { restart: false, initialJob: false },
+  { restart: true, initialJob: false },
+  { restart: false, initialJob: true },
+]) {
+  test(`an unrelated failure preserves an earlier ${initialJob ? "graph job" : "parent request"}${restart ? " across restart" : ""}`, async () => {
+    const child = gate();
+    const step: FauxResponseStep = async (context, request) => {
+      const messages = context.messages.filter(
+        (message) => message.role !== "system",
+      );
+      const last = messages.at(-1);
+      const text = textOf(last?.content);
+      if (text === "held child") {
+        await Promise.race([child.promise, heldUntilAborted(request?.signal)]);
+        return fauxAssistantMessage("preserved evidence");
+      }
+      if (text === "doomed child") {
+        await heldUntilAborted(request?.signal);
+        return fauxAssistantMessage("aborted");
+      }
+      if (last?.role === "toolResult") {
+        const input = textOf(
+          messages.findLast((message) => message.role === "user")?.content,
+        );
+        return input === "unrelated failure"
+          ? failure("request failed")
+          : fauxAssistantMessage("checking");
+      }
+      if (text === "earlier request")
+        return spawn([{ name: "c", job: "held child" }]);
+      if (text === "unrelated failure")
+        return spawn([{ name: "doomed", job: "doomed child" }]);
+      return fauxAssistantMessage(`answer: ${text}`);
+    };
+    const directory = restart ? tempDir() : undefined;
+    const storage = async () =>
+      directory ? { storage: await jsonlStorage(directory) } : {};
+    let { service, harness } = await open(step, await storage());
+    try {
+      await service.spawnGraph({
+        agents: [lead(initialJob ? "earlier request" : "initial")],
+      });
+      if (!initialJob) {
+        await until(() => service.pendingDeliveries().length > 0);
+        for (const delivery of service.pendingDeliveries())
+          await service.acknowledge(delivery);
+        await service.send("lead", "earlier request", "auto");
+      }
+      await until(
+        () =>
+          service.get("lead")?.result?.text === "checking" &&
+          service.get("lead.c")?.state === "working",
+      );
+      expect(service.pendingDeliveries()).toHaveLength(0);
+      await service.send("lead", "unrelated failure", "auto");
+      await until(() => service.get("lead")?.state === "failed");
+      if (directory) {
+        await closeService(service);
+        ({ service, harness } = await open(step, await storage()));
+      }
+      await until(async () =>
+        (await spawned(harness)).some((graph) => graph.cancelled),
+      );
+      expect((await spawned(harness)).map((graph) => graph.cancelled)).toEqual([
+        undefined,
+        true,
+      ]);
+      child.release();
+      // The earlier work's result still settles what asked for it.
+      await until(() =>
+        service
+          .pendingDeliveries()
+          .some((delivery) =>
+            (delivery.kind === "agent"
+              ? [delivery.outcome]
+              : delivery.nodes.map((node) => node.outcome)
+            ).some(
+              (outcome) =>
+                outcome.kind === "answered" &&
+                outcome.result.text.includes("preserved evidence"),
+            ),
+          ),
+      );
+    } finally {
+      child.release();
+    }
+  }, 15_000);
+}
+
+test("a failed job's recovery withdraws only the failed run's groups", async () => {
+  // The worker's failed job still drains its group when the process dies;
+  // meanwhile a retry spawned another group.
+  const directory = tempDir();
+  const worker = fileURLToPath(new URL("./fail-worker.ts", import.meta.url));
+  const crashed = Bun.spawn(["bun", worker, directory], { stdout: "ignore" });
+  expect(await crashed.exited).toBe(0);
+  const { harness } = await open(
+    async (_context, request) => {
+      await heldUntilAborted(request?.signal);
+      return fauxAssistantMessage("aborted");
+    },
+    { storage: await jsonlStorage(directory) },
+  );
+  const graphs = (await harness.snapshot(GraphsDoc, CONTEXT))?.graphs ?? {};
+  const job = Object.keys(graphs).find((id) => !graphs[id]?.owner);
+  // The failed job ends once its group did, after replaying its failure.
+  await until(
+    async () =>
+      (await harness.getTask(Number(job) as TaskId, CONTEXT))?.state.status ===
+      "terminal",
+  );
+  expect(
+    (await spawned(harness)).map((graph) => [graph.name, graph.cancelled]),
+  ).toEqual([
+    ["lead.original", true],
+    ["lead.retry", undefined],
+  ]);
+});
+
 test("a withdrawn queued result arrives after the first corrective answer", async () => {
   let corrections = 0;
   const { service, harness } = await open(async (context, request) => {
     const last = context.messages.at(-1);
     const text = textOf(last?.content);
-    if (text === "start")
-      return fauxAssistantMessage(
-        [
-          fauxToolCall("agent_spawn", {
-            agents: [{ name: "child", job: "child" }],
-          }),
-        ],
-        { stopReason: "toolUse" },
-      );
+    if (text === "start") return spawn([{ name: "child", job: "child" }]);
     if (last?.role === "toolResult" && last.toolName === "agent_spawn") {
       await heldUntilAborted(request?.signal);
       return fauxAssistantMessage("interrupted");
@@ -297,10 +297,7 @@ test("a withdrawn queued result arrives after the first corrective answer", asyn
     return fauxAssistantMessage(`final: ${text}`);
   });
   await service.spawnGraph({ agents: [lead("start")] });
-  const child = async () =>
-    Object.values(
-      (await harness.snapshot(GraphsDoc, CONTEXT))?.graphs ?? {},
-    ).find((graph) => graph.owner);
+  const child = async () => (await spawned(harness))[0];
   await until(async () => {
     const graph = await child();
     return graph?.attempt !== undefined && graph.presented === undefined;
@@ -341,9 +338,9 @@ test("a codemode script can immediately stop the group it spawned", async () => 
   });
   await until(() => scriptResult !== undefined);
   expect(scriptResult).not.toContain("Script failed");
-  const pair = Object.values(
-    (await harness.snapshot(GraphsDoc, CONTEXT))?.graphs ?? {},
-  ).find((graph) => graph.name === "lead.pair");
+  const pair = (await spawned(harness)).find(
+    (graph) => graph.name === "lead.pair",
+  );
   expect(pair?.stopped).toBe(true);
   await until(async () => (await service.liveTasks()).length === 0);
 });
@@ -415,24 +412,9 @@ test.each(["interrupt", "stop"] as const)(
       )
         return fauxAssistantMessage(`answer: ${text}`);
       const tools = messages.filter((message) => message.role === "toolResult");
-      if (tools.length === 0)
-        return fauxAssistantMessage(
-          [
-            fauxToolCall("agent_spawn", {
-              agents: [{ name: "c", job: "gated child" }],
-            }),
-          ],
-          { stopReason: "toolUse" },
-        );
+      if (tools.length === 0) return spawn([{ name: "c", job: "gated child" }]);
       if (tools.length === 1)
-        return fauxAssistantMessage(
-          [
-            fauxToolCall("agent_spawn", {
-              agents: [{ name: "d", job: "slow cleanup" }],
-            }),
-          ],
-          { stopReason: "toolUse" },
-        );
+        return spawn([{ name: "d", job: "slow cleanup" }]);
       await childStarted.promise;
       return fauxAssistantMessage(
         [
@@ -443,7 +425,7 @@ test.each(["interrupt", "stop"] as const)(
       );
     };
     const { service, harness } = await open(step, {
-      hooks: [
+      taskHooks: [
         hook(ToolTask, {
           beforeTool: async (call, _api, context) => {
             if (call.name !== "read") return;
@@ -476,17 +458,12 @@ test.each(["interrupt", "stop"] as const)(
       await until(
         () => service.get("lead.c")?.result?.text === "child evidence",
       );
-      await until(async () => {
-        const graphs = await harness.snapshot(GraphsDoc, CONTEXT);
-        const group = Object.entries(graphs?.graphs ?? {}).find(([, graph]) =>
-          graph.nodes.some((node) => node.agent === service.get("lead.c")?.id),
-        );
-        return (
-          group !== undefined &&
-          (await harness.getTask(Number(group[0]) as TaskId, CONTEXT))?.state
-            .status === "terminal"
-        );
-      });
+      const childGroup = service.get("lead.c")?.graph;
+      await until(
+        async () =>
+          (await harness.getTask(Number(childGroup) as TaskId, CONTEXT))?.state
+            .status === "terminal",
+      );
       // An unrelated operation must finish even while lead holds its turn.
       const unrelated = await within(
         service.spawnGraph({
@@ -517,21 +494,14 @@ test.each(["interrupt", "stop"] as const)(
       await service.prompt("lead", "continue", "auto");
       const id = Number(service.get("lead")?.id) as ConversationId;
       const conversation = await harness.conversation(id, CONTEXT);
-      const presentations = async () => {
-        const entries = await conversation?.entries(
-          {},
-          200,
-          undefined,
-          CONTEXT,
-        );
-        return (
-          entries?.items.filter(
-            (entry) =>
-              entry.kind === "pi-agents.results" &&
-              JSON.stringify(entry.model).includes("child evidence"),
-          ) ?? []
-        );
-      };
+      const presentations = async () =>
+        (
+          await conversation?.entries({}, 200, undefined, CONTEXT)
+        )?.items.filter(
+          (entry) =>
+            entry.kind === "pi-agents.results" &&
+            JSON.stringify(entry.model).includes("child evidence"),
+        ) ?? [];
       await until(async () => (await presentations()).length > 0);
       await until(async () => (await service.liveTasks()).length === 0);
       expect(await presentations()).toHaveLength(1);
@@ -543,155 +513,3 @@ test.each(["interrupt", "stop"] as const)(
   },
   15_000,
 );
-
-for (const { restart, initialJob } of [
-  { restart: false, initialJob: false },
-  { restart: true, initialJob: false },
-  { restart: false, initialJob: true },
-]) {
-  test(`an unrelated failure preserves an earlier ${initialJob ? "graph job" : "parent request"}${restart ? " across restart" : ""}`, async () => {
-    const child = gate();
-    const step: FauxResponseStep = async (context, request) => {
-      const messages = context.messages.filter(
-        (message) => message.role !== "system",
-      );
-      const last = messages.at(-1);
-      const text = textOf(last?.content);
-      if (text === "held child") {
-        await Promise.race([child.promise, heldUntilAborted(request?.signal)]);
-        return fauxAssistantMessage("preserved evidence");
-      }
-      if (text === "doomed child") {
-        await heldUntilAborted(request?.signal);
-        return fauxAssistantMessage("aborted");
-      }
-      if (last?.role === "toolResult") {
-        const input = textOf(
-          [...messages].reverse().find((message) => message.role === "user")
-            ?.content,
-        );
-        return input === "unrelated failure"
-          ? fauxAssistantMessage("", {
-              stopReason: "error",
-              errorMessage: "request failed",
-            })
-          : fauxAssistantMessage("checking");
-      }
-      if (text === "earlier request")
-        return fauxAssistantMessage(
-          [
-            fauxToolCall("agent_spawn", {
-              agents: [{ name: "c", job: "held child" }],
-            }),
-          ],
-          { stopReason: "toolUse" },
-        );
-      if (text === "unrelated failure")
-        return fauxAssistantMessage(
-          [
-            fauxToolCall("agent_spawn", {
-              agents: [{ name: "doomed", job: "doomed child" }],
-            }),
-          ],
-          { stopReason: "toolUse" },
-        );
-      return fauxAssistantMessage(`answer: ${text}`);
-    };
-    const directory = restart ? tempDir() : undefined;
-    let host = await open(step, {
-      storage: directory ? await jsonlStorage(directory) : undefined,
-    });
-    try {
-      await host.service.spawnGraph({
-        agents: [lead(initialJob ? "earlier request" : "initial")],
-      });
-      if (!initialJob) {
-        await until(() => host.service.pendingDeliveries().length > 0);
-        for (const delivery of host.service.pendingDeliveries())
-          await host.service.acknowledge(delivery);
-        await host.service.send("lead", "earlier request", "auto");
-      }
-      await until(
-        () =>
-          host.service.get("lead")?.result?.text === "checking" &&
-          host.service.get("lead.c")?.state === "working",
-      );
-      expect(host.service.pendingDeliveries()).toHaveLength(0);
-      await host.service.send("lead", "unrelated failure", "auto");
-      await until(() => host.service.get("lead")?.state === "failed");
-      if (directory) {
-        await host.close();
-        host = await open(step, { storage: await jsonlStorage(directory) });
-      }
-      const graphs = await host.harness.snapshot(GraphsDoc, CONTEXT);
-      const spawned = Object.values(graphs?.graphs ?? {}).filter(
-        (graph) => graph.owner !== undefined,
-      );
-      expect(spawned).toHaveLength(2);
-      expect(spawned[0]?.cancelled).not.toBe(true);
-      await until(async () => {
-        const graphs = await host.harness.snapshot(GraphsDoc, CONTEXT);
-        return Object.values(graphs?.graphs ?? {}).some(
-          (graph) => graph.owner !== undefined && graph.cancelled,
-        );
-      });
-      const settled = Object.values(
-        (await host.harness.snapshot(GraphsDoc, CONTEXT))?.graphs ?? {},
-      ).filter((graph) => graph.owner !== undefined);
-      expect(settled[0]?.cancelled).not.toBe(true);
-      expect(settled[1]?.cancelled).toBe(true);
-      child.release();
-      await until(
-        () =>
-          host.service
-            .get("lead")
-            ?.result?.text.includes("preserved evidence") === true,
-      );
-      await until(() =>
-        host.service.pendingDeliveries().some((delivery) => {
-          const outcomes =
-            delivery.kind === "agent"
-              ? [delivery.outcome]
-              : delivery.nodes.map((node) => node.outcome);
-          return outcomes.some(
-            (outcome) =>
-              outcome.kind === "answered" &&
-              outcome.result.text.includes("preserved evidence"),
-          );
-        }),
-      );
-    } finally {
-      child.release();
-    }
-  }, 15_000);
-}
-
-test("a failed job's recovery withdraws only the failed run's groups", async () => {
-  // The worker's failed job still drains its group when the process dies;
-  // meanwhile a retry spawned another group.
-  const directory = tempDir();
-  const worker = fileURLToPath(new URL("./fail-worker.ts", import.meta.url));
-  const crashed = Bun.spawn(["bun", worker, directory], { stdout: "ignore" });
-  expect(await crashed.exited).toBe(0);
-  const { harness } = await open(
-    async (_context, request) => {
-      await heldUntilAborted(request?.signal);
-      return fauxAssistantMessage("aborted");
-    },
-    { storage: await jsonlStorage(directory) },
-  );
-  const graphs = async () =>
-    Object.entries((await harness.snapshot(GraphsDoc, CONTEXT))?.graphs ?? {});
-  const [job] = (await graphs()).filter(([, graph]) => !graph.owner);
-  // The failed job ends once its group did, after replaying its failure.
-  await until(
-    async () =>
-      (await harness.getTask(Number(job?.[0]) as TaskId, CONTEXT))?.state
-        .status === "terminal",
-  );
-  const spawned = (await graphs()).filter(([, graph]) => graph.owner);
-  expect(spawned.map(([, graph]) => [graph.name, graph.cancelled])).toEqual([
-    ["lead.original", true],
-    ["lead.retry", undefined],
-  ]);
-});

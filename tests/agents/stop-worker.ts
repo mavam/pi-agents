@@ -4,13 +4,12 @@
  * the process exits at the stop's first commit, before the stop can finish.
  */
 
-import { createModels } from "@earendil-works/pi-ai/models";
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import {
+  fauxModels,
   heldUntilAborted,
   hostOf,
   jsonlStorage,
@@ -20,30 +19,25 @@ import {
   until,
 } from "./helpers.js";
 
-const faux = fauxProvider();
-const models = createModels();
-models.setProvider(faux.provider);
-faux.setResponses(
-  Array.from({ length: 50 }, () => async (context, request) => {
-    const last = context.messages.at(-1);
-    if (last?.role === "toolResult") return fauxAssistantMessage("checking");
-    const prompt = lastUserText(context);
-    if (prompt === "hold") await heldUntilAborted(request?.signal);
-    if (prompt.includes("spawn"))
-      return fauxAssistantMessage(
-        [
-          fauxToolCall("agent_spawn", {
-            agents: [
-              { name: "c", job: "hold" },
-              { name: "d", job: "hold" },
-            ],
-          }),
-        ],
-        { stopReason: "toolUse" },
-      );
-    return fauxAssistantMessage(`done: ${prompt}`);
-  }),
-);
+const models = fauxModels(async (context, request) => {
+  const last = context.messages.at(-1);
+  if (last?.role === "toolResult") return fauxAssistantMessage("checking");
+  const prompt = lastUserText(context);
+  if (prompt === "hold") await heldUntilAborted(request?.signal);
+  if (prompt.includes("spawn"))
+    return fauxAssistantMessage(
+      [
+        fauxToolCall("agent_spawn", {
+          agents: [
+            { name: "c", job: "hold" },
+            { name: "d", job: "hold" },
+          ],
+        }),
+      ],
+      { stopReason: "toolUse" },
+    );
+  return fauxAssistantMessage(`done: ${prompt}`);
+});
 
 const directory = process.argv[2] as string;
 const service = await openService({

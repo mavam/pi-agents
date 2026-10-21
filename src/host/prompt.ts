@@ -65,7 +65,7 @@ const SPAWNING_SNIPPETS: Record<string, string> = {
   [WAIT_TOOL]: "Block until agents you spawned finished and get their results",
   [STOP_TOOL]: "Stop agents you spawned",
 };
-const SPAWN_RULE = `Use ${SPAWN_TOOL} when your job splits into parts that can run on their own, such as one per file or area; give each agent a self-contained job. Inputs that start with ${RESULTS_PREFIX.trim()} carry the results of agents you spawned. Your job ends with your first answer after the results of every agent you spawned, so after spawning, continue with other work, end your turn until the results arrive, or call ${WAIT_TOOL}`;
+const SPAWN_RULE = `Use ${SPAWN_TOOL} when your job splits into parts that can run on their own, such as one per file or area; give each agent a self-contained job. Its arguments are always an agents array, also for one agent: {"agents": [{"name": "...", "job": "..."}]}. Inputs that start with ${RESULTS_PREFIX.trim()} carry the results of agents you spawned. Your job ends with your first answer after the results of every agent you spawned, so after spawning, continue with other work, end your turn until the results arrive, or call ${WAIT_TOOL}`;
 
 /** What the prompt says about messaging other agents. */
 const MESSAGING_SNIPPETS: Record<string, string> = {

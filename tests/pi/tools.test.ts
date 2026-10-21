@@ -243,6 +243,15 @@ describe("tool exposure", () => {
       await runtime.dispose();
     }
   });
+
+  test("agent_spawn shows how to list a single agent's fields", () => {
+    const prepare = tools().get("agent_spawn")?.prepareArguments;
+    const lead = { name: "lead", job: "review", spawn: true };
+    expect(() => prepare?.(lead)).toThrow(
+      'Move job, spawn into an entry of agents. Arguments are always an agents array, also for a single agent: {"agents": [{"name": "lead"',
+    );
+    expect(prepare?.({ agents: [lead] })).toEqual({ agents: [lead] });
+  });
 });
 
 describe("structured output", () => {

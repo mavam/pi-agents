@@ -72,11 +72,13 @@ import {
 import { endNodes } from "./topology.js";
 import {
   AgentError,
+  checkSpawnShape,
   GRAPH_SIZE,
   type GraphPolicy,
   type HelperResolver,
   isThinkingLevel,
   MAX_DEPTH,
+  SPAWN_SHAPE,
   THINKING_LEVELS,
 } from "./types.js";
 
@@ -137,17 +139,23 @@ const agentFields = Type.Object({
   ),
   spawn: Type.Optional(
     Type.Boolean({
-      description: "Let the agent spawn agents of its own",
+      description: "Let this agent spawn agents of its own",
     }),
   ),
 });
 
 const spawnParameters = Type.Object({
-  name: Type.Optional(Type.String({ description: "Short name for the group" })),
+  name: Type.Optional(
+    Type.String({
+      description:
+        "Short name for the whole group; each agent's name goes in its entry",
+    }),
+  ),
   agents: Type.Array(agentFields, {
     minItems: GRAPH_SIZE.min,
     maxItems: GRAPH_SIZE.max,
-    description: "One entry per agent; one entry for a single agent",
+    description:
+      "One entry per agent with its fields, also for a single agent: [{ job, name, spawn, ... }]",
   }),
   failFast: Type.Optional(
     Type.Boolean({ description: "Stop the other agents when one fails" }),
@@ -795,9 +803,9 @@ export function spawningTools(options: SpawningOptions): ToolRegistration[] {
   return [
     defineTool({
       name: SPAWN_TOOL,
-      description:
-        "Spawn agents and return at once. One call starts one group of 1 to 12 agents: they run in parallel, and one that lists others in after starts once they finished and receives their final messages. The group's result, the final messages of the agents nothing waits for, arrives as one message once all finished, or call agent_wait to block for it. Add an agent after the others to merge their results into one. Agents don't see your conversation. Your own work ends only with an answer after the results of the agents you spawned.",
+      description: `Spawn agents and return at once. One call starts one group of 1 to 12 agents: they run in parallel, and one that lists others in after starts once they finished and receives their final messages. The group's result, the final messages of the agents nothing waits for, arrives as one message once all finished, or call agent_wait to block for it. Add an agent after the others to merge their results into one. Agents don't see your conversation. Your own work ends only with an answer after the results of the agents you spawned. ${SPAWN_SHAPE}`,
       parameters: spawnParameters,
+      prepareArguments: (args) => checkSpawnShape(args) as never,
       // A rerun finds the group the interrupted call started.
       replay: "safe",
       outputLimits: UNBOUNDED_OUTPUT,

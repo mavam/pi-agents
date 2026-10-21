@@ -22,8 +22,10 @@ import type { AgentService } from "../agents/service.js";
 import {
   AgentError,
   type AgentInfo,
+  checkSpawnShape,
   GRAPH_SIZE,
   type GraphInfo,
+  SPAWN_SHAPE,
   type Target,
   type TargetRef,
   THINKING_LEVELS,
@@ -203,6 +205,8 @@ interface AgentToolSpec<T extends TSchema, O extends TSchema> {
   parameters: T;
   /** The schema of the output scripts get. */
   output: O;
+  /** Checks the arguments, after the common preparation, by throwing. */
+  prepare?: (args: unknown) => unknown;
   execute: Execute<T, O>;
 }
 
@@ -232,7 +236,8 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
     ...(spec.exposure ? { exposure: spec.exposure } : {}),
     parameters: spec.parameters,
     outputSchema: spec.output,
-    prepareArguments: (args) => prepareArguments(args) as Static<T>,
+    prepareArguments: (args) =>
+      (spec.prepare ?? ((each) => each))(prepareArguments(args)) as Static<T>,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       let service: AgentService;
       try {
@@ -404,7 +409,7 @@ const agentFields = {
   spawn: Type.Optional(
     Type.Boolean({
       description:
-        "Let the agent spawn agents of its own, which report back to it",
+        "Let this agent spawn agents of its own, which report back to it",
     }),
   ),
 };
@@ -419,7 +424,8 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   const spawnParams = Type.Object({
     name: Type.Optional(
       Type.String({
-        description: "Short name for the group, when it has several agents",
+        description:
+          "Short name for the whole group, when it has several agents; each agent's name goes in its entry",
       }),
     ),
     agents: Type.Array(
@@ -435,7 +441,8 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       {
         minItems: GRAPH_SIZE.min,
         maxItems: GRAPH_SIZE.max,
-        description: "One entry per agent; one entry for a single agent",
+        description:
+          "One entry per agent with its fields, also for a single agent: [{ job, name, spawn, ... }]",
       },
     ),
     failFast: Type.Optional(
@@ -447,9 +454,9 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_spawn",
-      description:
-        "Start agents and return at once. One call starts one group of 1 to 12 agents, whose result arrives on its own as one message that starts a new turn. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The result holds the final messages of the agents nothing waits for, so to get one merged answer, add an agent after the others that merges their results. A group of one agent reports its answer. For independent jobs whose results should arrive separately, call agent_spawn once per job.",
+      description: `Start agents and return at once. One call starts one group of 1 to 12 agents, whose result arrives on its own as one message that starts a new turn. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The result holds the final messages of the agents nothing waits for, so to get one merged answer, add an agent after the others that merges their results. A group of one agent reports its answer. For independent jobs whose results should arrive separately, call agent_spawn once per job. ${SPAWN_SHAPE}`,
       parameters: spawnParams,
+      prepare: checkSpawnShape,
       output: GraphOutput,
       async execute(service, params, ctx) {
         const thinking = pi.getThinkingLevel();

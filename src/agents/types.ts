@@ -218,6 +218,26 @@ export interface GraphInfo {
 /** How many agents one spawn starts. */
 export const GRAPH_SIZE = { min: 1, max: 12 } as const;
 
+/** How `agent_spawn` takes its agents, for its descriptions and errors. */
+export const SPAWN_SHAPE =
+  'Arguments are always an agents array, also for a single agent: {"agents": [{"name": "lead", "job": "...", "spawn": true}]}. Each agent\'s fields, such as job, name, model, after, and spawn, go in its own entry; only the group\'s name and failFast sit beside agents.';
+
+/** The arguments of `agent_spawn` beside `agents`. */
+const GROUP_FIELDS = new Set(["name", "agents", "failFast"]);
+
+/** Reject `agent_spawn` arguments that put an agent's fields beside
+ * `agents`, with how to write them instead. Validation reports what else
+ * is wrong. */
+export function checkSpawnShape(args: unknown): unknown {
+  if (typeof args !== "object" || args === null) return args;
+  const misplaced = Object.keys(args).filter((key) => !GROUP_FIELDS.has(key));
+  if (misplaced.length > 0)
+    throw new AgentError(
+      `Move ${misplaced.join(", ")} into an entry of agents. ${SPAWN_SHAPE}`,
+    );
+  return args;
+}
+
 /** How deep agents nest: the parent's agents are at depth 1, and an agent
  * at the deepest level can't spawn. */
 export const MAX_DEPTH = 3;

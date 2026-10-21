@@ -3,6 +3,8 @@ title: One recursive agent_spawn for every way to start agents
 type: breaking
 authors:
   - mavam
+prs:
+  - 115
 created: 2026-10-21T09:14:41.233172Z
 ---
 

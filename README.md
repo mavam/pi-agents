@@ -62,21 +62,50 @@ graph, agents pass results to each other and Pi gets one message at the end.
 
 ## 🏗️ Architecture
 
-Agents run inside your Pi process on
-[pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable),
-using your Pi logins and models. Resuming a session continues interrupted
-work.
+Agents run inside Pi and use your Pi logins and models:
 
 ```text
-Pi process
-├─ Your conversation ── delegate ──▶ Agents and graphs
-│                    ◀── results ──  ├─ scout ── message ──▶ fixer
-│                                    └─ {api, tests} ──▶ merge
-├─ Panel, /agents, /messages, attach view
-└─ Optional extensions ── hooks ──▶ Agent settings and requests
-
-Pi session file                    Agent storage (pi-durable)
-Your conversation and results      Agent conversations and pending work
+╭─ Pi process ─────────────────────────────────────────────────────╮
+│                                                                  │
+│  ╭──────────────────╮ ╭────────────────────╮ ╭────────────────╮  │
+│ ╭┤ ◆ Pi session:    │ │ ◇ optional         │ │ ▤ panel        │  │
+│ ┊│   MCP, extension │ │   extensions, e.g. │ │ ⇄ attach view  │  │
+│ ┊│   tools          │ │   pi-service-tier  │ │ ≡ /agents      │  │
+│ ┊│                  │ │                    │ │ ✉ /messages    │  │
+│ ┊╰───┬─────────▲────╯ ╰─────────┬──────────╯ ╰────────▲───────╯  │
+│ ┊    │ agent_* │ results        ╎ hooks: capture at   │          │
+│ ┊    │         │                ╎ spawn, hold calls,  │          │
+│ ┊    ▼         │                ▼ adapt requests      │          │
+│ ┊╭─────────────┴──────────────────────────────────────┴───────╮  │
+│ ┊│  ✦ pi-agents: a thin bridge from Pi to pi-durable          │  │
+│ ┊╰───┬─────────▲──────────────────────────────────────────────╯  │
+│ ┊    │ start   │ state                                           │
+│ ┊    │ message │ results                                         │
+│ ┊    ▼ stop    │                                                 │
+│ ┊╭─────────────┴──────────────────────────────────────────────╮  │
+│ ┊│  pi-durable harness                                        │  │
+│ ┊│                                                            │  │
+│ ┊│   ◉ scout ─── message ──▶ ● notes                          │  │
+│ ┊│                                                            │  │
+│ ┊│   ╭─ graph ─────────────────────────╮  agent tools:        │  │
+│ ┊│   │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │  read  bash  edit    │  │
+│ ┊│   │        └─▶ ◉ ui ───┘            │  write  grep         │  │
+│ ┊│   │            └─ ◉ ◉ ◉ helpers     │  find  ls  codemode  │  │
+│ ┊│   ╰─────────────────────────────────╯                      │  │
+│ ┊│                                                            │  │
+│ ┊│   agents are conversations; turns, tool calls, and graphs  │  │
+│ ┊│   are durable tasks that own what they start; model        │  │
+│ ┊│   requests pass the hooks with each agent's snapshot       │  │
+│ ┊╰─────────────────────────────┬──────────────────────────────╯  │
+╰─┬──────────────────────────────┬─────────────────────────────────╯
+  ┊ saves                        │ checkpoint every step
+  ▼                              ▼
+╭──────────────────────╮    ╭──────────────────────────────╮
+│ ▤ Pi's session file  │    │ ▤ pi-agents store, one per   │
+│   your conversation, │    │   session: agents and their  │
+│   saved results, and │    │   hook snapshots, graphs,    │
+│   message cards      │    │   messages, tasks            │
+╰──────────────────────╯    ╰──────────────────────────────╯
 ```
 
 ## 📚 Documentation

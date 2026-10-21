@@ -8,9 +8,14 @@ import {
 import { type ConversationId, ProviderDoc } from "@earendil-works/pi-durable";
 import { AgentsDoc } from "../../src/agents/records.js";
 import type { AgentService } from "../../src/agents/service.js";
-import type { AgentHooks, AgentRequestContext } from "../../src/hooks.js";
+import type {
+  AgentBeforeRequestContext,
+  AgentHooks,
+  AgentRequestContext,
+} from "../../src/hooks.js";
 import { AgentRequestHooks } from "../../src/host/hooks.js";
 import {
+  briefly,
   closeService,
   createFaux,
   hostOf,
@@ -19,6 +24,7 @@ import {
   MODEL,
   openService,
   tempDir,
+  until,
 } from "../agents/helpers.js";
 
 let services: AgentService[] = [];
@@ -141,6 +147,51 @@ describe("agent lifecycle hooks", () => {
     expect(captures).toBe(2);
     expect(seen.at(-1)?.state).toEqual({ setting: "first" });
     expect(seen.at(-1)?.sessionId).toBe("test-parent");
+  });
+
+  test("before-request hooks hold model calls; stopping ends a hold", async () => {
+    const { models, payloads } = provider();
+    const seen: AgentBeforeRequestContext[] = [];
+    let release!: () => void;
+    let hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const service = await open({
+      models,
+      captureExtensionState: () => ({ gate: { peak: true } }),
+      hooks: [
+        {
+          namespace: "gate",
+          // Ignores its signal, which must not block a stop.
+          beforeAgentRequest: (ctx) => {
+            seen.push(ctx);
+            return hold;
+          },
+        },
+      ],
+    });
+    const info = await service.spawn(spawn("held"));
+    await until(() => seen.length === 1);
+    await briefly(undefined, 50);
+    expect(payloads).toHaveLength(0);
+    expect(service.get(info.id)?.state).toBe("working");
+    expect(seen[0]).toMatchObject({
+      sessionId: "test-parent",
+      agent: { id: info.id, name: "held" },
+      model: { provider: MODEL.provider, id: MODEL.modelId },
+      operation: "generation",
+      state: { peak: true },
+    });
+    release();
+    await service.wait([info.id]);
+    expect(payloads).toHaveLength(1);
+
+    hold = new Promise(() => {});
+    await service.send(info.id, "again");
+    await until(() => seen.length === 2);
+    await service.stop(info.id);
+    await until(() => service.get(info.id)?.state !== "working");
+    expect(payloads).toHaveLength(1);
   });
 
   test("capture failure creates no partial graph; missing adapters retain state", async () => {

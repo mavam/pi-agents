@@ -7,7 +7,11 @@
  * and prompt in a session worker, never reaches agents.
  */
 
-import type { Extension, Registry } from "@earendil-works/pi-durable";
+import type {
+  Extension,
+  HookRegistration,
+  Registry,
+} from "@earendil-works/pi-durable";
 import { createPromptExtension, type PromptOptions } from "../host/prompt.js";
 import { createToolsExtension } from "../host/tools.js";
 import { WorkingAgents } from "../host/working.js";
@@ -55,6 +59,8 @@ export interface AgentExtensionOptions {
   messaging?: MessagingOptions;
   /** How many agents work at once; unlimited when absent. */
   maxWorkingAgents?: number;
+  /** Co-loaded extensions' hooks on every agent's requests. */
+  hooks?: readonly HookRegistration[];
 }
 
 export function createAgentExtensions(
@@ -65,10 +71,14 @@ export function createAgentExtensions(
     options.maxWorkingAgents === undefined
       ? undefined
       : new WorkingAgents(options.maxWorkingAgents);
-  // Every agent selects the tools, so their hooks hold every request.
-  const tools = working
-    ? { ...extension, hooks: [...(extension.hooks ?? []), ...working.hooks] }
-    : extension;
+  // Every agent selects the tools, so their hooks see every request.
+  // Extensions' hooks run before the cap's, so a held run takes no slot.
+  const hooks = [
+    ...(extension.hooks ?? []),
+    ...(options.hooks ?? []),
+    ...(working?.hooks ?? []),
+  ];
+  const tools = hooks.length > 0 ? { ...extension, hooks } : extension;
   const prompt = createPromptExtension(options.prompt);
   const hub = new MessagingHub();
   return {

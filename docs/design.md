@@ -125,11 +125,11 @@ delegate.
 
 Agents run in pi-durable, outside Pi's extension runner, so Pi's own provider
 events never see their requests. Extension hooks are the bridge: co-loaded Pi
-extensions capture immutable, namespaced JSON state when agents are created
-and transform their outgoing model requests. The host connects these hooks to
-the agent runtime; the core stores opaque state without interpreting another
-extension's settings. The bridge stays thin on purpose: it carries state and
-payloads, nothing else, so the plumbing behind it can follow pi-durable as
+extensions capture immutable, namespaced JSON state when agents are created,
+hold their model calls, and transform their outgoing model requests. The host
+connects these hooks to the agent runtime; the core stores opaque state
+without interpreting another extension's settings. The bridge stays thin on
+purpose: it carries state and payloads and awaits callbacks, nothing else, so the plumbing behind it can follow pi-durable as
 pi-durable gains native extension points, without changing the protocol.
 
 Creation captures a snapshot, rather than a live link to the parent. Changes
@@ -138,6 +138,18 @@ before it commits: a graph's nodes share one snapshot, and helpers copy their
 creator's state without recapturing it. State is committed with creation and
 survives retries, compaction, stop/reopen, and session recovery. It lives in
 the agents' shared records, so it stays small.
+
+A third hook lets extensions hold an agent's model calls, for example during
+peak pricing. It is a callback that pi-agents awaits, not a decision it
+interprets: the extension decides when to hold, why, for how long, and how
+users override it, and keeps whatever state that takes. The wait runs in
+pi-durable's own hooks before a request or compaction summary, where the
+working-agent cap waits too. Credentials therefore resolve after a long hold,
+and stopping, interrupting, and shutting down cancel the wait like any other
+durable wait. A failing callback is reported and doesn't stop the call, as
+with pi-durable's own hooks; an extension that must fail closed keeps
+waiting instead. Pi-agents adds no hold protocol, timers, or status, so a
+policy never becomes part of the core.
 
 Request hooks use the actual dispatched model, so routing and a child's
 choice of provider do not accidentally apply the parent's model policy.

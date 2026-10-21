@@ -65,17 +65,26 @@ export function discoverAgentHooks(
     const candidate = (
       typeof value === "object" && value !== null ? value : {}
     ) as Partial<AgentHooks>;
-    const { namespace, onAgentCreate, onAgentRequest } = candidate;
+    const { namespace, onAgentCreate, onAgentRequest, beforeAgentRequest } =
+      candidate;
     if (
       typeof namespace !== "string" ||
       !NAMESPACE.test(namespace) ||
-      (onAgentCreate !== undefined && typeof onAgentCreate !== "function") ||
-      (onAgentRequest !== undefined && typeof onAgentRequest !== "function")
+      [onAgentCreate, onAgentRequest, beforeAgentRequest].some(
+        (callback) => callback !== undefined && typeof callback !== "function",
+      )
     ) {
       problems.push(`invalid registration ${label(namespace)}`);
       continue;
     }
-    valid.push(Object.freeze({ namespace, onAgentCreate, onAgentRequest }));
+    valid.push(
+      Object.freeze({
+        namespace,
+        onAgentCreate,
+        onAgentRequest,
+        beforeAgentRequest,
+      }),
+    );
   }
   const counts = new Map<string, number>();
   for (const hook of valid)

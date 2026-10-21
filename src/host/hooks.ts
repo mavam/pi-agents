@@ -1,14 +1,25 @@
-/** Per-harness request identity and optional extension payload hooks. */
+/** Per-harness request identity and optional extension request hooks. */
+import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
+  AgentDoc,
   type CommitPublication,
+  CompactionTask,
   type ConversationId,
+  GenerationTask,
   type Harness,
+  type HookApi,
+  type HookRegistration,
+  hook,
   ProviderDoc,
 } from "@earendil-works/pi-durable";
 import { AgentsDoc, type AgentsState } from "../agents/records.js";
-import type { AgentHooks, ReadonlyAgentExtensionValue } from "../hooks.js";
+import type {
+  AgentBeforeRequestContext,
+  AgentHooks,
+  ReadonlyAgentExtensionValue,
+} from "../hooks.js";
 import { freezeValue, hookError } from "./hook-state.js";
 
 /** Await a hook without holding shutdown hostage to an uncooperative listener. */
@@ -28,6 +39,77 @@ async function abortable<T>(
   } finally {
     signal.removeEventListener("abort", abort);
   }
+}
+
+/**
+ * Each extension's `beforeAgentRequest` as pi-durable hooks of its own, so
+ * pi-durable reports a failing one and still runs the others. They run where
+ * pi-durable is about to request the model or summarize a compaction, before
+ * credentials resolve, and stop waiting when the agent's work is aborted.
+ */
+export function beforeRequestHooks(
+  sessionId: string,
+  hooks: readonly AgentHooks[],
+): HookRegistration[] {
+  return hooks.flatMap(({ namespace, beforeAgentRequest: callback }) => {
+    if (!callback) return [];
+    const run = async (
+      operation: AgentBeforeRequestContext["operation"],
+      api: HookApi,
+      context: Context,
+    ): Promise<undefined> => {
+      const id = String(api.conversationId);
+      const [agents, durable] = await Promise.all([
+        api.snapshot(AgentsDoc, context),
+        api.snapshot(AgentDoc, api.conversationId, context),
+      ]);
+      const agent = agents?.agents[id];
+      const ref = durable?.model;
+      const model = ref && api.models.getModel(ref.provider, ref.modelId);
+      // Not an agent, or a call that fails for want of a model anyway.
+      if (!agent || !model) return undefined;
+      const all = agent.extensionState ?? {};
+      const signal = context.abortSignal;
+      signal?.throwIfAborted();
+      try {
+        await abortable(
+          Promise.resolve(
+            callback(
+              Object.freeze({
+                sessionId,
+                agent: Object.freeze({ id, name: agent.name }),
+                model: Object.freeze({
+                  provider: model.provider,
+                  api: model.api,
+                  id: model.id,
+                }),
+                operation,
+                state: Object.hasOwn(all, namespace)
+                  ? freezeValue(structuredClone(all[namespace]))
+                  : undefined,
+                ...(signal ? { signal } : {}),
+              }),
+            ),
+          ),
+          signal,
+        );
+      } catch (error) {
+        signal?.throwIfAborted();
+        throw hookError(namespace, "beforeAgentRequest", error);
+      }
+      return undefined;
+    };
+    return [
+      hook(GenerationTask, {
+        beforeRequest: (_request, api, context) =>
+          run("generation", api, context),
+      }),
+      hook(CompactionTask, {
+        beforeCompact: (_compaction, api, context) =>
+          run("compaction", api, context),
+      }),
+    ];
+  });
 }
 
 export class AgentRequestHooks {

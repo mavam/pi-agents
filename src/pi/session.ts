@@ -34,6 +34,7 @@ import { SkillCatalog } from "../catalog/skills.js";
 import type { AgentHooks } from "../hooks.js";
 import { type AgentHarness, openAgentHarness } from "../host/harness.js";
 import { createHarnessSettings } from "../host/harness-setup.js";
+import { beforeRequestHooks } from "../host/hooks.js";
 import { acquireLock, type StorageLock } from "../host/lock.js";
 import { resolveModels } from "../host/models.js";
 import { pruneSessions, readRetention } from "../host/retention.js";
@@ -221,6 +222,7 @@ export class SessionHost {
       const models = await resolveModels(modelRegistry);
       const extensions = createAgentExtensions({
         ...(limit === undefined ? {} : { maxWorkingAgents: limit }),
+        hooks: beforeRequestHooks(sessionId, this.hooks),
         prompt: { trusted: () => this.trusted, skills: this.skills.get },
         resolveHelper: (request, defaults) => {
           const current = this.ctx;

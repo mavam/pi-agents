@@ -34,6 +34,7 @@ import {
   type AgentHarnessOptions,
   openAgentHarness,
 } from "../../src/host/harness.js";
+import { beforeRequestHooks } from "../../src/host/hooks.js";
 
 export const MODEL = { provider: "faux", modelId: "faux-1" };
 
@@ -237,6 +238,7 @@ export function testExtensions(options: HostOptions = {}): AgentExtensions {
       skills: options.skills ?? (async () => []),
     },
     resolveHelper: inheritHelper,
+    hooks: beforeRequestHooks("test-parent", options.hooks ?? []),
     ...(options.delegationLimits
       ? { delegationLimits: options.delegationLimits }
       : {}),

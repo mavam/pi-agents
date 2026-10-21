@@ -54,12 +54,17 @@ describe("agent hook discovery and capture", () => {
       discovery.register({ namespace: "duplicate" });
       discovery.register({ namespace: "duplicate" });
       discovery.register({ namespace: "not valid" });
+      discovery.register({
+        namespace: "not-a-function",
+        beforeAgentRequest: 1 as never,
+      });
       discovery.register({ namespace: "kept" });
     });
     const { hooks, problems } = discoverAgentHooks(events);
     expect(hooks.map((hook) => hook.namespace)).toEqual(["kept"]);
     expect(problems).toEqual([
       'invalid registration "not valid"',
+      'invalid registration "not-a-function"',
       'duplicate namespace "duplicate"',
     ]);
     const ctx = {

@@ -1,8 +1,12 @@
 # Agent extension hooks
 
-Co-loaded Pi extensions can capture state when agents are created and modify
-their model requests. Pi-agents has no dependency on any consumer extension.
-With no registrations, agent behavior stays unchanged.
+Co-loaded Pi extensions can capture state when agents are created, hold their
+model calls, and modify their model requests. Pi-agents has no dependency on
+any consumer extension. With no registrations, agent behavior stays
+unchanged.
+
+The hooks carry data and wait; they don't decide anything. Policy, such as
+when to hold calls, why, and how users override it, stays in your extension.
 
 ## Register hooks
 
@@ -125,6 +129,58 @@ them idempotent and avoid mutating payloads retained by other code.
 These hooks do not run for the parent, classifier/image calls, router-internal
 calls, or deferred polling. Custom providers must honor Pi's `onPayload`
 contract. Request purpose is not exposed.
+
+## Hold requests
+
+`beforeAgentRequest(ctx)` runs before each generation request and compaction
+summary of an agent, before credentials resolve and the request is built. The
+call waits until the callback returns or its promise settles. For example,
+hold agents' calls during peak pricing:
+
+```ts
+discovery.register({
+  namespace: "peak-pricing",
+  beforeAgentRequest: async ({ model, signal }) => {
+    while (isPeak(model.provider, Date.now())) await sleep(60_000, signal);
+  },
+});
+```
+
+The context contains:
+
+| Field | Meaning |
+| --- | --- |
+| `sessionId` | Owning Pi session |
+| `agent.id`, `agent.name` | Committed agent identity |
+| `model.provider`, `model.api`, `model.id` | The agent's model; routing may still dispatch to another |
+| `operation` | `generation` or `compaction` |
+| `state` | Your namespace's detached, deeply frozen JSON, or `undefined` |
+| `signal` | The agent's abort signal, when available |
+
+Holding isn't stopping. A held agent stays working: it receives messages,
+and tools it already called finish. Only the held call waits.
+
+Pi-agents keeps nothing about holds: no reasons, schedules, timers, manual
+overrides, or status. Your extension owns them, for example with a command
+that toggles a hold and a status entry that shows why agents wait.
+
+- **Cancellation.** Stopping or interrupting the agent, stopping its graph,
+  and shutting down end the wait, even if the callback ignores the signal.
+  Honor the signal so your own code stops too.
+- **Errors.** A throw neither holds nor fails the call: pi-agents reports the
+  error with your namespace, and the call proceeds. To fail closed, catch
+  errors in the callback and keep waiting.
+- **Order.** Callbacks run in lexicographic namespace order, each after the
+  previous one returned, so a call proceeds once none holds it.
+- **Repeats.** The callback runs again for retries and for calls that resume
+  after a restart. A compaction that a restart resumes mid-summary passes
+  without it, and so does deferred polling.
+- **Working-agent cap.** Callbacks run before an agent takes a slot. A run
+  held at its first call takes none, but an agent held later in its run
+  keeps its slot, so other agents may wait behind it.
+
+Like the other hooks, it doesn't run for the parent or for classifier and
+image calls.
 
 ## Optional consumers
 

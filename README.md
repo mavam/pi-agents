@@ -122,9 +122,9 @@ kept apart from Pi's session file, and lends agents your Pi logins and models:
 ```
 
 Because agents run on pi-durable, Pi's extension events never see their model
-requests. Other extensions can opt in through two customization points
-instead: they capture state when an agent is created, and adapt each of its
-model requests to the provider it actually uses. For example,
+requests. Other extensions can opt in through customization points
+instead: they capture state when an agent is created, hold its model calls,
+and adapt each of its requests to the provider it actually uses. For example,
 [pi-service-tier](https://github.com/mavam/pi-service-tier) passes your
 `/fast` setting on to new agents. Without such extensions, nothing changes.
 
@@ -140,5 +140,6 @@ and results stay durable across crashes and restarts, and
 - [Agent profiles](docs/profiles.md): reusable settings and instructions.
 - [Configuration](docs/configuration.md): models, requests, and footer counts.
 - [Architecture](docs/architecture.md): durable tasks, recovery, and storage.
-- [Extension hooks](docs/hooks.md): capturing state for agents and adapting
-  their model requests from other extensions.
+- [Extension hooks](docs/hooks.md): capturing state for agents, holding
+  their model calls, and adapting their model requests from other
+  extensions.

@@ -41,6 +41,21 @@ export interface AgentRequestContext {
   readonly signal?: AbortSignal;
 }
 
+export interface AgentBeforeRequestContext {
+  /** Owning Pi session. */
+  readonly sessionId: string;
+  readonly agent: { readonly id: string; readonly name: string };
+  /** The agent's model; routing may still dispatch to another. */
+  readonly model: {
+    readonly provider: string;
+    readonly api: string;
+    readonly id: string;
+  };
+  readonly operation: "generation" | "compaction";
+  readonly state: ReadonlyAgentExtensionValue | undefined;
+  readonly signal?: AbortSignal;
+}
+
 export interface AgentHooks {
   /** Stable extension-owned namespace. Also keys its persisted state. */
   readonly namespace: string;
@@ -55,6 +70,12 @@ export interface AgentHooks {
     ctx: AgentRequestContext,
     payload: unknown,
   ) => unknown | Promise<unknown>;
+  /** Before each generation request and compaction summary, before
+   * credentials resolve. The call waits until this returns or settles.
+   * A throw is reported and doesn't stop the call. */
+  readonly beforeAgentRequest?: (
+    ctx: AgentBeforeRequestContext,
+  ) => void | Promise<void>;
 }
 
 /** Respond synchronously from a listener registered during extension loading. */

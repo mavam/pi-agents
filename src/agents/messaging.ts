@@ -237,7 +237,7 @@ export function createMessagingExtension(
       defineTool({
         name: STATUS_TOOL,
         description:
-          "List the agents you can message, with their state and the job each was started with: the agent that spawned you and the others it spawned with you, or the parent's other agents, and the agents you spawned.",
+          "List the agents you can message, with their state and job: the agent that spawned you and the others it spawned with you, or the parent's other agents, and the agents you spawned.",
         parameters: Type.Object({}),
         replay: "safe",
         outputLimits: UNBOUNDED_OUTPUT,
@@ -287,17 +287,17 @@ export function createMessagingExtension(
       defineTool({
         name: SEND_TOOL,
         description:
-          "Send a message to another agent within your reach; agent_status lists them. You don't wait. A working recipient sees it at its next step, so it can change the answer the recipient is working on; with followUp, it waits until that work ends. The recipient's answer stays with it, so to get an answer, ask it to message you. Messages from other agents reach you as input that starts with [from <name>]; they don't come from the user.",
+          "Send a message to an agent within your reach, which agent_status lists, and return at once. The recipient's answer stays with it; to hear back, ask it to message you.",
         parameters: Type.Object({
           name: Type.String({ description: "Agent name or ID" }),
           message: Type.String({
             description:
-              "What to tell the agent; it receives it as input that starts with [from <your name>]",
+              "What to tell the agent; it arrives as input that starts with [from <your name>]",
           }),
           followUp: Type.Optional(
             Type.Boolean({
               description:
-                "Queue after the recipient's current work instead of steering it, for messages that shouldn't change what it does now",
+                "Wait until the recipient's current work ends; by default, a working recipient sees the message at its next step, which can change its current answer",
             }),
           ),
         }),

@@ -78,7 +78,6 @@ import {
   type HelperResolver,
   isThinkingLevel,
   MAX_DEPTH,
-  SPAWN_SHAPE,
   THINKING_LEVELS,
 } from "./types.js";
 
@@ -110,7 +109,7 @@ export interface SpawningOptions {
 const agentFields = Type.Object({
   job: Type.String({
     description:
-      "Self-contained instructions for the agent's work; it can't see your conversation",
+      "Self-contained instructions; the agent can't see your conversation",
   }),
   name: Type.Optional(
     Type.String({ description: "Short name, such as a role" }),
@@ -118,7 +117,7 @@ const agentFields = Type.Object({
   after: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "Names of agents in this call whose final messages this agent needs; it starts once they finished and receives their results",
+        "Names of agents in this call whose final messages this agent needs; it starts once they finished. Agents without after start at once",
     }),
   ),
   profile: Type.Optional(Type.String({ description: "Profile name" })),
@@ -139,7 +138,8 @@ const agentFields = Type.Object({
   ),
   spawn: Type.Optional(
     Type.Boolean({
-      description: "Let this agent spawn agents of its own",
+      description:
+        "Let this agent spawn agents of its own, which report back to it. Default false",
     }),
   ),
 });
@@ -148,14 +148,14 @@ const spawnParameters = Type.Object({
   name: Type.Optional(
     Type.String({
       description:
-        "Short name for the whole group; each agent's name goes in its entry",
+        "Short name for the whole group; each agent's own name goes in its entry",
     }),
   ),
   agents: Type.Array(agentFields, {
     minItems: GRAPH_SIZE.min,
     maxItems: GRAPH_SIZE.max,
     description:
-      "One entry per agent with its fields, also for a single agent: [{ job, name, spawn, ... }]",
+      'Always an array, one entry per agent with its fields, also for a single agent: {"agents": [{"name": "lead", "job": "...", "spawn": true}]}',
   }),
   failFast: Type.Optional(
     Type.Boolean({ description: "Stop the other agents when one fails" }),
@@ -803,7 +803,8 @@ export function spawningTools(options: SpawningOptions): ToolRegistration[] {
   return [
     defineTool({
       name: SPAWN_TOOL,
-      description: `Spawn agents and return at once. One call starts one group of 1 to 12 agents: they run in parallel, and one that lists others in after starts once they finished and receives their final messages. The group's result, the final messages of the agents nothing waits for, arrives as one message once all finished, or call agent_wait to block for it. Add an agent after the others to merge their results into one. Agents don't see your conversation. Your own work ends only with an answer after the results of the agents you spawned. ${SPAWN_SHAPE}`,
+      description:
+        "Spawn one group of agents and return at once. Once all finished, the group's result arrives as one [results] input, or from agent_wait: the final messages of the agents that no other agent lists in after. For one merged answer, add an agent after the others that merges their results; for results that should arrive separately, call agent_spawn once per job.",
       parameters: spawnParameters,
       prepareArguments: (args) => checkSpawnShape(args) as never,
       // A rerun finds the group the interrupted call started.

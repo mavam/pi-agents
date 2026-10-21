@@ -218,8 +218,9 @@ export interface GraphInfo {
 /** How many agents one spawn starts. */
 export const GRAPH_SIZE = { min: 1, max: 12 } as const;
 
-/** How `agent_spawn` takes its agents, for its descriptions and errors. */
-export const SPAWN_SHAPE =
+/** How `agent_spawn` takes its agents, in full for its error; the
+ * schema shows it more briefly. */
+const SPAWN_SHAPE =
   'Arguments are always an agents array, also for a single agent: {"agents": [{"name": "lead", "job": "...", "spawn": true}]}. Each agent\'s fields, such as job, name, model, after, and spawn, go in its own entry; only the group\'s name and failFast sit beside agents.';
 
 /** The arguments of `agent_spawn` beside `agents`. */

@@ -25,7 +25,6 @@ import {
   checkSpawnShape,
   GRAPH_SIZE,
   type GraphInfo,
-  SPAWN_SHAPE,
   type Target,
   type TargetRef,
   THINKING_LEVELS,
@@ -382,7 +381,7 @@ async function waitWithProgress(
 const agentFields = {
   job: Type.String({
     description:
-      "Self-contained instructions for the agent's work; it can't see this conversation",
+      "Self-contained instructions; the agent can't see this conversation",
   }),
   name: Type.Optional(
     Type.String({ description: "Short name, such as a role" }),
@@ -409,7 +408,7 @@ const agentFields = {
   spawn: Type.Optional(
     Type.Boolean({
       description:
-        "Let this agent spawn agents of its own, which report back to it",
+        "Let this agent spawn agents of its own, which report back to it. Default false",
     }),
   ),
 };
@@ -425,7 +424,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     name: Type.Optional(
       Type.String({
         description:
-          "Short name for the whole group, when it has several agents; each agent's name goes in its entry",
+          "Short name for the whole group, when it has several agents; each agent's own name goes in its entry",
       }),
     ),
     agents: Type.Array(
@@ -434,7 +433,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         after: Type.Optional(
           Type.Array(Type.String(), {
             description:
-              "Names of agents in this call whose final messages this agent needs; it starts once they finished and receives their results",
+              "Names of agents in this call whose final messages this agent needs; it starts once they finished. Agents without after start at once",
           }),
         ),
       }),
@@ -442,7 +441,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         minItems: GRAPH_SIZE.min,
         maxItems: GRAPH_SIZE.max,
         description:
-          "One entry per agent with its fields, also for a single agent: [{ job, name, spawn, ... }]",
+          'Always an array, one entry per agent with its fields, also for a single agent: {"agents": [{"name": "lead", "job": "...", "spawn": true}]}',
       },
     ),
     failFast: Type.Optional(
@@ -454,7 +453,8 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_spawn",
-      description: `Start agents and return at once. One call starts one group of 1 to 12 agents, whose result arrives on its own as one message that starts a new turn. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The result holds the final messages of the agents nothing waits for, so to get one merged answer, add an agent after the others that merges their results. A group of one agent reports its answer. For independent jobs whose results should arrive separately, call agent_spawn once per job. ${SPAWN_SHAPE}`,
+      description:
+        "Start one group of agents and return at once. Once all finished, the group's result arrives as one message that starts a new turn: the final messages of the agents that no other agent lists in after. For one merged answer, add an agent after the others that merges their results; for results that should arrive separately, call agent_spawn once per job.",
       parameters: spawnParams,
       prepare: checkSpawnShape,
       output: GraphOutput,
@@ -497,7 +497,8 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     }),
     followUp: Type.Optional(
       Type.Boolean({
-        description: "Queue after the current answer instead of steering",
+        description:
+          "Wait until the agent's current work ends; by default, a working agent receives the message as steering",
       }),
     ),
   });
@@ -505,7 +506,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
     defineAgentTool(host, {
       name: "agent_send",
       description:
-        "Send a message to an agent, also one that answered or was stopped, and return at once. A working agent receives it as steering. The answer arrives on its own as a message.",
+        "Send a message to an agent, also one that answered or was stopped, and return at once. Its answer arrives on its own as a message.",
       parameters: sendParams,
       output: AgentOutput,
       async execute(service, params) {
@@ -548,7 +549,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
       name: "agent_wait",
       exposure: "model-only",
       description:
-        "Block the current turn until agents or graphs answer, or a message from the user interrupts, and return their results. Call directly, not from codemode. Results arrive as messages without it; the system prompt says when to wait.",
+        "Block the current turn until agents or graphs answer, or a message from the user interrupts, and return their results, which then don't arrive as messages. Call directly, not from codemode.",
       parameters: waitParams,
       output: WaitOutput,
       execute: (service, params, _ctx, signal, onUpdate) =>
@@ -574,8 +575,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_status",
-      description:
-        "List agents and graphs with their state and job. Returns at once; don't call it repeatedly to watch for results, which arrive as messages.",
+      description: "List agents and graphs with their state and job.",
       parameters: statusParams,
       output: StatusOutput,
       async execute(service, params) {

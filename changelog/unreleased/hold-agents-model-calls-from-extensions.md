@@ -3,7 +3,9 @@ title: Hold agents' model calls from extensions
 type: feature
 authors:
   - mavam
-created: 2026-10-21T07:44:20.493737Z
+prs:
+  - 112
+created: 2026-10-21T07:57:47.117413Z
 ---
 
 Co-loaded extensions can now hold agents' model calls, for example during peak pricing, with an optional `beforeAgentRequest` hook:

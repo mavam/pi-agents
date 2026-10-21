@@ -6,7 +6,7 @@
  * one frontend place that reads pi-durable view types.
  *
  * Tool calls draw with Pi's renderers for Pi's tools and with
- * `agentToolViews` for the agents' own tools, such as `delegate_graph` and
+ * `agentToolViews` for the agents' own tools, such as `agent_spawn` and
  * `agent_send`.
  *
  * Messages, received and sent, show as the same cards as in Pi's
@@ -65,7 +65,9 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { DELEGATE_TOOL } from "../agents/delegation.js";
+import { RESULTS_ENTRY, RESULTS_PREFIX } from "../agents/obligations.js";
 import type { AgentService } from "../agents/service.js";
+import { WAIT_TOOL } from "../agents/spawning.js";
 import {
   type AgentInfo,
   parseMessageInput,
@@ -149,15 +151,24 @@ export function withoutUserPrefix(text: string): string {
     : text;
 }
 
+/** The results of agents the agent spawned, without their marker; else
+ * nothing. */
+function resultsText(text: string): string | undefined {
+  return text.startsWith(RESULTS_PREFIX)
+    ? text.slice(RESULTS_PREFIX.length)
+    : undefined;
+}
+
 /** Queued texts of an inbox that Esc returns to the editor, steering
- * first like Pi restores them; messages from other agents stay theirs. */
+ * first like Pi restores them; messages from other agents and results stay
+ * theirs. */
 export function queuedTexts(inbox: InboxState): string[] {
   const steer: string[] = [];
   const followUp: string[] = [];
   for (const item of inbox.items) {
     if (item.mode === "write") continue;
     const raw = userText(item.content as UserMessage["content"]);
-    if (parseMessageInput(raw)) continue;
+    if (parseMessageInput(raw) || resultsText(raw) !== undefined) continue;
     (item.mode === "steer" ? steer : followUp).push(withoutUserPrefix(raw));
   }
   return [...steer, ...followUp];
@@ -190,6 +201,9 @@ function queuedLines(
           style,
         ),
       ];
+    const results = resultsText(raw);
+    if (results !== undefined)
+      return [color("dim", `Results: ${firstLine(results)}`)];
     const mode = item.mode === "steer" ? "Steer" : "Follow-up";
     return [color("dim", `${mode}: ${firstLine(withoutUserPrefix(raw))}`)];
   });
@@ -307,6 +321,17 @@ class ChatView {
       this.transcript.addChild(
         messageCard(
           { from: input.from, to: this.name(), text: input.text },
+          () => this.expanded,
+          this.theme,
+        ),
+      );
+    } else if (entry.kind === RESULTS_ENTRY && message?.role === "user") {
+      // The results of agents it spawned, as a message to it.
+      const text = userText(message.content);
+      this.transcript.addChild(new Spacer(1));
+      this.transcript.addChild(
+        messageCard(
+          { from: "results", to: this.name(), text: resultsText(text) ?? text },
           () => this.expanded,
           this.theme,
         ),
@@ -454,9 +479,12 @@ function statusText(live: LiveState): string {
     return compaction.retry
       ? `Retrying ${compaction.reason} compaction (attempt ${compaction.attempt + 1})...`
       : `Compacting (${compaction.reason})...`;
-  // The agent waits for its helpers; Pi places messages only after that.
+  // The agent waits for agents it spawned; Pi places messages only after
+  // that. Esc ends a wait, but stops the agents of earlier builds' tool.
+  if (runningTool?.name === WAIT_TOOL)
+    return "Waiting for agents; messages wait until they finish (esc stops waiting)";
   if (runningTool?.name === DELEGATE_TOOL)
-    return "Waiting for helpers; messages wait until they finish (esc stops them)";
+    return "Waiting for agents; messages wait until they finish (esc stops them)";
   if (runningTool !== undefined)
     return `Running ${runningTool.name}... (esc to interrupt)`;
   if (live.run !== undefined) return "Working... (esc to interrupt)";

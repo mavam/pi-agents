@@ -1,5 +1,7 @@
 /**
- * Delegation: an agent with `delegate` gets the tool `delegate_graph`, which
+ * Delegation of earlier builds, which `agent_spawn` replaced (see
+ * `spawning.ts`): agents that delegated before keep `delegate_graph` for
+ * calls that still run, but no longer see it. The tool
  * starts a graph of helper agents, waits for it, and returns its result. The
  * tool call owns the graph task, so the graph is part of the agent's run:
  *
@@ -87,7 +89,7 @@ export const DELEGATION_LIMITS: DelegationLimits = {
   active: 16,
 };
 
-const HELPER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+export const HELPER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
 
 const parameters = Type.Object({
   name: Type.Optional(
@@ -133,6 +135,21 @@ const parameters = Type.Object({
 });
 
 type Args = Static<typeof parameters>;
+
+/** What planning reads of a call's arguments. */
+export interface PlanArgs {
+  agents: ReadonlyArray<{
+    job: string;
+    name?: string;
+    after?: string[];
+    profile?: string;
+    model?: string;
+    thinking?: string;
+    tools?: string[];
+    skills?: string[];
+    spawn?: boolean;
+  }>;
+}
 type Api = ToolExecutionApi;
 
 export interface DelegationOptions {
@@ -147,7 +164,7 @@ export interface DelegationOptions {
   pause?: (agentId: string) => () => void;
 }
 
-function textResult(
+export function textResult(
   text: string,
   isError = false,
   graph?: GraphReceipt,
@@ -161,7 +178,7 @@ function textResult(
   };
 }
 
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -193,34 +210,34 @@ function startedBy(
   )?.[0];
 }
 
-interface Planned {
+export interface Planned {
   name: string;
   spec: SpawnSpec;
   tools: ToolRegistration[];
 }
 
 /** Resolve and check every helper before anything starts. */
-async function plan(
-  args: Args,
-  options: DelegationOptions,
+export async function plan(
+  args: PlanArgs,
+  options: Pick<DelegationOptions, "resolve" | "limits">,
   defaults: HelperDefaults,
   own: readonly ToolRegistration[],
   callable: readonly ToolRegistration[],
 ): Promise<{ helpers: Planned[]; inputs: number[][] }> {
   if (args.agents.length > options.limits.perCall)
     throw new AgentError(
-      `One call starts at most ${options.limits.perCall} helpers, not ${args.agents.length}`,
+      `One call starts at most ${options.limits.perCall} agents, not ${args.agents.length}`,
     );
   const names = args.agents.map((agent, index) => {
     const name = agent.name?.trim() || `${index + 1}`;
     if (!HELPER_NAME.test(name))
       throw new AgentError(
-        `Invalid helper name "${name}": use letters, digits, '_', or '-' (at most 32 characters)`,
+        `Invalid agent name "${name}": use letters, digits, '_', or '-' (at most 32 characters)`,
       );
     return name;
   });
   if (new Set(names).size !== names.length)
-    throw new AgentError("Helper names must differ within one call");
+    throw new AgentError("Agent names must differ within one call");
   const inputs = resolveEdges(
     names.map((name, index) => ({
       name,
@@ -233,7 +250,7 @@ async function plan(
   for (const [index, agent] of args.agents.entries()) {
     const name = names[index] as string;
     if (!agent.job.trim())
-      throw new AgentError(`The job of helper ${name} must not be empty`);
+      throw new AgentError(`The job of agent ${name} must not be empty`);
     const spec = await options.resolve(
       {
         job: agent.job,
@@ -242,6 +259,7 @@ async function plan(
         ...(agent.thinking ? { thinking: agent.thinking } : {}),
         ...(agent.tools ? { tools: agent.tools } : {}),
         ...(agent.skills ? { skills: agent.skills } : {}),
+        ...(agent.spawn !== undefined ? { spawn: agent.spawn } : {}),
       },
       defaults,
     );
@@ -254,7 +272,7 @@ async function plan(
     );
     if (missing.length > 0)
       throw new AgentError(
-        `Helper ${name} asks for tools you don't have: ${missing.join(", ")}. Your tools: ${own.map((tool) => tool.name).join(", ") || "none"}`,
+        `Agent ${name} asks for tools you don't have: ${missing.join(", ")}. Your tools: ${own.map((tool) => tool.name).join(", ") || "none"}`,
       );
     // With codemode, helpers get the internal tools of its models.* that
     // their agent's scripts can call.
@@ -270,18 +288,20 @@ async function plan(
 }
 
 /** `<agent>.<part>`, shortening the agent's name to fit a generated name. */
-function qualify(agent: string, part: string): string {
+export function qualify(agent: string, part: string): string {
   return `${agent.slice(0, Math.max(1, NAME_BASE_LENGTH - 1 - part.length))}.${part}`;
 }
 
 /** Helpers working right now: their nodes aren't terminal. */
-async function activeHelpers(
+export async function activeHelpers(
   tx: Parameters<Parameters<Api["commit"]>[0]>[0],
   graphs: Record<string, GraphRecord>,
 ): Promise<number> {
   let count = 0;
+  // Closed graphs count too: a graph closes when its result is
+  // delivered, which can be before its agents' jobs ended.
   for (const graph of Object.values(graphs)) {
-    if (!graph.owner || graph.closed) continue;
+    if (!graph.owner || graph.cancelled) continue;
     for (const node of graph.nodes) {
       const task = await tx.task(node.task as TaskId);
       if (task && task.state.status !== "terminal") count += 1;
@@ -407,7 +427,7 @@ async function start(
 }
 
 /** One helper's outcome for the report, from stored records only. */
-async function reportNode(
+export async function reportNode(
   api: Api,
   context: Context,
   name: string,
@@ -459,7 +479,7 @@ function helperName(name: string, owner: string | undefined): string {
  * The helpers as the agent's receipt shows them: who they are and who waits
  * for whom, and with `nodes`, how each did its job, from stored records.
  */
-async function helpersReceipt(
+export async function helpersReceipt(
   api: Api,
   context: Context,
   graph: GraphRecord,
@@ -507,7 +527,7 @@ async function helpersReceipt(
 
 /** Names of a graph's agents by conversation ID: helpers' without their
  * agent's, which itself keeps its own. */
-function helperNames(
+export function helperNames(
   graph: GraphRecord,
   agents: Readonly<Record<string, AgentRecord>> | undefined,
 ): (agent: string) => string {
@@ -519,7 +539,7 @@ function helperNames(
 }
 
 /** What the call started, for its progress. */
-async function startedReceipt(
+export async function startedReceipt(
   api: Api,
   context: Context,
   graphId: string,
@@ -658,12 +678,19 @@ async function execute(
   return textResult(text, false, helpers);
 }
 
+/**
+ * The extension that agents that may spawn select: the spawning tools, and
+ * `delegate_graph`, which agents of earlier builds still run but are no
+ * longer offered.
+ */
 export function createDelegationExtension(
   options: DelegationOptions,
+  spawning: readonly ToolRegistration[] = [],
 ): Extension {
   return defineExtension({
     name: DELEGATION_EXTENSION,
     tools: [
+      ...spawning,
       defineTool({
         name: DELEGATE_TOOL,
         description:

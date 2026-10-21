@@ -35,8 +35,9 @@ export function takenNames(
   const taken = new Set(extra);
   for (const record of Object.values(agents?.agents ?? {}))
     if (!record.closed) taken.add(record.name);
+  // A graph of one agent goes by its agent's name.
   for (const record of Object.values(graphs?.graphs ?? {}))
-    if (!record.closed) taken.add(record.name);
+    if (!record.closed && !record.single) taken.add(record.name);
   return taken;
 }
 

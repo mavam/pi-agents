@@ -43,7 +43,7 @@ function textOf(content: unknown): string {
 }
 
 /**
- * `send <json>` calls agent_send, `delegate <json>` delegate_graph, a
+ * `send <json>` calls agent_send, `spawn <json>` agent_spawn, a
  * message answers `got: <text>`, a tool
  * result `tool: <text>`, prompts and messages with `hold` wait until
  * aborted, and prompts with `briefly` work briefly.
@@ -68,9 +68,9 @@ function scripted() {
       return fauxAssistantMessage([fauxToolCall("agent_status", {})], {
         stopReason: "toolUse",
       });
-    if (text.startsWith("delegate "))
+    if (text.startsWith("spawn "))
       return fauxAssistantMessage(
-        [fauxToolCall("delegate_graph", JSON.parse(text.slice(9)))],
+        [fauxToolCall("agent_spawn", JSON.parse(text.slice(6)))],
         { stopReason: "toolUse" },
       );
     if (text.startsWith("send "))
@@ -304,23 +304,35 @@ describe("messaging", () => {
     expect(answers.some((answer) => answer.startsWith("b: tool:"))).toBe(true);
   });
 
-  test("helpers neither send nor receive messages", async () => {
+  test("spawned agents reach their spawner, not unrelated agents", async () => {
     const service = await open();
     await service.spawn(spec("b", "idle"));
     await until(() => service.get("b")?.state === "idle");
+    const send = (name: string) =>
+      `send ${JSON.stringify({ name, message: "hi" })}`;
+    const agents = [
+      { name: "h", job: send("lead") },
+      { name: "k", job: send("b") },
+    ];
     await service.spawn({
-      ...spec(
-        "lead",
-        `delegate ${JSON.stringify({ agents: [{ name: "h", job: SEND }] })}`,
-      ),
-      delegate: true,
+      ...spec("lead", `spawn ${JSON.stringify({ agents })}`),
+      spawn: true,
     });
-    await until(() => service.get("lead")?.state === "idle");
-    const toHelper = JSON.stringify({ name: "lead.h", message: "hi" });
-    await service.spawn(spec("a", `send ${toHelper}`));
+    await until(() => service.get("lead.k")?.result !== undefined);
+    await until(() => service.get("lead.h")?.result !== undefined);
+    expect(service.get("lead.h")?.result?.text).toBe("tool: Sent to lead.");
+    expect(service.get("lead.k")?.result?.text).toBe(
+      "tool: No agent named b within your reach.",
+    );
+    await service.spawn(spec("a", send("lead.h")));
     await until(() => service.get("a")?.state === "idle");
-    expect(service.get("a")?.result?.text).toBe("tool: No agent named lead.h.");
-    expect(service.messages()).toEqual([]);
+    expect(service.get("a")?.result?.text).toBe(
+      "tool: No agent named lead.h within your reach.",
+    );
+    await until(() => service.messages()[0]?.status === "delivered");
+    expect(service.messages()).toMatchObject([
+      { from: { name: "lead.h" }, to: { name: "lead" }, text: "hi" },
+    ]);
     expect(await transcript(service, "b")).not.toContain("[from lead");
   });
 

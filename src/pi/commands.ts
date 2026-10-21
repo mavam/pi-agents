@@ -120,7 +120,7 @@ function graphRow(
   const name = boldName(graph.name, nameWidth - indent.length, bold);
   return [
     `${color("dim", indent)}${statusIcon(graph, color)} ${name}`,
-    color("dim", pad(graph.owner ? "helpers" : "graph", 10)),
+    color("dim", pad(graph.owner ? "group" : "graph", 10)),
     color("dim", pad(`${graph.nodes.length} agents`, 14)),
     color("dim", pad(formatElapsed(runtime(graph, now)), 7)),
     rowTail(usage, graph.queued, color),
@@ -158,7 +158,8 @@ export function graphDetail(
   color: Colorize,
   bold: Bold = (text) => text,
 ): DetailLine[] {
-  // Helpers repeat their agent's name, which the divider above shows.
+  // Spawned agents repeat their spawner's name, which the divider above
+  // shows.
   const owner = graph.owner ? lookup(graph.owner)?.name : undefined;
   const names = new Map(
     graph.nodes.map((node) => [node.agentId, shortName(node.name, owner)]),

@@ -4,8 +4,8 @@
  * An agent takes a slot at its first model request and keeps it, tool calls
  * included, until its run and its compactions end, so the server's cache
  * stays warm. A follow-up run queues again. Agents over the cap wait in
- * order of arrival. An agent that waits for its helpers gives its slot up
- * meanwhile, so the helpers can work.
+ * order of arrival. An agent that waits for the agents it spawned gives its
+ * slot up meanwhile, so they can work.
  *
  * Slots are taken in the hooks before generation requests and before
  * compactions summarize. A compaction that a restart resumes mid-summary
@@ -51,7 +51,8 @@ export class WorkingAgents {
   private readonly holders = new Set<string>();
   /** Agents in order of arrival, with every request that waits for each. */
   private readonly waiting = new Map<string, Set<() => void>>();
-  /** Agents waiting for their helpers, with how many waits each has. */
+  /** Agents waiting for agents they spawned, with how many waits each
+   * has. */
   private readonly paused = new Map<string, number>();
   private readonly live = new Map<string, Live>();
 
@@ -84,7 +85,7 @@ export class WorkingAgents {
   }
 
   /**
-   * Give up the agent's slot while it waits for its helpers, until the
+   * Give up the agent's slot while it waits for agents it spawned, until the
    * returned function is called: once its compactions end, and without
    * taking it back meanwhile. Its next request queues again.
    */

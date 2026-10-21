@@ -120,7 +120,7 @@ describe("tool results", () => {
     };
     // What a call started.
     expect(
-      draw("agent_spawn_graph", {
+      draw("agent_spawn", {
         at: 5_000,
         started: true,
         graphs: [graph],

@@ -75,7 +75,7 @@ export class Waits implements Holds {
   }
 
   /** Resolve true once `ready` holds after a refresh, false on abort or close. */
-  private until(ready: () => boolean, signal?: AbortSignal): Promise<boolean> {
+  until(ready: () => boolean, signal?: AbortSignal): Promise<boolean> {
     return new Promise((resolve) => {
       const done = (value: boolean) => {
         this.checks.delete(check);

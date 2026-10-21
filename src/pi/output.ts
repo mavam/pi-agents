@@ -33,6 +33,9 @@ const resultFields = {
 
 export const AgentOutput = exact({
   kind: Type.Literal("agent"),
+  id: Type.String({
+    description: "Its ID, which addresses it whatever its name",
+  }),
   name: Type.String(),
   state: StringEnum(AGENT_STATES),
   graph: Type.Optional(Type.String({ description: "The graph it belongs to" })),
@@ -42,6 +45,7 @@ export const AgentOutput = exact({
 export type AgentOutput = Static<typeof AgentOutput>;
 
 const NodeOutput = exact({
+  id: Type.String({ description: "The agent's ID" }),
   name: Type.String(),
   after: Type.Array(Type.String(), {
     description: "Agents of the graph it depends on",
@@ -55,11 +59,28 @@ const NodeOutput = exact({
   ...resultFields,
 });
 
+/** How a finished graph did, by the agents nothing waits for. */
+export const GRAPH_OUTCOMES = [
+  "succeeded",
+  "partial",
+  "failed",
+  "stopped",
+] as const;
+
 export const GraphOutput = exact({
   kind: Type.Literal("graph"),
+  id: Type.String({
+    description: "Its ID, which addresses it whatever its name",
+  }),
   name: Type.String(),
   state: StringEnum(AGENT_STATES),
   stopped: Type.Boolean(),
+  outcome: Type.Optional(
+    StringEnum(GRAPH_OUTCOMES, {
+      description:
+        "Once it finished: whether all, some, or none of the agents nothing waits for answered, or it was stopped",
+    }),
+  ),
   agents: Type.Array(NodeOutput),
 });
 
@@ -108,6 +129,7 @@ export function agentOutput(
   const { result, error } = turnResult(info);
   return {
     kind: "agent",
+    id: info.id,
     name: info.name,
     state: info.state,
     ...(graph ? { graph } : {}),
@@ -128,14 +150,18 @@ export function graphOutput(
   lookup: (agentId: string) => AgentInfo | undefined,
 ): GraphOutput {
   const names = new Map(graph.nodes.map((node) => [node.agentId, node.name]));
+  const outcome = graphOutcome(graph);
   return {
     kind: "graph",
+    id: graph.id,
     name: graph.name,
     state: graph.state,
     stopped: graph.stopped,
+    ...(outcome ? { outcome } : {}),
     agents: graph.nodes.map((node) => {
       const details = nodeDetails(node, lookup(node.agentId), names);
       return {
+        id: node.agentId,
         name: details.name,
         after: details.inputs,
         end: details.end,
@@ -148,6 +174,28 @@ export function graphOutput(
       };
     }),
   };
+}
+
+/** A finished graph's outcome; undefined while it works. */
+export function graphOutcome(
+  graph: GraphInfo,
+): (typeof GRAPH_OUTCOMES)[number] | undefined {
+  if (graph.state === "working") return undefined;
+  if (graph.stopped) return "stopped";
+  const ends = graph.nodes.filter((node) => node.end);
+  const answered = ends.filter(
+    (node) =>
+      node.outcome?.kind === "answered" &&
+      node.outcome.result.stopReason !== "error",
+  ).length;
+  if (answered === ends.length) return "succeeded";
+  return answered > 0 ? "partial" : "failed";
+}
+
+/** The name of an agent's graph for scripts; a graph of one agent goes
+ * by the agent's name, so it names none. */
+export function graphName(graph: GraphInfo | undefined): string | undefined {
+  return graph && !graph.single ? graph.name : undefined;
 }
 
 /** Looks up what outputs refer to. */
@@ -171,7 +219,7 @@ export function statusOutput(
 ): StatusOutput {
   return {
     agents: agents.map((info) =>
-      agentOutput(info, (id) => lookup.graph(id)?.name),
+      agentOutput(info, (id) => graphName(lookup.graph(id))),
     ),
     graphs: graphs.map((graph) => graphOutput(graph, lookup.agent)),
   };

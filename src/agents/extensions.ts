@@ -26,6 +26,7 @@ import {
   createMessagingExtension,
   type MessagingOptions,
 } from "./messaging.js";
+import { SPAWNING_TOOLS, spawningTools } from "./spawning.js";
 import type { HelperResolver } from "./types.js";
 
 export interface AgentExtensions {
@@ -36,10 +37,11 @@ export interface AgentExtensions {
   /** Graph and node tasks; they resolve from the registry, and agents never
    * select them. */
   graphs: Extension;
-  /** `delegate_graph`; only delegating agents select it. */
+  /** `agent_spawn`, `agent_wait`, and `agent_stop`, and the legacy
+   * `delegate_graph`; only agents that may spawn select it. */
   delegation: Extension;
-  /** `agent_send` and `agent_status`; every agent selects it, helpers
-   * don't. */
+  /** `agent_send` and `agent_status`; every agent selects it, except
+   * helpers of earlier builds' delegation. */
   messaging: Extension;
   /** What the messaging tools share with the service. */
   hub: MessagingHub;
@@ -81,17 +83,50 @@ export function createAgentExtensions(
   const tools = hooks.length > 0 ? { ...extension, hooks } : extension;
   const prompt = createPromptExtension(options.prompt);
   const hub = new MessagingHub();
+  const limits = { ...DELEGATION_LIMITS, ...options.delegationLimits };
+  const pause = working
+    ? { pause: (agentId: string) => working.pause(agentId) }
+    : {};
+  const messaging = createMessagingExtension(hub, options.messaging);
+  let delegation: Extension | undefined;
+  const spawning = spawningTools({
+    resolve: options.resolveHelper,
+    limits,
+    hub,
+    ...pause,
+    // What a new agent selects besides its own tools.
+    selection: (spawn) => ({
+      extensions: [
+        tools,
+        prompt,
+        ...(spawn && delegation ? [delegation] : []),
+        messaging,
+      ],
+      tools: [
+        ...(spawn
+          ? (delegation?.tools ?? []).filter((tool) =>
+              (SPAWNING_TOOLS as readonly string[]).includes(tool.name),
+            )
+          : []),
+        ...(messaging.tools ?? []),
+      ],
+    }),
+  });
+  delegation = createDelegationExtension(
+    {
+      resolve: options.resolveHelper,
+      limits,
+      extensions: [tools, prompt],
+      ...pause,
+    },
+    spawning,
+  );
   return {
     tools,
     prompt,
     graphs: createGraphsExtension(),
-    delegation: createDelegationExtension({
-      resolve: options.resolveHelper,
-      limits: { ...DELEGATION_LIMITS, ...options.delegationLimits },
-      extensions: [tools, prompt],
-      ...(working ? { pause: (agentId) => working.pause(agentId) } : {}),
-    }),
-    messaging: createMessagingExtension(hub, options.messaging),
+    delegation,
+    messaging,
     hub,
     ...(working ? { working } : {}),
     close,
@@ -113,10 +148,10 @@ export function installAgentExtensions(
 }
 
 /**
- * What an agent selects: its tools and prompt, delegation when it
- * delegates, and messaging when it may message other agents. Agents stored before they selected explicitly follow the
- * harness's default, which Pi's host sets to the selection of an agent that
- * doesn't delegate.
+ * What an agent selects: its tools and prompt, the spawning tools when it
+ * may spawn, and messaging when it may message other agents. Agents stored
+ * before they selected explicitly follow the harness's default, which Pi's
+ * host sets to the selection of an agent that doesn't spawn.
  */
 export function agentSelection(
   extensions: AgentExtensions,

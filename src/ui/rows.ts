@@ -1,16 +1,17 @@
 /**
  * Rows of the panel and of `/agents`: graphs and standalone agents, each
  * graph followed by its agents in stages, and an agent followed by the
- * helpers it started, drawn as a tree. Graphs and agents with helpers fold;
- * a `Disclosure` remembers what the user folded, shared by both views.
+ * groups it spawned, drawn as a tree; a group of one agent shows as that
+ * agent. Graphs and agents that spawned fold; a `Disclosure` remembers what
+ * the user folded, shared by both views.
  */
 
 import type { AgentInfo, GraphInfo } from "../agents/types.js";
 import { shortName } from "./format.js";
 
 interface Tree {
-  /** The name to show: a helper's without its agent's name, while it
-   * sits below that agent. */
+  /** The name to show: a spawned agent's without its spawner's name,
+   * while it sits below that agent. */
   label: string;
   /** Tree connectors before the line. */
   lead: string;
@@ -89,9 +90,9 @@ export type EntryOrder = (
 
 /**
  * Graphs and the agents outside them in `order`; a graph is followed by its
- * agents in stages, and an agent by the graphs of helpers it started,
- * unless folded. `expand` says whether a graph shows its agents unless the
- * user chose otherwise. An agent whose graph is not among `graphs` stands
+ * agents in stages, and an agent by the groups it spawned, unless folded.
+ * `expand` says whether a graph shows its agents unless the user chose
+ * otherwise. An agent whose graph is not among `graphs` stands
  * alone, and so does a graph whose agent isn't shown.
  */
 export function buildRows(
@@ -108,12 +109,24 @@ export function buildRows(
   const standalone = source.agents.filter(
     (info) => info.graph === undefined || !graphIds.has(info.graph),
   );
+  // Agents shown below their spawner, all the way down: their groups
+  // aren't entries of their own.
   const shown = new Set<string>([
     ...standalone.map((info) => info.id),
     ...source.graphs
       .filter((graph) => !graph.owner)
       .flatMap((graph) => graph.nodes.map((node) => node.agentId)),
   ]);
+  for (let grown = true; grown; ) {
+    grown = false;
+    for (const graph of source.graphs)
+      if (graph.owner && shown.has(graph.owner))
+        for (const node of graph.nodes)
+          if (!shown.has(node.agentId)) {
+            shown.add(node.agentId);
+            grown = true;
+          }
+  }
   const entries: Entry[] = [
     ...source.graphs
       .filter((graph) => !graph.owner || !shown.has(graph.owner))
@@ -121,7 +134,7 @@ export function buildRows(
     ...standalone.map((info) => ({ kind: "agent" as const, info })),
   ].sort((left, right) => order(left.info, right.info));
 
-  /** Agents below a graph, helpers included. */
+  /** Agents below a graph, spawned ones included. */
   const graphBelow = (graph: GraphInfo): number =>
     graph.nodes.reduce((sum, node) => sum + 1 + agentBelow(node.agentId), 0);
   const agentBelow = (agentId: string): number =>
@@ -131,8 +144,9 @@ export function buildRows(
     );
 
   /**
-   * A graph row, then its agents, each followed by its helpers. Helpers drop
-   * their agent's name, and so does their graph below that agent.
+   * A graph row, then its agents, each followed by the groups it spawned.
+   * Spawned agents drop their spawner's name, and so does their group
+   * below that agent. A group of one agent is only that agent's rows.
    */
   const graphRows = (
     graph: GraphInfo,
@@ -144,6 +158,19 @@ export function buildRows(
     const expanded = disclosure.isExpanded(key, expand(graph));
     const owner = graph.owner ? source.agent(graph.owner)?.name : undefined;
     const short = (name: string) => shortName(name, owner);
+    const [only] = graph.nodes;
+    if (graph.single && only) {
+      const agent = source.agent(only.agentId);
+      if (!agent) return [];
+      return agentRows(
+        agent,
+        { nested: false, last: false, inputs: [], others: 0 },
+        parent === `agent:${graph.owner}` ? short(agent.name) : agent.name,
+        lead,
+        indent,
+        parent,
+      );
+    }
     const head: Row = {
       kind: "graph",
       key,
@@ -183,7 +210,7 @@ export function buildRows(
     ];
   };
 
-  /** An agent row, then the graphs of helpers it started. */
+  /** An agent row, then the groups it spawned. */
   const agentRows = (
     agent: AgentInfo,
     place: {
@@ -198,7 +225,7 @@ export function buildRows(
     parent?: string,
   ): Row[] => {
     const key = `agent:${agent.id}`;
-    const helpers = owned.get(agent.id) ?? [];
+    const spawned = owned.get(agent.id) ?? [];
     const expanded = disclosure.isExpanded(key, true);
     const row: Row = {
       kind: "agent",
@@ -214,8 +241,8 @@ export function buildRows(
     if (!expanded) return [row];
     return [
       row,
-      ...helpers.flatMap((graph, index) => {
-        const last = index === helpers.length - 1;
+      ...spawned.flatMap((graph, index) => {
+        const last = index === spawned.length - 1;
         return graphRows(
           graph,
           `${indent}${last ? "└─ " : "├─ "}`,

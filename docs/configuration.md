@@ -19,7 +19,8 @@ and Pi picks them by name: "spawn a Luna agent" runs on your scoped Luna.
 Extensions must opt into [agent hooks](./hooks.md); parent request hooks
 aren't inherited automatically. For example, a compatible pi-service-tier
 version can pass its service tiers and `/fast` overrides to agents.
-Captured settings survive resumes and pass to helpers. Later parent
+Captured settings survive resumes and pass to the agents that agents
+spawn. Later parent
 changes affect future agents only.
 
 ## Working agents
@@ -37,10 +38,10 @@ server. Set the limit in `~/.pi/agent/settings.json` or your project's
 ```
 
 An agent keeps its slot until its work ends, including tool calls, but
-yields it while waiting for helpers. Agents over the cap wait in order and
+yields it while `agent_wait` waits for the agents it spawned. Agents over the cap wait in order and
 show as working. A later message to a finished agent waits for a new slot.
 
-Agents, graphs, and helpers share the cap. Your session's own requests don't
+Agents, graphs, and spawned agents share the cap. Your session's own requests don't
 count toward it. Without the setting, agents aren't capped. Restart Pi after
 changing it.
 
@@ -68,4 +69,4 @@ forever. Changes apply the next time Pi starts.
 
 With [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer), enable the
 `agents` widget through `/fancy-footer` to show counts by state, such as
-`2◉ 1● 3◌`. Counts include closed agents, but not closed helpers.
+`2◉ 1● 3◌`. Counts include closed agents, but not closed spawned agents.

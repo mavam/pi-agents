@@ -177,8 +177,6 @@ export function resultOf(
   };
 }
 
-export const USER_KIND = "pi.user";
-
 /**
  * What a submission settled with, or `interrupted` when its turn was
  * aborted: the request then stays open for a later answer, after `since`,
@@ -216,31 +214,6 @@ export function outcomeOf(
             ? { detail: submission.detail }
             : {}),
         };
-  }
-  return undefined;
-}
-
-/**
- * The answer that settles an interrupted request: the first finished answer
- * after an input from `since` on, so a turn that started before the request
- * entered the conversation never answers it. `entries` ascend from `since`.
- * Interrupting is a correction, not a cancellation; only stopping the agent
- * withdraws the request.
- */
-export function resumedAnswer(
-  entries: Iterable<EntryRecord>,
-  since: number,
-  agentId: string,
-  name: string,
-): AgentResult | undefined {
-  let input = false;
-  for (const entry of entries) {
-    if (entry.kind === USER_KIND && entry.id >= since) input = true;
-    else if (input) {
-      const result = resultOf(entry, agentId, name);
-      if (result?.stopReason === "stop" || result?.stopReason === "length")
-        return result;
-    }
   }
   return undefined;
 }

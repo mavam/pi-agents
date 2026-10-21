@@ -71,7 +71,7 @@ type AgentsStateSnapshot = {
 
 Each `snapshot` replaces the previous state completely. Its entries are
 sorted by ID and include visible agents: open agents and closed agents that
-are working again, including graph nodes and delegated helpers. It does not
+are working again, including graph nodes and spawned agents. It does not
 include prompts, results, tool arguments, or other private conversation data.
 The payload, agent array, and entries are detached, frozen objects.
 

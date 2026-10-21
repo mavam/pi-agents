@@ -12,8 +12,8 @@ Ask Pi to delegate: [see the example prompts](../README.md#-usage).
 | Job | The instructions an agent starts with. They must stand on their own, because the agent doesn't see your conversation. |
 | Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done. |
 | Result | The agent's final message after its job or a message. |
-| Graph | Agents that work together: some in parallel, some after others, receiving their results. Pi gets one message at the end. |
-| Helper | An agent that another agent started for part of its job. Its result goes to that agent, not to Pi. |
+| Graph | The agents one spawn starts: some in parallel, some after others, receiving their results. Pi gets one message at the end. A graph of one agent shows as that agent. |
+| Spawned agent | An agent that another agent started for part of its job. Its result goes to that agent, not to Pi. |
 | Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
 | Attach | Open an agent's conversation to watch it and talk to it. |
 | Stop | End an agent or graph and remove it from the panel. Agents end on their own once their answer reaches Pi. Messaging an agent that ended starts it again. |
@@ -49,8 +49,8 @@ from other extensions.
 `read` supports images. Codemode scripts can call the agent's other tools
 and use [`models`](https://pi.dev/docs/latest/codemode#models) to list models,
 run classifiers, and generate images. These calls count toward the agent's
-usage. Agents start helpers only when you let them
-[delegate](./graphs.md#agents-that-delegate).
+usage. Agents start agents of their own only when you let them
+[spawn](./graphs.md#agents-that-spawn-agents).
 
 ## Skills
 
@@ -104,8 +104,8 @@ A line above the editor shows how many agents are in each state:
 
 Press ← in an empty editor, Ctrl+Q, or click the line to focus the panel.
 It shows open agents and graphs, with their states, elapsed time, usage,
-and progress. Graphs and helpers appear as trees; `after` names an agent's
-dependencies:
+and progress. Graphs and spawned agents appear as trees; `after` names an
+agent's dependencies:
 
 ```text
 ◉ reviewer explorer terra 1m32s 15.5k Using grep
@@ -129,7 +129,7 @@ In the focused panel:
 | Key | Action |
 | --- | --- |
 | ↑ ↓ | Select an agent or graph. |
-| Space | Fold or unfold a graph, or an agent's helpers. On a row inside one, fold what it sits in. |
+| Space | Fold or unfold a graph, or the agents an agent spawned. On a row inside one, fold what it sits in. |
 | ⏎ | Attach to the agent, or to a graph's first agent. |
 | Click | Attach like ⏎; a message attaches to its recipient. Needs Pi's fullscreen mode, its default. |
 | Tab | Open `/agents` at the same row. Tab cycles the panel, `/agents`, and `/messages`; Shift+Tab goes back. |
@@ -141,7 +141,7 @@ sends your input to it:
 
 | Key | Action |
 | --- | --- |
-| ⏎ | Prompt an idle agent or steer a working one. |
+| ⏎ | Prompt an idle agent or steer a working one. An agent that waits for the agents its job needs takes input once it starts. |
 | Alt+⏎ | Queue a follow-up after the current answer. |
 | Esc | Interrupt a working agent; queued messages return to the editor. Go back from an idle one when the editor is empty. |
 | Ctrl+O | Expand or collapse tool output. |
@@ -153,9 +153,9 @@ Messages you send while attached stay between you and the agent. Their
 results don't post into the parent conversation, with one exception: when
 you interrupt an agent while it works on a job or message from Pi and then
 steer it to finish, its next answer goes to Pi, since Pi still expects one.
-Stop the agent instead if Pi should get nothing. A graph's agent is
-different: interrupting it ends its part in the graph, which goes on
-without it.
+Stop the agent instead if Pi should get nothing. The same holds for a
+graph's agent, whose job in the graph stays open until it answers again,
+and for an agent's own agents, which keep working after an interrupt.
 
 Open `/agents` to attach to finished or stopped agents, including agents
 from completed graphs. Their conversations remain available after you
@@ -179,17 +179,17 @@ Pi uses these tools to work with agents:
 
 | Tool | Purpose |
 | --- | --- |
-| `agent_spawn` | Start an agent on a job, optionally letting it delegate. |
-| `agent_spawn_graph` | Start a graph of agents. |
+| `agent_spawn` | Start one graph of 1 to 12 agents, optionally letting them spawn agents of their own. |
 | `agent_send` | Message an agent: prompt, steer, or queue a follow-up. |
 | `agent_wait` | Block until agents or graphs answer and return their results. |
 | `agent_status` | Show agent and graph states. |
 | `agent_stop` | Stop an agent or a graph. |
 
-`agent_spawn`, `agent_spawn_graph`, and `agent_send` return at once.
-Results arrive as messages that start Pi's next turn. A graph groups its
-results into one message. Pi receives complete results and error messages
-without a size limit.
+`agent_spawn` and `agent_send` return at once. Results arrive as messages
+that start Pi's next turn, one per spawn. Pi receives complete results and
+error messages without a size limit. Agents that may spawn get
+`agent_spawn`, `agent_wait`, and `agent_stop` for their own agents, besides
+`agent_send` and `agent_status`.
 
 Only `agent_wait` blocks, up to its `timeout` in seconds. Use it when a
 turn must combine results, or in a single-shot run such as `pi --print`,
@@ -198,19 +198,26 @@ don't also post as messages. Cancelling a wait or sending Pi a message ends
 the wait, not the agents' work.
 
 With [codemode](https://pi.dev/docs/latest/codemode), scripts get the
-results as data instead of text: an agent's `name`, `state`, and `result`
-or `error`, a graph's `state` and how each of its agents ended its job,
-and the names a wait leaves `pending`. A script that waits blocks Pi like
+results as data instead of text: an agent's `id`, `name`, `state`, and
+`result` or `error`, a graph's `id`, `state`, its `outcome` once it
+finished (`succeeded`, `partial`, `failed`, or `stopped`), and how each of
+its agents ended its job, and the names a wait leaves `pending`. A wait for
+an agent whose graph of one hasn't reported yet returns the graph. A script that waits blocks Pi like
 a direct wait, so it pays off when the script combines the results in code
 before Pi reads anything:
 
 ```js
 const names = ["api", "tests", "docs"];
 await Promise.all(
-  names.map((name) => tools.agent_spawn({ name, job: `Review the ${name}.` })),
+  names.map((name) =>
+    tools.agent_spawn({ agents: [{ name, job: `Review the ${name}.` }] }),
+  ),
 );
-const { agents, pending } = await tools.agent_wait({ names, timeout: 600 });
-return { failed: agents.filter((a) => a.state === "failed"), pending };
+const { graphs, pending } = await tools.agent_wait({ names, timeout: 600 });
+return {
+  failed: graphs.filter((g) => g.outcome !== "succeeded").map((g) => g.name),
+  pending,
+};
 ```
 
 Names in `pending` keep working, and their results arrive as messages.

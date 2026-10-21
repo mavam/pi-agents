@@ -15,9 +15,9 @@
  *   └─ ○ merge after all opus
  *
  * Names are in the normal color and details dim, separated by single
- * spaces. ↑↓ select, space folds a graph or an agent's helpers, ⏎ attaches
- * (a graph: its first agent), `s` stops, Tab opens `/agents` at the
- * selected row, and Esc returns to the editor.
+ * spaces. ↑↓ select, space folds a graph or the agents an agent spawned,
+ * ⏎ attaches (a graph: its first agent), `s` stops, Tab opens `/agents` at
+ * the selected row, and Esc returns to the editor.
  *
  * It also shows messages still queued for their
  * recipients, in a column to the right of the agents from 120 terminal

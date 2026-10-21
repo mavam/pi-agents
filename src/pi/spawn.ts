@@ -40,7 +40,7 @@ export interface SpawnRequest {
   tools?: string[];
   skills?: string[];
   cwd?: string;
-  delegate?: boolean;
+  spawn?: boolean;
 }
 
 /** What a spawn draws on besides its request. */
@@ -227,12 +227,12 @@ export async function resolveSpawn(
     trusted,
     sources.skills,
   );
-  const delegate = request.delegate ?? profile?.delegate;
+  const spawn = request.spawn ?? profile?.spawn;
   return {
     job: request.job,
     cwd,
     ambientSkills,
-    ...(delegate ? { delegate: true } : {}),
+    ...(spawn ? { spawn: true } : {}),
     ...(request.name ? { name: request.name } : {}),
     ...(profile ? { profile: profile.name } : {}),
     ...(model ? { model } : {}),
@@ -243,9 +243,10 @@ export async function resolveSpawn(
 }
 
 /**
- * A helper's settings: resolved like the parent's spawns, with its agent's
- * working directory, model, and thinking level as defaults. Helpers never
- * delegate.
+ * The settings of an agent that an agent spawns: resolved like the
+ * parent's spawns, with the spawning agent's working directory, model, and
+ * thinking level as defaults. Whether it may spawn comes from the request
+ * or its profile; the spawning tool checks the depth.
  */
 export async function resolveHelper(
   request: HelperRequest,
@@ -253,9 +254,10 @@ export async function resolveHelper(
   defaults: HelperDefaults,
   skills: SkillSource,
 ): Promise<SpawnSpec> {
-  const { delegate: _, ...spec } = await resolveSpawn(
+  return resolveSpawn(
     {
       job: request.job,
+      ...(request.spawn !== undefined ? { spawn: request.spawn } : {}),
       ...(request.profile ? { profile: request.profile } : {}),
       ...(request.model ? { model: request.model } : {}),
       ...(request.thinking ? { thinking: request.thinking } : {}),
@@ -270,5 +272,4 @@ export async function resolveHelper(
       ...(defaults.model ? { model: defaults.model } : {}),
     },
   );
-  return spec;
 }

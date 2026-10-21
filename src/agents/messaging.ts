@@ -14,7 +14,10 @@
  * recipient admits once. When the service starts, it submits logged
  * messages that a crash left without a submission.
  *
- * Helpers stay private: they can't send, and nobody can message them.
+ * Agents reach the agent that spawned them, the others it spawned with
+ * them, and the agents they spawned; the parent's agents reach each other.
+ * Helpers of earlier builds' delegation stay private: they can't send, and
+ * nobody can message them.
  */
 
 import type { Context } from "@earendil-works/chord";
@@ -27,10 +30,13 @@ import {
   defineTool,
   type Extension,
   type InputSubmissionDraft,
+  type TaskId,
   type ToolExecutionApi,
   type ToolExecutionResult,
+  type Tx,
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
+import { nodeRequestId } from "./graphs.js";
 import type { MessagingHub } from "./hub.js";
 import { type AgentReceipt, receipt, stateOutcome } from "./receipts.js";
 import {
@@ -38,6 +44,8 @@ import {
   AgentsDoc,
   GraphsDoc,
   type GraphsState,
+  isLegacyHelperGroup,
+  isSpawned,
   MESSAGE_MEMORY,
   type MessageRecord,
   MessagesDoc,
@@ -95,44 +103,105 @@ function isHelper(
   record: AgentRecord,
   graphs: Readonly<GraphsState> | undefined,
 ): boolean {
-  return !!record.graph && !!graphs?.graphs[record.graph]?.owner;
+  return isLegacyHelperGroup(
+    record.graph ? graphs?.graphs[record.graph] : undefined,
+  );
 }
 
-/** The agent a name addresses: an open one, else the newest. */
+/**
+ * Whom an agent can reach: the agent that spawned it and the others it
+ * spawned with it, or, for the parent's agents, each other; and the agents
+ * it spawned itself. Helpers of earlier builds reach nobody, and nobody
+ * reaches them.
+ */
+function scopeOf(
+  agents: Readonly<Record<string, AgentRecord>>,
+  graphs: Readonly<GraphsState> | undefined,
+  self: string,
+): Set<string> {
+  const scope = new Set<string>();
+  const record = agents[self];
+  if (!record || isHelper(record, graphs)) return scope;
+  const group = record.graph ? graphs?.graphs[record.graph] : undefined;
+  if (group && isSpawned(group)) {
+    scope.add(group.owner.agent);
+    for (const node of group.nodes) scope.add(node.agent);
+  } else
+    for (const [id, other] of Object.entries(agents)) {
+      const graph = other.graph ? graphs?.graphs[other.graph] : undefined;
+      if (!graph?.owner) scope.add(id);
+    }
+  for (const graph of Object.values(graphs?.graphs ?? {}))
+    if (isSpawned(graph) && graph.owner.agent === self)
+      for (const node of graph.nodes) scope.add(node.agent);
+  scope.delete(self);
+  return scope;
+}
+
+/** The agent a name addresses within reach: an open one, else the
+ * newest. */
 function resolve(
   agents: Readonly<Record<string, AgentRecord>>,
   graphs: Readonly<GraphsState> | undefined,
+  self: string,
   name: string,
 ): [string, AgentRecord] | undefined {
+  const scope = scopeOf(agents, graphs, self);
   const named = Object.entries(agents)
-    .filter(([, record]) => record.name === name && !isHelper(record, graphs))
+    .filter(([id, record]) => record.name === name && scope.has(id))
     .sort(([, left], [, right]) => left.createdAt - right.createdAt);
   return named.find(([, record]) => !record.closed) ?? named.at(-1);
 }
 
-/** Whom other agents can message: what each name addresses, unless it's
- * the sender or stopped, open agents first, then the newest. An older agent
+/** Whom an agent can message: what each name within reach addresses,
+ * unless it's stopped, open agents first, then the newest. An older agent
  * whose name a newer one took isn't listed, since sending can't reach it. */
 function reachable(
   agents: Readonly<Record<string, AgentRecord>>,
   graphs: Readonly<GraphsState> | undefined,
   self: string,
 ): Array<[string, AgentRecord]> {
+  const scope = scopeOf(agents, graphs, self);
   const names = new Set(
-    Object.values(agents)
-      .filter((record) => !isHelper(record, graphs))
-      .map((record) => record.name),
+    [...scope].flatMap((id) => {
+      const name = agents[id]?.name;
+      return name === undefined ? [] : [name];
+    }),
   );
   return [...names]
     .flatMap((name) => {
-      const target = resolve(agents, graphs, name);
-      return target && target[0] !== self && !target[1].stopped ? [target] : [];
+      const target = resolve(agents, graphs, self, name);
+      return target && !target[1].stopped ? [target] : [];
     })
     .sort(
       ([, left], [, right]) =>
         Number(left.closed) - Number(right.closed) ||
         right.createdAt - left.createdAt,
     );
+}
+
+/**
+ * Whether the agent's job hasn't reached it yet: its graph still waits for
+ * the agents the job needs. A message then would start it without its job.
+ * Inside a commit.
+ */
+export async function awaitsJob(
+  tx: Pick<Tx, "doc" | "task" | "submissionByRequest">,
+  agentId: string,
+  record: AgentRecord,
+): Promise<boolean> {
+  if (record.graph === undefined) return false;
+  const graph = (await tx.doc(GraphsDoc)).graphs[record.graph];
+  const node = graph?.nodes.find((each) => each.agent === agentId);
+  if (!node) return false;
+  const task = await tx.task(node.task as TaskId);
+  if (!task || task.state.status === "terminal") return false;
+  return (
+    (await tx.submissionByRequest(
+      Number(agentId) as ConversationId,
+      nodeRequestId(node.task),
+    )) === undefined
+  );
 }
 
 /** The first run of a send: check it and bind its recipient. */
@@ -152,8 +221,8 @@ async function bind(
   const sender = agents[from];
   if (!sender || isHelper(sender, graphs))
     return `${SEND_TOOL} is not available to you.`;
-  const target = resolve(agents, graphs, args.name);
-  if (!target) return `No agent named ${args.name}.`;
+  const target = resolve(agents, graphs, from, args.name);
+  if (!target) return `No agent named ${args.name} within your reach.`;
   const [to, recipient] = target;
   if (to === from) return "You can't message yourself.";
   return api.memo<Binding>(
@@ -182,7 +251,7 @@ export function createMessagingExtension(
       defineTool({
         name: STATUS_TOOL,
         description:
-          "List the other agents of this session you can message, with their state and the job each was started with.",
+          "List the agents you can message, with their state and the job each was started with: the agent that spawned you and the others it spawned with you, or the parent's other agents, and the agents you spawned.",
         parameters: Type.Object({}),
         replay: "safe",
         outputLimits: UNBOUNDED_OUTPUT,
@@ -232,7 +301,7 @@ export function createMessagingExtension(
       defineTool({
         name: SEND_TOOL,
         description:
-          "Send a message to another agent of this session; agent_status lists them. You don't wait. A working recipient sees it at its next step, so it can change the answer the recipient is working on; with followUp, it waits until that work ends. The recipient's answer stays with it, so to get an answer, ask it to message you. Messages from other agents reach you as input that starts with [from <name>]; they don't come from the user.",
+          "Send a message to another agent within your reach; agent_status lists them. You don't wait. A working recipient sees it at its next step, so it can change the answer the recipient is working on; with followUp, it waits until that work ends. The recipient's answer stays with it, so to get an answer, ask it to message you. Messages from other agents reach you as input that starts with [from <name>]; they don't come from the user.",
         parameters: Type.Object({
           name: Type.String({ description: "Agent name" }),
           message: Type.String({
@@ -264,6 +333,7 @@ export function createMessagingExtension(
               const recipient = (await tx.doc(AgentsDoc)).agents[bound.to];
               if (!recipient) return "missing";
               if (recipient.stopped) return "stopped";
+              if (await awaitsJob(tx, bound.to, recipient)) return "blocked";
               log.messages.push({
                 id: bound.id,
                 from: bound.from,
@@ -300,6 +370,11 @@ export function createMessagingExtension(
           if (outcome === "stopped")
             return textResult(
               `${bound.recipient} was stopped and doesn't take messages from agents.`,
+              true,
+            );
+          if (outcome === "blocked")
+            return textResult(
+              `${bound.recipient} waits for the agents its job needs and hasn't started; message it once it works.`,
               true,
             );
           return textResult(`Sent to ${bound.recipient}.`);

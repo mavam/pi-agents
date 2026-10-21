@@ -217,3 +217,34 @@ describe("failure result messages", () => {
     );
   });
 });
+
+describe("graph result messages", () => {
+  test("a group of one agent reads as that agent's answer", () => {
+    const details = graphResultDetails(
+      { id: "graph", name: "scout", policy: "allSettled", single: true },
+      [
+        {
+          agentId: "1",
+          name: "scout",
+          inputs: [],
+          end: true,
+          outcome: {
+            kind: "answered",
+            result: {
+              agentId: "1",
+              name: "scout",
+              entryId: 1,
+              text: "Found it.",
+              stopReason: "stop",
+            },
+          },
+        },
+      ],
+      () => undefined,
+    );
+    expect(graphContent(details)).toBe("scout answered:\n\nFound it.");
+    expect(draw(GRAPH_RESULT_MESSAGE, details).split("\n")[1]?.trim()).toBe(
+      "● scout answered",
+    );
+  });
+});

@@ -8,21 +8,32 @@
  *      └─ node task × n
  *         └─ agent conversation
  *
- * A node waits for the nodes whose results it needs, then sends its agent
- * its job with those results appended. Aborting the graph aborts its nodes
- * and their agents bottom-up, and `failFast` reaches the agents of sibling
- * nodes. Once a node finished, its agent keeps working normally when
- * messaged.
+ * Groups that agents spawn have the same shape, owned in the background by
+ * the spawning agent's conversation instead of the anchor.
  *
- * Versioning: both definitions are at version 1. A change to a task's input
- * or checkpoint shape bumps `version` and adds `migrate(input, checkpoint,
- * fromVersion)`, which pi-durable applies to live tasks when it next reserves
- * them; it must keep the checkpoints' task IDs. Terminal tasks are stored
- * results and never migrate. A task whose definition is missing stays
- * blocked, not lost; stopping its graph then settles it as `orphaned`.
+ * A node waits for the nodes whose results it needs, then sends its agent
+ * its job with those results appended. Its job ends with the first final
+ * answer that follows the results of the groups the agent spawned meanwhile
+ * (see `obligations.ts`); an interrupted agent keeps its job until it
+ * answers, unless it is stopped. Aborting the graph aborts its nodes and
+ * their agents bottom-up, and `failFast` reaches the agents of sibling
+ * nodes; a node that ends without its answer withdraws the groups its agent
+ * spawned, which the service then stops. Once a node finished, its agent
+ * keeps working normally when messaged.
+ *
+ * Versioning: the graph task is at version 1, the node task at version 2,
+ * which added the `settle` and `fail` phases; version 1's checkpoints are
+ * valid version 2 checkpoints. A change to a task's input or checkpoint
+ * shape bumps `version` and extends `migrate(input, checkpoint,
+ * fromVersion)`, which pi-durable applies to live tasks when it next
+ * reserves them; it must keep the checkpoints' task IDs. Terminal tasks are
+ * stored results and never migrate. A task whose definition is missing
+ * stays blocked, not lost; stopping its graph then settles it as
+ * `orphaned`.
  */
 
 import type { Context, JsonValue } from "@earendil-works/chord";
+import { withAbortSignal } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   type ConversationId,
@@ -30,11 +41,24 @@ import {
   defineTask,
   type EntryRecord,
   type Extension,
+  LiveDoc,
   type TaskId,
   type TaskOutcome,
   type TaskRuntime,
 } from "@earendil-works/pi-durable";
-import { AgentsDoc, GraphsDoc } from "./records.js";
+import {
+  coveringAnswer,
+  covers,
+  isFinalAnswer,
+  obligationsOf,
+  scanStart,
+} from "./obligations.js";
+import {
+  AgentsDoc,
+  GraphsDoc,
+  type GraphsState,
+  isSpawned,
+} from "./records.js";
 import type { GraphPolicy } from "./types.js";
 
 export const GRAPHS_EXTENSION = "pi-agents-graphs";
@@ -54,7 +78,13 @@ export type NodeInput = { message: string };
 type NodeState =
   | { phase: "wait" }
   /** `inputs`: node task IDs whose results the agent receives. */
-  | { phase: "run"; inputs: number[] };
+  | { phase: "run"; inputs: number[] }
+  /** The agent got its job at entry `since` but hasn't settled it: it was
+   * interrupted, or answered before results of its groups arrived. */
+  | { phase: "settle"; agent: number; since: number }
+  /** The agent's job failed, at entry `before` if it has one; the groups
+   * it spawned before stop first. */
+  | { phase: "fail"; agent: number; reason: string; before?: number };
 
 export type GraphInput = { policy: GraphPolicy };
 type GraphState = { phase: "join" } | { phase: "report"; nodes: number[] };
@@ -169,6 +199,99 @@ async function composeMessage(
   return `${job}\n\n## Results of other agents\n\n${sections.join("\n\n")}`;
 }
 
+/** The agent's conversation: the one its node owns. */
+async function agentOf(
+  runtime: Runtime,
+  context: Context,
+  node: number,
+): Promise<number | undefined> {
+  return read(runtime, context, async (tx) => {
+    const page = await tx.scanConversations({ ownerTaskId: node as TaskId }, 1);
+    const id = page.items[0]?.id;
+    return id === undefined ? undefined : Number(id);
+  });
+}
+
+/** Mark the agent's spawned groups that haven't ended cancelled, those
+ * spawned before entry `before` if given: their results no longer count,
+ * and the service stops them. Inside a commit. */
+async function cancelGroups(
+  tx: ReadTx,
+  agent: number,
+  before?: number,
+): Promise<number[]> {
+  const graphs: GraphsState = await tx.doc(GraphsDoc);
+  const live: number[] = [];
+  for (const [id, graph] of Object.entries(graphs.graphs)) {
+    if (!isSpawned(graph) || graph.owner.agent !== String(agent)) continue;
+    if (graph.cancelled || graph.presented !== undefined) continue;
+    if (before !== undefined && (graph.owner.since ?? 0) >= before) continue;
+    const task = await tx.task(Number(id) as TaskId);
+    if (task?.state.status === "terminal") continue;
+    graph.cancelled = true;
+    live.push(Number(id));
+  }
+  return live;
+}
+
+/** The agent's entries from `from` on, oldest first. */
+async function entriesFrom(
+  runtime: Runtime,
+  context: Context,
+  agent: number,
+  from: number,
+): Promise<EntryRecord[]> {
+  const entries: EntryRecord[] = [];
+  let cursor: Parameters<ReadTx["scanEntries"]>[2];
+  for (;;) {
+    const page = await read(runtime, context, (tx) =>
+      tx.scanEntries(
+        {
+          conversationId: agent as ConversationId,
+          minEntryId: from as EntryRecord["id"],
+          order: "ascending",
+        },
+        128,
+        cursor,
+      ),
+    );
+    entries.push(...page.items);
+    if (page.next === undefined) return entries;
+    cursor = page.next;
+  }
+}
+
+/** Resolve on the next change to what decides a settling node, or after a
+ * while, whichever comes first. */
+async function nextChange(
+  runtime: Runtime,
+  context: Context,
+  watches: ReadonlyArray<{ start: (listener: () => Promise<void>) => void }>,
+): Promise<void> {
+  const timer = new AbortController();
+  const signal = AbortSignal.any([runtime.signal, timer.signal]);
+  try {
+    await new Promise<void>((resolve) => {
+      const done = () => resolve();
+      for (const watch of watches) watch.start(async () => done());
+      signal.addEventListener("abort", done, { once: true });
+      void runtime
+        .sleep(
+          runtime.now() + SETTLE_RECHECK_MS,
+          withAbortSignal(signal, context),
+        )
+        .then(done, done);
+    });
+  } finally {
+    // Whatever woke it, the sleep and the listener end with it.
+    timer.abort();
+  }
+  runtime.signal.throwIfAborted();
+}
+
+/** How often a settling node checks again without a change it saw. */
+const SETTLE_RECHECK_MS = 5_000;
+
 /**
  * One agent of a graph. It waits for the nodes it needs, then sends its
  * agent its job with their results appended, using a request ID derived
@@ -177,8 +300,13 @@ async function composeMessage(
  */
 export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
   name: NODE_TASK,
-  version: 1,
+  version: 2,
   initial: () => ({ phase: "wait" }),
+  // Version 1 had the `wait` and `run` phases only, with the same shapes.
+  migrate: (input, checkpoint) => ({
+    input: input as NodeInput,
+    checkpoint: checkpoint as NodeState,
+  }),
   phases: {
     wait: async (task, runtime, context) => {
       try {
@@ -227,18 +355,12 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
           );
           return;
         }
-        const id = await read(runtime, context, async (tx) => {
-          const page = await tx.scanConversations(
-            { ownerTaskId: task.id as TaskId },
-            1,
-          );
-          return page.items[0]?.id;
-        });
+        const agent = await agentOf(runtime, context, task.id);
         const conversation =
-          id === undefined
+          agent === undefined
             ? undefined
-            : await runtime.conversation(id as ConversationId, context);
-        if (!conversation) {
+            : await runtime.conversation(agent as ConversationId, context);
+        if (agent === undefined || !conversation) {
           await runtime.commit(
             () => ({
               status: "terminal",
@@ -251,6 +373,27 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
           );
           return;
         }
+        // The stop fence: a stopped agent never gets its job. A stop that
+        // lands while the job is submitted aborts it after the stop is
+        // recorded, so checking again afterwards closes the gap.
+        const stopped = async () =>
+          (await runtime.snapshot(AgentsDoc, context))?.agents[String(agent)]
+            ?.stopped === true;
+        const interrupted = () =>
+          runtime.commit(
+            () => ({
+              status: "terminal",
+              outcome: {
+                status: "completed",
+                result: { kind: "interrupted" },
+              },
+            }),
+            context,
+          );
+        if (await stopped()) {
+          await interrupted();
+          return;
+        }
         const submission = await conversation.submit(
           {
             type: "input",
@@ -260,12 +403,27 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
           },
           context,
         );
+        if (await stopped()) {
+          await conversation.abort(context);
+          await interrupted();
+          return;
+        }
         const settled = await submission.wait(context);
         await runtime.commit(async (tx) => {
-          const failed = (reason: string) =>
+          const failed = (reason: string, before?: number) =>
             ({
-              status: "terminal",
-              outcome: { status: "failed", error: { message: reason } },
+              status: "running",
+              checkpoint: {
+                phase: "fail",
+                agent,
+                reason,
+                ...(before !== undefined ? { before } : {}),
+              },
+            }) as const;
+          const settle = (since: number) =>
+            ({
+              status: "running",
+              checkpoint: { phase: "settle", agent, since },
             }) as const;
           const completed = (result: NodeResult) =>
             ({
@@ -277,28 +435,152 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
             const entry = await tx.entry(settled.answer);
             const answer = entry?.model?.[0] as AssistantMessage | undefined;
             if (answer?.stopReason === "error")
-              return failed(answer.errorMessage ?? "error");
-            if (answer?.stopReason === "aborted")
-              return completed({ kind: "interrupted" });
-            return completed({ kind: "answered", entryId: settled.answer });
+              return failed(answer.errorMessage ?? "error", settled.answer);
+            if (answer?.stopReason === "aborted") return settle(settled.entry);
+            const graphs = (await tx.doc(GraphsDoc)).graphs;
+            // An answer before results it was owed is an intermediate one.
+            return covers(settled.answer, obligationsOf(String(agent), graphs))
+              ? completed({ kind: "answered", entryId: settled.answer })
+              : settle(settled.entry);
           }
           if (settled.status !== "unanswered") return undefined;
-          // A direct interrupt of the agent is not a failure, so `failFast`
-          // keeps its siblings working.
+          // An interrupt corrects the agent rather than ending its job,
+          // so `failFast` keeps its siblings working. A job withdrawn
+          // before the agent saw it ends.
           if (settled.reason === "aborted")
-            return completed({ kind: "interrupted" });
+            return settled.entry === undefined
+              ? completed({ kind: "interrupted" })
+              : settle(settled.entry);
           return failed(textOf(settled.detail) ?? settled.reason);
         }, context);
       } catch (error) {
         rethrowUnlessAborted(runtime.signal, error);
       }
     },
+    settle: async (task, runtime, context) => {
+      const { agent, since } = task.state.checkpoint;
+      const cid = agent as ConversationId;
+      try {
+        for (;;) {
+          const watches = (
+            await Promise.all([
+              runtime.watchDoc(LiveDoc, cid, context),
+              runtime.watchDoc(GraphsDoc, context),
+              runtime.watchDoc(AgentsDoc, context),
+            ])
+          ).filter((watch) => watch !== undefined);
+          try {
+            const [agents, graphs, live] = await Promise.all([
+              runtime.snapshot(AgentsDoc, context),
+              runtime.snapshot(GraphsDoc, context),
+              runtime.snapshot(LiveDoc, cid, context),
+            ]);
+            // Stopping the agent ends its job; nothing it answers counts.
+            if (agents?.agents[String(agent)]?.stopped) {
+              await runtime.commit(
+                () => ({
+                  status: "terminal",
+                  outcome: {
+                    status: "completed",
+                    result: { kind: "interrupted" },
+                  },
+                }),
+                context,
+              );
+              return;
+            }
+            const obligations = obligationsOf(String(agent), graphs?.graphs);
+            const entries = await entriesFrom(
+              runtime,
+              context,
+              agent,
+              scanStart(since, obligations),
+            );
+            const answer = coveringAnswer(entries, since, obligations);
+            if (answer) {
+              await runtime.commit(
+                () => ({
+                  status: "terminal",
+                  outcome: {
+                    status: "completed",
+                    result: { kind: "answered", entryId: answer.id },
+                  },
+                }),
+                context,
+              );
+              return;
+            }
+            // An idle agent whose latest turn failed failed its job.
+            const latest = [...entries]
+              .reverse()
+              .find((entry) => entry.kind === "pi.assistant");
+            const message = latest?.model?.[0] as AssistantMessage | undefined;
+            if (
+              live?.run === undefined &&
+              latest !== undefined &&
+              latest.id > since &&
+              !isFinalAnswer(latest) &&
+              message?.stopReason === "error"
+            ) {
+              await runtime.commit(
+                () => ({
+                  status: "running",
+                  checkpoint: {
+                    phase: "fail",
+                    agent,
+                    reason: message.errorMessage ?? "error",
+                    before: latest.id,
+                  },
+                }),
+                context,
+              );
+              return;
+            }
+            await nextChange(runtime, context, watches);
+          } finally {
+            await Promise.all(watches.map((watch) => watch.stop()));
+          }
+        }
+      } catch (error) {
+        rethrowUnlessAborted(runtime.signal, error);
+      }
+    },
+    fail: async (task, runtime, context) => {
+      const { agent, reason, before } = task.state.checkpoint;
+      try {
+        let live: number[] = [];
+        await runtime.commit(async (tx) => {
+          live = await cancelGroups(tx, agent, before);
+          return undefined;
+        }, context);
+        // The service stops the withdrawn groups; the job fails once they
+        // ended, so nothing they do outlives the failure.
+        for (const group of live)
+          await runtime.waitForTask(group as TaskId, context);
+        await runtime.commit(
+          () => ({
+            status: "terminal",
+            outcome: { status: "failed", error: { message: reason } },
+          }),
+          context,
+        );
+      } catch (error) {
+        rethrowUnlessAborted(runtime.signal, error);
+      }
+    },
   },
-  abort: (_task, runtime, context) =>
-    runtime.commit(
-      () => ({ status: "terminal", outcome: { status: "aborted" } }),
-      context,
-    ),
+  // Stopping the graph withdraws the groups the agent spawned, which the
+  // service then stops: a task can't abort another conversation's tasks.
+  abort: (task, runtime, context) =>
+    runtime.commit(async (tx) => {
+      const page = await tx.scanConversations(
+        { ownerTaskId: task.id as TaskId },
+        1,
+      );
+      const agent = page.items[0]?.id;
+      if (agent !== undefined) await cancelGroups(tx, Number(agent));
+      return { status: "terminal", outcome: { status: "aborted" } };
+    }, context),
 });
 
 /**

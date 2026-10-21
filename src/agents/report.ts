@@ -116,20 +116,23 @@ export function nodesContent(
 
 /**
  * A finished graph's result: the results of the agents nothing waits for. A
- * single one reads as that agent's answer. Agents in between that didn't
+ * single one reads as that agent's answer, without the graph's name for a
+ * graph of one agent. Agents in between that didn't
  * answer are named after it.
  */
 export function graphReport(
   name: string,
   nodes: readonly ReportNode[],
+  options: { single?: boolean } = {},
 ): string {
   const ends = nodes.filter((node) => node.end);
   const [only] = ends;
+  const prefix = options.single ? "" : `Graph ${name}: `;
   const main =
     ends.length === 1 && only
       ? only.kind === "answered"
-        ? `Graph ${name}: ${only.name} answered:\n\n${only.body || "(empty)"}`
-        : `Graph ${name}: ${only.name} ${nodeNote(only)}.`
+        ? `${prefix}${only.name} answered:\n\n${only.body || "(empty)"}`
+        : `${prefix}${only.name} ${nodeNote(only)}.`
       : `Graph ${name} finished: ${nodeCounts(ends)}.\n\n${nodesContent(ends, 2)}`;
   const others = nodes.filter((node) => !node.end && node.kind !== "answered");
   if (others.length === 0) return main;

@@ -42,6 +42,8 @@ describe("attach view", () => {
         { id: 1, mode: "followUp", content: "[user] then tests" },
         { id: 2, mode: "steer", content: "[user] focus on errors" },
         { id: 3, mode: "write", entry: {} },
+        // Results of agents it spawned come again after an interrupt.
+        { id: 4, mode: "followUp", content: "[results] scout answered" },
       ],
     } as never);
     expect(queued).toEqual(["focus on errors", "then tests"]);

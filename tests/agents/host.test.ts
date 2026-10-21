@@ -116,17 +116,19 @@ describe("hosts", () => {
         }),
       ],
     });
-    // The lead delegates one helper, then answers with its result.
+    // The lead spawns one agent, then answers with its result.
     const faux = fauxProvider();
     const models = createModels();
     models.setProvider(faux.provider);
     const step: FauxResponseStep = (context) => {
       if (context.messages.at(-1)?.role === "toolResult")
+        return fauxAssistantMessage([fauxText("checking")]);
+      if (lastUserText(context).startsWith("[results] "))
         return fauxAssistantMessage([fauxText("merged")]);
-      if (lastUserText(context).startsWith("delegate"))
+      if (lastUserText(context).startsWith("spawn"))
         return fauxAssistantMessage(
           [
-            fauxToolCall("delegate_graph", {
+            fauxToolCall("agent_spawn", {
               agents: [{ name: "h", job: "help" }],
             }),
           ],
@@ -161,12 +163,14 @@ describe("hosts", () => {
       name: "g",
       agents: [agent("x", "one"), { ...agent("y", "two"), after: ["x"] }],
     });
-    await service.spawn({ ...agent("lead", "delegate"), delegate: true });
+    await service.spawnGraph({
+      agents: [{ ...agent("lead", "spawn"), spawn: true }],
+    });
     await service.wait(["solo", "g", "lead"]);
     expect(service.get("lead")?.result?.text).toBe("merged");
 
     const ours = [extensions.tools.name, extensions.prompt.name];
-    // Agents can message each other; helpers can't.
+    // Every agent messages; only agents that may spawn select delegation.
     const messaging = [...ours, extensions.messaging.name];
     for (const [name, selected] of [
       ["solo", messaging],
@@ -175,7 +179,7 @@ describe("hosts", () => {
         "lead",
         [...ours, extensions.delegation.name, extensions.messaging.name],
       ],
-      ["lead.h", ours],
+      ["lead.h", messaging],
     ] as const) {
       const id = Number(service.get(name)?.id) as ConversationId;
       const conversation = await harness.conversation(id, CONTEXT);

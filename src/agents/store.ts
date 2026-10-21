@@ -4,25 +4,36 @@
  */
 
 import type {
+  Cursor,
   EntryRecord,
   Harness,
   SubmissionRecord,
+  TaskId,
+  Tx,
 } from "@earendil-works/pi-durable";
 import { CONTEXT, conversationId } from "./context.js";
 import {
   ASSISTANT_KIND,
   GENERATION_KIND,
   outcomeOf,
-  resumedAnswer,
+  resultOf,
   type SubmissionOutcome,
 } from "./derive.js";
-import { messageSubmission } from "./messaging.js";
+import { awaitsJob, messageSubmission } from "./messaging.js";
+import {
+  coveringAnswer,
+  isFinalAnswer,
+  type Obligation,
+  presentedGroups,
+  scanStart,
+} from "./obligations.js";
 import {
   type AgentRecord,
   AgentsDoc,
   DELIVERED_MEMORY,
   type GraphRecord,
   GraphsDoc,
+  isSpawned,
   MessagesDoc,
   type MessagesState,
   type ParentRequest,
@@ -34,6 +45,59 @@ import {
   type GraphNode,
   type RequestOutcome,
 } from "./types.js";
+
+/** The agent's first entry from `from` on that presented the group;
+ * inside a commit. */
+async function findPresentation(
+  tx: Tx,
+  agentId: string,
+  from: number,
+  graphId: string,
+): Promise<number | undefined> {
+  let cursor: Cursor | undefined;
+  for (;;) {
+    const page = await tx.scanEntries(
+      {
+        conversationId: conversationId(agentId),
+        minEntryId: from as EntryRecord["id"],
+        order: "ascending",
+      },
+      128,
+      cursor,
+    );
+    const found = page.items.find((entry) =>
+      presentedGroups(entry).includes(graphId),
+    );
+    if (found) return Number(found.id);
+    if (page.next === undefined) return undefined;
+    cursor = page.next;
+  }
+}
+
+/** Whether the agent's newest answer finished after `entry`; inside a
+ * commit. */
+async function answeredSince(
+  tx: Tx,
+  agentId: string,
+  entry: number,
+): Promise<boolean> {
+  let cursor: Cursor | undefined;
+  for (;;) {
+    const page = await tx.scanEntries(
+      {
+        conversationId: conversationId(agentId),
+        minEntryId: (entry + 1) as EntryRecord["id"],
+        order: "descending",
+      },
+      32,
+      cursor,
+    );
+    const latest = page.items.find((each) => each.kind === ASSISTANT_KIND);
+    if (latest) return isFinalAnswer(latest);
+    if (page.next === undefined) return false;
+    cursor = page.next;
+  }
+}
 
 export class AgentStore {
   private readonly harness: Harness;
@@ -208,14 +272,171 @@ export class AgentStore {
     }, CONTEXT);
   }
 
-  async markStopped(agentId: string): Promise<void> {
+  /**
+   * Stop the agent and every agent below it, through every group it or they
+   * spawned, finished or not, in one commit: the stop fence. The results
+   * they are owed are withdrawn: their groups that didn't reach them are
+   * cancelled, so nothing they spawn afterwards escapes the stop. Returns
+   * the stopped agents, the agent first.
+   */
+  async markStopped(agentId: string): Promise<string[]> {
+    return this.harness.commit(async (tx) => {
+      const agents = (await tx.doc(AgentsDoc)).agents;
+      if (!agents[agentId]) return [];
+      const graphs = (await tx.doc(GraphsDoc)).graphs;
+      const stopped = [agentId];
+      for (let index = 0; index < stopped.length; index++) {
+        const owner = stopped[index] as string;
+        for (const graph of Object.values(graphs)) {
+          if (graph.owner?.agent !== owner) continue;
+          if (
+            isSpawned(graph) &&
+            !graph.cancelled &&
+            graph.presented === undefined
+          )
+            graph.cancelled = true;
+          for (const node of graph.nodes)
+            if (!stopped.includes(node.agent)) stopped.push(node.agent);
+        }
+      }
+      for (const id of stopped) {
+        const record = agents[id];
+        if (!record) continue;
+        record.closed = true;
+        record.stopped = true;
+        record.requests = {};
+      }
+      return stopped;
+    }, CONTEXT);
+  }
+
+  /** Withdraw the results the agent is owed for work that failed at
+   * entry `before`: those of the groups it spawned before. Returns
+   * whether any group was cancelled. */
+  async cancelGroups(agentId: string, before: number): Promise<boolean> {
+    return this.harness.commit(async (tx) => {
+      let any = false;
+      for (const graph of Object.values((await tx.doc(GraphsDoc)).graphs)) {
+        if (!isSpawned(graph) || graph.owner.agent !== agentId) continue;
+        if (graph.cancelled || graph.presented !== undefined) continue;
+        if ((graph.owner.since ?? 0) >= before) continue;
+        graph.cancelled = true;
+        any = true;
+      }
+      return any;
+    }, CONTEXT);
+  }
+
+  /** Whether the agent's graph still waits for the agents its job needs,
+   * so its job hasn't reached it. */
+  async awaitsJob(agentId: string): Promise<boolean> {
+    return this.harness.commit(async (tx) => {
+      const record = (await tx.doc(AgentsDoc)).agents[agentId];
+      return record !== undefined && (await awaitsJob(tx, agentId, record));
+    }, CONTEXT);
+  }
+
+  /** The user interrupted the agent: results it is owed wait until it
+   * answered after its newest entry. */
+  async markInterrupted(agentId: string): Promise<void> {
     await this.harness.commit(async (tx) => {
       const record = (await tx.doc(AgentsDoc)).agents[agentId];
       if (!record) return;
-      record.closed = true;
-      record.stopped = true;
-      record.requests = {};
+      const page = await tx.scanEntries(
+        { conversationId: conversationId(agentId), order: "descending" },
+        1,
+      );
+      record.interrupted = Number(page.items[0]?.id ?? 0);
     }, CONTEXT);
+  }
+
+  /** The owner's entry that presented the group's result. */
+  async markPresented(graphId: string, entry: number): Promise<void> {
+    await this.harness.commit(async (tx) => {
+      const graph = (await tx.doc(GraphsDoc)).graphs[graphId];
+      if (graph && graph.presented === undefined) graph.presented = entry;
+    }, CONTEXT);
+  }
+
+  /**
+   * Reserve the next attempt to hand a group's result to its owner, unless
+   * a live `agent_wait` call holds it. Returns the attempt.
+   */
+  async reserveAttempt(
+    graphId: string,
+    attempt: number,
+  ): Promise<number | undefined> {
+    return this.harness.commit(async (tx) => {
+      const graph = (await tx.doc(GraphsDoc)).graphs[graphId];
+      if (!graph || graph.presented !== undefined || graph.cancelled)
+        return undefined;
+      // The owner as it is now: stopped, or interrupted and not answered
+      // since, it gets nothing.
+      if (isSpawned(graph)) {
+        const owner = (await tx.doc(AgentsDoc)).agents[graph.owner.agent];
+        if (!owner || owner.stopped) return undefined;
+        if (
+          owner.interrupted !== undefined &&
+          !(await answeredSince(tx, graph.owner.agent, owner.interrupted))
+        )
+          return undefined;
+      }
+      if (graph.claim !== undefined) {
+        const holder = await tx.task(graph.claim as TaskId);
+        if (holder && holder.state.status !== "terminal") return undefined;
+        // The call that held the result may have returned it meanwhile;
+        // its result entry commits with its end, so this commit sees it.
+        if (isSpawned(graph)) {
+          const entry = await findPresentation(
+            tx,
+            graph.owner.agent,
+            graph.owner.since ?? 0,
+            graphId,
+          );
+          if (entry !== undefined) {
+            graph.presented = entry;
+            return undefined;
+          }
+        }
+        delete graph.claim;
+      }
+      graph.attempt = attempt;
+      delete graph.withdrawn;
+      return attempt;
+    }, CONTEXT);
+  }
+
+  /** An interrupt withdrew the attempt; `entry` is the owner's newest. */
+  async markWithdrawn(graphId: string, entry: number): Promise<void> {
+    await this.harness.commit(async (tx) => {
+      const graph = (await tx.doc(GraphsDoc)).graphs[graphId];
+      if (graph && graph.withdrawn === undefined) graph.withdrawn = entry;
+    }, CONTEXT);
+  }
+
+  /** The owner's first entry from `from` on that presented the group. */
+  async presentation(
+    agentId: string,
+    from: number,
+    graphId: string,
+  ): Promise<number | undefined> {
+    return this.harness.commit(
+      (tx) => findPresentation(tx, agentId, from, graphId),
+      CONTEXT,
+    );
+  }
+
+  /** The agent's newest entry. */
+  async newestEntry(agentId: string): Promise<number> {
+    const page = await this.harness.commit(
+      (tx) =>
+        tx.scanEntries(
+          { conversationId: conversationId(agentId), order: "descending" },
+          1,
+        ),
+      CONTEXT,
+    );
+    return Number(page.items[0]?.id ?? 0);
   }
 
   async clearStopped(agentId: string): Promise<void> {
@@ -246,6 +467,10 @@ export class AgentStore {
       const state = await tx.doc(AgentsDoc);
       const record = state.agents[agentId];
       if (!record) throw new AgentError(`Agent ${name} is missing`);
+      if (await awaitsJob(tx, agentId, record))
+        throw new AgentError(
+          `${name} waits for the agents its job needs and hasn't started; message it once it works`,
+        );
       record.closed = false;
       delete record.stopped;
       const next = requestId(record.nextRequest);
@@ -366,11 +591,16 @@ export class AgentStore {
       : null;
   }
 
-  /** The answer that settles a request interrupted at `since`, if any. */
-  async resumedAnswer(
+  /**
+   * The answer that settles a request whose input entered at `since` but
+   * that no answer settled yet: it was interrupted, or answered before the
+   * results it was owed.
+   */
+  async coveringAnswer(
     agentId: string,
     name: string,
     since: number,
+    obligations: readonly Obligation[],
   ): Promise<AgentResult | undefined> {
     const conversation = await this.harness.conversation(
       conversationId(agentId),
@@ -381,13 +611,20 @@ export class AgentStore {
     let cursor: Parameters<typeof conversation.entries>[2];
     for (;;) {
       const page = await conversation.entries(
-        { minEntryId: since as EntryRecord["id"], order: "ascending" },
+        {
+          minEntryId: scanStart(since, obligations) as EntryRecord["id"],
+          order: "ascending",
+        },
         64,
         cursor,
         CONTEXT,
       );
       entries.push(...page.items);
-      const found = resumedAnswer(entries, since, agentId, name);
+      const found = resultOf(
+        coveringAnswer(entries, since, obligations),
+        agentId,
+        name,
+      );
       if (found || page.next === undefined) return found;
       cursor = page.next;
     }

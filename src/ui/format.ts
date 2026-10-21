@@ -197,7 +197,7 @@ function activityText(info: AgentInfo, now: number): string | undefined {
   const { activity } = info;
   if (activity.retry) return `retrying: ${activity.retry}`;
   if (activity.delegation)
-    return `delegating ${shortName(activity.delegation.graph, info.name)} ${activity.delegation.done}/${activity.delegation.total}`;
+    return `spawned ${shortName(activity.delegation.graph, info.name)} ${activity.delegation.done}/${activity.delegation.total}`;
   if (activity.compacting) return "compacting";
   if (activity.tool) return `Using ${activity.tool}`;
   return activity.summary;
@@ -243,8 +243,8 @@ export function formatAgentLine(
 }
 
 /**
- * A helper's name without its agent's: `agents-review.derive` reads as
- * `derive` below `agents-review`. Other names stay as they are.
+ * A spawned agent's name without its spawner's: `agents-review.derive`
+ * reads as `derive` below `agents-review`. Other names stay as they are.
  */
 export function shortName(name: string, owner: string | undefined): string {
   return owner !== undefined && name.startsWith(`${owner}.`)

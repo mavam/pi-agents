@@ -1,6 +1,6 @@
 /**
- * The parent model's tools: agent_spawn, agent_spawn_graph, agent_send,
- * agent_wait, agent_status, and agent_stop.
+ * The parent model's tools: agent_spawn, agent_send, agent_wait,
+ * agent_status, and agent_stop.
  */
 
 import { type JsonValue, StringEnum } from "@earendil-works/pi-ai";
@@ -19,12 +19,12 @@ import {
 } from "../agents/receipts.js";
 import { turnResult } from "../agents/report.js";
 import type { AgentService } from "../agents/service.js";
+import { prepareSpawnArguments } from "../agents/spawning.js";
 import {
   AgentError,
   type AgentInfo,
   GRAPH_SIZE,
   type GraphInfo,
-  renameTaskToJob,
   type Target,
   type TargetRef,
   THINKING_LEVELS,
@@ -34,11 +34,17 @@ import { AGENT_TOOL_NAMES } from "../host/tools.js";
 import { graphShape, oneLine } from "../ui/format.js";
 import { PARENT_TOOL_VIEWS, positiveSeconds } from "../ui/tool-views.js";
 import { callKey } from "./calls.js";
-import { graphContent, graphResultDetails, nodeCounts } from "./messages.js";
+import {
+  graphContent,
+  graphResultDetails,
+  isSingle,
+  nodeCounts,
+} from "./messages.js";
 import {
   AgentOutput,
   agentOutput,
   GraphOutput,
+  graphName,
   graphOutput,
   type OutputLookup,
   StatusOutput,
@@ -85,9 +91,8 @@ function lookup(service: AgentService): OutputLookup {
 
 /** An agent as scripts see it now, by ID. */
 function agentNow(service: AgentService, id: string): AgentOutput {
-  return agentOutput(
-    service.agentById(id) as AgentInfo,
-    (graph) => service.graphById(graph)?.name,
+  return agentOutput(service.agentById(id) as AgentInfo, (graph) =>
+    graphName(service.graphById(graph)),
   );
 }
 
@@ -107,26 +112,45 @@ function describeAgent(info: AgentInfo): string {
   return result ? `${head}\n${result}` : head;
 }
 
-/** The model-facing summary of a graph: its result once it finished. */
+/** The model-facing summary of a graph: its result once it finished. A
+ * graph of one agent reads as the agent. */
 function describeGraph(service: AgentService, graph: GraphInfo): string {
   const details = graphResultDetails(graph, graph.nodes, (id) =>
     service.agentById(id),
   );
-  if (graph.stopped) return `Graph ${graph.name} was stopped.`;
+  const single = isSingle(details);
+  const name = single ? (graph.nodes[0]?.name ?? graph.name) : graph.name;
+  const what = single ? name : `Graph ${name}`;
+  if (graph.stopped) return `${what} was stopped.`;
   if (graph.state === "working")
-    return `Graph ${graph.name} is still working: ${nodeCounts(details.nodes)}.`;
+    return single
+      ? `${what} is still working.`
+      : `${what} is still working: ${nodeCounts(details.nodes)}.`;
   return graphContent(details);
 }
 
 function statusLine(service: AgentService, info: AgentInfo): string {
   const delegation = info.activity.delegation;
   const state = delegation
-    ? `${info.state}, waiting for its helpers ${delegation.graph} (${delegation.done}/${delegation.total} done)`
+    ? `${info.state}, spawned ${delegation.graph} (${delegation.done}/${delegation.total} done)`
     : info.activity.tool
       ? `${info.state}, using ${info.activity.tool}`
       : info.state;
   const graph = info.graph ? service.graphById(info.graph) : undefined;
-  return `${info.name} (${state}${graph ? `, in graph ${graph.name}` : ""}): ${oneLine(info.job, 120)}`;
+  const owner = info.owner ? service.agentById(info.owner) : undefined;
+  const where =
+    graph && !graph.single
+      ? `, in graph ${graph.name}`
+      : owner
+        ? `, spawned by ${owner.name}`
+        : "";
+  return `${info.name} (${state}${where}): ${oneLine(info.job, 120)}`;
+}
+
+/** Status lines of graphs; a graph of one agent has its agent's line
+ * only. */
+function graphLines(graphs: readonly GraphInfo[]): string[] {
+  return graphs.filter((graph) => !graph.single).map(graphStatusLine);
 }
 
 function graphStatusLine(graph: GraphInfo): string {
@@ -185,15 +209,28 @@ interface AgentToolSpec<T extends TSchema, O extends TSchema> {
   execute: Execute<T, O>;
 }
 
+/** An agent's `delegate`, the name of `spawn` before agents spawned
+ * asynchronously. */
+function renameDelegate(agent: unknown): unknown {
+  if (typeof agent !== "object" || agent === null) return agent;
+  const { delegate, ...rest } = agent as Record<string, unknown>;
+  return delegate === undefined || "spawn" in rest
+    ? rest
+    : { ...rest, spawn: delegate };
+}
+
 /**
  * Arguments as the tools take them. Models sometimes write `timeout: false`
  * or quote numbers: seconds that aren't a positive number mean none, and
  * numeric strings count. Calls of earlier builds, and models used to them,
- * name a job `task`.
+ * name a job `task`, give a single agent's fields at the top, and say
+ * `delegate` for `spawn`.
  */
 export function prepareArguments(args: unknown): unknown {
   if (typeof args !== "object" || args === null) return args;
-  const prepared = renameTaskToJob(args) as Record<string, unknown>;
+  const prepared = prepareSpawnArguments(args) as Record<string, unknown>;
+  if (Array.isArray(prepared.agents))
+    prepared.agents = prepared.agents.map(renameDelegate);
   for (const key of ["timeout"]) {
     if (!(key in prepared)) continue;
     const parsed = positiveSeconds(prepared[key]);
@@ -280,7 +317,7 @@ async function waitWithProgress(
     onUpdate?.(
       text(
         [
-          ...graphs.map(graphStatusLine),
+          ...graphLines(graphs),
           ...withNodes(service, graphs, agents).map((info) =>
             statusLine(service, info),
           ),
@@ -387,10 +424,10 @@ const agentFields = {
     }),
   ),
   cwd: Type.Optional(Type.String({ description: "Working directory" })),
-  delegate: Type.Optional(
+  spawn: Type.Optional(
     Type.Boolean({
       description:
-        "Let the agent split its job among helper agents it starts and waits for",
+        "Let the agent spawn agents of its own, which report back to it",
     }),
   ),
 };
@@ -402,34 +439,11 @@ function describeTarget(service: AgentService, target: Target): string {
 }
 
 export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
-  const spawnParams = Type.Object({ ...agentFields });
-  pi.registerTool(
-    defineAgentTool(host, {
-      name: "agent_spawn",
-      description:
-        "Start an agent on a job and return at once. Its final message is its result, which arrives on its own as a message that starts a new turn.",
-      parameters: spawnParams,
-      output: AgentOutput,
-      async execute(service, params, ctx) {
-        const spec = await resolveSpawn(params, ctx, {
-          skills: host.skills.get,
-          thinking: pi.getThinkingLevel(),
-          ...inherited(pi),
-        });
-        const info = await service.spawn(spec);
-        // The call line already names what it started.
-        return {
-          content: `Started ${info.name}.`,
-          details: { receipt: receipt() },
-          output: agentNow(service, info.id),
-        };
-      },
-    }),
-  );
-
-  const graphParams = Type.Object({
+  const spawnParams = Type.Object({
     name: Type.Optional(
-      Type.String({ description: "Short name for the graph" }),
+      Type.String({
+        description: "Short name for the group, when it has several agents",
+      }),
     ),
     agents: Type.Array(
       Type.Object({
@@ -437,14 +451,14 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         after: Type.Optional(
           Type.Array(Type.String(), {
             description:
-              "Names of agents in this graph whose final messages this agent needs; it starts once they finished and receives their results",
+              "Names of agents in this call whose final messages this agent needs; it starts once they finished and receives their results",
           }),
         ),
       }),
       {
         minItems: GRAPH_SIZE.min,
         maxItems: GRAPH_SIZE.max,
-        description: "One entry per agent",
+        description: "One entry per agent; one entry for a single agent",
       },
     ),
     failFast: Type.Optional(
@@ -455,10 +469,10 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   });
   pi.registerTool(
     defineAgentTool(host, {
-      name: "agent_spawn_graph",
+      name: "agent_spawn",
       description:
-        "Start agents whose jobs build on each other's results, or whose results you want as one message. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The final messages of the agents nothing waits for come back as one message, so to get one merged answer, add an agent after all the others that merges their results. For independent jobs whose results should arrive separately, call agent_spawn once per job instead. Returns at once; the result arrives on its own as one message.",
-      parameters: graphParams,
+        "Start agents and return at once. One call starts one group of 1 to 12 agents, whose result arrives on its own as one message that starts a new turn. Agents run in parallel; one that lists others in after starts once they finished and receives their final messages. The result holds the final messages of the agents nothing waits for, so to get one merged answer, add an agent after the others that merges their results. A group of one agent reports its answer. For independent jobs whose results should arrive separately, call agent_spawn once per job.",
+      parameters: spawnParams,
       output: GraphOutput,
       async execute(service, params, ctx) {
         const thinking = pi.getThinkingLevel();
@@ -482,7 +496,9 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
           graphs: [startedGraph(graph, lookupAgent(service))],
         });
         return {
-          content: `Started graph ${graph.name}: ${graphShape(graph)}.`,
+          content: graph.single
+            ? `Started ${graph.name}.`
+            : `Started graph ${graph.name}: ${graphShape(graph)}.`,
           details: { receipt: started },
           output: graphNow(service, graph.id),
         };
@@ -595,7 +611,7 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
         const graphs = service.graphs();
         const agents = service.list();
         const lines = [
-          ...graphs.map(graphStatusLine),
+          ...graphLines(graphs),
           ...agents.map((info) => statusLine(service, info)),
         ];
         return {

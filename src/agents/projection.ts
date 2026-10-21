@@ -23,6 +23,7 @@ import {
   sumUsage,
 } from "./derive.js";
 import { type NodeResult, nodeRequestId } from "./graphs.js";
+import { covers, obligationsOf } from "./obligations.js";
 import type { HarnessObserver } from "./observer.js";
 import {
   type AgentRecord,
@@ -32,11 +33,13 @@ import {
   graphDeliveryId,
   requestId,
 } from "./records.js";
+import { SPAWNING_TOOLS, WAIT_TOOL } from "./spawning.js";
 import type { AgentStore } from "./store.js";
 import { endNodes, stages } from "./topology.js";
 import {
   type AgentInfo,
   type AgentResult,
+  type AgentUsage,
   type GraphInfo,
   type GraphNode,
   isThinkingLevel,
@@ -180,7 +183,8 @@ export class Projection {
   }
 
   /** A parent request's outcome. An interrupted request stays open until a
-   * later answer settles it. */
+   * later answer settles it, and so does one answered before the results
+   * of agents the agent spawned. */
   private async outcome(
     id: string,
     name: string,
@@ -190,8 +194,22 @@ export class Projection {
     const known = this.resumed.get(key);
     if (known) return { kind: "answered", result: known };
     const settled = await this.store.requestOutcome(id, name, rid);
-    if (settled?.kind !== "interrupted") return settled;
-    const result = await this.store.resumedAnswer(id, name, settled.since);
+    if (settled === undefined || settled.kind === "failed") return settled;
+    const obligations = obligationsOf(id, this.graphRecords);
+    if (
+      settled.kind === "answered" &&
+      covers(settled.result.entryId, obligations)
+    )
+      return settled;
+    // An intermediate answer: a later one after the results settles it.
+    const since =
+      settled.kind === "answered" ? settled.result.entryId + 1 : settled.since;
+    const result = await this.store.coveringAnswer(
+      id,
+      name,
+      since,
+      obligations,
+    );
     if (!result) return undefined;
     this.resumed.set(key, result);
     return { kind: "answered", result };
@@ -242,9 +260,14 @@ export class Projection {
     const durable = (agent ?? {}) as DurableAgentState;
     const tools = Array.isArray(durable.tools)
       ? durable.tools.filter(
-          (tool) => tool !== DELEGATE_TOOL && !isCodemodeModelTool(tool),
+          (tool) =>
+            tool !== DELEGATE_TOOL &&
+            !(SPAWNING_TOOLS as readonly string[]).includes(tool) &&
+            !isCodemodeModelTool(tool),
         )
       : undefined;
+    const group =
+      record.graph === undefined ? undefined : this.graphRecords[record.graph];
     this.agentInfos.set(id, {
       id,
       name: record.name,
@@ -290,6 +313,7 @@ export class Projection {
       ...(jobAnswer !== undefined ? { jobAnswer } : {}),
       ...(record.graph ? { graph: record.graph } : {}),
       ...(record.delegate ? { delegates: true } : {}),
+      ...(group?.owner ? { owner: group.owner.agent } : {}),
       ...(state === "idle" &&
       [...outcomes.values()].some(
         (outcome) =>
@@ -358,6 +382,9 @@ export class Projection {
         if (task !== undefined && !(await this.observer.isFinished(task)))
           return "waiting";
       }
+      // Once the agent ran, its job waits for an answer that settles it,
+      // and the conversation tells how the agent is.
+      if (result || this.observer.settlementOf(agentId)) return undefined;
       return "working";
     }
     if (result) return undefined;
@@ -461,6 +488,8 @@ export class Projection {
           }),
         ),
         ...(record.owner ? { owner: record.owner.agent } : {}),
+        ...(record.single ? { single: true } : {}),
+        ...(record.cancelled ? { cancelled: true } : {}),
         ...(record.pending &&
         ended !== undefined &&
         !isStopped &&
@@ -483,17 +512,25 @@ export class Projection {
     for (const graph of this.graphInfoById.values())
       if (graph.owner)
         owned.set(graph.owner, [...(owned.get(graph.owner) ?? []), graph]);
-    for (const graph of this.graphInfoById.values()) {
-      if (graph.owner) continue;
-      const nested = graph.nodes.flatMap(
-        (node) => owned.get(node.agentId) ?? [],
-      );
-      if (nested.length > 0)
-        graph.usage = sumUsage([
-          graph.usage,
-          ...nested.map((each) => each.usage),
-        ]);
-    }
+    // A graph's usage includes the graphs its agents spawned, all the way
+    // down; ownership has no cycles.
+    const own = new Map(
+      [...this.graphInfoById.values()].map((graph) => [graph.id, graph.usage]),
+    );
+    const totals = new Map<string, AgentUsage>();
+    const total = (graph: GraphInfo): AgentUsage => {
+      const known = totals.get(graph.id);
+      if (known) return known;
+      const usage = sumUsage([
+        own.get(graph.id) ?? graph.usage,
+        ...graph.nodes.flatMap((node) =>
+          (owned.get(node.agentId) ?? []).map(total),
+        ),
+      ]);
+      totals.set(graph.id, usage);
+      return usage;
+    };
+    for (const graph of this.graphInfoById.values()) graph.usage = total(graph);
     for (const info of this.agentInfos.values()) {
       const working = (owned.get(info.id) ?? []).find(
         (graph) => graph.state === "working",
@@ -503,7 +540,8 @@ export class Projection {
         info.activity = activity;
         continue;
       }
-      if (activity.tool === DELEGATE_TOOL) delete activity.tool;
+      if (activity.tool === DELEGATE_TOOL || activity.tool === WAIT_TOOL)
+        delete activity.tool;
       info.activity = {
         ...activity,
         delegation: {

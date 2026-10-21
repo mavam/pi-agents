@@ -204,12 +204,18 @@ describe("graphs", () => {
     });
     await until(() => service.get("pair-1")?.state === "working");
     await service.interrupt("pair-1");
+    await until(() => service.get("pair-2")?.result !== undefined);
+    // An interrupt corrects the agent; its node stays open.
+    expect(service.get("pair-1")?.state).toBe("interrupted");
+    expect(service.getGraph("pair")?.state).toBe("working");
+    expect(service.pendingDeliveries()).toEqual([]);
+    await service.send("pair-1", "go on");
     await until(() => service.pendingDeliveries().length > 0);
     expect(summary(graphDelivery(service.pendingDeliveries()))).toEqual([
-      "pair-1: interrupted",
+      "pair-1: done: go on",
       "pair-2: done: two",
     ]);
-    expect(service.getGraph("pair")?.state).toBe("interrupted");
+    expect(service.getGraph("pair")?.state).toBe("idle");
   });
 
   test("stopping a graph stops its agents bottom-up", async () => {

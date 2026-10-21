@@ -146,6 +146,8 @@ export interface GraphResultDetails {
   name: string;
   policy: GraphPolicy;
   nodes: NodeDetails[];
+  /** A graph of one agent: it reads as that agent's answer. */
+  single?: boolean;
   /** The delivery this message carries; absent in messages of earlier
    * versions and outside messages. */
   delivery?: string;
@@ -182,8 +184,15 @@ export function nodeDetails(
   };
 }
 
+/** A graph of one agent, which only agent_spawn's single agents are. */
+export function isSingle(
+  details: Pick<GraphResultDetails, "single" | "nodes">,
+) {
+  return details.single ?? details.nodes.length === 1;
+}
+
 export function graphResultDetails(
-  graph: { id: string; name: string; policy: GraphPolicy },
+  graph: { id: string; name: string; policy: GraphPolicy; single?: boolean },
   nodes: readonly GraphNode[],
   lookup: (agentId: string) => AgentInfo | undefined,
 ): GraphResultDetails {
@@ -194,12 +203,16 @@ export function graphResultDetails(
     name: graph.name,
     policy: graph.policy,
     nodes: nodes.map((node) => nodeDetails(node, lookup(node.agentId), names)),
+    ...((graph.single ?? nodes.length === 1) ? { single: true } : {}),
   };
 }
 
-/** What the parent model reads for a finished graph. */
+/** What the parent model reads for a finished graph; a graph of one agent
+ * reads as that agent's answer. */
 export function graphContent(details: GraphResultDetails): string {
-  return graphReport(details.name, details.nodes);
+  return graphReport(details.name, details.nodes, {
+    single: isSingle(details),
+  });
 }
 
 /** The agents that are not end nodes and did not answer. */
@@ -256,9 +269,13 @@ const renderGraphResult: MessageRenderer = (message, options, theme) => {
   };
   if (ends.length === 1 && only) {
     const meta = nodeMeta(only);
+    // A graph of one agent reads as the agent.
+    const who = isSingle(details)
+      ? only.name
+      : `${details.name} › ${only.name}`;
     card.addChild(
       new Text(
-        `${icon} ${details.name} › ${only.name} ${only.kind}${meta ? color("dim", ` ${meta}`) : ""}`,
+        `${icon} ${who} ${only.kind}${meta ? color("dim", ` ${meta}`) : ""}`,
         0,
         0,
       ),

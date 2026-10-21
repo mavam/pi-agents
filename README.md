@@ -52,8 +52,8 @@ fourth merges their findings into one list of issues.
 ```
 
 ```text
-Start an agent that may delegate: it finds every module under src, has one
-helper review each, and returns one merged review.
+Start an agent that may spawn agents: it finds every module under src, has
+one agent review each, and returns one merged review.
 ```
 
 Pi starts agents only when you ask for delegation. They work in the
@@ -90,7 +90,7 @@ Agents run inside Pi and use your Pi logins and models:
 │ ┊│   ╭─ graph ─────────────────────────╮  agent tools:        │  │
 │ ┊│   │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │  read  bash  edit    │  │
 │ ┊│   │        └─▶ ◉ ui ───┘            │  write  grep         │  │
-│ ┊│   │            └─ ◉ ◉ ◉ helpers     │  find  ls  codemode  │  │
+│ ┊│   │            └─ ◉ ◉ ◉ spawned     │  find  ls  codemode  │  │
 │ ┊│   ╰─────────────────────────────────╯                      │  │
 │ ┊│                                                            │  │
 │ ┊│   agents are conversations; turns, tool calls, and graphs  │  │
@@ -111,7 +111,7 @@ Agents run inside Pi and use your Pi logins and models:
 ## 📚 Documentation
 
 - [Usage](docs/usage.md): glossary, states, skills, UI, commands, and tools.
-- [Graphs](docs/graphs.md): coordinating agents and delegating to helpers.
+- [Graphs](docs/graphs.md): coordinating agents, and agents that spawn agents.
 - [Messaging](docs/messaging.md): using messages and their guarantees.
 - [Agent profiles](docs/profiles.md): reusable settings and instructions.
 - [Configuration](docs/configuration.md): models, requests, and footer counts.

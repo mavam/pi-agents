@@ -224,12 +224,12 @@ describe("tool arguments", () => {
     expect(prepareArguments({ timeout: "120" })).toEqual({ timeout: 120 });
   });
 
-  test("calls that name a job task still work", () => {
-    expect(prepareArguments({ task: "a", name: "x" })).toEqual({
-      job: "a",
-      name: "x",
+  test("calls of earlier shapes still work", () => {
+    // A single agent's fields at the top, its job as `task`.
+    expect(prepareArguments({ task: "a", name: "x", delegate: true })).toEqual({
+      agents: [{ job: "a", name: "x", spawn: true }],
     });
-    // Graph and helper agents too, and a job wins over a task.
+    // Every agent of a graph too, and a job wins over a task.
     expect(
       prepareArguments({ agents: [{ task: "a" }, { job: "b", task: "c" }] }),
     ).toEqual({ agents: [{ job: "a" }, { job: "b" }] });

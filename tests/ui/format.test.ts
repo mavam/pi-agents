@@ -240,7 +240,7 @@ describe("formatting", () => {
     expect(folded.map((row) => row.key)).toEqual(["agent:1", "graph:10"]);
   });
 
-  test("helpers draw under the agent that started them", () => {
+  test("spawned agents draw under the agent that spawned them", () => {
     const agents = [
       agent({ id: "1", name: "lead", graph: "10", state: "working" }),
       agent({ id: "2", name: "other", graph: "10" }),
@@ -265,10 +265,12 @@ describe("formatting", () => {
         { agentId: "4", name: "lead.b", inputs: ["3"], end: true },
       ],
     });
+    // A group of one agent shows as the agent.
     const solo = graph({
       id: "30",
-      name: "solo.helpers",
+      name: "solo.x",
       owner: "5",
+      single: true,
       createdAt: 9,
       nodes: [{ agentId: "6", name: "solo.x", inputs: [], end: true }],
     });
@@ -289,12 +291,11 @@ describe("formatting", () => {
       "│     └─ agent:4",
       "└─ agent:2",
       "agent:5",
-      "└─ graph:30",
-      "   └─ agent:6",
+      "└─ agent:6",
     ]);
   });
 
-  test("space folds graphs and helpers, from any row below them", () => {
+  test("space folds graphs and spawned agents, from any row below them", () => {
     const agents = [
       agent({ id: "1", name: "lead", graph: "10", state: "working" }),
       agent({ id: "2", name: "other", graph: "10" }),
@@ -340,7 +341,7 @@ describe("formatting", () => {
     expect(row("graph:10").below).toBe(4);
     expect(row("agent:1").below).toBe(2);
 
-    // Space on a helper folds the helpers' graph and selects it.
+    // Space on a spawned agent folds its group and selects it.
     expect(fold(row("agent:3"), disclosure)).toBe("graph:20");
     expect(keys()).toEqual(["graph:10", "agent:1", "graph:20", "agent:2"]);
     expect(hiddenNote(row("graph:20"))).toBe("2 hidden");
@@ -349,7 +350,7 @@ describe("formatting", () => {
     expect(fold(row("graph:20"), disclosure)).toBe("graph:20");
     expect(keys()).toHaveLength(6);
 
-    // An agent with helpers folds them; a graph folds everything below it.
+    // An agent folds the agents it spawned; a graph, everything below it.
     fold(row("agent:1"), disclosure);
     expect(keys()).toEqual(["graph:10", "agent:1", "agent:2"]);
     fold(row("graph:10"), disclosure);
@@ -379,7 +380,7 @@ describe("formatting", () => {
     ).toEqual(["graph:10", "agent:1", "agent:2"]);
   });
 
-  test("helpers drop their agent's name below it", () => {
+  test("spawned agents drop their spawner's name below it", () => {
     const agents = [
       agent({ id: "1", name: "lead", state: "working" }),
       agent({ id: "3", name: "lead.a", graph: "20" }),
@@ -423,7 +424,7 @@ describe("formatting", () => {
         }),
         2_000,
       ),
-    ).toBe("◉ lead terra 2s delegating helpers 1/2");
+    ).toBe("◉ lead terra 2s spawned helpers 1/2");
   });
 
   test("footer counts statuses, closed agents included", () => {

@@ -36,9 +36,9 @@ export default function agentExtension(pi: ExtensionAPI): void {
   const panel = new AgentPanel(host);
   const focus = new FocusController(host, panel);
   const transcript = new MessageTranscript(pi);
-  // The footer counts the agents Pi can reach: open ones, and closed ones
-  // that messaging opens again. Nobody can message helpers, so closed
-  // helpers drop out.
+  // The footer counts Pi's agents: open ones, and closed ones that
+  // messaging opens again. Agents that agents spawned belong to their
+  // agent, so closed ones drop out.
   const footer = new FancyFooterReporter(pi, () => {
     const service = host.current();
     if (!service) return [];

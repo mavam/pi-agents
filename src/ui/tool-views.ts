@@ -161,6 +161,8 @@ interface AgentArgs {
   tools?: string[];
   skills?: string[];
   cwd?: string;
+  spawn?: boolean;
+  /** `spawn` in calls of earlier builds. */
   delegate?: boolean;
 }
 
@@ -173,7 +175,7 @@ function agentPairs(args: AgentArgs): Record<string, unknown> {
     tools: args.tools,
     skills: args.skills,
     cwd: args.cwd,
-    delegate: args.delegate,
+    spawn: args.spawn ?? args.delegate,
   };
 }
 
@@ -228,6 +230,29 @@ function graphCall(args: GraphArgs, fallback: string): CallView {
 type Args = Record<string, unknown>;
 const str = (value: unknown) => (typeof value === "string" ? value : "");
 
+/**
+ * A spawn call: one agent reads as that agent, its job as the body, and
+ * several as a graph. Calls of earlier builds gave a single agent's fields
+ * at the top, with the job as `task`.
+ */
+function spawnCall(args: Args, fallback: string): CallView {
+  const graph = args as GraphArgs;
+  const agents = Array.isArray(graph.agents)
+    ? graph.agents
+    : [args as NonNullable<GraphArgs["agents"]>[number]];
+  const [only] = agents;
+  if (agents.length !== 1 || !only) return graphCall(graph, fallback);
+  return {
+    title: str(only.name) || str(graph.name) || "agent",
+    pairs: {
+      ...agentPairs(only),
+      failFast: graph.failFast,
+      wait: seconds(graph.wait),
+    },
+    body: str(only.job ?? only.task),
+  };
+}
+
 interface ToolView {
   label: string;
   call: (args: Args) => CallView;
@@ -258,21 +283,21 @@ function asStarted(receipt: ToolReceipt): ToolReceipt {
   };
 }
 
+/** A wait names what it waits for; without names, all. */
+function waitCall(args: Args): CallView {
+  const names = Array.isArray(args.names) ? args.names.map(String) : [];
+  return {
+    title: names.join(", ") || "all",
+    pairs: { timeout: seconds(args.timeout) },
+  };
+}
+
 /** The parent's tools: their labels and call views. */
 const PARENT_CALLS: Record<string, ToolView> = {
   agent_spawn: {
     label: "spawn",
     starts: true,
-    call: (args) => ({
-      title: str(args.name) || "agent",
-      pairs: { ...agentPairs(args as AgentArgs), wait: seconds(args.wait) },
-      body: str(args.job ?? args.task),
-    }),
-  },
-  agent_spawn_graph: {
-    label: "spawn graph",
-    starts: true,
-    call: (args) => graphCall(args as GraphArgs, "graph"),
+    call: (args) => spawnCall(args, "graph"),
   },
   agent_send: {
     label: "send",
@@ -286,10 +311,7 @@ const PARENT_CALLS: Record<string, ToolView> = {
   agent_wait: {
     label: "wait",
     running: "Send a message to stop waiting; the agents keep working.",
-    call: (args) => ({
-      title: (Array.isArray(args.names) ? args.names : []).join(", "),
-      pairs: { timeout: seconds(args.timeout) },
-    }),
+    call: waitCall,
   },
   agent_status: {
     label: "status",
@@ -304,10 +326,21 @@ const PARENT_CALLS: Record<string, ToolView> = {
 
 /** The agents' own tools. */
 const AGENT_CALLS: typeof PARENT_CALLS = {
+  agent_spawn: {
+    label: "spawn",
+    starts: true,
+    call: (args) => spawnCall(args, "group"),
+  },
+  agent_wait: { label: "wait", call: waitCall },
+  agent_stop: {
+    label: "stop",
+    call: (args) => ({ title: str(args.name) }),
+  },
+  // Earlier builds' tool for starting agents, in stored transcripts.
   delegate_graph: {
     label: "delegate",
     starts: true,
-    call: (args) => graphCall(args as GraphArgs, "helpers"),
+    call: (args) => graphCall(args as GraphArgs, "group"),
   },
   agent_status: {
     label: "status",
@@ -467,6 +500,13 @@ export function formatReceipt(
       );
   };
   for (const graph of receipt.graphs) {
+    // A graph of one agent reads as the agent; below a call whose title
+    // names it, it shows only once there's more to say than its name.
+    const [only] = graph.agents;
+    if (graph.agents.length === 1 && only) {
+      if (!titled || only.outcome !== undefined) agentLines(only, "", "");
+      continue;
+    }
     const row = graphRow(graph, receipt, color, titled);
     if (row) lines.push(row);
     graph.agents.forEach((agent, index) => {

@@ -15,9 +15,10 @@ import {
   type PromptInput,
   section,
 } from "@earendil-works/pi-durable";
-import { DELEGATE_TOOL } from "../agents/delegation.js";
 import { SEND_TOOL, STATUS_TOOL } from "../agents/messaging.js";
+import { RESULTS_PREFIX } from "../agents/obligations.js";
 import { AgentsDoc } from "../agents/records.js";
+import { SPAWN_TOOL, STOP_TOOL, WAIT_TOOL } from "../agents/spawning.js";
 import { USER_MESSAGE_PREFIX } from "../agents/types.js";
 import type { SkillSource } from "../catalog/skills.js";
 import { toolPromptContribution } from "./tools.js";
@@ -50,22 +51,25 @@ function buildRules(tools: readonly string[]): string {
     add("Use bash for file operations like ls, rg, find");
   for (const name of tools)
     for (const rule of toolPromptContribution(name).guidelines) add(rule);
-  if (tools.includes(DELEGATE_TOOL)) add(DELEGATE_RULE);
+  if (tools.includes(SPAWN_TOOL)) add(SPAWN_RULE);
   if (tools.includes(SEND_TOOL)) add(MESSAGING_RULE);
   add("Be concise in your responses");
   add("Show file paths clearly when working with files");
   return rules.map((rule) => `- ${rule}`).join("\n");
 }
 
-/** What the prompt says about the tool of agents that delegate. */
-const DELEGATE_SNIPPET =
-  "Start helper agents for parts of your job and wait for their results";
-const DELEGATE_RULE =
-  "Use delegate_graph when your job splits into parts that can run on their own, such as one per file or area; give each helper a self-contained job";
+/** What the prompt says about the tools of agents that spawn. */
+const SPAWNING_SNIPPETS: Record<string, string> = {
+  [SPAWN_TOOL]:
+    "Spawn agents for parts of your job; their result arrives as a message",
+  [WAIT_TOOL]: "Block until agents you spawned finished and get their results",
+  [STOP_TOOL]: "Stop agents you spawned",
+};
+const SPAWN_RULE = `Use ${SPAWN_TOOL} when your job splits into parts that can run on their own, such as one per file or area; give each agent a self-contained job. Inputs that start with ${RESULTS_PREFIX.trim()} carry the results of agents you spawned. Your job ends with your first answer after the results of every agent you spawned, so after spawning, continue with other work, end your turn until the results arrive, or call ${WAIT_TOOL}`;
 
 /** What the prompt says about messaging other agents. */
 const MESSAGING_SNIPPETS: Record<string, string> = {
-  [STATUS_TOOL]: "List the other agents of this session and their jobs",
+  [STATUS_TOOL]: "List the agents you can message and their jobs",
   [SEND_TOOL]: "Send another agent a message without waiting for its answer",
 };
 const MESSAGING_RULE =
@@ -73,7 +77,8 @@ const MESSAGING_RULE =
 
 function renderTools(tools: readonly string[]): string {
   const lines = tools.flatMap((name) => {
-    if (name === DELEGATE_TOOL) return [`- ${name}: ${DELEGATE_SNIPPET}`];
+    const spawning = SPAWNING_SNIPPETS[name];
+    if (spawning) return [`- ${name}: ${spawning}`];
     const messaging = MESSAGING_SNIPPETS[name];
     if (messaging) return [`- ${name}: ${messaging}`];
     const snippet = toolPromptContribution(name).snippet;

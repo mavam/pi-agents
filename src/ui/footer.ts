@@ -2,7 +2,7 @@
  * Compact pi-fancy-footer summary of the session's agents: `2◉ 1● 3◌`, each
  * glyph in its status color.
  * Closed agents count too, because messaging one opens it again; closed
- * helpers don't, because nobody can message them.
+ * agents that agents spawned don't, because they belong to their agent.
  *
  * This speaks the event protocol directly: pi-agents does not depend on
  * pi-fancy-footer, and the producer owns all update timing.

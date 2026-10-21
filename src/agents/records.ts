@@ -40,13 +40,24 @@ export type AgentRecord = {
   requests: Record<string, ParentRequest>;
   /** Answer entries already delivered, newest last, bounded. */
   delivered: number[];
-  /** The graph this agent belongs to, by graph ID; absent when standalone. */
+  /** The group this agent belongs to, by group ID; absent for agents of
+   * earlier builds that the parent started alone. */
   graph?: string;
-  /** Whether the agent can start helpers; absent means it can't. */
+  /** Whether the agent may spawn agents of its own; absent means it
+   * can't. Named after the delegation of earlier builds. */
   delegate?: boolean;
-  /** Stopped by the user or the parent, until one of them messages it
-   * again; other agents can't message it meanwhile. */
+  /** How many agents started this one and its ancestors: 1 for the
+   * parent's agents. Absent in records of earlier builds: 1, or 2 for
+   * their helpers. */
+  depth?: number;
+  /** Stopped by the user or the parent, or with an agent above it, until
+   * the user or the parent messages it again; other agents can't message
+   * it meanwhile. */
   stopped?: boolean;
+  /** Its newest entry when the user last interrupted it: results it is
+   * owed wait until it answered after it, so they don't restart the work
+   * the user stopped. */
+  interrupted?: number;
 };
 
 export type AgentsState = {
@@ -96,12 +107,69 @@ export type GraphRecord = {
   closed: boolean;
   /** The parent still expects the graph's result. */
   pending: boolean;
-  /** Stopped before it finished; absent in records written before. */
+  /** Stopped before it finished; absent in records written before. Its
+   * result still reaches an agent that owns it, but not the parent. */
   stopped?: boolean;
-  /** A delegating agent's helpers: the agent, and the tool call that owns
-   * the graph task. Absent for graphs the parent started. */
-  owner?: { agent: string; tool: number };
+  /** Withdrawn with the work that needed it, such as when its owner was
+   * stopped or failed: it stops, and its result reaches nobody. */
+  cancelled?: true;
+  /** One agent the parent started on its own: the panel and the parent's
+   * messages show the agent alone, and only its ID addresses the group. */
+  single?: true;
+  /**
+   * The agent that spawned the group, and the tool call that did, by task
+   * ID, so a rerun of the call finds the group. Absent for groups the
+   * parent started. Groups of earlier builds' `delegate_graph` lack
+   * `spawned`: their tool call owns them and receives their result.
+   */
+  owner?: GroupOwner;
+  /** The owner's entry that presented the result: an input carrying it, or
+   * the result of an `agent_wait` call that returned it. */
+  presented?: number;
+  /** The `agent_wait` call that holds the result while it returns it, by
+   * task ID; delivery as input waits until that call ended. */
+  claim?: number;
+  /** Delivery attempts as input; the next one runs after the owner
+   * answered beyond `withdrawn`, its newest entry when an interrupt
+   * withdrew the last attempt. */
+  attempt?: number;
+  withdrawn?: number;
 };
+
+export type GroupOwner = {
+  agent: string;
+  tool: number;
+  /** The agent spawned the group with `agent_spawn`: its conversation owns
+   * it in the background, and the agent gets its result as input or from
+   * `agent_wait`. */
+  spawned?: true;
+  /** The agent's newest entry when it spawned the group: its answers
+   * after it settle the agent's work only once they follow the result. */
+  since?: number;
+};
+
+/** Whether the group's result goes to the agent that spawned it, as input
+ * or through `agent_wait`, rather than to the parent or a tool call. */
+export function isSpawned(
+  graph: GraphRecord,
+): graph is GraphRecord & { owner: GroupOwner & { spawned: true } } {
+  return graph.owner?.spawned === true;
+}
+
+/** Helpers of earlier builds' `delegate_graph`: private to their agent. */
+export function isLegacyHelperGroup(graph: GraphRecord | undefined): boolean {
+  return graph?.owner !== undefined && graph.owner.spawned !== true;
+}
+
+/** How deep the agent nests: 1 for the parent's agents. */
+export function depthOf(
+  record: AgentRecord,
+  graphs: Readonly<Record<string, GraphRecord>> | undefined,
+): number {
+  if (record.depth !== undefined) return record.depth;
+  const graph = record.graph ? graphs?.[record.graph] : undefined;
+  return graph?.owner ? 2 : 1;
+}
 
 export type GraphsState = {
   graphs: Record<string, GraphRecord>;
@@ -162,6 +230,15 @@ export const DELIVERED_MEMORY = 64;
 
 export function graphDeliveryId(graphId: string, record: GraphRecord): string {
   return `graph:${graphId}@${record.createdAt}`;
+}
+
+/** One attempt to hand a group's result to the agent that spawned it. */
+export function resultsRequestId(
+  graphId: string,
+  record: GraphRecord,
+  attempt: number,
+): string {
+  return `results:${graphId}@${record.createdAt}#${attempt}`;
 }
 
 /** One answer, which delivers once for every request it answered. */

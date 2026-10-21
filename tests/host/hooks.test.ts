@@ -44,7 +44,7 @@ function provider() {
     if (last?.role === "user" && lastUserText(context) === "delegate")
       return fauxAssistantMessage(
         [
-          fauxToolCall("delegate_graph", {
+          fauxToolCall("agent_spawn", {
             agents: [{ name: "helper", job: "help" }],
           }),
         ],
@@ -80,7 +80,7 @@ const observe = (seen: AgentRequestContext[]): AgentHooks => ({
 });
 
 describe("agent lifecycle hooks", () => {
-  test("snapshots follow agents, graphs, helpers, compaction, and reopening", async () => {
+  test("snapshots follow agents, graphs, spawned agents, compaction, and reopening", async () => {
     const directory = tempDir();
     const { models, payloads } = provider();
     const seen: AgentRequestContext[] = [];
@@ -99,10 +99,10 @@ describe("agent lifecycle hooks", () => {
     });
     const lead = await service.spawn({
       ...spawn("lead", "delegate"),
-      delegate: true,
+      spawn: true,
     });
     await service.wait([lead.id]);
-    expect(captures).toBe(1); // Helper copies state; it never captures from Pi.
+    expect(captures).toBe(1); // Spawned agents copy state; they never capture from Pi.
     expect(seen.some((ctx) => ctx.agent.name === "lead.helper")).toBe(true);
     expect(seen.every((ctx) => ctx.state?.setting === "first")).toBe(true);
     setting = "second";

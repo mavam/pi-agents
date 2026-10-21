@@ -26,8 +26,8 @@ export interface Profile {
   skills?: string[];
   /** Tool allowlist; absent selects the default tools. */
   tools?: string[];
-  /** Whether agents of this profile can start helper agents. */
-  delegate?: boolean;
+  /** Whether agents of this profile may spawn agents of their own. */
+  spawn?: boolean;
   /** The Markdown body, appended to the agent's system prompt. */
   instructions: string;
   source: Source;
@@ -52,6 +52,8 @@ const ALLOWED_FRONTMATTER_KEYS = new Set([
   "thinking",
   "skills",
   "tools",
+  "spawn",
+  // The name of `spawn` before agents spawned asynchronously.
   "delegate",
 ]);
 
@@ -116,9 +118,12 @@ export function parseProfileFile(
   if (skills && "error" in skills) return skills.error;
   const tools = parseList(frontmatter.tools, "tools");
   if (tools && "error" in tools) return tools.error;
-  const delegate = frontmatter.delegate;
-  if (delegate !== undefined && typeof delegate !== "boolean")
-    return "Invalid 'delegate' (must be true or false)";
+  for (const key of ["spawn", "delegate"])
+    if (frontmatter[key] !== undefined && typeof frontmatter[key] !== "boolean")
+      return `Invalid '${key}' (must be true or false)`;
+  const spawn = (frontmatter.spawn ?? frontmatter.delegate) as
+    | boolean
+    | undefined;
 
   return {
     name: name.trim(),
@@ -129,7 +134,7 @@ export function parseProfileFile(
     ...(thinking !== undefined ? { thinking } : {}),
     ...(skills ? { skills } : {}),
     ...(tools ? { tools } : {}),
-    ...(delegate !== undefined ? { delegate } : {}),
+    ...(spawn !== undefined ? { spawn } : {}),
     instructions: body.trim(),
     source,
     filePath,

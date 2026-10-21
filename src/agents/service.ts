@@ -11,21 +11,15 @@ import type { AttachedReplicatedState } from "@earendil-works/chord";
 import type {
   Conversation,
   ConversationView,
+  Cursor,
   Harness,
+  TaskId,
 } from "@earendil-works/pi-durable";
 import { CONTEXT, contextFor, conversationId, taskId } from "./context.js";
-import {
-  type CreationDeps,
-  createAgent,
-  createGraph,
-  enableCodemodeModels,
-  offerSpawning,
-  prepare,
-} from "./creation.js";
+import { type CreationDeps, createGraph } from "./creation.js";
 import { Delivery } from "./delivery.js";
 import type { AgentExtensions } from "./extensions.js";
 import { MessageLog } from "./message-log.js";
-import { claimName } from "./names.js";
 import {
   obligationsOf,
   RESULTS_ENTRY,
@@ -40,7 +34,6 @@ import {
   graphDeliveryId,
   isSpawned,
   type ParentRequest,
-  requestId,
   resultsRequestId,
 } from "./records.js";
 import { groupResult } from "./spawning.js";
@@ -53,7 +46,6 @@ import {
   type MessageInfo,
   type PendingDelivery,
   type SendMode,
-  type SpawnSpec,
   type Target,
   type TargetRef,
   type TaskNode,
@@ -89,11 +81,8 @@ export interface AgentServiceOptions {
 export interface WaitOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
-  /** The parent call that waits, whose result carries the results to the
-   * parent; `call` is its key, if it has one, by which the parent
-   * recognizes the result where it doesn't name the results, such as a
-   * nested call's. */
-  carrier?: { call?: string };
+  /** The direct parent wait carries delivery IDs in its saved result. */
+  carrier?: boolean;
 }
 
 export interface WaitOutcome {
@@ -206,13 +195,13 @@ export class AgentService {
   // --- Lifecycle ---
 
   private async initialize(): Promise<void> {
+    // Work a crash left running behind a stop fence ends before it can
+    // go on: the stop may have recorded the fence before its aborts.
+    // Before observing, whose refreshes can resume scheduling.
+    const stopped = await this.markStoppedWork();
     this.observer.start();
     await this.projection.reload();
-    await enableCodemodeModels(
-      this.creation,
-      Object.keys(this.projection.agents()),
-    );
-    await offerSpawning(this.creation, this.projection.agents());
+    for (const id of stopped) await this.abortAgent(id);
     for (const id of Object.keys(this.projection.agents())) {
       await this.observer.loadLastAssistant(id);
       // A request recorded before a crash may lack its submission.
@@ -224,6 +213,37 @@ export class AgentService {
     this.unsubscribeParent = this.parent.subscribe(() =>
       this.delivery.schedule(),
     );
+  }
+
+  /**
+   * Mark the live work of stopped agents aborted, all before anything
+   * resumes scheduling, as aborting a conversation does, so none of it
+   * runs again. Returns the agents that had live work.
+   */
+  private async markStoppedWork(): Promise<string[]> {
+    const agents = await this.store.loadAgents();
+    const stopped = new Set(
+      Object.keys(agents).filter((id) => agents[id]?.stopped),
+    );
+    if (stopped.size === 0) return [];
+    const tasks = await this.harness.commit(async (tx) => {
+      const found: Array<{ id: TaskId; agent: string }> = [];
+      for (const status of ["pending", "running", "waiting"] as const) {
+        let cursor: Cursor | undefined;
+        do {
+          const query = { status, background: false };
+          const page = await tx.scanTasks(query, 256, cursor);
+          for (const task of page.items) {
+            const agent = String(task.conversationId);
+            if (stopped.has(agent)) found.push({ id: task.id, agent });
+          }
+          cursor = page.next;
+        } while (cursor !== undefined);
+      }
+      return found;
+    }, CONTEXT);
+    for (const task of tasks) await this.harness.abortTask(task.id, CONTEXT);
+    return [...new Set(tasks.map((task) => task.agent))];
   }
 
   /** Stop observing the harness; the host closes it afterwards. */
@@ -290,33 +310,35 @@ export class AgentService {
     return this.messageLog.list();
   }
 
-  /** A visible agent by name, else the newest closed one, else by ID. */
+  /** An agent by exact ID, else visible name, else newest closed name. */
   get(nameOrId: string): AgentInfo | undefined {
+    const exact = this.projection.info(nameOrId);
+    if (exact) return exact;
     const named = this.list({ includeClosed: true }).filter(
       (info) => info.name === nameOrId,
     );
-    return (
-      named.find(isVisible) ?? named.at(-1) ?? this.projection.info(nameOrId)
-    );
+    return named.find(isVisible) ?? named.at(-1);
   }
 
-  /** A visible graph by name, else the newest closed one, else by ID. */
+  /** A graph by exact ID, else visible name, else newest closed name. */
   getGraph(nameOrId: string): GraphInfo | undefined {
+    const exact = this.projection.graphInfo(nameOrId);
+    if (exact) return exact;
     const named = this.graphs({ includeClosed: true }).filter(
       (info) => info.name === nameOrId,
     );
-    return (
-      named.find(isGraphVisible) ??
-      named.at(-1) ??
-      this.projection.graphInfo(nameOrId)
-    );
+    return named.find(isGraphVisible) ?? named.at(-1);
   }
 
   /**
-   * An agent or a graph: a visible one by name, else the newest closed one,
-   * else by ID. Names are unique among visible agents and graphs.
+   * An agent or graph by exact ID, else visible name, else newest closed
+   * name. Names are unique among visible agents and graphs.
    */
   find(nameOrId: string): Target | undefined {
+    const exactAgent = this.projection.info(nameOrId);
+    if (exactAgent) return { kind: "agent", info: exactAgent };
+    const exactGraph = this.projection.graphInfo(nameOrId);
+    if (exactGraph) return { kind: "graph", info: exactGraph };
     const agent = this.get(nameOrId);
     const graph = this.getGraph(nameOrId);
     const named = (info: { name: string } | undefined) =>
@@ -401,24 +423,6 @@ export class AgentService {
   }
 
   // --- Operations ---
-
-  /** Create an agent and send it its job. */
-  async spawn(spec: SpawnSpec): Promise<AgentInfo> {
-    // Fail early with the service's view; the commit claims for real.
-    claimName(spec.name, spec.profile ?? "agent", this.takenNames(), "agent");
-    const { job, tools } = prepare(this.creation, spec);
-    const first = requestId(1);
-    const request: ParentRequest = { message: job, whenBusy: "followUp" };
-    const id = await createAgent(this.creation, spec, {
-      job,
-      tools,
-      first,
-      request,
-    });
-    await this.store.submit(id, first, request);
-    await this.refresh([id]);
-    return this.requireAgent(id);
-  }
 
   /**
    * Start agents that work together and report back as one result. An agent
@@ -517,9 +521,9 @@ export class AgentService {
   /** `stop`, by ID. */
   async stopTarget(target: TargetRef): Promise<void> {
     if (target.kind === "graph") return this.stopGraph(target.id);
-    const record = this.projection.agents()[target.id];
+    const record = (await this.store.loadAgents())[target.id];
     const graph = record?.graph
-      ? this.projection.graphs()[record.graph]
+      ? (await this.store.loadGraphs())[record.graph]
       : undefined;
     if (record?.graph && graph?.single && !graph.owner)
       return this.stopGraph(record.graph);
@@ -560,7 +564,9 @@ export class AgentService {
   }
 
   private async stopGraph(graphId: string): Promise<void> {
-    const info = this.requireGraph(graphId);
+    // Nested tools can stop a group before the next projection refresh.
+    const graph = (await this.store.loadGraphs())[graphId];
+    if (!graph) throw new AgentError(`No graph with ID ${graphId}`);
     const finished = await this.observer.isFinished(Number(graphId));
     await this.store.stopGraph(graphId, !finished);
     // Aborting the graph aborts its nodes, and they their agents, bottom-up.
@@ -569,9 +575,9 @@ export class AgentService {
       await this.harness.waitForTask(taskId(graphId), CONTEXT);
     }
     // Agents may work beyond their job, for example on a user's message.
-    for (const node of info.nodes) await this.stopAgent(node.agentId);
+    for (const node of graph.nodes) await this.stopAgent(node.agent);
     await this.refresh(
-      this.projection.withHelpers(info.nodes.map((node) => node.agentId)),
+      this.projection.withHelpers(graph.nodes.map((node) => node.agent)),
     );
   }
 
@@ -680,14 +686,9 @@ export class AgentService {
         ...[...ended].flatMap((id) => this.delivery.graphDelivery(id) ?? []),
         ...[...idle].flatMap((id) => this.delivery.agentDeliveries(id)),
       ].filter((each) => !this.delivery.isInFlight(each.id));
-      if (options.carrier === undefined)
-        await this.delivery.acknowledgeAll(taken);
+      if (!options.carrier) await this.delivery.acknowledgeAll(taken);
       else if (taken.length > 0) {
-        const { call } = options.carrier;
-        this.delivery.markCarried(
-          taken.map((each) => each.id),
-          call,
-        );
+        this.delivery.markCarried(taken.map((each) => each.id));
         await this.refresh(ids);
       }
       await this.delivery.consumeUnrequested([...idle]);
@@ -844,13 +845,10 @@ export class AgentService {
    */
   private async cancelForFailures(): Promise<void> {
     for (const [id, record] of Object.entries(this.projection.agents())) {
-      const info = this.projection.info(id);
-      if (record.stopped || info?.state !== "failed") continue;
-      if (!this.owesResults(id)) continue;
-      // Only what the failed turn waited for: a retry's groups come after.
-      const failed = info.result;
-      if (failed?.stopReason !== "error") continue;
-      await this.store.cancelGroups(id, failed.entryId);
+      if (record.stopped || !this.owesResults(id)) continue;
+      // A quick retry can replace the projected failure before refresh.
+      // Durable run boundaries preserve earlier work and exclude retries.
+      await this.store.cancelFailedGroups(id);
     }
   }
 
@@ -909,34 +907,38 @@ export class AgentService {
           attempt = graph.attempt + 1;
         }
       }
-      // Under the agent's turn, so an interrupt or a stop lands before the
-      // reservation, which then sees it, or after the submission, which it
-      // then withdraws.
-      await this.extensions.hub.turn(ownerId, async () => {
-        const reserved = await this.store.reserveAttempt(id, attempt);
-        if (reserved === undefined) return;
-        const conversation = await this.harness.conversation(
-          conversationId(ownerId),
-          CONTEXT,
-        );
-        if (!conversation) return;
-        const { text } = await groupResult(
-          this.harness as unknown as Parameters<typeof groupResult>[0],
-          CONTEXT,
-          id,
-        );
-        const data: ResultsEntryData = { groups: [id] };
-        await conversation.submit(
-          {
-            type: "input",
-            content: `${RESULTS_PREFIX}${text}`,
-            whenBusy: "followUp",
-            requestId: resultsRequestId(id, graph, attempt),
-            entry: { kind: RESULTS_ENTRY, data },
-          },
-          CONTEXT,
-        );
-      });
+      // Never queue behind a busy turn: an interrupt can hold it while
+      // aborting agent_stop, whose stop operation needs this refresh to
+      // finish. Retry later, checking all durable fences again.
+      await this.extensions.hub.tryTurn(
+        ownerId,
+        async () => {
+          const reserved = await this.store.reserveAttempt(id, attempt);
+          if (reserved === undefined) return;
+          const conversation = await this.harness.conversation(
+            conversationId(ownerId),
+            CONTEXT,
+          );
+          if (!conversation) return;
+          const { text } = await groupResult(
+            this.harness as unknown as Parameters<typeof groupResult>[0],
+            CONTEXT,
+            id,
+          );
+          const data: ResultsEntryData = { groups: [id] };
+          await conversation.submit(
+            {
+              type: "input",
+              content: `${RESULTS_PREFIX}${text}`,
+              whenBusy: "followUp",
+              requestId: resultsRequestId(id, graph, attempt),
+              entry: { kind: RESULTS_ENTRY, data },
+            },
+            CONTEXT,
+          );
+        },
+        () => this.scheduleRefresh(),
+      );
     }
   }
 
@@ -947,8 +949,7 @@ export class AgentService {
 
   /**
    * Groups agents spawned leave the panel once they finished and their
-   * result reached the agent, or nobody needs it anymore; helpers of
-   * earlier builds, once the call that started them ended. Storage keeps
+   * result reached the agent, or nobody needs it anymore. Storage keeps
    * them, and `/agents` shows them.
    */
   private async closeEndedHelpers(): Promise<void> {
@@ -956,11 +957,10 @@ export class AgentService {
     for (const [id, graph] of Object.entries(this.projection.graphs())) {
       if (!graph.owner || graph.closed) continue;
       if (!(await this.observer.isFinished(Number(id)))) continue;
-      const done = isSpawned(graph)
-        ? graph.presented !== undefined ||
-          graph.cancelled === true ||
-          this.projection.agents()[graph.owner.agent]?.stopped === true
-        : await this.observer.isFinished(graph.owner.tool);
+      const done =
+        graph.presented !== undefined ||
+        graph.cancelled === true ||
+        this.projection.agents()[graph.owner.agent]?.stopped === true;
       if (done) ended.push(id);
     }
     if (ended.length === 0) return;

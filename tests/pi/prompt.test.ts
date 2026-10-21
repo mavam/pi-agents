@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { migrateAgents } from "../../src/agents/records.js";
 import { discoverSkills } from "../../src/catalog/skills.js";
 import {
   graphContent,
@@ -222,26 +221,5 @@ describe("tool arguments", () => {
       names: ["a"],
     });
     expect(prepareArguments({ timeout: "120" })).toEqual({ timeout: 120 });
-  });
-
-  test("calls of earlier shapes still work", () => {
-    // A single agent's fields at the top, its job as `task`.
-    expect(prepareArguments({ task: "a", name: "x", delegate: true })).toEqual({
-      agents: [{ job: "a", name: "x", spawn: true }],
-    });
-    // Every agent of a graph too, and a job wins over a task.
-    expect(
-      prepareArguments({ agents: [{ task: "a" }, { job: "b", task: "c" }] }),
-    ).toEqual({ agents: [{ job: "a" }, { job: "b" }] });
-  });
-
-  test("stored agents of earlier versions name their job task", () => {
-    expect(
-      migrateAgents({
-        agents: { "7": { name: "a", task: "review it", closed: false } },
-      }),
-    ).toEqual({
-      agents: { "7": { job: "review it", name: "a", closed: false } },
-    } as unknown as ReturnType<typeof migrateAgents>);
   });
 });

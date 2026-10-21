@@ -21,7 +21,7 @@ import {
 
 /**
  * A faux model that records which agent each request comes from and how many
- * run at once. `bash <command>` calls bash, `delegate <json>` delegates, and
+ * run at once. `bash <command>` calls bash, `spawn <json>` spawns, and
  * a tool result or another prompt is answered after a moment.
  */
 function recording() {
@@ -36,8 +36,13 @@ function recording() {
     try {
       await briefly(options?.signal, 20);
       const last = context.messages.at(-1);
-      if (last?.role === "toolResult")
+      if (last?.role === "toolResult") {
+        if (last.toolName === "agent_spawn")
+          return fauxAssistantMessage([fauxToolCall("agent_wait", {})], {
+            stopReason: "toolUse",
+          });
         return fauxAssistantMessage([fauxText("merged")]);
+      }
       const content = last?.content;
       const text =
         typeof content === "string"
@@ -51,9 +56,9 @@ function recording() {
           [fauxToolCall("bash", { command: first.slice(5) })],
           { stopReason: "toolUse" },
         );
-      if (first.startsWith("delegate "))
+      if (first.startsWith("spawn "))
         return fauxAssistantMessage(
-          [fauxToolCall("delegate_graph", JSON.parse(first.slice(9)))],
+          [fauxToolCall("agent_spawn", JSON.parse(first.slice(6)))],
           { stopReason: "toolUse" },
         );
       return fauxAssistantMessage(`done: ${first}`);
@@ -98,11 +103,15 @@ describe("agents with a working cap", () => {
     const { models, stats } = recording();
     service = await openService({ models, maxWorkingAgents: 1 });
     for (const name of ["a", "b", "c"])
-      await service.spawn({
-        job: "bash sleep 0.1",
-        name,
-        cwd: ".",
-        model: MODEL,
+      await service.spawnGraph({
+        agents: [
+          {
+            job: "bash sleep 0.1",
+            name,
+            cwd: ".",
+            model: MODEL,
+          },
+        ],
       });
     const current = service;
     await until(() => current.pendingDeliveries().length === 3, 10_000);
@@ -114,7 +123,7 @@ describe("agents with a working cap", () => {
     expect(hostOf(current).extensions.working?.working).toBe(0);
   });
 
-  test("a delegating agent lets its helpers work", async () => {
+  test("an agent waiting for its agents lets them work", async () => {
     const { models, stats } = recording();
     service = await openService({ models, maxWorkingAgents: 1 });
     const helpers = [
@@ -122,15 +131,19 @@ describe("agents with a working cap", () => {
       { name: "y", job: "map y" },
       { name: "merge", job: "merge", after: ["x", "y"] },
     ];
-    await service.spawn({
-      name: "lead",
-      job: `delegate ${JSON.stringify({ agents: helpers })}`,
-      delegate: true,
-      cwd: ".",
-      model: MODEL,
+    await service.spawnGraph({
+      agents: [
+        {
+          name: "lead",
+          job: `spawn ${JSON.stringify({ agents: helpers })}`,
+          spawn: true,
+          cwd: ".",
+          model: MODEL,
+        },
+      ],
     });
-    const outcome = await service.wait(["lead"]);
-    expect(outcome.agents[0]?.result?.text).toBe("merged");
+    await service.wait(["lead"]);
+    expect(service.get("lead")?.result?.text).toBe("merged");
     expect(stats.peak).toBe(1);
   });
 
@@ -140,17 +153,21 @@ describe("agents with a working cap", () => {
     const current = service;
     const working = () => hostOf(current).extensions.working;
     for (const name of ["a", "b", "c"])
-      await service.spawn({
-        job: `hold ${name}`,
-        name,
-        cwd: ".",
-        model: MODEL,
+      await service.spawnGraph({
+        agents: [
+          {
+            job: `hold ${name}`,
+            name,
+            cwd: ".",
+            model: MODEL,
+          },
+        ],
       });
     await until(() => working()?.queued === 2);
     await service.stop("b");
     await until(() => working()?.queued === 1);
     release();
     const outcome = await service.wait(["a", "c"]);
-    expect(outcome.agents.map((each) => each.state)).toEqual(["idle", "idle"]);
+    expect(outcome.graphs.map((each) => each.state)).toEqual(["idle", "idle"]);
   });
 });

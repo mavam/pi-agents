@@ -12,7 +12,6 @@ import {
 } from "@earendil-works/pi-durable";
 import { isCodemodeModelTool } from "../host/tools.js";
 import { CONTEXT, conversationId } from "./context.js";
-import { DELEGATE_TOOL } from "./delegation.js";
 import {
   activityOf,
   addPartialUsage,
@@ -31,7 +30,6 @@ import {
   type GraphNodeRecord,
   type GraphRecord,
   graphDeliveryId,
-  requestId,
 } from "./records.js";
 import { SPAWNING_TOOLS, WAIT_TOOL } from "./spawning.js";
 import type { AgentStore } from "./store.js";
@@ -161,10 +159,7 @@ export class Projection {
 
   /** A graph agent's own results wait while its graph's result is due. */
   isHeldByGraph(record: AgentRecord): boolean {
-    return (
-      record.graph !== undefined &&
-      this.graphRecords[record.graph]?.pending === true
-    );
+    return this.graphRecords[record.graph]?.pending === true;
   }
 
   graphOfNode(task: number): GraphRecord | undefined {
@@ -261,13 +256,11 @@ export class Projection {
     const tools = Array.isArray(durable.tools)
       ? durable.tools.filter(
           (tool) =>
-            tool !== DELEGATE_TOOL &&
             !(SPAWNING_TOOLS as readonly string[]).includes(tool) &&
             !isCodemodeModelTool(tool),
         )
       : undefined;
-    const group =
-      record.graph === undefined ? undefined : this.graphRecords[record.graph];
+    const group = this.graphRecords[record.graph];
     this.agentInfos.set(id, {
       id,
       name: record.name,
@@ -311,17 +304,9 @@ export class Projection {
           }
         : {}),
       ...(jobAnswer !== undefined ? { jobAnswer } : {}),
-      ...(record.graph ? { graph: record.graph } : {}),
-      ...(record.delegate ? { delegates: true } : {}),
+      graph: record.graph,
+      ...(record.spawn ? { spawn: true } : {}),
       ...(group?.owner ? { owner: group.owner.agent } : {}),
-      ...(state === "idle" &&
-      [...outcomes.values()].some(
-        (outcome) =>
-          outcome.kind === "answered" &&
-          !this.carried(answerDeliveryId(id, record, outcome.result.entryId)),
-      )
-        ? { queued: true }
-        : {}),
     });
     return delivered;
   }
@@ -336,8 +321,7 @@ export class Projection {
   ): Promise<number | undefined> {
     const latest = await this.observer.latestGeneration(agentId);
     if (latest) return latest.endedAt;
-    const graph =
-      record.graph === undefined ? undefined : this.graphRecords[record.graph];
+    const graph = this.graphRecords[record.graph];
     const node = graph?.nodes.find((each) => each.agent === agentId);
     return node
       ? (await this.observer.settledTask(node.task))?.endedAt
@@ -345,19 +329,18 @@ export class Projection {
   }
 
   /**
-   * The entry that answered the agent's job: the answer to the submission
-   * of its job, under `parent:1` for agents the parent started and under
-   * its node's request ID for a graph's agents.
+   * The entry that answered the agent's job, submitted under its node's
+   * request ID.
    */
   private async jobAnswer(
     agentId: string,
     record: AgentRecord,
   ): Promise<number | undefined> {
-    const graph =
-      record.graph === undefined ? undefined : this.graphRecords[record.graph];
+    const graph = this.graphRecords[record.graph];
     const node = graph?.nodes.find((each) => each.agent === agentId);
-    const rid = node ? nodeRequestId(node.task) : requestId(1);
-    return this.observer.jobAnswer(agentId, rid);
+    return node
+      ? this.observer.jobAnswer(agentId, nodeRequestId(node.task))
+      : undefined;
   }
 
   /**
@@ -371,8 +354,7 @@ export class Projection {
     record: AgentRecord,
     result: AgentResult | undefined,
   ): Promise<AgentInfo["state"] | undefined> {
-    const graph =
-      record.graph === undefined ? undefined : this.graphRecords[record.graph];
+    const graph = this.graphRecords[record.graph];
     const node = graph?.nodes.find((each) => each.agent === agentId);
     if (!graph || !node) return undefined;
     const outcome = await this.observer.taskOutcome(node.task);
@@ -498,16 +480,39 @@ export class Projection {
           : {}),
       });
     }
-    this.deriveDelegation();
+    this.deriveQueued();
+    this.deriveSpawning();
     return stopped;
   }
 
+  /** A hidden single graph's queued result shows on its visible agent. */
+  private deriveQueued(): void {
+    for (const [id, info] of this.agentInfos) {
+      const record = this.records[id];
+      if (!record) continue;
+      const graph = this.graphInfoById.get(record.graph);
+      const outcomes = this.settled.get(id);
+      const queued =
+        info.state === "idle" &&
+        ((graph?.single && graph.queued) ||
+          [...(outcomes?.values() ?? [])].some(
+            (outcome) =>
+              outcome.kind === "answered" &&
+              !this.carried(
+                answerDeliveryId(id, record, outcome.result.entryId),
+              ),
+          ));
+      if (queued) info.queued = true;
+      else delete info.queued;
+    }
+  }
+
   /**
-   * What delegation adds to the derived infos: a graph's usage includes the
+   * What spawning adds to the derived infos: a graph's usage includes the
    * helpers its agents started, and an agent that waits for helpers shows
    * their progress instead of its tool.
    */
-  private deriveDelegation(): void {
+  private deriveSpawning(): void {
     const owned = new Map<string, GraphInfo[]>();
     for (const graph of this.graphInfoById.values())
       if (graph.owner)
@@ -535,16 +540,15 @@ export class Projection {
       const working = (owned.get(info.id) ?? []).find(
         (graph) => graph.state === "working",
       );
-      const { delegation: _, ...activity } = info.activity;
+      const { spawning: _, ...activity } = info.activity;
       if (!working) {
         info.activity = activity;
         continue;
       }
-      if (activity.tool === DELEGATE_TOOL || activity.tool === WAIT_TOOL)
-        delete activity.tool;
+      if (activity.tool === WAIT_TOOL) delete activity.tool;
       info.activity = {
         ...activity,
-        delegation: {
+        spawning: {
           graph: working.name,
           done: working.nodes.filter((node) => node.outcome).length,
           total: working.nodes.length,

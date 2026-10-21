@@ -64,7 +64,6 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { DELEGATE_TOOL } from "../agents/delegation.js";
 import { RESULTS_ENTRY, RESULTS_PREFIX } from "../agents/obligations.js";
 import type { AgentService } from "../agents/service.js";
 import { WAIT_TOOL } from "../agents/spawning.js";
@@ -480,11 +479,9 @@ function statusText(live: LiveState): string {
       ? `Retrying ${compaction.reason} compaction (attempt ${compaction.attempt + 1})...`
       : `Compacting (${compaction.reason})...`;
   // The agent waits for agents it spawned; Pi places messages only after
-  // that. Esc ends a wait, but stops the agents of earlier builds' tool.
+  // that. Esc ends the wait without stopping those agents.
   if (runningTool?.name === WAIT_TOOL)
     return "Waiting for agents; messages wait until they finish (esc stops waiting)";
-  if (runningTool?.name === DELEGATE_TOOL)
-    return "Waiting for agents; messages wait until they finish (esc stops them)";
   if (runningTool !== undefined)
     return `Running ${runningTool.name}... (esc to interrupt)`;
   if (live.run !== undefined) return "Working... (esc to interrupt)";

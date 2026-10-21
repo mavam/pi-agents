@@ -29,14 +29,10 @@ import {
   asReceipt,
   type GraphReceipt,
   isFinished,
-  observed,
-  receipt,
-  startedGraph,
   type ToolReceipt,
 } from "../agents/receipts.js";
 import type { NodeKind } from "../agents/report.js";
 import { shapeLine } from "../agents/topology.js";
-import type { AgentInfo, GraphInfo } from "../agents/types.js";
 import {
   type Colorize,
   formatInputs,
@@ -162,8 +158,6 @@ interface AgentArgs {
   skills?: string[];
   cwd?: string;
   spawn?: boolean;
-  /** `spawn` in calls of earlier builds. */
-  delegate?: boolean;
 }
 
 /** The settings an agent's call line shows. */
@@ -175,7 +169,7 @@ function agentPairs(args: AgentArgs): Record<string, unknown> {
     tools: args.tools,
     skills: args.skills,
     cwd: args.cwd,
-    spawn: args.spawn ?? args.delegate,
+    spawn: args.spawn,
   };
 }
 
@@ -183,9 +177,7 @@ interface GraphArgs {
   name?: string;
   failFast?: boolean;
   wait?: unknown;
-  agents?: Array<
-    AgentArgs & { name?: string; job?: string; task?: string; after?: string[] }
-  >;
+  agents?: Array<AgentArgs & { name?: string; job?: string; after?: string[] }>;
 }
 
 /** A graph call: its shape collapsed, one paragraph per agent expanded. */
@@ -210,11 +202,8 @@ function graphCall(args: GraphArgs, fallback: string): CallView {
           const after = agent.after?.length
             ? ` after ${agent.after.join(", ")}`
             : "";
-          // The job keeps its own lines, indented under the agent; calls
-          // of earlier builds named it `task`.
-          const [first = "", ...rest] = (agent.job ?? agent.task ?? "")
-            .trim()
-            .split("\n");
+          // The job keeps its own lines, indented under the agent.
+          const [first = "", ...rest] = (agent.job ?? "").trim().split("\n");
           return [
             `${label(agent, index)}${after}${pairs ? ` (${pairs})` : ""}: ${first}`,
             ...rest.map((line) => (line ? `  ${line}` : "")),
@@ -232,14 +221,11 @@ const str = (value: unknown) => (typeof value === "string" ? value : "");
 
 /**
  * A spawn call: one agent reads as that agent, its job as the body, and
- * several as a graph. Calls of earlier builds gave a single agent's fields
- * at the top, with the job as `task`.
+ * several as a graph.
  */
 function spawnCall(args: Args, fallback: string): CallView {
   const graph = args as GraphArgs;
-  const agents = Array.isArray(graph.agents)
-    ? graph.agents
-    : [args as NonNullable<GraphArgs["agents"]>[number]];
+  const agents = graph.agents ?? [];
   const [only] = agents;
   if (agents.length !== 1 || !only) return graphCall(graph, fallback);
   return {
@@ -249,7 +235,7 @@ function spawnCall(args: Args, fallback: string): CallView {
       failFast: graph.failFast,
       wait: seconds(graph.wait),
     },
-    body: str(only.job ?? only.task),
+    body: str(only.job),
   };
 }
 
@@ -335,12 +321,6 @@ const AGENT_CALLS: typeof PARENT_CALLS = {
   agent_stop: {
     label: "stop",
     call: (args) => ({ title: str(args.name) }),
-  },
-  // Earlier builds' tool for starting agents, in stored transcripts.
-  delegate_graph: {
-    label: "delegate",
-    starts: true,
-    call: (args) => graphCall(args as GraphArgs, "group"),
   },
   agent_status: {
     label: "status",
@@ -529,46 +509,10 @@ export function formatReceipt(
 
 // --- Stored results ---
 
-/**
- * The receipt of a stored result. Results of earlier versions stored live
- * agent records instead; they read as what they showed: what a call
- * started, or how agents were when it returned.
- */
+/** The receipt of a stored result. */
 export function decodeReceipt(details: unknown): ToolReceipt | undefined {
   if (typeof details !== "object" || details === null) return undefined;
-  const stored = (details as { receipt?: unknown }).receipt;
-  if (stored !== undefined) return asReceipt(stored);
-  const legacy = details as {
-    started?: unknown;
-    agents?: unknown;
-    graphs?: unknown;
-    timedOut?: unknown;
-    message?: unknown;
-  };
-  if (!Array.isArray(legacy.agents)) return undefined;
-  try {
-    const agents = legacy.agents as AgentInfo[];
-    const graphs = (
-      Array.isArray(legacy.graphs) ? legacy.graphs : []
-    ) as GraphInfo[];
-    const byId = new Map(agents.map((info) => [info.id, info]));
-    const lookup = (id: string) => byId.get(id);
-    if (legacy.started === true)
-      return receipt({
-        graphs: graphs.map((graph) => startedGraph(graph, lookup)),
-      });
-    const wait =
-      Array.isArray(legacy.timedOut) && legacy.timedOut.length > 0
-        ? "timeout"
-        : legacy.message === WAIT_NOTES.attention.text
-          ? "attention"
-          : legacy.message === WAIT_NOTES.cancelled.text
-            ? "cancelled"
-            : undefined;
-    return observed(graphs, agents, lookup, wait);
-  } catch {
-    return undefined;
-  }
+  return asReceipt((details as { receipt?: unknown }).receipt);
 }
 
 /** The text of a result. */

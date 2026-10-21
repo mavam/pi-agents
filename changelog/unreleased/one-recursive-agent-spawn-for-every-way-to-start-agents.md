@@ -5,21 +5,22 @@ authors:
   - mavam
 prs:
   - 115
-created: 2026-10-21T09:14:41.233172Z
+created: 2026-10-21T11:26:48.741438Z
 ---
 
-`agent_spawn` is now the one tool for starting agents. Each call starts a graph of 1 to 12 agents, with `after` edges between them, and reports back as one message. A graph of one agent shows and reports as that agent. `agent_spawn_graph` is gone, and `agent_spawn` always takes an `agents` list:
+`agent_spawn` starts one group of 1 to 12 agents for Pi or for an agent permitted to spawn. Use `after` to pass results between agents within the group; the group reports one result to whoever started it. A group of one shows as its agent but retains a separate group ID:
 
 ```json
-{ "agents": [{ "name": "scout", "job": "Map the API surface." }] }
+{
+  "agents": [
+    { "name": "scout", "job": "Map the API surface." },
+    { "name": "review", "job": "Review the map.", "after": ["scout"], "spawn": true }
+  ]
+}
 ```
 
-Agents that may spawn now use the same tools as Pi: `agent_spawn`, `agent_wait`, and `agent_stop`, besides `agent_send` and `agent_status`. Spawning returns at once, and the results arrive as a message that starts with `[results]`, or from `agent_wait`. Spawned agents may spawn agents of their own when asked, up to three levels deep. An agent's job ends only with its first answer after the results of the agents it spawned, so Pi never gets an intermediate answer such as "checking with my agents".
+Agents permitted to spawn can use `agent_spawn`, `agent_send`, `agent_status`, `agent_wait`, and `agent_stop`. Spawning returns at once; the group result arrives as `[results]` input to the spawning agent or from a direct `agent_wait`, never both. Pi receives its groups' results as messages unless it calls `agent_wait` directly. Intermediate answers don't finish an agent's job while it is still owed results. `agent_wait` is model-only in both Pi and agents: codemode scripts cannot safely acknowledge results they might discard or truncate. Peer messages don't wake a blocked wait.
 
-Esc on an agent no longer stops its agents, and no longer ends its part in a graph: its job stays open until it answers again, and results of its agents wait for that answer. Stopping an agent stops every agent below it. When an agent's work fails, the agents whose results it still waited for stop.
+An interrupted agent keeps its children working and its job open for a corrective answer. Stopping it stops its entire subtree; a run that fails withdraws only the groups it spawned that still owe results. Agents can message their spawner, peers in their group, and their own children by name or reachable ID; Pi's agents can message each other. Spawning is bounded to three agent levels, 24 children per agent over its lifetime (including completed or cancelled children), and 16 unfinished initial spawned-agent jobs across a session. Later messages to finished agents don't use that fixed 16-agent allowance; the optional working-agent cap still applies.
 
-The `delegate` argument and profile field are now called `spawn`; profiles with `delegate` still work. Agents that delegated in earlier versions keep running and are offered the new tools instead of `delegate_graph`.
-
-An agent spawned by another agent can message its spawner, the agents spawned with it, and its own agents. Pi's agents still message each other.
-
-Scripts get IDs for agents and graphs, and a finished graph's `outcome`: `succeeded`, `partial`, `failed`, or `stopped`.
+This replaces earlier ways to start agents without compatibility shims. `agent_spawn_graph` and the agents' blocking `delegate_graph` are gone, `agent_spawn` takes only `agents` with a `job` for each agent, and profiles say `spawn: true` instead of `delegate: true`. Agents that earlier versions started can't spawn.

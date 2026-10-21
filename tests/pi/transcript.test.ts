@@ -39,5 +39,26 @@ describe("transcript", () => {
     second.start(ctx);
     second.sync([message, { ...message, id: "m2" }]);
     expect(entries).toHaveLength(2);
+
+    // An invalid timestamp doesn't identify a transcript message.
+    for (const sentAt of [undefined, "1000", Number.NaN]) {
+      entries.length = 0;
+      entries.push({
+        type: "custom",
+        customType: MESSAGE_ENTRY,
+        data: {
+          version: 1,
+          key: "m1@1000",
+          from: "scout",
+          to: "notes",
+          text: message.text,
+          sentAt,
+        },
+      });
+      const restarted = new MessageTranscript(pi);
+      restarted.start(ctx);
+      restarted.sync([message]);
+      expect(entries).toHaveLength(2);
+    }
   });
 });

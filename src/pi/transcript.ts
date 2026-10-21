@@ -26,8 +26,8 @@ export interface MessageEntryData {
   from: string;
   to: string;
   text: string;
-  /** When it was sent; absent in entries of earlier builds. */
-  sentAt?: number;
+  /** When it was sent. */
+  sentAt: number;
 }
 
 function isMessageEntryData(value: unknown): value is MessageEntryData {
@@ -38,7 +38,9 @@ function isMessageEntryData(value: unknown): value is MessageEntryData {
     typeof data.key === "string" &&
     typeof data.from === "string" &&
     typeof data.to === "string" &&
-    typeof data.text === "string"
+    typeof data.text === "string" &&
+    typeof data.sentAt === "number" &&
+    Number.isFinite(data.sentAt)
   );
 }
 

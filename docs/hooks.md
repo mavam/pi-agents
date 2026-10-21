@@ -41,8 +41,7 @@ same structural contract without importing or depending on pi-agents.
 Registration is synchronous. Call `register` before the listener returns;
 registrations after discovery finishes are ignored. Late-loaded registrations
 require a reload. Pi removes an extension's `pi.events` listeners on reload
-and session replacement; extensions that also support older Pi versions
-should unsubscribe in `session_shutdown`.
+and session replacement.
 
 Namespaces start with an ASCII letter or digit, contain only letters, digits,
 `.`, `_`, `/`, or `-`, and are at most 128 characters. Pi-agents ignores
@@ -52,8 +51,10 @@ ignored namespace behaves like an absent extension.
 
 ## Capture state
 
-`onAgentCreate(ctx)` runs synchronously once per spawn, after validation.
-A single agent or a whole graph counts as one spawn. It receives:
+`onAgentCreate(ctx)` runs synchronously once per spawn from Pi, after
+validation. A group with one or several agents counts as one spawn; agents
+spawned by another agent inherit its snapshot instead of calling this hook.
+It receives:
 
 - `ctx.parent.sessionId`: the owning Pi session.
 - `ctx.parent.branch`: a detached, frozen snapshot of its active branch at
@@ -63,8 +64,8 @@ A single agent or a whole graph counts as one spawn. It receives:
 The context describes the parent, not the new agent: its model and provider
 are known only per request, possibly after routing.
 
-Return JSON or `undefined`. Pi-agents stores JSON under your namespace in the
-agent's durable record, outside its prompt and the parent's transcript. Use a
+Return JSON or `undefined`. Pi-agents stores JSON under your namespace in each
+agent's durable record, outside its prompt and Pi's transcript. Use a
 version field inside your state if its format may evolve. Don't store secrets:
 state is persisted in agent storage, not an encrypted credential store.
 
@@ -75,17 +76,16 @@ namespace map to 8 KiB per agent. Returned values are detached before storage.
 
 Creation callbacks are snapshot operations, not exactly-once side effects:
 a failed spawn can be attempted again. A thrown error or invalid state fails
-creation without creating a partial graph.
+creation without creating a partial group.
 
 ### Inheritance
 
-- Graph nodes share the snapshot captured at graph creation, even if they
+- Agents in a group share the snapshot captured at creation, even if they
   start later.
-- Helpers copy their creating agent's entire state map without invoking
-  creation callbacks.
+- Agents spawned by another agent copy their spawner's entire state map
+  without invoking creation callbacks.
 - Follow-ups, retries, compaction, stop/reopen, and session recovery retain
   the stored state. Parent changes affect future top-level spawns only.
-- Existing agents without state are not backfilled.
 
 ## Transform requests
 

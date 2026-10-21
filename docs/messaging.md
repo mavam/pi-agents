@@ -14,17 +14,16 @@ Agents in one Pi session can send each other one-way messages.
 
 Each agent gets `agent_status` to list the agents it can reach and their
 jobs, including finished agents but not stopped ones. It can use
-`agent_send` to message one of them without waiting. A message steers a
-working recipient unless queued as a follow-up; the recipient's answer stays
-with it.
+`agent_send` to message one of them by name or ID without waiting. An ID
+addresses that agent even if another agent has since taken its name, but
+doesn't grant access outside the sender's reach. A message steers a working
+recipient unless queued as a follow-up; the recipient's answer stays with it.
 
 Pi's agents reach each other. An agent that another agent spawned reaches
 that agent and the others spawned with it, and every agent reaches the
-agents it spawned. Helpers that earlier versions started with
-`delegate_graph` can't send or receive messages. An agent you or Pi stopped
-refuses messages from agents until you or Pi message it again, and an agent
-that still waits for the agents its job needs refuses them until it
-starts.
+agents it spawned. An agent you or Pi stopped refuses messages from agents
+until you or Pi message it again. An agent that still waits for the agents
+its job needs refuses them until it starts.
 
 Messages appear in your transcript, but Pi's model doesn't see them.
 The focused panel shows queued messages. Use ↑↓ to select one, ⏎ to
@@ -86,6 +85,10 @@ appear in red. A session keeps its latest 1,000 messages.
 
 - Sends don't wait for replies or have time limits. Ask the recipient to
   message back if you need an answer.
+- Peer messages don't wake an agent blocked in `agent_wait`. If a child
+  asks its waiting spawner for clarification, the spawner can't answer until
+  the wait ends. For interactive coordination, let results arrive
+  asynchronously instead of waiting.
 - Agents can't message the parent, agents in another Pi session, or
   agents outside their reach.
 - There are no send budgets or hop limits. Agents told to keep talking do

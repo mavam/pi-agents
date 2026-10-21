@@ -97,11 +97,17 @@ describe("agent lifecycle hooks", () => {
       captureExtensionState,
       settings: { compaction: { keepRecentTokens: 0 } },
     });
-    const lead = await service.spawn({
-      ...spawn("lead", "delegate"),
-      spawn: true,
-    });
-    await service.wait([lead.id]);
+    const lead = await service
+      .spawnGraph({
+        agents: [
+          {
+            ...spawn("lead", "delegate"),
+            spawn: true,
+          },
+        ],
+      })
+      .then((graph) => graph.nodes[0]?.agentId ?? "");
+    await service.wait([lead]);
     expect(captures).toBe(1); // Spawned agents copy state; they never capture from Pi.
     expect(seen.some((ctx) => ctx.agent.name === "lead.helper")).toBe(true);
     expect(seen.every((ctx) => ctx.state?.setting === "first")).toBe(true);
@@ -120,7 +126,7 @@ describe("agent lifecycle hooks", () => {
 
     const harness = hostOf(service).harness.harness;
     const conversation = await harness.conversation(
-      Number(lead.id) as ConversationId,
+      Number(lead) as ConversationId,
       CONTEXT,
     );
     if (!conversation) throw new Error("Missing lead conversation");
@@ -142,8 +148,8 @@ describe("agent lifecycle hooks", () => {
       hooks: [observe(seen)],
       captureExtensionState,
     });
-    await service.send(lead.id, "again");
-    await service.wait([lead.id]);
+    await service.send(lead, "again");
+    await service.wait([lead]);
     expect(captures).toBe(2);
     expect(seen.at(-1)?.state).toEqual({ setting: "first" });
     expect(seen.at(-1)?.sessionId).toBe("test-parent");
@@ -170,27 +176,29 @@ describe("agent lifecycle hooks", () => {
         },
       ],
     });
-    const info = await service.spawn(spawn("held"));
+    const info = await service
+      .spawnGraph({ agents: [spawn("held")] })
+      .then((graph) => graph.nodes[0]?.agentId ?? "");
     await until(() => seen.length === 1);
     await briefly(undefined, 50);
     expect(payloads).toHaveLength(0);
-    expect(service.get(info.id)?.state).toBe("working");
+    expect(service.get(info)?.state).toBe("working");
     expect(seen[0]).toMatchObject({
       sessionId: "test-parent",
-      agent: { id: info.id, name: "held" },
+      agent: { id: info, name: "held" },
       model: { provider: MODEL.provider, id: MODEL.modelId },
       operation: "generation",
       state: { peak: true },
     });
     release();
-    await service.wait([info.id]);
+    await service.wait([info]);
     expect(payloads).toHaveLength(1);
 
     hold = new Promise(() => {});
-    await service.send(info.id, "again");
+    await service.send(info, "again");
     await until(() => seen.length === 2);
-    await service.stop(info.id);
-    await until(() => service.get(info.id)?.state !== "working");
+    await service.stop(info);
+    await until(() => service.get(info)?.state !== "working");
     expect(payloads).toHaveLength(1);
   });
 
@@ -206,13 +214,15 @@ describe("agent lifecycle hooks", () => {
       service.spawnGraph({ agents: [spawn("one"), spawn("two")] }),
     ).rejects.toThrow("capture failed");
     expect(service.list({ includeClosed: true })).toEqual([]);
-    const info = await service.spawn(spawn("ordinary"));
-    await service.wait([info.id]);
+    const info = await service
+      .spawnGraph({ agents: [spawn("ordinary")] })
+      .then((graph) => graph.nodes[0]?.agentId ?? "");
+    await service.wait([info]);
     const state = await hostOf(service).harness.harness.snapshot(
       AgentsDoc,
       CONTEXT,
     );
-    expect(state?.agents[info.id]?.extensionState).toEqual({
+    expect(state?.agents[info]?.extensionState).toEqual({
       absent: { version: 1 },
     });
   });
@@ -220,12 +230,14 @@ describe("agent lifecycle hooks", () => {
   test("request callbacks compose, see actual models and undefined state, and propagate failures", async () => {
     const { models, faux, payloads } = provider();
     const service = await open({ models });
-    const info = await service.spawn(spawn("legacy"));
-    await service.wait([info.id]);
+    const info = await service
+      .spawnGraph({ agents: [spawn("legacy")] })
+      .then((graph) => graph.nodes[0]?.agentId ?? "");
+    await service.wait([info]);
     const harness = hostOf(service).harness.harness;
     const identity = await harness.snapshot(
       ProviderDoc,
-      Number(info.id) as ConversationId,
+      Number(info) as ConversationId,
       CONTEXT,
     );
     if (!identity) throw new Error("Missing provider identity");

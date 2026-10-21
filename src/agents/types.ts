@@ -93,7 +93,7 @@ export interface AgentActivity {
   /** A compaction is running. */
   compacting?: boolean;
   /** The agent waits for agents it spawned: their graph, and progress. */
-  delegation?: { graph: string; done: number; total: number };
+  spawning?: { graph: string; done: number; total: number };
 }
 
 export interface AgentInfo {
@@ -128,7 +128,7 @@ export interface AgentInfo {
   /** The graph this agent belongs to, by graph ID. */
   graph?: string;
   /** Whether the agent may spawn agents of its own. */
-  delegates?: boolean;
+  spawn?: boolean;
   /** The agent that spawned this one, by agent ID; absent for the
    * parent's agents. */
   owner?: string;
@@ -296,7 +296,7 @@ export interface HelperDefaults {
 
 /**
  * Resolves a helper's profile, model, and skills like the parent's spawns, with the
- * delegating agent's settings as defaults. The session host provides it;
+ * spawning agent's settings as defaults. The session host provides it;
  * it throws `AgentError` for what it can't resolve.
  */
 export type HelperResolver = (
@@ -359,23 +359,4 @@ export class WaitInterrupted extends AgentError {
       reason === "cancelled" ? "Wait cancelled" : "Wait ended for the parent",
     );
   }
-}
-
-/**
- * Arguments with each agent's `task` renamed to `job`, its name before
- * pi-agents left "task" to pi-durable, so calls of earlier builds replay and
- * models used to the old name still work.
- */
-export function renameTaskToJob(args: unknown): unknown {
-  if (typeof args !== "object" || args === null) return args;
-  const rename = (value: unknown): unknown => {
-    if (typeof value !== "object" || value === null || Array.isArray(value))
-      return value;
-    const { task, ...rest } = value as Record<string, unknown>;
-    return task === undefined || "job" in rest ? rest : { ...rest, job: task };
-  };
-  const renamed = rename(args) as Record<string, unknown>;
-  return Array.isArray(renamed.agents)
-    ? { ...renamed, agents: renamed.agents.map(rename) }
-    : renamed;
 }

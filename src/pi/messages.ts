@@ -60,8 +60,7 @@ export interface ResultDetails {
   profile?: string;
   model?: string;
   usage?: string;
-  /** The delivery this message carries; absent in messages of earlier
-   * versions. */
+  /** The delivery this result carries, when posted as a message. */
   delivery?: string;
 }
 
@@ -148,8 +147,7 @@ export interface GraphResultDetails {
   nodes: NodeDetails[];
   /** A graph of one agent: it reads as that agent's answer. */
   single?: boolean;
-  /** The delivery this message carries; absent in messages of earlier
-   * versions and outside messages. */
+  /** The delivery this result carries, when posted as a message. */
   delivery?: string;
 }
 

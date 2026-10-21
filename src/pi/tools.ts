@@ -19,7 +19,6 @@ import {
 } from "../agents/receipts.js";
 import { turnResult } from "../agents/report.js";
 import type { AgentService } from "../agents/service.js";
-import { prepareSpawnArguments } from "../agents/spawning.js";
 import {
   AgentError,
   type AgentInfo,
@@ -33,7 +32,6 @@ import {
 import { AGENT_TOOL_NAMES } from "../host/tools.js";
 import { graphShape, oneLine } from "../ui/format.js";
 import { PARENT_TOOL_VIEWS, positiveSeconds } from "../ui/tool-views.js";
-import { callKey } from "./calls.js";
 import {
   graphContent,
   graphResultDetails,
@@ -130,9 +128,9 @@ function describeGraph(service: AgentService, graph: GraphInfo): string {
 }
 
 function statusLine(service: AgentService, info: AgentInfo): string {
-  const delegation = info.activity.delegation;
-  const state = delegation
-    ? `${info.state}, spawned ${delegation.graph} (${delegation.done}/${delegation.total} done)`
+  const spawning = info.activity.spawning;
+  const state = spawning
+    ? `${info.state}, spawned ${spawning.graph} (${spawning.done}/${spawning.total} done)`
     : info.activity.tool
       ? `${info.state}, using ${info.activity.tool}`
       : info.state;
@@ -195,42 +193,23 @@ type Execute<T extends TSchema, O extends TSchema> = (
   ctx: ExtensionContext,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
-  /** The call's key (see `callKey`); absent when it has no ID. */
-  call: string | undefined,
 ) => Promise<Returned<Static<O>>>;
 
 interface AgentToolSpec<T extends TSchema, O extends TSchema> {
   /** A name `PARENT_TOOL_VIEWS` draws. */
   name: string;
   description: string;
+  exposure?: ToolDefinition["exposure"];
   parameters: T;
   /** The schema of the output scripts get. */
   output: O;
   execute: Execute<T, O>;
 }
 
-/** An agent's `delegate`, the name of `spawn` before agents spawned
- * asynchronously. */
-function renameDelegate(agent: unknown): unknown {
-  if (typeof agent !== "object" || agent === null) return agent;
-  const { delegate, ...rest } = agent as Record<string, unknown>;
-  return delegate === undefined || "spawn" in rest
-    ? rest
-    : { ...rest, spawn: delegate };
-}
-
-/**
- * Arguments as the tools take them. Models sometimes write `timeout: false`
- * or quote numbers: seconds that aren't a positive number mean none, and
- * numeric strings count. Calls of earlier builds, and models used to them,
- * name a job `task`, give a single agent's fields at the top, and say
- * `delegate` for `spawn`.
- */
+/** Normalize positive timeout seconds, accepting numeric strings. */
 export function prepareArguments(args: unknown): unknown {
   if (typeof args !== "object" || args === null) return args;
-  const prepared = prepareSpawnArguments(args) as Record<string, unknown>;
-  if (Array.isArray(prepared.agents))
-    prepared.agents = prepared.agents.map(renameDelegate);
+  const prepared = { ...(args as Record<string, unknown>) };
   for (const key of ["timeout"]) {
     if (!(key in prepared)) continue;
     const parsed = positiveSeconds(prepared[key]);
@@ -250,10 +229,11 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
     name: spec.name,
     label: views.label,
     description: spec.description,
+    ...(spec.exposure ? { exposure: spec.exposure } : {}),
     parameters: spec.parameters,
     outputSchema: spec.output,
     prepareArguments: (args) => prepareArguments(args) as Static<T>,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       let service: AgentService;
       try {
         service = await host.ensure(ctx);
@@ -267,7 +247,6 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
           ctx,
           signal,
           onUpdate,
-          callKey(ctx, toolCallId),
         );
         return {
           ...text(result.content, result.details),
@@ -287,7 +266,7 @@ function defineAgentTool<T extends TSchema, O extends TSchema>(
 
 /**
  * `agent_wait`: block for agents, streaming their lines as progress for
- * scripts and RPC clients; the panel shows the live states. The wait ends
+ * RPC clients; the panel shows the live states. The wait ends
  * early when the parent is needed, such as when the user steers, so Pi can
  * place the steer instead of holding it back.
  */
@@ -297,7 +276,6 @@ async function waitWithProgress(
   timeoutSeconds: number | undefined,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<AgentToolDetails> | undefined,
-  call: string | undefined,
 ): Promise<Returned<WaitOutput>> {
   const snapshot = () => {
     const graphs = targets.flatMap((target) => {
@@ -334,9 +312,8 @@ async function waitWithProgress(
       ...(timeoutSeconds !== undefined
         ? { timeoutMs: timeoutSeconds * 1000 }
         : {}),
-      // The call's result carries the results and names them in its
-      // details; nested calls' results aren't stored, so their key counts.
-      carrier: call === undefined ? {} : { call },
+      // Only Pi's stored direct result confirms these deliveries.
+      carrier: true,
     });
     const content = [
       ...outcome.graphs.map((graph) => describeGraph(service, graph)),
@@ -562,11 +539,12 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
   pi.registerTool(
     defineAgentTool(host, {
       name: "agent_wait",
+      exposure: "model-only",
       description:
-        "Block the current turn until agents or graphs answer, or a message from the user interrupts, and return their results. Results arrive as messages without it; the system prompt says when to wait.",
+        "Block the current turn until agents or graphs answer, or a message from the user interrupts, and return their results. Call directly, not from codemode. Results arrive as messages without it; the system prompt says when to wait.",
       parameters: waitParams,
       output: WaitOutput,
-      execute: (service, params, _ctx, signal, onUpdate, call) =>
+      execute: (service, params, _ctx, signal, onUpdate) =>
         waitWithProgress(
           service,
           params.names.map((name) => {
@@ -577,7 +555,6 @@ export function registerAgentTools(pi: ExtensionAPI, host: SessionHost): void {
           params.timeout,
           signal,
           onUpdate,
-          call,
         ),
     }),
   );

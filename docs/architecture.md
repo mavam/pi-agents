@@ -17,7 +17,7 @@ may repeat; a tool call that can't safely repeat reports its interruption
 to the agent instead.
 
 Pending results aren't lost, but can arrive more than once after a crash
-if Pi hadn't saved them, including results a codemode script waited for.
+if Pi hadn't saved them, including results returned by a direct wait.
 
 If agent storage fails, agents pause and Pi tells you. They resume when
 storage reopens. A second failure within a minute leaves them paused until

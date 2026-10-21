@@ -53,8 +53,6 @@ const ALLOWED_FRONTMATTER_KEYS = new Set([
   "skills",
   "tools",
   "spawn",
-  // The name of `spawn` before agents spawned asynchronously.
-  "delegate",
 ]);
 
 function toErrorMessage(error: unknown): string {
@@ -118,12 +116,9 @@ export function parseProfileFile(
   if (skills && "error" in skills) return skills.error;
   const tools = parseList(frontmatter.tools, "tools");
   if (tools && "error" in tools) return tools.error;
-  for (const key of ["spawn", "delegate"])
-    if (frontmatter[key] !== undefined && typeof frontmatter[key] !== "boolean")
-      return `Invalid '${key}' (must be true or false)`;
-  const spawn = (frontmatter.spawn ?? frontmatter.delegate) as
-    | boolean
-    | undefined;
+  const spawn = frontmatter.spawn;
+  if (spawn !== undefined && typeof spawn !== "boolean")
+    return "Invalid 'spawn' (must be true or false)";
 
   return {
     name: name.trim(),

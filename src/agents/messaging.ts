@@ -16,8 +16,6 @@
  *
  * Agents reach the agent that spawned them, the others it spawned with
  * them, and the agents they spawned; the parent's agents reach each other.
- * Helpers of earlier builds' delegation stay private: they can't send, and
- * nobody can message them.
  */
 
 import type { Context } from "@earendil-works/chord";
@@ -44,7 +42,6 @@ import {
   AgentsDoc,
   GraphsDoc,
   type GraphsState,
-  isLegacyHelperGroup,
   isSpawned,
   MESSAGE_MEMORY,
   type MessageRecord,
@@ -78,7 +75,7 @@ export function messageSubmission(
   return {
     type: "input",
     content: messageInput(sender, message.text),
-    whenBusy: message.mode ?? "steer",
+    whenBusy: message.mode,
     requestId: message.id,
   };
 }
@@ -99,20 +96,10 @@ function textResult(text: string, isError = false): ToolExecutionResult {
   return { output: [{ type: "text", text }], isError };
 }
 
-function isHelper(
-  record: AgentRecord,
-  graphs: Readonly<GraphsState> | undefined,
-): boolean {
-  return isLegacyHelperGroup(
-    record.graph ? graphs?.graphs[record.graph] : undefined,
-  );
-}
-
 /**
  * Whom an agent can reach: the agent that spawned it and the others it
  * spawned with it, or, for the parent's agents, each other; and the agents
- * it spawned itself. Helpers of earlier builds reach nobody, and nobody
- * reaches them.
+ * it spawned itself.
  */
 function scopeOf(
   agents: Readonly<Record<string, AgentRecord>>,
@@ -121,14 +108,14 @@ function scopeOf(
 ): Set<string> {
   const scope = new Set<string>();
   const record = agents[self];
-  if (!record || isHelper(record, graphs)) return scope;
-  const group = record.graph ? graphs?.graphs[record.graph] : undefined;
+  if (!record) return scope;
+  const group = graphs?.graphs[record.graph];
   if (group && isSpawned(group)) {
     scope.add(group.owner.agent);
     for (const node of group.nodes) scope.add(node.agent);
   } else
     for (const [id, other] of Object.entries(agents)) {
-      const graph = other.graph ? graphs?.graphs[other.graph] : undefined;
+      const graph = graphs?.graphs[other.graph];
       if (!graph?.owner) scope.add(id);
     }
   for (const graph of Object.values(graphs?.graphs ?? {}))
@@ -138,8 +125,7 @@ function scopeOf(
   return scope;
 }
 
-/** The agent a name addresses within reach: an open one, else the
- * newest. */
+/** Resolve an ID within reach, or a name: an open agent, else the newest. */
 function resolve(
   agents: Readonly<Record<string, AgentRecord>>,
   graphs: Readonly<GraphsState> | undefined,
@@ -147,6 +133,8 @@ function resolve(
   name: string,
 ): [string, AgentRecord] | undefined {
   const scope = scopeOf(agents, graphs, self);
+  const byId = Object.hasOwn(agents, name) ? agents[name] : undefined;
+  if (byId) return scope.has(name) ? [name, byId] : undefined;
   const named = Object.entries(agents)
     .filter(([id, record]) => record.name === name && scope.has(id))
     .sort(([, left], [, right]) => left.createdAt - right.createdAt);
@@ -155,7 +143,7 @@ function resolve(
 
 /** Whom an agent can message: what each name within reach addresses,
  * unless it's stopped, open agents first, then the newest. An older agent
- * whose name a newer one took isn't listed, since sending can't reach it. */
+ * whose name a newer one took is still addressable by ID. */
 function reachable(
   agents: Readonly<Record<string, AgentRecord>>,
   graphs: Readonly<GraphsState> | undefined,
@@ -190,7 +178,6 @@ export async function awaitsJob(
   agentId: string,
   record: AgentRecord,
 ): Promise<boolean> {
-  if (record.graph === undefined) return false;
   const graph = (await tx.doc(GraphsDoc)).graphs[record.graph];
   const node = graph?.nodes.find((each) => each.agent === agentId);
   if (!node) return false;
@@ -219,8 +206,7 @@ async function bind(
   const agents = state?.agents ?? {};
   const from = String(api.conversationId);
   const sender = agents[from];
-  if (!sender || isHelper(sender, graphs))
-    return `${SEND_TOOL} is not available to you.`;
+  if (!sender) return `${SEND_TOOL} is not available to you.`;
   const target = resolve(agents, graphs, from, args.name);
   if (!target) return `No agent named ${args.name} within your reach.`;
   const [to, recipient] = target;
@@ -303,7 +289,7 @@ export function createMessagingExtension(
         description:
           "Send a message to another agent within your reach; agent_status lists them. You don't wait. A working recipient sees it at its next step, so it can change the answer the recipient is working on; with followUp, it waits until that work ends. The recipient's answer stays with it, so to get an answer, ask it to message you. Messages from other agents reach you as input that starts with [from <name>]; they don't come from the user.",
         parameters: Type.Object({
-          name: Type.String({ description: "Agent name" }),
+          name: Type.String({ description: "Agent name or ID" }),
           message: Type.String({
             description:
               "What to tell the agent; it receives it as input that starts with [from <your name>]",

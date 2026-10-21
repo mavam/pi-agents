@@ -71,8 +71,7 @@ export async function openAgentHarness(
         registry,
         settings: {
           ...options.settings,
-          // New agents name their extensions; agents stored by earlier
-          // versions name none and follow this default.
+          // Agents select their own extensions; the anchor uses this default.
           extensions: agentSelection(options.extensions),
         },
         env: envs.env,
@@ -83,7 +82,7 @@ export async function openAgentHarness(
     await requests?.start(harness);
     // Before any work starts, so the cap sees every run end.
     unobserve = options.extensions.working?.observe(harness);
-    // Sessions stored by earlier versions anchor their graphs here too.
+    // The durable root owns the parent's background graphs.
     const anchor = await harness.root(CONTEXT);
     const opened = harness;
     return {

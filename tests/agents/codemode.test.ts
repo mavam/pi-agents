@@ -9,15 +9,9 @@ import {
   fauxText,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import { AgentDoc, type ConversationId } from "@earendil-works/pi-durable";
+import type { ConversationId } from "@earendil-works/pi-durable";
 import type { AgentService } from "../../src/agents/service.js";
-import {
-  closeService,
-  hostOf,
-  jsonlStorage,
-  openService,
-  tempDir,
-} from "./helpers.js";
+import { closeService, hostOf, openService } from "./helpers.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
 const CLASSIFY = "pi.codemode.models.classify";
@@ -104,79 +98,56 @@ describe("codemode models", () => {
   test("codemode scripts classify and include model usage", async () => {
     const service = await openService({ models: modelsWithClassifier() });
     services.push(service);
-    const info = await service.spawn({
-      name: "with-codemode",
-      job: `script const model = await models.getModelOfType("classifier", "test", "judge");
+    const info = await service.spawnGraph({
+      agents: [
+        {
+          name: "with-codemode",
+          job: `script const model = await models.getModelOfType("classifier", "test", "judge");
         const result = await models.classify(model, {
           state: { text: "hello" },
           questions: { good: { type: "bool", instructions: "Good?", criteria: { true: "yes", false: "no" } } },
         });
         return result.answers.good.value;`,
-      cwd: ".",
-      model: { provider: "faux", modelId: "faux-1" },
-      tools: ["codemode"],
+          cwd: ".",
+          model: { provider: "faux", modelId: "faux-1" },
+          tools: ["codemode"],
+        },
+      ],
     });
-    const outcome = await service.wait([info.name]);
-    expect(outcome.agents[0]?.result?.text).toContain("true");
-    expect(outcome.agents[0]?.usage.cost).toBeCloseTo(0.0012);
+    await service.wait([info.name]);
+    expect(service.get(info.name)?.result?.text).toContain("true");
+    expect(service.get(info.name)?.usage.cost).toBeCloseTo(0.0012);
 
-    const plain = await service.spawn({
-      name: "without-codemode",
-      job: "plain",
-      cwd: ".",
-      model: { provider: "faux", modelId: "faux-1" },
-      tools: ["read"],
-    });
+    const plain = await service
+      .spawnGraph({
+        agents: [
+          {
+            name: "without-codemode",
+            job: "plain",
+            cwd: ".",
+            model: { provider: "faux", modelId: "faux-1" },
+            tools: ["read"],
+          },
+        ],
+      })
+      .then((graph) => graph.nodes[0]?.agentId ?? "");
     const conversation = await hostOf(service).harness.harness.conversation(
-      Number(plain.id) as ConversationId,
+      Number(plain) as ConversationId,
       CONTEXT,
     );
     const resolved = await conversation?.agent(CONTEXT);
     expect(resolved?.callable.map((tool) => tool.name)).not.toContain(CLASSIFY);
     await expect(
-      service.spawn({
-        name: "internal-by-name",
-        job: "plain",
-        cwd: ".",
-        tools: [CLASSIFY],
+      service.spawnGraph({
+        agents: [
+          {
+            name: "internal-by-name",
+            job: "plain",
+            cwd: ".",
+            tools: [CLASSIFY],
+          },
+        ],
       }),
     ).rejects.toThrow("Unknown tools");
-  });
-
-  test("agents stored without the model tools get them on reopen", async () => {
-    const directory = tempDir();
-    const storedTools = async (service: AgentService, id: string) =>
-      (
-        await hostOf(service).harness.harness.snapshot(
-          AgentDoc,
-          Number(id) as ConversationId,
-          CONTEXT,
-        )
-      )?.tools;
-    const first = await openService({ storage: await jsonlStorage(directory) });
-    // Closing twice is harmless, so a failure before the reopen closes it.
-    services.push(first);
-    const spawn = (name: string, tools: string[]) =>
-      first.spawn({ name, job: "plain", cwd: ".", tools });
-    const scripting = await spawn("scripting", ["codemode"]);
-    const reading = await spawn("reading", ["read"]);
-    await first.wait([scripting.name, reading.name]);
-    // As an older version stored it.
-    await hostOf(first).harness.harness.commit(async (tx) => {
-      const agent = await tx.doc(
-        AgentDoc,
-        Number(scripting.id) as ConversationId,
-      );
-      agent.tools = (agent.tools as string[]).filter(
-        (name) => !name.startsWith("pi.codemode."),
-      );
-    }, CONTEXT);
-    await closeService(first);
-    const second = await openService({
-      storage: await jsonlStorage(directory),
-    });
-    services.push(second);
-    expect(await storedTools(second, scripting.id)).toContain(CLASSIFY);
-    expect(await storedTools(second, reading.id)).not.toContain(CLASSIFY);
   });
 });

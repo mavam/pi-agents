@@ -247,8 +247,12 @@ describe("child-agent lifecycle protocol", () => {
       snapshots.at(-1)?.agents.filter((info) => info.state === "working") ?? [];
     try {
       publisher.start("session");
-      await service.spawn({ name: "a", job: "hold a", cwd: ".", model: MODEL });
-      await service.spawn({ name: "b", job: "hold b", cwd: ".", model: MODEL });
+      await service.spawnGraph({
+        agents: [{ name: "a", job: "hold a", cwd: ".", model: MODEL }],
+      });
+      await service.spawnGraph({
+        agents: [{ name: "b", job: "hold b", cwd: ".", model: MODEL }],
+      });
       await until(() => working().length === 2);
       await service.stop("a");
       await until(() => working().length === 1);

@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { receipt, type ToolReceipt } from "../../src/agents/receipts.js";
-import {
-  type AgentInfo,
-  EMPTY_USAGE,
-  type GraphInfo,
-} from "../../src/agents/types.js";
+import { EMPTY_USAGE } from "../../src/agents/types.js";
 import { PARENT_TOOL_VIEWS } from "../../src/ui/tool-views.js";
 
 const plainTheme = {
@@ -85,56 +81,7 @@ describe("tool results", () => {
     expect(draw("agent_wait", running)).toEqual(["◉ b luna"]);
   });
 
-  test("results stored by earlier versions still draw, without live state", () => {
-    const agent = (id: string, name: string, state: AgentInfo["state"]) =>
-      ({
-        id,
-        name,
-        job: name,
-        cwd: "/repo",
-        model: { provider: "openai", modelId: "luna" },
-        state,
-        closed: false,
-        createdAt: 0,
-        stateSince: 0,
-        lastActivityAt: 0,
-        usage,
-        activity: { tool: "grep" },
-        queued: true,
-      }) satisfies AgentInfo;
-    const agents = [agent("1", "map", "idle"), agent("2", "report", "working")];
-    const graph: GraphInfo = {
-      id: "10",
-      name: "audit",
-      policy: "allSettled",
-      state: "working",
-      closed: false,
-      stopped: false,
-      createdAt: 0,
-      stateSince: 0,
-      nodes: [
-        { agentId: "1", name: "map", inputs: [], end: false },
-        { agentId: "2", name: "report", inputs: ["1"], end: true },
-      ],
-      usage,
-    };
-    // What a call started.
-    expect(
-      draw("agent_spawn", {
-        at: 5_000,
-        started: true,
-        graphs: [graph],
-        agents,
-      }),
-    ).toEqual(["├─ map luna", "└─ report after map luna"]);
-    // A wait that timed out.
-    expect(
-      draw("agent_wait", {
-        at: 5_000,
-        agents: agents.slice(1),
-        timedOut: ["report"],
-      }),
-    ).toEqual(["⊠ report luna", "Timed out"]);
+  test("unrecognized receipts show the result text", () => {
     // Details this version can't read show the result's text.
     expect(
       draw("agent_wait", { receipt: { version: 99 } }, { text: "x" }),

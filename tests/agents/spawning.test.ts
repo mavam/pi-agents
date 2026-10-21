@@ -8,15 +8,10 @@ import {
   fauxText,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import {
-  AgentDoc,
-  type ConversationId,
-  type Storage,
-} from "@earendil-works/pi-durable";
-import type { DelegationLimits } from "../../src/agents/delegation.js";
+import type { ConversationId, Storage } from "@earendil-works/pi-durable";
 import { GraphsDoc } from "../../src/agents/records.js";
 import type { AgentService } from "../../src/agents/service.js";
-import { SPAWNING_TOOLS } from "../../src/agents/spawning.js";
+import type { SpawningLimits } from "../../src/agents/spawn-support.js";
 import type { GraphDelivery } from "../../src/agents/types.js";
 import {
   closeService,
@@ -99,39 +94,12 @@ function scripted(options: { hold?: boolean } = {}) {
   return { models, prompts };
 }
 
-/** A model that calls delegate_graph for `delegate`, as agents of
- * earlier builds did, and merges its result. */
-function legacy() {
-  const faux = fauxProvider();
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const step: FauxResponseStep = (context) => {
-    const last = context.messages
-      .filter((each) => each.role !== "system")
-      .at(-1);
-    if (last?.role === "toolResult")
-      return fauxAssistantMessage(`merged: ${textOf(last.content)}`);
-    return textOf(last?.content) === "delegate"
-      ? fauxAssistantMessage(
-          [
-            fauxToolCall("delegate_graph", {
-              agents: [{ name: "h", job: "help" }],
-            }),
-          ],
-          { stopReason: "toolUse" },
-        )
-      : fauxAssistantMessage("done");
-  };
-  faux.setResponses(Array.from({ length: 50 }, () => step));
-  return models;
-}
-
 async function open(
   options: {
     maxWorkingAgents?: number;
     storage?: Storage;
     models?: ReturnType<typeof scripted>["models"];
-    delegationLimits?: Partial<DelegationLimits>;
+    spawningLimits?: Partial<SpawningLimits>;
   } = {},
 ): Promise<AgentService> {
   const service = await openService({
@@ -339,8 +307,76 @@ describe("spawning", () => {
     const delivery = await resultOf(service, "lead");
     expect(answerOf(delivery)).toBe("final: scout answered:");
     await until(async () => (await service.liveTasks()).length === 0);
-    const kinds = (await entries(service, "lead")).map((entry) => entry.kind);
-    expect(kinds).not.toContain("pi-agents.results");
+    const transcript = await entries(service, "lead");
+    expect(transcript.map((entry) => entry.kind)).not.toContain(
+      "pi-agents.results",
+    );
+    const graphs = await hostOf(service).harness.harness.snapshot(
+      GraphsDoc,
+      CONTEXT,
+    );
+    const group = Object.values(graphs?.graphs ?? {}).find(
+      (each) => each.owner,
+    );
+    // Presentation is evidence in committed model context, not a task's
+    // result or progress details (neither is visible for nested calls).
+    const presented = transcript.find((entry) => entry.id === group?.presented);
+    const message = presented?.model?.[0];
+    expect(message?.role === "toolResult" && message.toolName).toBe(
+      "agent_wait",
+    );
+    expect(textOf(message?.content)).toContain("done: look");
+  });
+
+  test("codemode cannot consume results without showing them to the model", async () => {
+    const service = await open();
+    const code = [
+      'await tools.agent_spawn({ agents: [{ name: "s", job: "hold s" }] });',
+      "await tools.agent_wait({});",
+      'throw new Error("discarded child result");',
+    ].join(" ");
+    await service.spawnGraph({
+      agents: [lead(`script ${code}`, { tools: ["codemode"] })],
+    });
+    await until(
+      () =>
+        service
+          .get("lead")
+          ?.result?.text?.startsWith("final: Script failed") === true,
+    );
+    expect(service.pendingDeliveries()).toEqual([]);
+    const before = await entries(service, "lead");
+    const failure = before
+      .flatMap((entry) => entry.model ?? [])
+      .find(
+        (message) =>
+          message.role === "toolResult" && message.toolName === "codemode",
+      );
+    expect(failure?.role === "toolResult" && failure.isError).toBe(true);
+    expect(textOf(failure?.content)).toContain("agent_wait");
+    expect(textOf(failure?.content)).not.toContain("discarded child result");
+    const graphs = await hostOf(service).harness.harness.snapshot(
+      GraphsDoc,
+      CONTEXT,
+    );
+    const group = Object.values(graphs?.graphs ?? {}).find(
+      (each) => each.owner,
+    );
+    expect(group?.claim).toBeUndefined();
+    expect(group?.presented).toBeUndefined();
+
+    await until(() => service.get("lead.s")?.state === "working");
+    await service.interrupt("lead.s");
+    await service.prompt("lead.s", "continue", "auto");
+    const delivery = await resultOf(service, "lead");
+    expect(answerOf(delivery)).toBe("final: [results] s answered:");
+    const results = (await entries(service, "lead")).filter(
+      (entry) => entry.kind === "pi-agents.results",
+    );
+    expect(results).toHaveLength(1);
+    expect(JSON.stringify(results[0]?.model)).toContain(
+      "done: [user] continue",
+    );
   });
 
   test("spawned agents get only tools their spawner has", async () => {
@@ -359,8 +395,51 @@ describe("spawning", () => {
     expect(spawnedGroups(service)).toEqual([]);
   });
 
+  test("finishing a child does not replenish the lifetime spawn cap", async () => {
+    const service = await open({ spawningLimits: { perAgent: 1 } });
+    await service.spawnGraph({
+      agents: [lead(spawnJob([{ name: "a", job: "a" }]))],
+    });
+    await service.acknowledge(await resultOf(service, "lead"));
+    await service.send("lead", spawnJob([{ name: "b", job: "b" }]), "auto");
+    const outcome = await service.wait(["lead"]);
+    expect(outcome.agents[0]?.result?.text).toBe(
+      "final: You can spawn 1 agents in total and spawned 1, so 1 more is too many.",
+    );
+    expect(spawnedGroups(service)).toHaveLength(1);
+  });
+
+  test("cancelled children still consume the default lifetime cap of 24", async () => {
+    const service = await open();
+    const job = spawnJob(
+      Array.from({ length: 12 }, (_, index) => ({
+        name: `child-${index}`,
+        job: "hold child",
+      })),
+    );
+    await service.spawnGraph({ agents: [lead(job)] });
+    for (let batch = 1; batch <= 2; batch++) {
+      await until(
+        () =>
+          spawnedGroups(service).length === batch &&
+          service.get("lead")?.result?.text === "checking",
+      );
+      await service.stop("lead");
+      expect(spawnedGroups(service).every((group) => group.cancelled)).toBe(
+        true,
+      );
+      // Reopening the same agent must not reset its budget.
+      await service.send("lead", job, "auto");
+    }
+    const outcome = await service.wait(["lead"]);
+    expect(outcome.agents[0]?.result?.text).toBe(
+      "final: You can spawn 24 agents in total and spawned 24, so 12 more is too many.",
+    );
+    expect(spawnedGroups(service)).toHaveLength(2);
+  });
+
   test("the session caps spawned agents that work at once", async () => {
-    const service = await open({ delegationLimits: { active: 1 } });
+    const service = await open({ spawningLimits: { active: 1 } });
     await service.spawnGraph({
       agents: [lead(spawnJob([{ name: "a", job: "hold a" }]))],
     });
@@ -393,14 +472,14 @@ describe("spawning", () => {
     const service = await open();
     const call = (name: string) =>
       `tools.agent_spawn({ agents: [{ name: "${name}", job: "map ${name}" }] })`;
-    const info = await service.spawn(
-      lead(
-        `script return await Promise.all([${call("api")}, ${call("tests")}]);`,
-        {
-          tools: ["codemode"],
-        },
-      ),
-    );
+    const info = await service.spawnGraph({
+      agents: [
+        lead(
+          `script return await Promise.all([${call("api")}, ${call("tests")}]);`,
+          { tools: ["codemode"] },
+        ),
+      ],
+    });
     await until(
       () =>
         spawnedGroups(service).length === 2 &&
@@ -408,7 +487,10 @@ describe("spawning", () => {
       10_000,
     );
     const groups = spawnedGroups(service);
-    expect(groups.map((each) => each.owner)).toEqual([info.id, info.id]);
+    expect(groups.map((each) => each.owner)).toEqual([
+      info.nodes[0]?.agentId,
+      info.nodes[0]?.agentId,
+    ]);
     expect(groups.map((each) => each.nodes[0]?.name).sort()).toEqual([
       "lead.api",
       "lead.tests",
@@ -463,48 +545,5 @@ describe("spawning durability", () => {
     expect(spawnedGroups(after)).toHaveLength(1);
     // Only b's interrupted work ran again; a and the lead's job didn't.
     expect(second.prompts).toEqual(["hold b"]);
-  });
-
-  test("agents of earlier builds that delegated are offered agent_spawn", async () => {
-    const directory = tempDir();
-    const before = await open({ storage: await jsonlStorage(directory) });
-    const info = await before.spawn(lead("idle"));
-    await until(() => before.get("lead")?.state === "idle");
-    // An earlier build gave delegating agents delegate_graph instead.
-    const id = Number(info.id) as ConversationId;
-    await hostOf(before).harness.harness.commit(async (tx) => {
-      const agent = await tx.doc(AgentDoc, id);
-      const tools = (agent.tools ?? []).filter(
-        (name) => !(SPAWNING_TOOLS as readonly string[]).includes(name),
-      );
-      agent.tools = [...tools, "delegate_graph"];
-    }, CONTEXT);
-    const after = await reopen(before, {
-      storage: await jsonlStorage(directory),
-    });
-    const conversation = await hostOf(after).harness.harness.conversation(
-      id,
-      CONTEXT,
-    );
-    const tools = (await conversation?.agent(CONTEXT))?.tools.map(
-      (tool) => tool.name,
-    );
-    expect(tools).toEqual(expect.arrayContaining([...SPAWNING_TOOLS]));
-    expect(tools).not.toContain("delegate_graph");
-  });
-
-  test("calls of delegate_graph that agents of earlier builds make still run", async () => {
-    const service = await open({ models: legacy() });
-    const info = await service.spawn(lead("idle"));
-    await until(() => service.get("lead")?.state === "idle");
-    await hostOf(service).harness.harness.commit(async (tx) => {
-      const agent = await tx.doc(AgentDoc, Number(info.id) as ConversationId);
-      agent.tools = [...(agent.tools ?? []), "delegate_graph"];
-    }, CONTEXT);
-    await service.send("lead", "delegate", "auto");
-    const outcome = await service.wait(["lead"]);
-    expect(outcome.agents[0]?.result?.text).toStartWith(
-      "merged: Graph lead.helpers: lead.h answered:",
-    );
   });
 });

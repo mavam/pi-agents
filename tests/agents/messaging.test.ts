@@ -148,9 +148,9 @@ const SEND = `send ${JSON.stringify({ name: "b", message: "hello" })}`;
 describe("messaging", () => {
   test("a message reaches its recipient, and the answer stays there", async () => {
     const service = await open();
-    await service.spawn(spec("b", "idle"));
+    await service.spawnGraph({ agents: [spec("b", "idle")] });
     await until(() => service.get("b")?.state === "idle");
-    await service.spawn(spec("a", SEND));
+    await service.spawnGraph({ agents: [spec("a", SEND)] });
     await until(() => service.get("b")?.state === "idle");
     await until(() => service.messages()[0]?.status === "delivered");
     expect(service.get("a")?.result?.text).toBe("tool: Sent to b.");
@@ -162,8 +162,9 @@ describe("messaging", () => {
       service
         .pendingDeliveries()
         .map((delivery) =>
-          delivery.kind === "agent" && delivery.outcome.kind === "answered"
-            ? delivery.outcome.result.text
+          delivery.kind === "graph" &&
+          delivery.nodes[0]?.outcome.kind === "answered"
+            ? delivery.nodes[0].outcome.result.text
             : delivery.kind,
         )
         .sort(),
@@ -182,9 +183,9 @@ describe("messaging", () => {
         },
       },
     });
-    await before.spawn(spec("b", "idle"));
+    await before.spawnGraph({ agents: [spec("b", "idle")] });
     await until(() => before.get("b")?.state === "idle");
-    await before.spawn(spec("a", SEND));
+    await before.spawnGraph({ agents: [spec("a", SEND)] });
     await until(() => held);
 
     const after = await reopen(before, directory, {});
@@ -206,9 +207,9 @@ describe("messaging", () => {
         },
       },
     });
-    await before.spawn(spec("b", "idle"));
+    await before.spawnGraph({ agents: [spec("b", "idle")] });
     await until(() => before.get("b")?.state === "idle");
-    await before.spawn(spec("a", SEND));
+    await before.spawnGraph({ agents: [spec("a", SEND)] });
     await until(() => held);
     // b's stop is recorded, as when a stop ran while the send waited.
     const b = before.get("b")?.id as string;
@@ -234,13 +235,13 @@ describe("messaging", () => {
         },
       },
     });
-    await before.spawn(spec("b", "idle"));
+    await before.spawnGraph({ agents: [spec("b", "idle")] });
     await until(() => before.get("b")?.state === "idle");
-    await before.spawn(spec("a", SEND));
+    await before.spawnGraph({ agents: [spec("a", SEND)] });
     await until(() => held);
     // The bound agent stops, and another one takes its name.
     await before.stop("b");
-    await before.spawn(spec("b", "idle again"));
+    await before.spawnGraph({ agents: [spec("b", "idle again")] });
 
     const after = await reopen(before, directory, {});
     await until(() => after.get("a")?.state === "idle");
@@ -268,10 +269,10 @@ describe("messaging", () => {
         },
       },
     });
-    await service.spawn(spec("b", "idle"));
+    await service.spawnGraph({ agents: [spec("b", "idle")] });
     await until(() => service.get("b")?.state === "idle");
     const hold = JSON.stringify({ name: "b", message: "hold on" });
-    await service.spawn(spec("a", `send ${hold}`));
+    await service.spawnGraph({ agents: [spec("a", `send ${hold}`)] });
     await isLogged;
     const stopping = service.stop("b");
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -284,21 +285,22 @@ describe("messaging", () => {
 
   test("a follow-up waits until the recipient's work ends", async () => {
     const service = await open();
-    await service.spawn(spec("b", "sleep"));
+    await service.spawnGraph({ agents: [spec("b", "sleep")] });
     await until(() => service.get("b")?.state === "working");
     const later = JSON.stringify({
       name: "b",
       message: "hello",
       followUp: true,
     });
-    await service.spawn(spec("a", `send ${later}`));
+    await service.spawnGraph({ agents: [spec("a", `send ${later}`)] });
     await until(() => service.get("b")?.result?.text === "got: hello");
     // b answered its job before the message, unlike with a steer.
     const answers = service
       .pendingDeliveries()
       .flatMap((delivery) =>
-        delivery.kind === "agent" && delivery.outcome.kind === "answered"
-          ? [`${delivery.name}: ${delivery.outcome.result.text}`]
+        delivery.kind === "graph" &&
+        delivery.nodes[0]?.outcome.kind === "answered"
+          ? [`${delivery.name}: ${delivery.nodes[0].outcome.result.text}`]
           : [],
       );
     expect(answers.some((answer) => answer.startsWith("b: tool:"))).toBe(true);
@@ -306,7 +308,7 @@ describe("messaging", () => {
 
   test("spawned agents reach their spawner, not unrelated agents", async () => {
     const service = await open();
-    await service.spawn(spec("b", "idle"));
+    await service.spawnGraph({ agents: [spec("b", "idle")] });
     await until(() => service.get("b")?.state === "idle");
     const send = (name: string) =>
       `send ${JSON.stringify({ name, message: "hi" })}`;
@@ -314,9 +316,13 @@ describe("messaging", () => {
       { name: "h", job: send("lead") },
       { name: "k", job: send("b") },
     ];
-    await service.spawn({
-      ...spec("lead", `spawn ${JSON.stringify({ agents })}`),
-      spawn: true,
+    await service.spawnGraph({
+      agents: [
+        {
+          ...spec("lead", `spawn ${JSON.stringify({ agents })}`),
+          spawn: true,
+        },
+      ],
     });
     await until(() => service.get("lead.k")?.result !== undefined);
     await until(() => service.get("lead.h")?.result !== undefined);
@@ -324,7 +330,7 @@ describe("messaging", () => {
     expect(service.get("lead.k")?.result?.text).toBe(
       "tool: No agent named b within your reach.",
     );
-    await service.spawn(spec("a", send("lead.h")));
+    await service.spawnGraph({ agents: [spec("a", send("lead.h"))] });
     await until(() => service.get("a")?.state === "idle");
     expect(service.get("a")?.result?.text).toBe(
       "tool: No agent named lead.h within your reach.",
@@ -339,15 +345,16 @@ describe("messaging", () => {
   test("a steer joins the recipient's work, also the answer its parent gets", async () => {
     const service = await open();
     // b works in steps: a tool call, then its answer.
-    await service.spawn(spec("b", "sleep"));
+    await service.spawnGraph({ agents: [spec("b", "sleep")] });
     await until(() => service.get("b")?.state === "working");
-    await service.spawn(spec("a", SEND));
+    await service.spawnGraph({ agents: [spec("a", SEND)] });
     await until(() => service.get("b")?.result?.text === "got: hello");
     const answers = service
       .pendingDeliveries()
       .flatMap((delivery) =>
-        delivery.kind === "agent" && delivery.outcome.kind === "answered"
-          ? [`${delivery.name}: ${delivery.outcome.result.text}`]
+        delivery.kind === "graph" &&
+        delivery.nodes[0]?.outcome.kind === "answered"
+          ? [`${delivery.name}: ${delivery.nodes[0].outcome.result.text}`]
           : [],
       );
     expect(answers).toContain("b: got: hello");
@@ -355,9 +362,9 @@ describe("messaging", () => {
 
   test("interrupting a busy recipient drops its queued messages", async () => {
     const service = await open();
-    await service.spawn(spec("b", "hold"));
+    await service.spawnGraph({ agents: [spec("b", "hold")] });
     await until(() => service.get("b")?.state === "working");
-    await service.spawn(spec("a", SEND));
+    await service.spawnGraph({ agents: [spec("a", SEND)] });
     await until(() => service.messages()[0]?.status === "queued");
     await service.interrupt("b");
     await until(() => service.messages()[0]?.status === "dropped");
@@ -368,13 +375,13 @@ describe("messaging", () => {
     const service = await open();
     // An older b that answered and closed; the newer b takes its name, so
     // only the newer one is listed.
-    await service.spawn(spec("b", "Old job."));
+    await service.spawnGraph({ agents: [spec("b", "Old job.")] });
     await until(() => service.pendingDeliveries().length === 1);
     await service.acknowledge(service.pendingDeliveries()[0] as never);
     await until(() => service.list().length === 0);
-    await service.spawn(spec("b", "Keep notes. Then rest."));
+    await service.spawnGraph({ agents: [spec("b", "Keep notes. Then rest.")] });
     await until(() => service.get("b")?.state === "idle");
-    await service.spawn(spec("a", "status"));
+    await service.spawnGraph({ agents: [spec("a", "status")] });
     await until(() => service.get("a")?.state === "idle");
     const result = (await entries(service, "a"))
       .map((entry) => entry.model?.[0])
@@ -405,9 +412,9 @@ describe("messaging", () => {
     const service = await open();
     // Longer than pi-durable's default output limit of 50 KB.
     const job = `Keep notes. ${"x".repeat(60_000)}`;
-    await service.spawn(spec("b", job));
+    await service.spawnGraph({ agents: [spec("b", job)] });
     await until(() => service.get("b")?.state === "idle");
-    await service.spawn(spec("a", "status"));
+    await service.spawnGraph({ agents: [spec("a", "status")] });
     await until(() => service.get("a")?.state === "idle");
     const result = (await entries(service, "a"))
       .map((entry) => entry.model?.[0])
@@ -418,10 +425,10 @@ describe("messaging", () => {
 
   test("a stopped agent refuses messages until the parent messages it", async () => {
     const service = await open();
-    await service.spawn(spec("b", "idle"));
+    await service.spawnGraph({ agents: [spec("b", "idle")] });
     await until(() => service.get("b")?.state === "idle");
     await service.stop("b");
-    await service.spawn(spec("a", SEND));
+    await service.spawnGraph({ agents: [spec("a", SEND)] });
     await until(() => service.get("a")?.state === "idle");
     expect(service.get("a")?.result?.text).toBe(
       "tool: b was stopped and doesn't take messages from agents.",

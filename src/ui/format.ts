@@ -196,8 +196,8 @@ function activityText(info: AgentInfo, now: number): string | undefined {
     return `no activity for ${formatElapsed(silent)}`;
   const { activity } = info;
   if (activity.retry) return `retrying: ${activity.retry}`;
-  if (activity.delegation)
-    return `spawned ${shortName(activity.delegation.graph, info.name)} ${activity.delegation.done}/${activity.delegation.total}`;
+  if (activity.spawning)
+    return `spawned ${shortName(activity.spawning.graph, info.name)} ${activity.spawning.done}/${activity.spawning.total}`;
   if (activity.compacting) return "compacting";
   if (activity.tool) return `Using ${activity.tool}`;
   return activity.summary;

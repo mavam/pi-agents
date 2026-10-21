@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { renderToolOutputType } from "@earendil-works/pi-codemode";
-import type {
-  AgentToolUpdateCallback,
-  ExtensionAPI,
-  ExtensionContext,
-  ToolDefinition,
+import {
+  type AgentToolUpdateCallback,
+  createAgentSessionFromServices,
+  createAgentSessionRuntime,
+  createAgentSessionServices,
+  type ExtensionAPI,
+  type ExtensionContext,
+  SessionManager,
+  SettingsManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 import type { AgentService } from "../../src/agents/service.js";
@@ -15,6 +20,7 @@ import {
   type GraphInfo,
 } from "../../src/agents/types.js";
 import { SkillCatalog } from "../../src/catalog/skills.js";
+import agentExtension from "../../src/index.js";
 import { agentOutput, graphOutput } from "../../src/pi/output.js";
 import type { SessionHost } from "../../src/pi/session.js";
 import { registerAgentTools } from "../../src/pi/tools.js";
@@ -25,6 +31,7 @@ import {
   MODEL,
   openService,
   parentOf,
+  tempDir,
 } from "../agents/helpers.js";
 
 const noSkills = new SkillCatalog(async () => []);
@@ -85,8 +92,8 @@ async function gated() {
   const registered = tools();
   let calls = 0;
   /**
-   * Run a tool and return its text and what a script gets, which must match
-   * the tool's output schema.
+   * Run a direct tool call and return its text and structured output,
+   * which must match the tool's output schema.
    */
   return async (
     name: string,
@@ -184,8 +191,62 @@ function single(name: string, state: string, agent: Record<string, unknown>) {
   };
 }
 
-describe("script output", () => {
-  test("every agent tool declares the output scripts get", () => {
+describe("tool exposure", () => {
+  test("Pi exposes waits only to the model and keeps other tools composable", async () => {
+    const cwd = tempDir();
+    const runtime = await createAgentSessionRuntime(
+      async ({ cwd, sessionManager, sessionStartEvent }) => {
+        const services = await createAgentSessionServices({
+          cwd,
+          agentDir: tempDir(),
+          settingsManager: SettingsManager.inMemory(),
+          resourceLoaderOptions: {
+            noExtensions: true,
+            noSkills: true,
+            noPromptTemplates: true,
+            noThemes: true,
+            noContextFiles: true,
+            extensionFactories: [agentExtension],
+          },
+        });
+        return {
+          ...(await createAgentSessionFromServices({
+            services,
+            sessionManager,
+            sessionStartEvent,
+            noTools: "builtin",
+          })),
+          services,
+          diagnostics: services.diagnostics,
+        };
+      },
+      { cwd, sessionManager: SessionManager.inMemory(cwd) },
+    );
+    try {
+      const errors: unknown[] = [];
+      await runtime.session.bindExtensions({
+        mode: "json",
+        onError: (error) => errors.push(error),
+      });
+      expect(errors).toEqual([]);
+      expect(runtime.session.getActiveToolNames()).toContain("agent_wait");
+      const callable = runtime.session.getCallableToolNames();
+      expect(callable).not.toContain("agent_wait");
+      for (const name of [
+        "agent_spawn",
+        "agent_send",
+        "agent_status",
+        "agent_stop",
+      ])
+        expect(callable).toContain(name);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+});
+
+describe("structured output", () => {
+  test("every agent tool declares its structured output", () => {
     const registered = tools();
     for (const tool of registered.values())
       expect(tool.outputSchema, tool.name).toBeDefined();
@@ -198,10 +259,11 @@ describe("script output", () => {
   test("agents resolve to what their latest turn produced", async () => {
     const run = await gated();
     const a = { kind: "agent", name: "a", state: "idle" };
-    // Spawns and sends return at once; a script waits with agent_wait. A
+    // Spawns and sends return at once; the model waits with agent_wait. A
     // spawn starts a group, of one agent here, until its result arrived.
     expect(
-      (await run("agent_spawn", { job: "one", name: "a" })).output,
+      (await run("agent_spawn", { agents: [{ job: "one", name: "a" }] }))
+        .output,
     ).toEqual(single("a", "working", { outcome: "working" }));
     expect((await run("agent_wait", { names: ["a"] })).output).toEqual({
       agents: [],
@@ -229,7 +291,7 @@ describe("script output", () => {
 
   test("an interrupted turn doesn't report an earlier answer", async () => {
     const run = await gated();
-    await run("agent_spawn", { job: "one", name: "a" });
+    await run("agent_spawn", { agents: [{ job: "one", name: "a" }] });
     await run("agent_wait", { names: ["a"] });
     expect(
       (await run("agent_send", { name: "a", message: "hold two" })).output,
@@ -251,7 +313,7 @@ describe("script output", () => {
 
   test("a failed turn reports its error, not an earlier answer", async () => {
     const run = await gated();
-    await run("agent_spawn", { job: "one", name: "a" });
+    await run("agent_spawn", { agents: [{ job: "one", name: "a" }] });
     await run("agent_wait", { names: ["a"] });
     await run("agent_send", { name: "a", message: "fail two" });
     const failed = await run("agent_wait", { names: ["a"] });
@@ -275,7 +337,7 @@ describe("script output", () => {
     };
     // A wait that something interrupted reports what it was asked for.
     const interrupted = { agents: [w], graphs: [], pending: ["w"] };
-    await run("agent_spawn", { job: "hold", name: "w" });
+    await run("agent_spawn", { agents: [{ job: "hold", name: "w" }] });
     // A timeout.
     expect(
       (await run("agent_wait", { names: ["w"], timeout: 0.05 })).output,
@@ -580,10 +642,6 @@ describe("call results", () => {
       "spawn scout spawn=true",
       "  Look.",
     ]);
-    // Calls of earlier builds draw the same.
-    expect(
-      drawFrame(spawn, { name: "scout", task: "Look.", delegate: true }),
-    ).toEqual(["spawn scout spawn=true", "  Look."]);
     // Its result reads as its answer, without a graph.
     const waited = await run("agent_wait", { names: ["scout"] });
     expect(waited.text).toBe("scout answered:\n\ndone: Look.");

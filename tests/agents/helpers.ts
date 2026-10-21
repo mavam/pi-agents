@@ -10,7 +10,6 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
-import type { DelegationLimits } from "../../src/agents/delegation.js";
 import {
   type AgentExtensions,
   createAgentExtensions,
@@ -26,6 +25,7 @@ import {
   AgentService,
   type AgentServiceOptions,
 } from "../../src/agents/service.js";
+import type { SpawningLimits } from "../../src/agents/spawn-support.js";
 import type { HelperResolver } from "../../src/agents/types.js";
 import type { SkillSource } from "../../src/catalog/skills.js";
 import type { AgentHooks } from "../../src/hooks.js";
@@ -217,7 +217,7 @@ export interface HostOptions {
   /** Whether the project is trusted, and its skills. */
   trusted?: boolean;
   skills?: SkillSource;
-  delegationLimits?: Partial<DelegationLimits>;
+  spawningLimits?: Partial<SpawningLimits>;
   /** Hooks into messaging between agents. */
   messaging?: MessagingOptions;
   maxWorkingAgents?: number;
@@ -241,8 +241,8 @@ export function testExtensions(options: HostOptions = {}): AgentExtensions {
     },
     resolveHelper: inheritHelper,
     hooks: beforeRequestHooks("test-parent", options.hooks ?? []),
-    ...(options.delegationLimits
-      ? { delegationLimits: options.delegationLimits }
+    ...(options.spawningLimits
+      ? { spawningLimits: options.spawningLimits }
       : {}),
     ...(options.messaging ? { messaging: options.messaging } : {}),
     ...(options.maxWorkingAgents

@@ -25,7 +25,6 @@ import {
   type Parent,
 } from "../agents/parent.js";
 import type { PendingDelivery } from "../agents/types.js";
-import { issued, qualify } from "./calls.js";
 import {
   GRAPH_RESULT_MESSAGE,
   type GraphResultDetails,
@@ -88,24 +87,6 @@ function deliveriesOf(details: unknown): unknown[] {
       ? (details as { deliveries?: unknown }).deliveries
       : undefined;
   return Array.isArray(deliveries) ? deliveries : [];
-}
-
-/**
- * The entry of the assistant message that issued the call of a tool result:
- * the result's nearest assistant ancestor, if it issued the call.
- */
-function issuerOf(
-  entry: SessionEntry,
-  toolCallId: string,
-  byId: ReadonlyMap<string, SessionEntry>,
-): string | undefined {
-  let current = entry.parentId ? byId.get(entry.parentId) : undefined;
-  while (current) {
-    if (current.type === "message" && current.message.role === "assistant")
-      return issued(current, toolCallId) ? current.id : undefined;
-    current = current.parentId ? byId.get(current.parentId) : undefined;
-  }
-  return undefined;
 }
 
 /** How often to check again while a delivery waits for Pi. */
@@ -221,17 +202,11 @@ export class PiParent implements Parent {
 
   async received(handovers: readonly Handover[]): Promise<ReadonlySet<string>> {
     const wanted = new Set(handovers.map((handover) => handover.id));
-    const byCall = new Map<string, string[]>();
-    for (const { id, call } of handovers)
-      if (call !== undefined)
-        byCall.set(call, [...(byCall.get(call) ?? []), id]);
     const found = new Set<string>();
     const take = (id: unknown) => {
       if (typeof id === "string" && wanted.has(id)) found.add(id);
     };
-    const entries = this.entries();
-    const byId = new Map(entries.map((entry) => [entry.id, entry]));
-    for (const entry of entries) {
+    for (const entry of this.entries()) {
       if (entry.type === "custom_message") {
         if (
           entry.customType === RESULT_MESSAGE ||
@@ -242,18 +217,11 @@ export class PiParent implements Parent {
       }
       if (entry.type !== "message" || entry.message.role !== "toolResult")
         continue;
+      // Only the stored direct wait result carries deliveries. Nested
+      // call metadata says nothing about what the model actually received.
       const result = entry.message;
-      deliveriesOf(result.details).forEach(take);
-      // Pi stores no results of nested calls, such as a codemode script's,
-      // only their records in the caller's result. The core knows their
-      // keys only in memory, so after a restart they deliver again.
-      const issuer = issuerOf(entry, result.toolCallId, byId);
-      if (issuer === undefined) continue;
-      if (!result.isError)
-        byCall.get(qualify(issuer, result.toolCallId))?.forEach(take);
-      for (const call of result.nestedCalls?.calls ?? [])
-        if (call.status === "ok")
-          byCall.get(qualify(issuer, call.id))?.forEach(take);
+      if (result.toolName === "agent_wait" && !result.isError)
+        deliveriesOf(result.details).forEach(take);
     }
     return found;
   }

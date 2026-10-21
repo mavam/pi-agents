@@ -24,7 +24,10 @@
  */
 
 import type { Context } from "@earendil-works/chord";
-import { withAbortSignal } from "@earendil-works/chord/context";
+import {
+  awaitWithContext,
+  withAbortSignal,
+} from "@earendil-works/chord/context";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
@@ -32,26 +35,13 @@ import {
   type AgentState as DurableAgentState,
   defineTool,
   type Extension,
+  LiveDoc,
   type TaskId,
   type ToolExecutionApi,
   type ToolExecutionResult,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import {
-  activeHelpers,
-  type DelegationLimits,
-  errorText,
-  HELPER_NAME,
-  helperNames,
-  helpersReceipt,
-  type Planned,
-  plan,
-  qualify,
-  reportNode,
-  startedReceipt,
-  textResult,
-} from "./delegation.js";
 import { GraphTask, NodeTask } from "./graphs.js";
 import type { MessagingHub } from "./hub.js";
 import { UNBOUNDED_OUTPUT } from "./messaging.js";
@@ -60,13 +50,25 @@ import { type GraphReceipt, receipt } from "./receipts.js";
 import {
   type AgentRecord,
   AgentsDoc,
-  depthOf,
   type GraphRecord,
   GraphsDoc,
-  isLegacyHelperGroup,
   isSpawned,
 } from "./records.js";
 import { graphReport } from "./report.js";
+import {
+  activeHelpers,
+  errorText,
+  HELPER_NAME,
+  helperNames,
+  helpersReceipt,
+  type Planned,
+  plan,
+  qualify,
+  reportNode,
+  type SpawningLimits,
+  startedReceipt,
+  textResult,
+} from "./spawn-support.js";
 import { endNodes } from "./topology.js";
 import {
   AgentError,
@@ -75,7 +77,6 @@ import {
   type HelperResolver,
   isThinkingLevel,
   MAX_DEPTH,
-  renameTaskToJob,
   THINKING_LEVELS,
 } from "./types.js";
 
@@ -95,7 +96,7 @@ export type Selection = (spawn: boolean) => {
 
 export interface SpawningOptions {
   resolve: HelperResolver;
-  limits: DelegationLimits;
+  limits: SpawningLimits;
   /** The extensions and tools of a new agent besides its own tools. */
   selection: Selection;
   /** The agent waits until the returned function is called, so a cap on
@@ -190,15 +191,12 @@ type SpawnArgs = {
 /** The spawner, if it may spawn: its record and depth. */
 function spawner(
   agents: Readonly<Record<string, AgentRecord>> | undefined,
-  graphs: Readonly<Record<string, GraphRecord>> | undefined,
   id: string,
 ): { record: AgentRecord; depth: number } | string {
   const record = agents?.[id];
-  if (!record?.delegate) return `${SPAWN_TOOL} is not available to you.`;
-  if (isLegacyHelperGroup(record.graph ? graphs?.[record.graph] : undefined))
-    return `${SPAWN_TOOL} is not available to you.`;
+  if (!record?.spawn) return `${SPAWN_TOOL} is not available to you.`;
   if (record.stopped) return "You were stopped and can't spawn agents.";
-  const depth = depthOf(record, graphs);
+  const depth = record.depth;
   if (depth >= MAX_DEPTH)
     return `Agents at depth ${MAX_DEPTH} can't spawn agents.`;
   return { record, depth };
@@ -281,6 +279,8 @@ async function start(
         );
     const policy: GraphPolicy = args.failFast ? "failFast" : "allSettled";
     const since = await newestEntry(tx, api);
+    // The run that spawns decides the group's fate if it fails.
+    const run = (await tx.doc(LiveDoc, api.conversationId)).run?.inputs;
     const graph = await tx.createTask(
       GraphTask,
       { policy },
@@ -330,7 +330,7 @@ async function start(
         delivered: [],
         graph: String(graph),
         depth: owner.depth + 1,
-        ...(helper.spec.spawn ? { delegate: true } : {}),
+        ...(helper.spec.spawn ? { spawn: true } : {}),
       };
     });
     graphsDoc.graphs[String(graph)] = {
@@ -348,7 +348,12 @@ async function start(
       // The result goes to the spawning agent, not the parent.
       pending: false,
       ...(single ? { single: true as const } : {}),
-      owner: { agent: owner.id, tool: api.taskId, spawned: true, since },
+      owner: {
+        agent: owner.id,
+        tool: api.taskId,
+        since,
+        ...(run === undefined ? {} : { run: run.map(Number) }),
+      },
     };
     return { graph: String(graph) };
   }, context);
@@ -422,7 +427,7 @@ async function spawnExecute(
   // A rerun after a restart finds the group it started.
   let graphId = startedBy(graphs?.graphs, api.taskId);
   if (graphId === undefined) {
-    const allowed = spawner(agents?.agents, graphs?.graphs, id);
+    const allowed = spawner(agents?.agents, id);
     if (typeof allowed === "string") return textResult(allowed, true);
     if (args.agents.length < GRAPH_SIZE.min)
       return textResult("Name at least one agent to spawn.", true);
@@ -432,12 +437,7 @@ async function spawnExecute(
       context,
     )) ?? {}) as DurableAgentState;
     const agent = await api.agent(context);
-    const own = new Set(
-      options
-        .selection(true)
-        .tools.map((tool) => tool.name)
-        .concat("delegate_graph"),
-    );
+    const own = new Set(options.selection(true).tools.map((tool) => tool.name));
     // Agents get tools their spawner has, besides the tools that make
     // them agents.
     const ownTools = agent.tools.filter((tool) => !own.has(tool.name));
@@ -602,12 +602,7 @@ async function waitExecute(
     for (const group of chosen) {
       const graph = doc.graphs[group];
       if (!graph || graph.cancelled) continue;
-      // A result this call presented already, as a nested call does
-      // before its result commits, returns again on a rerun.
-      if (graph.presented !== undefined) {
-        if (graph.claim === api.taskId) result.push(group);
-        continue;
-      }
+      if (graph.presented !== undefined) continue;
       if (graph.attempt !== undefined && graph.withdrawn === undefined)
         continue;
       if (graph.claim !== undefined && graph.claim !== api.taskId) {
@@ -662,21 +657,14 @@ async function waitExecute(
   );
   const finished = results.filter((each) => each.finished);
   const pending = results.filter((each) => !each.finished);
-  // Unfinished groups deliver as input once they finish. A nested call,
-  // such as a script's, leaves no result entry of its own to show that
-  // the agent got the results, so it records that they did.
-  const nested = api.callId.includes("/");
-  if (pending.length > 0 || (nested && finished.length > 0))
+  // Unfinished groups deliver as input once they finish. Finished results
+  // count only when this direct call commits its model-visible result.
+  if (pending.length > 0)
     await api.commit(async (tx) => {
       const doc = await tx.doc(GraphsDoc);
-      const newest = nested ? await newestEntry(tx, api) : undefined;
       for (const each of pending) {
         const graph = doc.graphs[each.group];
         if (graph?.claim === api.taskId) delete graph.claim;
-      }
-      for (const each of nested ? finished : []) {
-        const graph = doc.graphs[each.group];
-        if (graph && graph.presented === undefined) graph.presented = newest;
       }
     }, context);
   const text = [
@@ -788,7 +776,13 @@ async function stopExecute(
     if (typeof found === "string") return textResult(found, true);
     bound = await api.memo<StopBinding>("stop", found, context);
   }
-  await options.hub.stop({ kind: bound.kind, id: bound.id });
+  // The stop continues if this caller is interrupted, but its refresh may
+  // need the caller's turn. Never hold that turn by ignoring cancellation.
+  context.abortSignal?.throwIfAborted();
+  await awaitWithContext(
+    options.hub.stop({ kind: bound.kind, id: bound.id }),
+    context,
+  );
   return textResult(
     bound.kind === "graph"
       ? `Stopped group ${bound.name}; its result arrives as a message.`
@@ -796,7 +790,7 @@ async function stopExecute(
   );
 }
 
-/** The spawning tools; the delegation extension carries them. */
+/** The tools available to agents that may spawn. */
 export function spawningTools(options: SpawningOptions): ToolRegistration[] {
   return [
     defineTool({
@@ -807,14 +801,15 @@ export function spawningTools(options: SpawningOptions): ToolRegistration[] {
       // A rerun finds the group the interrupted call started.
       replay: "safe",
       outputLimits: UNBOUNDED_OUTPUT,
-      prepareArguments: (args) => prepareSpawnArguments(args) as never,
       execute: (args, api, context) =>
         spawnExecute(args as SpawnArgs, api, context, options),
     }),
     defineTool({
       name: WAIT_TOOL,
+      // Only a direct result enters model context; a script can discard it.
+      callers: ["model"],
       description:
-        "Block until groups you spawned finished and return their results, which then don't arrive as a message.",
+        "Block until groups you spawned finished and return their results, which then don't arrive as a message. Call directly, not from codemode.",
       parameters: waitParameters,
       replay: "safe",
       outputLimits: UNBOUNDED_OUTPUT,
@@ -829,19 +824,4 @@ export function spawningTools(options: SpawningOptions): ToolRegistration[] {
       execute: (args, api, context) => stopExecute(args, api, context, options),
     }),
   ] as ToolRegistration[];
-}
-
-/** Arguments of earlier shapes: a single agent's fields at the top, and
- * `task` for `job`. */
-export function prepareSpawnArguments(args: unknown): unknown {
-  const renamed = renameTaskToJob(args);
-  if (typeof renamed !== "object" || renamed === null) return renamed;
-  const record = renamed as Record<string, unknown>;
-  if (Array.isArray(record.agents) || typeof record.job !== "string")
-    return record;
-  const { failFast, ...agent } = record;
-  return {
-    agents: [agent],
-    ...(failFast !== undefined ? { failFast } : {}),
-  };
 }

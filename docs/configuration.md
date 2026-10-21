@@ -20,8 +20,7 @@ Extensions must opt into [agent hooks](./hooks.md); parent request hooks
 aren't inherited automatically. For example, a compatible pi-service-tier
 version can pass its service tiers and `/fast` overrides to agents.
 Captured settings survive resumes and pass to the agents that agents
-spawn. Later parent
-changes affect future agents only.
+spawn. Later parent changes affect future agents only.
 
 ## Working agents
 
@@ -38,12 +37,22 @@ server. Set the limit in `~/.pi/agent/settings.json` or your project's
 ```
 
 An agent keeps its slot until its work ends, including tool calls, but
-yields it while `agent_wait` waits for the agents it spawned. Agents over the cap wait in order and
-show as working. A later message to a finished agent waits for a new slot.
+yields it while a direct `agent_wait` call waits for the agents it spawned.
+Agents over the cap wait in order and show as working. A later message to a
+finished agent waits for a new slot.
 
-Agents, graphs, and spawned agents share the cap. Your session's own requests don't
-count toward it. Without the setting, agents aren't capped. Restart Pi after
-changing it.
+Agents in every group, including spawned agents, share the cap. Your
+session's own requests don't count toward it. Without the setting, no additional
+working-agent cap applies. Restart Pi after changing it.
+
+This concurrency setting is separate from the fixed spawning limits:
+12 agents per group, 24 children per spawning agent over its lifetime, and
+16 unfinished initial spawned-agent jobs in a session (including agents
+waiting on dependencies). Later messages to agents whose initial jobs
+finished don't use that fixed 16-agent allowance, but still use the
+working-agent cap. The lifetime limit includes completed and cancelled
+children and never replenishes. See
+[agents that spawn agents](./graphs.md#agents-that-spawn-agents).
 
 ## Storage retention
 

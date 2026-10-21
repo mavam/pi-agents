@@ -9,6 +9,7 @@ import type { AgentState, TargetRef } from "./types.js";
 
 export class MessagingHub {
   private readonly turns = new Map<string, Promise<unknown>>();
+  private readonly retries = new Map<string, () => void>();
 
   /** An agent's state as the service derives it; the service sets it. */
   state: (agentId: string) => AgentState | undefined = () => undefined;
@@ -19,6 +20,22 @@ export class MessagingHub {
     throw new Error("Agents are closing");
   };
 
+  /** Take an idle turn without waiting behind work that may need the
+   * caller to finish, such as result presentation during a refresh. */
+  async tryTurn(
+    agentId: string,
+    work: () => Promise<void>,
+    retry: () => void,
+  ): Promise<boolean> {
+    if (this.turns.has(agentId)) {
+      // One wakeup per recipient, however many refreshes try meanwhile.
+      this.retries.set(agentId, retry);
+      return false;
+    }
+    await this.turn(agentId, work);
+    return true;
+  }
+
   /** Run `work` once the recipient's earlier turns ended. */
   async turn<T>(agentId: string, work: () => Promise<T>): Promise<T> {
     const previous = this.turns.get(agentId) ?? Promise.resolve();
@@ -28,7 +45,12 @@ export class MessagingHub {
     try {
       return await run;
     } finally {
-      if (this.turns.get(agentId) === settled) this.turns.delete(agentId);
+      if (this.turns.get(agentId) === settled) {
+        this.turns.delete(agentId);
+        const retry = this.retries.get(agentId);
+        this.retries.delete(agentId);
+        retry?.();
+      }
     }
   }
 }

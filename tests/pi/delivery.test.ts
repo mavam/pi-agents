@@ -5,8 +5,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentService } from "../../src/agents/service.js";
-import { callKey } from "../../src/pi/calls.js";
-import { GRAPH_RESULT_MESSAGE, RESULT_MESSAGE } from "../../src/pi/messages.js";
+import { GRAPH_RESULT_MESSAGE } from "../../src/pi/messages.js";
 import { PiParent } from "../../src/pi/parent.js";
 import {
   closeService,
@@ -57,10 +56,10 @@ function piSession(manager = SessionManager.inMemory(process.cwd())) {
         message.details,
       ),
     /** The parent's turn issues a tool call. */
-    issue: (id: string) =>
+    issue: (id: string, name = "agent_wait") =>
       manager.appendMessage({
         role: "assistant",
-        content: [{ type: "toolCall", id, name: "agent_wait", arguments: {} }],
+        content: [{ type: "toolCall", id, name, arguments: {} }],
         api: "faux",
         provider: "faux",
         model: "faux-1",
@@ -71,12 +70,16 @@ function piSession(manager = SessionManager.inMemory(process.cwd())) {
     /** Pi stores a call's result, which records its nested calls. */
     store: (
       toolCallId: string,
-      options: { deliveries?: string[]; nested?: string[] } = {},
+      options: {
+        deliveries?: string[];
+        nested?: string[];
+        isError?: boolean;
+      } = {},
     ) =>
       manager.appendMessage({
         role: "toolResult",
         toolCallId,
-        toolName: options.nested ? "code" : "agent_wait",
+        toolName: options.nested ? "codemode" : "agent_wait",
         content: [{ type: "text", text: "…" }],
         details: options.deliveries ? { deliveries: options.deliveries } : {},
         ...(options.nested
@@ -91,7 +94,7 @@ function piSession(manager = SessionManager.inMemory(process.cwd())) {
               },
             }
           : {}),
-        isError: false,
+        isError: options.isError ?? false,
         timestamp: Date.now(),
       }),
   };
@@ -132,7 +135,7 @@ function setup(
     for (const handler of handlers.get(type) ?? [])
       await handler({ type }, ctx);
   };
-  return { sent, parent, session, ctx, emit };
+  return { sent, parent, session, emit };
 }
 
 /** Long enough for a delivery that would happen to happen. */
@@ -148,8 +151,12 @@ describe("delivery to Pi", () => {
     parent.setBlocked(() => attached);
     const current = await openService({ parent });
     service = current;
-    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
-    await current.spawn({ job: "b", name: "b", cwd: ".", model: MODEL });
+    await current.spawnGraph({
+      agents: [{ job: "a", name: "a", cwd: ".", model: MODEL }],
+    });
+    await current.spawnGraph({
+      agents: [{ job: "b", name: "b", cwd: ".", model: MODEL }],
+    });
     await until(() => current.pendingDeliveries().length === 2);
 
     state.idle = true;
@@ -161,10 +168,10 @@ describe("delivery to Pi", () => {
     parent.notify();
     await until(() => sent.length === 2);
     expect(sent.map((message) => message.customType)).toEqual([
-      RESULT_MESSAGE,
-      RESULT_MESSAGE,
+      GRAPH_RESULT_MESSAGE,
+      GRAPH_RESULT_MESSAGE,
     ]);
-    expect(sent[0]?.content).toBe("Agent a answered:\n\ndone: a");
+    expect(sent[0]?.content).toBe("a answered:\n\ndone: a");
     // Only the last message starts a parent turn.
     expect(sent.map((message) => message.options?.triggerTurn)).toEqual([
       undefined,
@@ -184,21 +191,25 @@ describe("delivery to Pi", () => {
       models: createGatedFaux().models,
     });
     service = current;
-    await current.spawn({
-      job: "fail first",
-      name: "a",
-      cwd: ".",
-      model: MODEL,
+    await current.spawnGraph({
+      agents: [
+        {
+          job: "fail first",
+          name: "a",
+          cwd: ".",
+          model: MODEL,
+        },
+      ],
     });
     await until(() => current.pendingDeliveries().length === 1);
     await current.send("a", "second", "auto");
-    await until(() => current.pendingDeliveries().length === 2);
+    await until(() => current.get("a")?.result?.text === "done: second");
 
     state.idle = true;
     parent.notify();
     await until(() => sent.length === 2);
     expect(sent.map((message) => message.content)).toEqual([
-      "Agent a failed: model_error\n\ncannot fail first",
+      "a failed: cannot fail first.",
       "Agent a answered:\n\ndone: second",
     ]);
   });
@@ -225,7 +236,9 @@ describe("delivery to Pi", () => {
     const pi = setup(state);
     const current = await openService({ parent: pi.parent });
     service = current;
-    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawnGraph({
+      agents: [{ job: "a", name: "a", cwd: ".", model: MODEL }],
+    });
     await until(() => current.pendingDeliveries().length === 1);
     await settle();
     expect(pi.sent).toEqual([]);
@@ -242,7 +255,9 @@ describe("delivery to Pi", () => {
     const pi = setup(state, { recheckMs: 20 });
     const current = await openService({ parent: pi.parent });
     service = current;
-    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawnGraph({
+      agents: [{ job: "a", name: "a", cwd: ".", model: MODEL }],
+    });
     await until(() => current.pendingDeliveries().length === 1);
     await settle();
     expect(pi.sent).toEqual([]);
@@ -257,7 +272,9 @@ describe("confirmed delivery to Pi", () => {
     const { sent, parent, session } = setup({ idle: true, saves: false });
     const current = await openService({ parent });
     service = current;
-    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawnGraph({
+      agents: [{ job: "a", name: "a", cwd: ".", model: MODEL }],
+    });
     await until(() => sent.length === 1);
     expect(sent[0]?.details?.delivery).toBe(current.pendingDeliveries()[0]?.id);
 
@@ -281,7 +298,9 @@ describe("confirmed delivery to Pi", () => {
       storage: await jsonlStorage(directory),
     });
     service = before;
-    await before.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
+    await before.spawnGraph({
+      agents: [{ job: "a", name: "a", cwd: ".", model: MODEL }],
+    });
     await until(() => first.sent.length === 1);
     // Pi saved the message, and pi-agents crashed before it saw it.
     await closeService(before);
@@ -306,7 +325,9 @@ describe("confirmed delivery to Pi", () => {
       storage: await jsonlStorage(directory),
     });
     service = before;
-    await before.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
+    await before.spawnGraph({
+      agents: [{ job: "a", name: "a", cwd: ".", model: MODEL }],
+    });
     await until(() => first.sent.length === 1);
     await closeService(before);
 
@@ -326,13 +347,15 @@ describe("confirmed delivery to Pi", () => {
 
   test("a wait's stored result counts as its delivery", async () => {
     const state = { idle: false };
-    const { sent, parent, session, ctx } = setup(state);
+    const { sent, parent, session } = setup(state);
     const current = await openService({ parent });
     service = current;
-    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
+    await current.spawnGraph({
+      agents: [{ job: "a", name: "a", cwd: ".", model: MODEL }],
+    });
     session.issue("toolu_1");
     const outcome = await current.wait(["a"], {
-      carrier: { call: callKey(ctx, "toolu_1") },
+      carrier: true,
     });
     expect(outcome.deliveries).toHaveLength(1);
 
@@ -351,53 +374,49 @@ describe("confirmed delivery to Pi", () => {
     expect(sent).toEqual([]);
   });
 
-  test("a script's wait counts once Pi stored the script's result", async () => {
-    const { sent, parent, session, ctx } = setup({ idle: true });
-    const current = await openService({ parent });
-    service = current;
-    // An earlier turn's script reused the call's ID; its result doesn't count.
-    session.issue("toolu_2");
-    session.store("toolu_2", { nested: ["toolu_2/1"] });
-    await current.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
-    session.issue("toolu_2");
-    await current.wait(["a"], {
-      carrier: { call: callKey(ctx, "toolu_2/1") },
-    });
-    parent.notify();
-    await settle();
-    expect(current.get("a")?.closed).toBe(false);
+  test.each([false, true])(
+    "nested wait metadata never confirms delivery (carrier error: %s)",
+    async (isError) => {
+      const { parent, session } = setup({ idle: true });
+      session.issue("toolu_2", "codemode");
+      // Nested-call metadata proves neither delivery nor model context.
+      session.store("toolu_2", { nested: ["toolu_2/1"], isError });
+      expect(await parent.received([{ id: "delivery" }])).toEqual(new Set());
+    },
+  );
 
-    // Pi stores no nested results; it records the calls in the caller's.
-    session.store("toolu_2", { nested: ["toolu_2/1"] });
-    parent.notify();
-    await until(() => current.get("a")?.closed === true);
-    expect(sent).toEqual([]);
-  });
+  test.each([false, true])(
+    "a wait survives restart (saved: %s)",
+    async (saved) => {
+      const directory = tempDir();
+      const first = setup({ idle: false });
+      const before = await openService({
+        parent: first.parent,
+        storage: await jsonlStorage(directory),
+      });
+      service = before;
+      await before.spawnGraph({
+        agents: [{ job: "a", name: "a", cwd: ".", model: MODEL }],
+      });
+      first.session.issue("toolu_3");
+      const outcome = await before.wait(["a"], {
+        carrier: true,
+      });
+      await closeService(before);
+      if (saved)
+        first.session.store("toolu_3", { deliveries: outcome.deliveries });
 
-  test("a restart after Pi stored a wait's result doesn't post it", async () => {
-    const directory = tempDir();
-    const first = setup({ idle: false });
-    const before = await openService({
-      parent: first.parent,
-      storage: await jsonlStorage(directory),
-    });
-    service = before;
-    await before.spawn({ job: "a", name: "a", cwd: ".", model: MODEL });
-    first.session.issue("toolu_3");
-    const outcome = await before.wait(["a"], {
-      carrier: { call: callKey(first.ctx, "toolu_3") },
-    });
-    await closeService(before);
-    first.session.store("toolu_3", { deliveries: outcome.deliveries });
-
-    const second = setup({ idle: true }, { session: first.session });
-    const after = await openService({
-      parent: second.parent,
-      storage: await jsonlStorage(directory),
-      models: createFaux().models,
-    });
-    service = after;
-    await until(() => after.get("a")?.closed === true);
-    expect(second.sent).toEqual([]);
-  });
+      const second = setup({ idle: true }, { session: first.session });
+      const after = await openService({
+        parent: second.parent,
+        storage: await jsonlStorage(directory),
+        models: createFaux().models,
+      });
+      service = after;
+      await until(() => after.get("a")?.closed === true);
+      expect(second.sent.map((message) => message.details?.delivery)).toEqual(
+        saved ? [] : outcome.deliveries,
+      );
+    },
+  );
 });

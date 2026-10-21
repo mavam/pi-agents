@@ -34,13 +34,10 @@ export class Delivery {
   private deliveryChain: Promise<void> = Promise.resolve();
   private deliveryQueued = false;
   /** Deliveries handed to the parent that it doesn't hold yet: posted, or
-   * carried by the result of a parent call's wait, with that call's key.
+   * carried by the result of a direct parent wait.
    * In memory only: after a restart, the parent decides what it holds, and
    * what it doesn't hold goes out again. */
-  private readonly inFlight = new Map<
-    string,
-    { carried: boolean; call?: string }
-  >();
+  private readonly inFlight = new Map<string, { carried: boolean }>();
   /** Whether delivery asked the parent what it holds since starting. */
   private reconciled = false;
   private readonly options: DeliveryOptions;
@@ -57,14 +54,10 @@ export class Delivery {
     return this.inFlight.has(id);
   }
 
-  markCarried(ids: string[], call?: string): void {
+  markCarried(ids: string[]): void {
     // In flight until the parent holds the call's result; no longer
     // queued meanwhile.
-    for (const id of ids)
-      this.inFlight.set(id, {
-        carried: true,
-        ...(call === undefined ? {} : { call }),
-      });
+    for (const id of ids) this.inFlight.set(id, { carried: true });
   }
 
   async settle(): Promise<void> {
@@ -194,10 +187,7 @@ export class Delivery {
     this.reconciled = true;
     if (ids.size === 0) return;
     const received = await this.options.parent.received(
-      [...ids].map((id) => {
-        const call = this.inFlight.get(id)?.call;
-        return call === undefined ? { id } : { id, call };
-      }),
+      [...ids].map((id) => ({ id })),
     );
     await this.acknowledgeAll(all.filter((each) => received.has(each.id)));
     const next = due();

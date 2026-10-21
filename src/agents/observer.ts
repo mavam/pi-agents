@@ -213,8 +213,7 @@ export class HarnessObserver {
 
   /**
    * The entry that answered the agent's job: the answer to the submission
-   * of its job, under `parent:1` for agents the parent started and under
-   * its node's request ID for a graph's agents.
+   * of its job, under its graph node's request ID.
    */
   async jobAnswer(agentId: string, rid: string): Promise<number | undefined> {
     const cached = this.jobAnswers.get(agentId);

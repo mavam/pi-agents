@@ -13,7 +13,7 @@ const DELEGATE =
 
 /** When results arrive, in a session that goes on after your turn. */
 const ONGOING =
-  "Agents work in the background, and their results arrive on their own as messages that start a new turn. After starting agents, tell the user what you started and end your turn, also when nothing else is left to do, or continue with work that doesn't need the results. Call agent_wait only when this turn must combine results, as a codemode script that aggregates them does.";
+  "Agents work in the background, and their results arrive on their own as messages that start a new turn. After starting agents, tell the user what you started and end your turn, also when nothing else is left to do, or continue with work that doesn't need the results. Call agent_wait directly, never from codemode, only when this turn must combine results.";
 
 /** When results arrive, in a run that ends with your answer. */
 const SINGLE_SHOT =

@@ -14,11 +14,9 @@
 
 import type { AgentInfo, GraphInfo, PendingDelivery } from "./types.js";
 
-/** A delivery handed to the parent: its ID, and the key of the parent call
- * whose result carried it, if one did. */
+/** A delivery handed to the parent, identified in its saved context. */
 export interface Handover {
   id: string;
-  call?: string;
 }
 
 /** What the parent may read to word deliveries, by immutable ID. */
@@ -51,8 +49,7 @@ export interface Parent {
   ): Promise<void>;
   /**
    * The deliveries among `handovers` that the parent holds durably, by ID:
-   * delivered, or carried by the stored result of one of its calls, which
-   * either names their IDs or is the result of their call.
+   * delivered, or carried by a saved direct-wait result naming their IDs.
    */
   received(handovers: readonly Handover[]): Promise<ReadonlySet<string>>;
   /**

@@ -419,7 +419,7 @@ describe("formatting", () => {
           state: "working",
           lastActivityAt: 1_000,
           activity: {
-            delegation: { graph: "lead.helpers", done: 1, total: 2 },
+            spawning: { graph: "lead.helpers", done: 1, total: 2 },
           },
         }),
         2_000,

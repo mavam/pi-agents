@@ -20,16 +20,6 @@
  * nodes; a node that ends without its answer withdraws the groups its agent
  * spawned, which the service then stops. Once a node finished, its agent
  * keeps working normally when messaged.
- *
- * Versioning: the graph task is at version 1, the node task at version 2,
- * which added the `settle` and `fail` phases; version 1's checkpoints are
- * valid version 2 checkpoints. A change to a task's input or checkpoint
- * shape bumps `version` and extends `migrate(input, checkpoint,
- * fromVersion)`, which pi-durable applies to live tasks when it next
- * reserves them; it must keep the checkpoints' task IDs. Terminal tasks are
- * stored results and never migrate. A task whose definition is missing
- * stays blocked, not lost; stopping its graph then settles it as
- * `orphaned`.
  */
 
 import type { Context, JsonValue } from "@earendil-works/chord";
@@ -49,7 +39,6 @@ import {
 import {
   coveringAnswer,
   covers,
-  isFinalAnswer,
   obligationsOf,
   scanStart,
 } from "./obligations.js";
@@ -82,9 +71,9 @@ type NodeState =
   /** The agent got its job at entry `since` but hasn't settled it: it was
    * interrupted, or answered before results of its groups arrived. */
   | { phase: "settle"; agent: number; since: number }
-  /** The agent's job failed, at entry `before` if it has one; the groups
-   * it spawned before stop first. */
-  | { phase: "fail"; agent: number; reason: string; before?: number };
+  /** The agent's job failed in the run of input `submission`; the groups
+   * that run spawned stop first. */
+  | { phase: "fail"; agent: number; reason: string; submission?: number };
 
 export type GraphInput = { policy: GraphPolicy };
 type GraphState = { phase: "join" } | { phase: "report"; nodes: number[] };
@@ -212,20 +201,24 @@ async function agentOf(
   });
 }
 
-/** Mark the agent's spawned groups that haven't ended cancelled, those
- * spawned before entry `before` if given: their results no longer count,
- * and the service stops them. Inside a commit. */
+/** Mark the agent's spawned groups that haven't ended cancelled, only
+ * those of the run of input `submission` if given: their results no
+ * longer count, and the service stops them. Inside a commit. */
 async function cancelGroups(
   tx: ReadTx,
   agent: number,
-  before?: number,
+  submission?: number,
 ): Promise<number[]> {
   const graphs: GraphsState = await tx.doc(GraphsDoc);
   const live: number[] = [];
   for (const [id, graph] of Object.entries(graphs.graphs)) {
     if (!isSpawned(graph) || graph.owner.agent !== String(agent)) continue;
     if (graph.cancelled || graph.presented !== undefined) continue;
-    if (before !== undefined && (graph.owner.since ?? 0) >= before) continue;
+    if (
+      submission !== undefined &&
+      !(graph.owner.run ?? []).includes(submission)
+    )
+      continue;
     const task = await tx.task(Number(id) as TaskId);
     if (task?.state.status === "terminal") continue;
     graph.cancelled = true;
@@ -302,11 +295,6 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
   name: NODE_TASK,
   version: 2,
   initial: () => ({ phase: "wait" }),
-  // Version 1 had the `wait` and `run` phases only, with the same shapes.
-  migrate: (input, checkpoint) => ({
-    input: input as NodeInput,
-    checkpoint: checkpoint as NodeState,
-  }),
   phases: {
     wait: async (task, runtime, context) => {
       try {
@@ -410,14 +398,16 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
         }
         const settled = await submission.wait(context);
         await runtime.commit(async (tx) => {
-          const failed = (reason: string, before?: number) =>
+          // Only the groups of the failed run: a later run's are another
+          // request's work, also when this phase reruns after a restart.
+          const failed = (reason: string) =>
             ({
               status: "running",
               checkpoint: {
                 phase: "fail",
                 agent,
                 reason,
-                ...(before !== undefined ? { before } : {}),
+                submission: Number(settled.id),
               },
             }) as const;
           const settle = (since: number) =>
@@ -435,7 +425,7 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
             const entry = await tx.entry(settled.answer);
             const answer = entry?.model?.[0] as AssistantMessage | undefined;
             if (answer?.stopReason === "error")
-              return failed(answer.errorMessage ?? "error", settled.answer);
+              return failed(answer.errorMessage ?? "error");
             if (answer?.stopReason === "aborted") return settle(settled.entry);
             const graphs = (await tx.doc(GraphsDoc)).graphs;
             // An answer before results it was owed is an intermediate one.
@@ -470,10 +460,9 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
             ])
           ).filter((watch) => watch !== undefined);
           try {
-            const [agents, graphs, live] = await Promise.all([
+            const [agents, graphs] = await Promise.all([
               runtime.snapshot(AgentsDoc, context),
               runtime.snapshot(GraphsDoc, context),
-              runtime.snapshot(LiveDoc, cid, context),
             ]);
             // Stopping the agent ends its job; nothing it answers counts.
             if (agents?.agents[String(agent)]?.stopped) {
@@ -510,32 +499,9 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
               );
               return;
             }
-            // An idle agent whose latest turn failed failed its job.
-            const latest = [...entries]
-              .reverse()
-              .find((entry) => entry.kind === "pi.assistant");
-            const message = latest?.model?.[0] as AssistantMessage | undefined;
-            if (
-              live?.run === undefined &&
-              latest !== undefined &&
-              latest.id > since &&
-              !isFinalAnswer(latest) &&
-              message?.stopReason === "error"
-            ) {
-              await runtime.commit(
-                () => ({
-                  status: "running",
-                  checkpoint: {
-                    phase: "fail",
-                    agent,
-                    reason: message.errorMessage ?? "error",
-                    before: latest.id,
-                  },
-                }),
-                context,
-              );
-              return;
-            }
+            // The original submission already ended (or was interrupted).
+            // A later run can answer this open job, but its failure belongs
+            // to its own inputs, not to this job or the groups it still needs.
             await nextChange(runtime, context, watches);
           } finally {
             await Promise.all(watches.map((watch) => watch.stop()));
@@ -546,11 +512,11 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
       }
     },
     fail: async (task, runtime, context) => {
-      const { agent, reason, before } = task.state.checkpoint;
+      const { agent, reason, submission } = task.state.checkpoint;
       try {
         let live: number[] = [];
         await runtime.commit(async (tx) => {
-          live = await cancelGroups(tx, agent, before);
+          live = await cancelGroups(tx, agent, submission);
           return undefined;
         }, context);
         // The service stops the withdrawn groups; the job fails once they

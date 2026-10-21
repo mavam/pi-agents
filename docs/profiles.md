@@ -32,7 +32,7 @@ Profile fields:
 | `thinking` | Thinking level. Defaults to the session's level. |
 | `tools` | Tool allowlist. Defaults to the session's active tools that agents can run, or `read`, `bash`, `edit`, `write` if it has none. |
 | `skills` | Skills to apply in full, including those only you can invoke. Without this field, the agent sees your skill catalog. An empty list disables skills. |
-| `spawn` | Whether agents of this profile may spawn agents of their own. Defaults to `false`. Profiles of earlier versions call it `delegate`. |
+| `spawn` | Whether agents of this profile may spawn agents of their own. Defaults to `false`. |
 
 The Markdown body extends the agent's system prompt. Arguments that Pi passes
 to `agent_spawn` override profile settings.

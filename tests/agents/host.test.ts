@@ -91,7 +91,9 @@ describe("hosts", () => {
     const task = await harness.getTask(Number(graph.id) as TaskId, CONTEXT);
     expect(task?.conversationId).toBe(anchor.id);
     expect(task?.background).toBe(true);
-    await service.spawn({ name: "solo", job: "solo", cwd: ".", model: MODEL });
+    await service.spawnGraph({
+      agents: [{ name: "solo", job: "solo", cwd: ".", model: MODEL }],
+    });
     const outcome = await service.wait(["g", "solo"]);
     expect(outcome.timedOut).toEqual([]);
     expect(service.get("solo")?.result?.text).toBe("done: solo");
@@ -158,7 +160,7 @@ describe("hosts", () => {
     cleanups.push(() => service.close());
     harness.resume();
 
-    await service.spawn(agent("solo", "solo"));
+    await service.spawnGraph({ agents: [agent("solo", "solo")] });
     await service.spawnGraph({
       name: "g",
       agents: [agent("x", "one"), { ...agent("y", "two"), after: ["x"] }],
@@ -170,15 +172,12 @@ describe("hosts", () => {
     expect(service.get("lead")?.result?.text).toBe("merged");
 
     const ours = [extensions.tools.name, extensions.prompt.name];
-    // Every agent messages; only agents that may spawn select delegation.
+    // Every agent messages; only agents that may spawn select spawning.
     const messaging = [...ours, extensions.messaging.name];
     for (const [name, selected] of [
       ["solo", messaging],
       ["x", messaging],
-      [
-        "lead",
-        [...ours, extensions.delegation.name, extensions.messaging.name],
-      ],
+      ["lead", [...ours, extensions.spawning.name, extensions.messaging.name]],
       ["lead.h", messaging],
     ] as const) {
       const id = Number(service.get(name)?.id) as ConversationId;

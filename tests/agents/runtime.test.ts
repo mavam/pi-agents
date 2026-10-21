@@ -53,7 +53,9 @@ describe("runtime", () => {
       storage: await jsonlStorage(directory),
       models,
     });
-    await first.spawn({ job: "long", name: "w", cwd: ".", model: MODEL });
+    await first.spawnGraph({
+      agents: [{ job: "long", name: "w", cwd: ".", model: MODEL }],
+    });
     await first.wait(["w"]);
     const ended = endedAt(first, "w");
     const info = first.get("w");

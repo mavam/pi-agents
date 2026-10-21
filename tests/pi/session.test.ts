@@ -91,8 +91,9 @@ function failingHost(
     const service = host.current();
     failNext = true;
     await expect(
-      service?.spawn({ job: "lost", name: "x", cwd, model: MODEL }) ??
-        Promise.reject(new Error("no service")),
+      service?.spawnGraph({
+        agents: [{ job: "lost", name: "x", cwd, model: MODEL }],
+      }) ?? Promise.reject(new Error("no service")),
     ).rejects.toThrow();
   };
   return { host, ctx, cwd, notes, directory, fail };
@@ -103,7 +104,9 @@ describe("storage failures", () => {
     const { host, ctx, cwd, notes, fail } = failingHost();
     await host.start(ctx);
     const first = await host.ensure(ctx);
-    await first.spawn({ job: "one", name: "w", cwd, model: MODEL });
+    await first.spawnGraph({
+      agents: [{ job: "one", name: "w", cwd, model: MODEL }],
+    });
     await first.wait(["w"]);
 
     await fail();
@@ -113,10 +116,11 @@ describe("storage failures", () => {
     );
     const second = host.current();
     expect(second?.get("w")?.state).toBe("idle");
-    await second?.spawn({ job: "three", name: "u", cwd, model: MODEL });
-    expect((await second?.wait(["u"]))?.agents[0]?.result?.text).toBe(
-      "done: three",
-    );
+    await second?.spawnGraph({
+      agents: [{ job: "three", name: "u", cwd, model: MODEL }],
+    });
+    await second?.wait(["u"]);
+    expect(second?.get("u")?.result?.text).toBe("done: three");
   });
 
   test("reopening waits for the previous close and keeps its lock", async () => {
@@ -200,7 +204,9 @@ describe("storage failures", () => {
     const { host, ctx, cwd, notes, fail } = failingHost({ memory: true });
     await host.start(ctx);
     const first = await host.ensure(ctx);
-    await first.spawn({ job: "one", name: "w", cwd, model: MODEL });
+    await first.spawnGraph({
+      agents: [{ job: "one", name: "w", cwd, model: MODEL }],
+    });
     await first.wait(["w"]);
     await fail();
     await until(() =>

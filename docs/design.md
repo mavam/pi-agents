@@ -3,8 +3,9 @@
 pi-agents gives a Pi session durable, named agents that the parent model and
 the user can start, message, wait on, watch, and stop. Agents run in-process as
 [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable)
-conversations. Graphs compose them: agents that pass results to each other.
-Agents that may spawn compose them the same way, recursively.
+conversations. A spawn owns one group of agents with one result; dependency
+graphs pass results between members of that group. Agents that may spawn
+compose groups the same way, recursively.
 
 This document explains the design and why it is so. The
 [manual](./usage.md) describes what users see.
@@ -12,7 +13,8 @@ This document explains the design and why it is so. The
 ## Principles
 
 - The agent is the core abstraction. An agent's result is its last assistant
-  message. A graph composes agents without changing them.
+  message. A group composes agents without changing them; its graph expresses
+  dependencies between them.
 - pi-durable is the substrate. Agents are durable conversations, not Pi
   processes, so crashes, restarts, and cancellation come from one model.
 - The parent conversation stays primary. Agents appear as compact lines, tool
@@ -30,7 +32,7 @@ not a feature.
 
 Asynchronous spawning by agents belongs to this core rather than outside
 it. An agent that splits its job needs the same durable guarantees as the
-parent: results that arrive once, survive crashes, and settle the work that
+parent: results that reach it despite crashes and settle the work that
 needed them. A blocking tool call can't give an agent those guarantees
 without holding the agent hostage: an interrupt either kills its agents or
 leaves the call stuck. Spawning that returns at once, with results that
@@ -60,9 +62,9 @@ An agent is a named conversation, not a single job. Keeping the conversation
 after it answers lets users follow up without reconstructing its context.
 Jobs must be self-contained: agents don't see the parent's conversation.
 
-A graph composes agents without changing them. Its edges carry final
-messages, and its end nodes provide the result. Agents outlive their graphs
-and can continue working independently.
+A group composes agents without changing them. Dependency edges carry final
+messages, and the group's end nodes provide its result. Agents outlive their
+groups and can continue working independently.
 
 See the [usage glossary](./usage.md#glossary) for user-facing terms and
 [graphs](./graphs.md) for composition and agents that spawn agents.
@@ -77,8 +79,8 @@ dependencies.
 Creation captures a snapshot rather than a live link to the parent. This
 keeps an agent's settings consistent across retries and recovery; changing
 the parent affects future agents only. Agents that agents spawn inherit
-their spawner's snapshot. Request transformations use the actual dispatched model, so a
-child's provider needn't match the parent's.
+their spawner's snapshot. Request transformations use the actual dispatched
+model, so a child's provider needn't match the parent's.
 
 The core stores opaque, namespaced state and awaits callbacks. Decisions
 about budgets, pricing, or approvals stay with the extension that owns
@@ -86,46 +88,63 @@ them.
 
 ## Composition
 
-One spawn starts one graph of one or more agents and reports once. A
-single tool covers single agents, fan-outs, and pipelines, so models don't
-choose between overlapping tools, and a graph of one is the same thing as
-any other graph. Graphs express dependencies, not a workflow language.
-Edges carry final messages without references, schemas, loops, or
-conditions. For repeated rounds, Pi can message the same agents again.
+One spawn starts one group of 1 to 12 agents and reports once to its owner.
+The group owns that result; its graph describes only `after` dependencies
+within the group. A single tool covers single agents, fan-outs, and
+pipelines, so models don't choose between overlapping tools. A singleton
+follows the same protocol but has distinct group and agent IDs; only its
+agent appears in ordinary views. Edges carry final messages without
+references, schemas, loops, or conditions. For repeated rounds, Pi can
+message the same agents again.
 
 Agents that may spawn handle work whose shape emerges during a job, such
 as one agent per discovered file. They use the parent's tools, and their
-graphs report to them the way the parent's report to Pi. Permission is
-explicit and doesn't pass down unless asked for, and nesting stops at a
-fixed depth, so the tree stays bounded. Ownership is separate from
-reachability: an agent reaches the agent that spawned it, the agents it
-spawned with it, and its own agents, but no other subtree. Names are
-aliases for IDs, which the tools return and accept: a name that fits
-several agents is an error rather than a guess, and a call that stops or
-messages an agent binds it by ID on its first run, so a rerun after a
-restart can't reach another agent that took the name.
+groups report to them the way Pi's groups report to Pi. Permission is
+explicit and doesn't pass down unless asked for, and nesting stops after
+three agent levels, so the tree stays bounded. Each agent may spawn at most
+24 children over its lifetime. Completed and cancelled children still count:
+this intentional, nonreplenishing budget bounds total fan-out, not just
+concurrent work.
+
+Ownership is separate from reachability: an agent reaches the agent that
+spawned it, the agents spawned with it, and its own agents, but no other
+subtree. Names are aliases for IDs, which the tools return and accept.
+An ID selects a particular reachable agent even after its name is reused;
+it doesn't grant additional authority. A call that stops or messages an
+agent binds it by ID on its first run, so a rerun after a restart can't
+reach another agent that took the name.
 
 An agent's work settles with its first answer after the results it is
 owed. An answer before them, such as "checking with my agents", is an
 intermediate one, so whoever waits for the agent never gets it as the
 result. The evidence is the agent's own transcript: the input that carried
-a result, or the wait that returned it. Both the service and the graph task
-read it, so they agree after restarts.
+a result, or a committed, model-visible result from a direct wait. A raw
+return to a nested script isn't evidence: the script can throw, discard the
+return, or truncate it before the model sees it. For this reason,
+`agent_wait` is model-only, both in Pi and inside agents, not callable from
+codemode. Other agent tools remain composable from scripts. Settlement and
+recovery use the same transcript evidence.
 
 Cancellation follows the work. Interrupting an agent corrects it: its
 agents keep working, and their results wait until the agent answered
 again, so they don't restart the work the user just stopped. Stopping an
 agent stops every agent below it in one durable step, through graphs that
-finished too, since finished agents can work again. Its work failing
-withdraws the graphs it still waits for. Withdrawn graphs stop, and
-nothing a stopped agent would start runs, also after a crash. Stopping one
-of its graphs still hands the agent what finished.
+finished too, since finished agents can work again. A run that fails
+withdraws the groups it spawned whose results are still owed, even if a
+quick retry answered meanwhile: the retry never asked for them. It doesn't
+withdraw groups of earlier runs, interrupted or answered: a later failure
+must not erase work their requests still need. Withdrawn groups
+stop, and nothing a stopped agent would start runs, also after a crash.
+Stopping one of its groups still hands the agent what finished.
 
 ## Messages between agents
 
 Messages are one-way inputs, not requests that wait for a reply. This lets
 agents coordinate without coupling their lifetimes. An agent that needs an
-answer asks the recipient to send one back.
+answer asks the recipient to send one back. Peer messages don't wake a
+blocked wait, so a child asking its waiting spawner for clarification can't
+make progress through that exchange until the wait ends. Asynchronous
+results avoid this limitation; waits aren't a general coordination loop.
 
 Messages between agents are visible to the user but don't start parent
 turns. Parent results and peer messages serve different audiences; see
@@ -135,10 +154,10 @@ turns. Parent results and peer messages serve different audiences; see
 
 The parent conversation stays primary. Spawning and sending return at once;
 results arrive as messages. Only an explicit wait blocks, for example when
-the parent must combine results before answering. A graph reports once
-rather than interrupting the parent for every intermediate result. Agents
-get their graphs' results the same way, as input, unless they wait for
-them; a result reaches its agent one way, never both.
+the parent must combine results before answering. A group reports once
+rather than interrupting the owner for every intermediate result. Agents
+get their groups' results as input unless they wait for them; a result
+reaches its agent one way, never both.
 
 Interrupting an agent means correcting its work, not withdrawing the job.
 The parent's request, or the agent's job in its graph, stays open for a
@@ -165,9 +184,16 @@ describe what a call observed, not the agent's current state.
 
 ## Deferred
 
-Composition beyond graphs (result schemas, loops, conditions, races), edges
-to agents outside a graph, replies to messages as requests with handles of
-their own, waits that end when another agent messages the waiting one,
-authority beyond the default reach, MCP, extension tools, forking agents, a
-daemon or CLI, agents shared across sessions, and model changes for running
-agents.
+- Composition beyond graphs: result schemas, loops, conditions, races, and
+  edges to agents outside a graph.
+- Request handles for message replies and waits that wake for peer messages.
+- Store-qualified IDs, authority beyond the default reach, and per-tool
+  grants.
+- Counting reopened agents against the fixed active-spawn limit. That limit
+  counts unfinished initial jobs, including agents waiting for dependencies;
+  the optional working-agent cap also covers later turns.
+- Crash-idempotent spawning by the parent Pi. An agent's own durable spawn
+  can recover its group, but retrying a parent spawn isn't guaranteed to
+  reuse a group created before a crash.
+- MCP, extension tools, forking agents, a daemon or CLI, agents shared
+  across sessions, and model changes for running agents.

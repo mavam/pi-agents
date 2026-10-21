@@ -5,9 +5,28 @@
  * stays until its result is delivered or consumed by a wait.
  */
 
-import { defineDoc } from "@earendil-works/pi-durable";
+import { type CheckpointInfo, defineDoc } from "@earendil-works/pi-durable";
 import type { AgentExtensionState } from "../hooks.js";
 import type { GraphPolicy } from "./types.js";
+
+/** How many deltas may follow a document's newest base before the next
+ * change is stored as a complete base. */
+const CHECKPOINT_INTERVAL = 64;
+
+/**
+ * The checkpoint policy of every document here. They live as long as the
+ * session and change in small steps, so a base at every change would
+ * rewrite all agents, graphs, or messages each time, and none would let
+ * replay grow without bound. A base after a fixed number of deltas bounds
+ * replay and lets storage reclaim older records.
+ */
+function checkpointWhen(
+  _value: unknown,
+  _ops: unknown,
+  { deltasSinceBase }: CheckpointInfo,
+): boolean {
+  return deltasSinceBase >= CHECKPOINT_INTERVAL;
+}
 
 export type ParentRequest = {
   message: string;
@@ -55,6 +74,7 @@ export const AgentsDoc = defineDoc<AgentsState>({
   version: 2,
   scope: "session",
   initial: () => ({ agents: {} }),
+  checkpointWhen,
 });
 
 export type GraphNodeRecord = {
@@ -132,6 +152,7 @@ export const GraphsDoc = defineDoc<GraphsState>({
   version: 1,
   scope: "session",
   initial: () => ({ graphs: {} }),
+  checkpointWhen,
 });
 
 /** A message one agent sent another with `agent_send`. */
@@ -164,6 +185,7 @@ export const MessagesDoc = defineDoc<MessagesState>({
   version: 1,
   scope: "session",
   initial: () => ({ messages: [] }),
+  checkpointWhen,
 });
 
 /** How many messages the log keeps. */

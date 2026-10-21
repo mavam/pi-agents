@@ -234,7 +234,12 @@ export class AgentService {
     if (stopped.size === 0) return [];
     const tasks = await this.harness.commit(async (tx) => {
       const found: Array<{ id: TaskId; agent: string }> = [];
-      for (const status of ["pending", "running", "waiting"] as const) {
+      for (const status of [
+        "pending",
+        "running",
+        "waiting",
+        "sleeping",
+      ] as const) {
         let cursor: Cursor | undefined;
         do {
           const query = { status, background: false };

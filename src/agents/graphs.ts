@@ -23,7 +23,6 @@
  */
 
 import type { Context, JsonValue } from "@earendil-works/chord";
-import { withAbortSignal } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   type ConversationId,
@@ -258,26 +257,25 @@ async function entriesFrom(
  * while, whichever comes first. */
 async function nextChange(
   runtime: Runtime,
-  context: Context,
   watches: ReadonlyArray<{ start: (listener: () => Promise<void>) => void }>,
 ): Promise<void> {
-  const timer = new AbortController();
-  const signal = AbortSignal.any([runtime.signal, timer.signal]);
+  runtime.signal.throwIfAborted();
+  let disarm: (() => void) | undefined;
+  let onAbort: (() => void) | undefined;
   try {
     await new Promise<void>((resolve) => {
       const done = () => resolve();
       for (const watch of watches) watch.start(async () => done());
-      signal.addEventListener("abort", done, { once: true });
-      void runtime
-        .sleep(
-          runtime.now() + SETTLE_RECHECK_MS,
-          withAbortSignal(signal, context),
-        )
-        .then(done, done);
+      onAbort = done;
+      runtime.signal.addEventListener("abort", done, { once: true });
+      // The phase keeps running meanwhile, so a timer paces the recheck;
+      // a restart rechecks anyway.
+      disarm = runtime.setTimer(done, SETTLE_RECHECK_MS);
     });
   } finally {
-    // Whatever woke it, the sleep and the listener end with it.
-    timer.abort();
+    // Whatever woke it, the timer and the listener end with it.
+    disarm?.();
+    if (onAbort) runtime.signal.removeEventListener("abort", onAbort);
   }
   runtime.signal.throwIfAborted();
 }
@@ -502,7 +500,7 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
             // The original submission already ended (or was interrupted).
             // A later run can answer this open job, but its failure belongs
             // to its own inputs, not to this job or the groups it still needs.
-            await nextChange(runtime, context, watches);
+            await nextChange(runtime, watches);
           } finally {
             await Promise.all(watches.map((watch) => watch.stop()));
           }

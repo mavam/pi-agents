@@ -80,20 +80,22 @@ kept apart from Pi's session file, and lends agents your Pi logins and models:
 ```text
 ╭─ Pi process ─────────────────────────────────────────────────────╮
 │                                                                  │
-│  ╭─────────────────────────────────────╮ ╭────────────────────╮  │
-│ ╭┤  ◆ Pi session: MCP, extension tools │ │  ▤ panel           │  │
-│ ┊╰───┬──────────▲──────────────────────╯ │  ⇄ attach view     │  │
-│ ┊    │ agent_*  │ results                │  ≡ /agents         │  │
-│ ┊    ▼          │                        │  ✉ /messages       │  │
-│ ┊╭──────────────┴───╮                    ╰─────────▲──────────╯  │
-│ ┊│  ✦ pi-agents     ├◀─────────────────────────────╯             │
-│ ┊│    thin bridge   │           ╭─────────────────────────────╮  │
-│ ┊│    to pi-durable │◀╌ hooks ╌╌┤ ◇ optional extensions, e.g. │  │
-│ ┊╰───┬──────────▲───╯           │   pi-service-tier: capture  │  │
-│ ┊    │ start    │ state         │   at spawn, adapt requests  │  │
-│ ┊    │ message  │ results       ╰─────────────────────────────╯  │
-│ ┊    ▼ stop     │                                                │
-│ ┊╭──────────────┴─────────────────────────────────────────────╮  │
+│  ╭──────────────────╮ ╭────────────────────╮ ╭────────────────╮  │
+│ ╭┤ ◆ Pi session:    │ │ ◇ optional         │ │ ▤ panel        │  │
+│ ┊│   MCP, extension │ │   extensions, e.g. │ │ ⇄ attach view  │  │
+│ ┊│   tools          │ │   pi-service-tier  │ │ ≡ /agents      │  │
+│ ┊│                  │ │                    │ │ ✉ /messages    │  │
+│ ┊╰───┬─────────▲────╯ ╰─────────┬──────────╯ ╰────────▲───────╯  │
+│ ┊    │ agent_* │ results        ╎ hooks:              │          │
+│ ┊    │         │                ╎ capture at spawn,   │          │
+│ ┊    ▼         │                ▼ adapt requests      │          │
+│ ┊╭─────────────┴──────────────────────────────────────┴───────╮  │
+│ ┊│  ✦ pi-agents: a thin bridge from Pi to pi-durable          │  │
+│ ┊╰───┬─────────▲──────────────────────────────────────────────╯  │
+│ ┊    │ start   │ state                                           │
+│ ┊    │ message │ results                                         │
+│ ┊    ▼ stop    │                                                 │
+│ ┊╭─────────────┴──────────────────────────────────────────────╮  │
 │ ┊│  pi-durable harness                                        │  │
 │ ┊│                                                            │  │
 │ ┊│   ◉ scout ─── message ──▶ ● notes                          │  │

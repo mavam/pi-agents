@@ -212,9 +212,15 @@ as your request, and acknowledges results briefly while other agents still
 work. To get several results together, start a graph: it reports as one
 message.
 
+Long agent and graph replies show a preview. In Pi's fullscreen mode, click
+a reply card to expand it; click again to collapse it. A graph card expands
+all of its displayed results and errors together. Ctrl+O still expands or
+collapses all cards and tool output, including in regular terminal mode,
+where clicking isn't available.
+
 Failed result cards include the error message when one is available, not
-just a category such as `model_error`. Long error messages collapse like
-answers; press Ctrl+O to expand them. Pi still receives the full error text.
+just a category such as `model_error`. Long errors collapse like answers.
+These previews only affect the display; Pi still receives the full text.
 
 Only `agent_wait` blocks: until the agents answer, or at most its `timeout`
 in seconds. Pi calls it only when a turn must combine results, or in a

@@ -8,7 +8,14 @@ import {
   getMarkdownTheme,
   type MessageRenderer,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+  Box,
+  Container,
+  Markdown,
+  MouseRegion,
+  Spacer,
+  Text,
+} from "@earendil-works/pi-tui";
 import {
   graphReport,
   type NodeKind,
@@ -339,7 +346,46 @@ const renderResult: MessageRenderer = (message, options, theme) => {
   return card;
 };
 
+/** Custom messages don't get Pi's tool-result click handler. Keep local
+ * expansion across renderer rebuilds (for example, theme changes), but let
+ * a change to Pi's global expansion setting override it. Nothing is stored
+ * in the message or shared between cards. */
+function clickableResult(renderer: MessageRenderer): MessageRenderer {
+  const states = new WeakMap<
+    Parameters<MessageRenderer>[0],
+    { expanded: boolean; globalExpanded: boolean }
+  >();
+  return (message, options, theme) => {
+    const previous = states.get(message);
+    const state =
+      previous?.globalExpanded === options.expanded
+        ? previous
+        : { expanded: options.expanded, globalExpanded: options.expanded };
+    states.set(message, state);
+    const card = new Container();
+    const rebuild = () => {
+      card.clear();
+      const content = renderer(
+        message,
+        { ...options, expanded: state.expanded },
+        theme,
+      );
+      if (content) card.addChild(content);
+    };
+    rebuild();
+    return new MouseRegion(card, (event) => {
+      if (event.type !== "click" || event.button !== "left") return undefined;
+      state.expanded = !state.expanded;
+      rebuild();
+      return { handled: true, render: true };
+    });
+  };
+}
+
 export function registerMessageRenderers(pi: ExtensionAPI): void {
-  pi.registerMessageRenderer(RESULT_MESSAGE, renderResult);
-  pi.registerMessageRenderer(GRAPH_RESULT_MESSAGE, renderGraphResult);
+  pi.registerMessageRenderer(RESULT_MESSAGE, clickableResult(renderResult));
+  pi.registerMessageRenderer(
+    GRAPH_RESULT_MESSAGE,
+    clickableResult(renderGraphResult),
+  );
 }

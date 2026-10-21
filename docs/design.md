@@ -380,6 +380,11 @@ Each surface has one job: the panel shows live state, the transcript and
 the message list show history, and the attach view shows one agent's
 conversation. One module draws messages for all of them.
 
+Result cards support per-card click expansion in fullscreen mode and Pi's
+global keyboard expansion in either terminal mode. Local expansion is
+transient display state, not part of a stored result, and a change to the
+global setting overrides it. Collapsing a card never changes its content.
+
 The focused panel keeps only its own keys. Any other key, including typed,
 pasted, or encoded text, returns focus to the editor where it lands, so Enter
 after editing submits to the parent rather than opening an agent. Terminal

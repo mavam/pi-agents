@@ -110,6 +110,7 @@ appear in red. A session keeps its latest 1,000 messages.
 - An interrupt and its message aren't one atomic step. If the sender's own
   call ends in between, for example because its agent was interrupted or two
   agents interrupted each other, the recipient stays interrupted without
-  the message.
+  the message. Like after your interrupt, results owed to it still wait
+  for its next answer.
 - Exactly-once delivery doesn't guarantee exactly-once side effects; see
   [recovery behavior](./architecture.md#durability).

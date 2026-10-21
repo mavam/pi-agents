@@ -180,6 +180,7 @@ export class AgentService {
     };
     this.extensions.hub.state = (id) => this.projection.info(id)?.state;
     this.extensions.hub.stop = (target) => this.stopTarget(target);
+    this.extensions.hub.interrupt = (id) => this.abortInterrupted(id);
   }
 
   /**
@@ -257,6 +258,9 @@ export class AgentService {
     this.closed = true;
     this.extensions.hub.state = () => undefined;
     this.extensions.hub.stop = async () => {
+      throw new AgentError("Agents are closing");
+    };
+    this.extensions.hub.interrupt = async () => {
       throw new AgentError("Agents are closing");
     };
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
@@ -529,17 +533,17 @@ export class AgentService {
   /** Abort the agent's current work and withdraw its queued messages. */
   async interrupt(nameOrId: string): Promise<void> {
     const info = this.require(nameOrId);
-    const conversation = await this.harness.conversation(
-      conversationId(info.id),
-      CONTEXT,
+    await this.extensions.hub.turn(info.id, () =>
+      this.abortInterrupted(info.id),
     );
-    // Under its turn, so results never land between the abort and the
-    // watermark.
-    await this.extensions.hub.turn(info.id, async () => {
-      await conversation?.abort(CONTEXT);
-      await this.store.markInterrupted(info.id);
-    });
     await this.refresh(this.projection.withHelpers([info.id]));
+  }
+
+  /** Abort the agent's work and record the interrupt's watermark. Under
+   * its turn, so results never land between the abort and the watermark. */
+  private async abortInterrupted(agentId: string): Promise<void> {
+    await this.abortAgent(agentId);
+    await this.store.markInterrupted(agentId);
   }
 
   /**

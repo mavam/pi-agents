@@ -15,19 +15,26 @@
  * recipient admits once. When the service starts, it submits logged
  * messages that a crash left without a submission.
  *
- * An interrupt aborts the recipient's work under its turn before the
- * message is logged, and logs it together with the interrupt's watermark,
- * so the log entry records that the abort happened: a rerun that finds the
- * message logged or submitted never aborts again, which would abort the
- * work the message started. A crash between the abort and the log leaves
- * an interrupted recipient, and the rerun aborts again before it logs.
+ * An interrupt aborts the recipient's work and records the interrupt's
+ * watermark under its turn before the message is logged, so the log entry
+ * records that the abort happened: a rerun that finds the message logged
+ * or submitted never aborts again, which would abort the work the message
+ * started. A crash before the log leaves an interrupted recipient, and the
+ * rerun aborts again before it logs. The abort and the watermark aren't
+ * bound to the call: a sender cancelled meanwhile, such as by an interrupt
+ * of its own, stops waiting at once and logs nothing, so it can't hold up
+ * that interrupt, while the recipient's turn ends only after the
+ * watermark, so the recipient's results still wait for its next answer.
  *
  * Agents reach the agent that spawned them, the others it spawned with
  * them, and the agents they spawned; the parent's agents reach each other.
  */
 
 import type { Context } from "@earendil-works/chord";
-import { withoutAbortSignal } from "@earendil-works/chord/context";
+import {
+  awaitWithContext,
+  withoutAbortSignal,
+} from "@earendil-works/chord/context";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
@@ -411,7 +418,7 @@ export function createMessagingExtension(
           // What this run's interrupt found: whether the recipient worked,
           // and how many queued messages it dropped.
           let interrupted: { working: boolean; dropped: number } | undefined;
-          const work = async () => {
+          const work = async (hold: (pending: Promise<unknown>) => void) => {
             if (bound.mode === "interrupt") {
               const admitted = await api.commit(
                 (tx) => admit(tx, bound),
@@ -427,16 +434,16 @@ export function createMessagingExtension(
                     await api.snapshot(InboxDoc, to, context),
                   ),
                 };
-                // Bound to this call: aborting this call, such as by an
-                // interrupt of its own agent, ends the wait.
-                await conversation.abort(context);
+                // A cancelled call stops waiting for the abort and ends its
+                // send here; the turn holds until the watermark.
+                const fence = hub.interrupt(bound.to);
+                hold(fence);
+                await awaitWithContext(fence, context);
               }
             }
             const logged = await api.commit(async (tx) => {
               const admitted = await admit(tx, bound);
               if (admitted !== "new") return admitted;
-              if (bound.mode === "interrupt")
-                await markInterrupted(tx, bound.to);
               const log = await tx.doc(MessagesDoc);
               log.messages.push({
                 id: bound.id,
@@ -469,7 +476,7 @@ export function createMessagingExtension(
             );
             return "sent";
           };
-          // A call aborted while it waits for the recipient's turn gives
+          // A call cancelled while it waits for the recipient's turn gives
           // it up, so its own agent's abort never waits on a turn.
           const outcome = await hub.turn(bound.to, work, context);
           if (outcome === "missing")

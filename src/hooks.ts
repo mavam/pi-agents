@@ -1,6 +1,5 @@
 /** Optional lifecycle protocol for co-loaded Pi extensions. */
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { SpawnSpec } from "./agents/types.js";
 
 export type AgentExtensionValue =
   | null
@@ -21,10 +20,9 @@ export type ReadonlyAgentExtensionValue =
   | { readonly [key: string]: ReadonlyAgentExtensionValue };
 
 export interface AgentCreateContext {
-  /** Resolved spawn input, before an ID or final name has been claimed. */
-  readonly spec: Readonly<SpawnSpec>;
   readonly parent: {
     readonly sessionId: string;
+    /** The active branch at creation, detached and frozen on first read. */
     readonly branch: readonly SessionEntry[];
   };
 }
@@ -46,7 +44,8 @@ export interface AgentRequestContext {
 export interface AgentHooks {
   /** Stable extension-owned namespace. Also keys its persisted state. */
   readonly namespace: string;
-  /** Synchronous and side-effect-free. Helpers inherit without calling it. */
+  /** Synchronous and side-effect-free. Runs once per spawn: a graph's
+   * nodes share one snapshot, and helpers inherit without calling it. */
   readonly onAgentCreate?: (
     ctx: AgentCreateContext,
   ) => AgentExtensionValue | undefined;

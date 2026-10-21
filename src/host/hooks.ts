@@ -123,14 +123,21 @@ export class AgentRequestHooks {
     });
     this.agents =
       (await harness.snapshot(AgentsDoc, BACKGROUND_CONTEXT))?.agents ?? {};
-    for (const id of Object.keys(this.agents)) {
-      const provider = await harness.snapshot(
-        ProviderDoc,
-        Number(id) as ConversationId,
-        BACKGROUND_CONTEXT,
-      );
+    const providers = await Promise.all(
+      Object.keys(this.agents).map(
+        async (id) =>
+          [
+            id,
+            await harness.snapshot(
+              ProviderDoc,
+              Number(id) as ConversationId,
+              BACKGROUND_CONTEXT,
+            ),
+          ] as const,
+      ),
+    );
+    for (const [id, provider] of providers)
       if (provider) this.identities.set(provider.sessionId, id);
-    }
     for (const publication of pending) this.adopt(publication);
     bootstrapping = false;
   }

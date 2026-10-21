@@ -8,15 +8,13 @@ import {
   AGENT_HOOKS_DISCOVER,
   type AgentHooksDiscovery,
 } from "../../src/hooks.js";
-import { copyExtensionValue } from "../../src/host/hook-state.js";
+import { copyExtensionValue, hookError } from "../../src/host/hook-state.js";
 import { captureAgentState, discoverAgentHooks } from "../../src/pi/hooks.js";
-
-const spec = { job: "work", cwd: "." };
 
 describe("agent hook discovery and capture", () => {
   test("optional, ordered, synchronous discovery with detached creation state", () => {
     const events = createEventBus();
-    expect(discoverAgentHooks(events)).toEqual([]);
+    expect(discoverAgentHooks(events)).toEqual({ hooks: [], problems: [] });
     const source = { version: 1, settings: { enabled: true } };
     let late: AgentHooksDiscovery | undefined;
     events.on(AGENT_HOOKS_DISCOVER, (message) => {
@@ -25,34 +23,45 @@ describe("agent hook discovery and capture", () => {
       late.register({
         namespace: "a",
         onAgentCreate: (ctx) => {
-          expect(Object.isFrozen(ctx.spec)).toBe(true);
-          expect(ctx.parent.branch.at(-1)?.type).toBe("custom");
+          const { branch } = ctx.parent;
+          expect(Object.isFrozen(branch.at(-1))).toBe(true);
+          expect(ctx.parent.branch).toBe(branch); // Shared, detached once.
+          expect(branch.at(-1)?.type).toBe("custom");
           return source;
         },
       });
     });
-    const hooks = discoverAgentHooks(events);
+    const { hooks, problems } = discoverAgentHooks(events);
     late?.register({ namespace: "late" });
+    expect(problems).toEqual([]);
     expect(hooks.map((hook) => hook.namespace)).toEqual(["a", "z"]);
     const manager = SessionManager.inMemory();
     manager.appendCustomEntry("settings", { enabled: true });
-    const state = captureAgentState(
-      hooks,
-      { sessionManager: manager } as ExtensionContext,
-      spec,
-    );
+    const state = captureAgentState(hooks, {
+      sessionManager: manager,
+    } as ExtensionContext);
     source.settings.enabled = false;
     expect(state).toEqual({ a: { version: 1, settings: { enabled: true } } });
+    expect(
+      Object.isFrozen(manager.getBranch().at(-1)), // Pi's entries stay its own.
+    ).toBe(false);
   });
 
-  test("duplicate registrations and capture errors cannot be swallowed by the bus", () => {
+  test("broken registrations are ignored; capture errors still fail creation", () => {
     const events = createEventBus();
     events.on(AGENT_HOOKS_DISCOVER, (message) => {
       const discovery = message as AgentHooksDiscovery;
       discovery.register({ namespace: "duplicate" });
       discovery.register({ namespace: "duplicate" });
+      discovery.register({ namespace: "not valid" });
+      discovery.register({ namespace: "kept" });
     });
-    expect(() => discoverAgentHooks(events)).toThrow("duplicate");
+    const { hooks, problems } = discoverAgentHooks(events);
+    expect(hooks.map((hook) => hook.namespace)).toEqual(["kept"]);
+    expect(problems).toEqual([
+      'invalid registration "not valid"',
+      'duplicate namespace "duplicate"',
+    ]);
     const ctx = {
       sessionManager: SessionManager.inMemory(),
     } as ExtensionContext;
@@ -67,9 +76,23 @@ describe("agent hook discovery and capture", () => {
           },
         ],
         ctx,
-        spec,
       ),
-    ).toThrow("broken: onAgentCreate failed");
+    ).toThrow("Agent extension broken: onAgentCreate failed: no");
+    expect(() =>
+      captureAgentState(
+        [{ namespace: "big", onAgentCreate: () => "x".repeat(9 * 1024) }],
+        ctx,
+      ),
+    ).toThrow("exceeds 8 KiB");
+  });
+
+  test("errors name the hook and keep only a message as detail", () => {
+    expect(hookError("ns", "onAgentRequest", { secret: 1 }).message).toBe(
+      "Agent extension ns: onAgentRequest failed",
+    );
+    expect(
+      hookError("ns", "onAgentRequest", new Error("bad\nstate")).message,
+    ).toBe("Agent extension ns: onAgentRequest failed: bad state");
   });
 
   test("state rejects values JSON would lose or change", () => {

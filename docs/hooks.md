@@ -40,23 +40,30 @@ same structural contract without importing or depending on pi-agents.
 
 Registration is synchronous. Call `register` before the listener returns;
 registrations after discovery finishes are ignored. Late-loaded registrations
-require a reload. Duplicate namespaces or malformed registrations make agents
-unavailable for that session rather than silently choosing one. Namespaces
-start with an ASCII letter or digit, contain only letters, digits, `.`, `_`,
-`/`, or `-`, and are at most 128 characters.
+require a reload. Pi removes an extension's `pi.events` listeners on reload
+and session replacement; extensions that also support older Pi versions
+should unsubscribe in `session_shutdown`.
+
+Namespaces start with an ASCII letter or digit, contain only letters, digits,
+`.`, `_`, `/`, or `-`, and are at most 128 characters. Pi-agents ignores
+malformed registrations and every registration of a namespace that more than
+one extension claims, and reports both in one notice. Agents keep working; an
+ignored namespace behaves like an absent extension.
 
 ## Capture state
 
-`onAgentCreate(ctx)` runs synchronously for each top-level agent after spawn
-validation and before its creation commit. It receives:
+`onAgentCreate(ctx)` runs synchronously once per spawn, after spawn
+validation and before the creation commit. A single agent and a whole graph
+are one spawn each, so a graph's nodes share one snapshot. It receives:
 
-- `ctx.spec`: a detached, frozen copy of the resolved spawn specification.
-  The requested name is not necessarily the final claimed name, and no agent
-  ID exists yet.
 - `ctx.parent.sessionId`: the owning Pi session.
-- `ctx.parent.branch`: a detached, frozen snapshot of its active branch,
-  including custom entries. Use this rather than cached `session_start` state
-  to recover branch-local settings.
+- `ctx.parent.branch`: a detached, frozen snapshot of its active branch at
+  creation, including custom entries. Use this rather than cached
+  `session_start` state to recover branch-local settings. Pi-agents copies
+  the branch only when a callback reads it, and then once for all callbacks.
+
+The context describes the parent, not the new agent: its model and provider
+are known only per request, possibly after routing.
 
 Return JSON or `undefined`. Pi-agents stores JSON under your namespace in the
 agent's durable record, outside its prompt and the parent's transcript. Use a
@@ -66,16 +73,17 @@ state is persisted in agent storage, not an encrypted credential store.
 State must contain only plain objects, arrays, finite numbers, strings,
 booleans, and null. Cycles, promises, functions, class instances, and nested
 `undefined` values are rejected. Depth is limited to 32 and the combined
-namespace map to 64 KiB per agent. Returned values are detached before storage.
+namespace map to 8 KiB per agent. Returned values are detached before storage.
 
 Creation callbacks are snapshot operations, not exactly-once side effects:
 a failed spawn can be attempted again. A thrown error or invalid state fails
-creation. For graphs, every node's callback runs synchronously before the
-single creation commit, so failure creates no partial graph.
+creation. For graphs, callbacks run before the single creation commit, so
+failure creates no partial graph.
 
 ### Inheritance
 
-- Graph nodes capture at graph creation, even if they start later.
+- Graph nodes share the snapshot captured at graph creation, even if they
+  start later.
 - Helpers copy their creating agent's entire state map without invoking
   creation callbacks.
 - Follow-ups, retries, compaction, stop/reopen, and session recovery retain
@@ -99,15 +107,18 @@ The context contains:
 | `state` | Your namespace's detached, deeply frozen JSON, or `undefined` |
 | `signal` | The child request's abort signal, when available |
 
-The existing provider `onPayload` callback runs first, followed by extension
-hooks in lexicographic namespace order. Each hook sees the preceding result.
-Request hooks run even without stored state, which supports stateless
-integrations. Stateful consumers should explicitly handle `undefined`.
+Hooks run in lexicographic namespace order, and each sees the preceding
+result. Should the agent runtime ever pass a payload callback of its own, that
+callback runs before them. Request hooks run even without stored state, which
+supports stateless integrations. Stateful consumers should explicitly handle
+`undefined`.
 
 Hook errors fail the request instead of silently sending the original payload.
-Pi-agents labels the error with the namespace and hook name without including
-state or payload contents. Async hooks should honor the signal. Cancellation
-ends the host's wait but cannot forcibly stop arbitrary extension code.
+The agent's error names the namespace and hook and includes the message of a
+thrown `Error` or string, shortened to one line. Pi-agents never adds state or
+payload contents; keep them out of your error messages too. Async hooks should
+honor the signal. Cancellation ends the host's wait but cannot forcibly stop
+arbitrary extension code.
 Callbacks can run more than once if a provider rebuilds a request, so make
 them idempotent and avoid mutating payloads retained by other code.
 
@@ -120,9 +131,23 @@ contract. Request purpose is not exposed.
 If an extension is absent, its stored state remains intact but no callback
 applies it. Pi-agents issues no warning and never substitutes current settings.
 Loading the extension again restores its ability to interpret that state.
-A present consumer should reject unsupported state versions explicitly.
+
+Snapshots never change, so a consumer must keep reading every state shape it
+ever wrote. Reject an unknown state `version` explicitly, but within a known
+version ignore fields and values you don't recognize. An older consumer then
+still reads what a newer one wrote, and no agent fails every request over
+state nobody can repair.
 
 For example, a compatible pi-service-tier version can capture the parent's
 provider-specific defaults and `/fast` overrides at creation and apply them
 to each child's actual provider. Tier names, mappings, and configuration stay
 entirely in that extension; pi-agents only stores and supplies its state.
+
+## Future work: tools
+
+These hooks carry JSON state and provider payloads; they can't give agents
+tools. Don't declare tools in a request payload: agents run only the tools
+pi-durable knows, so the model's call to such a tool fails. Bringing
+extension or MCP tools to agents needs a separate bridge that registers
+durable tools, with their own replay, cancellation, and trust rules. Pi-agents
+doesn't offer one yet.

@@ -109,15 +109,16 @@ export class SessionHost {
     this.sessionId = ctx.sessionManager.getSessionId();
     this.trusted = isTrusted(ctx);
     this.unavailable = undefined;
-    try {
-      this.hooks = this.options.events
-        ? discoverAgentHooks(this.options.events)
-        : [];
-    } catch (error) {
-      this.unavailable = `Agent hook discovery failed: ${message(error)}`;
-      notify(ctx, this.unavailable);
-      return;
-    }
+    // A broken registration costs only its own hooks, never the agents.
+    const discovered = this.options.events
+      ? discoverAgentHooks(this.options.events)
+      : { hooks: [], problems: [] };
+    this.hooks = discovered.hooks;
+    if (discovered.problems.length > 0)
+      notify(
+        ctx,
+        `pi-agents: ignored agent extension hooks: ${discovered.problems.join("; ")}`,
+      );
     if (isPersistent(ctx) && fs.existsSync(sessionDirectory(this.sessionId))) {
       try {
         await this.ensure(ctx);
@@ -241,7 +242,7 @@ export class SessionHost {
         anchor: harness.anchor,
         extensions,
         parent: this.parent,
-        captureExtensionState: (spec) => {
+        captureExtensionState: () => {
           const current = this.ctx;
           if (
             this.epoch !== epoch ||
@@ -249,7 +250,7 @@ export class SessionHost {
             current.sessionManager.getSessionId() !== sessionId
           )
             throw new AgentError("The spawning session has ended");
-          return captureAgentState(this.hooks, current, spec);
+          return captureAgentState(this.hooks, current);
         },
         onReport: (error) => this.report(error),
       });

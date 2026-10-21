@@ -18,7 +18,7 @@ manually.
 
 - Keep the docs in sync with user-facing changes: the manual under `docs/`
   (`usage.md`, `graphs.md`, `messaging.md`, `profiles.md`,
-  `configuration.md`, `architecture.md`) and `docs/design.md` for design
+  `configuration.md`, `architecture.md`, `hooks.md`) and `docs/design.md` for design
   decisions and their reasons, without implementation details such as file
   paths, module names, or version history. `README.md` keeps only installation, demos, example prompts,
   and the architecture diagram.

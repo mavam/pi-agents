@@ -1,5 +1,11 @@
 import type { AgentExtensionValue } from "../hooks.js";
 
+/** Every agent's state lives in one shared document, so keep it small. */
+export const MAX_EXTENSION_STATE_BYTES = 8 * 1024;
+
+/** Longest error detail a hook failure carries into the agent's error. */
+const MAX_DETAIL = 300;
+
 /** Strict JSON: serialization must not silently lose or change state. */
 export function copyExtensionValue(value: unknown): AgentExtensionValue {
   const ancestors = new Set<object>();
@@ -46,10 +52,26 @@ export function freezeValue<T>(value: T): T {
   return value;
 }
 
+/**
+ * Name the namespace and hook, plus the message of a thrown error or string.
+ * Other thrown values may hold state or payloads, so only `cause` keeps them.
+ */
 export function hookError(
   namespace: string,
   hook: string,
   cause: unknown,
 ): Error {
-  return new Error(`Agent extension ${namespace}: ${hook} failed`, { cause });
+  const raw =
+    cause instanceof Error
+      ? cause.message
+      : typeof cause === "string"
+        ? cause
+        : "";
+  const detail = raw.replace(/\s+/g, " ").trim();
+  const suffix = !detail
+    ? ""
+    : `: ${detail.length > MAX_DETAIL ? `${detail.slice(0, MAX_DETAIL - 1)}…` : detail}`;
+  return new Error(`Agent extension ${namespace}: ${hook} failed${suffix}`, {
+    cause,
+  });
 }

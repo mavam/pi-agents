@@ -105,7 +105,7 @@ describe("agent lifecycle hooks", () => {
     });
     setting = "third";
     await service.wait([graph.id]);
-    expect(captures).toBe(3);
+    expect(captures).toBe(2); // One snapshot for the whole graph.
     expect(
       seen
         .filter((ctx) => ["a", "b"].includes(ctx.agent.name))
@@ -138,7 +138,7 @@ describe("agent lifecycle hooks", () => {
     });
     await service.send(lead.id, "again");
     await service.wait([lead.id]);
-    expect(captures).toBe(3);
+    expect(captures).toBe(2);
     expect(seen.at(-1)?.state).toEqual({ setting: "first" });
     expect(seen.at(-1)?.sessionId).toBe("test-parent");
   });
@@ -147,7 +147,7 @@ describe("agent lifecycle hooks", () => {
     let captures = 0;
     const service = await open({
       captureExtensionState: () => {
-        if (++captures === 2) throw new Error("capture failed");
+        if (++captures === 1) throw new Error("capture failed");
         return { absent: { version: 1 } };
       },
     });
@@ -240,7 +240,7 @@ describe("agent lifecycle hooks", () => {
       );
       expect(failed.stopReason).toBe("error");
       expect(failed.errorMessage).toContain(
-        "constructor: onAgentRequest failed",
+        "constructor: onAgentRequest failed: do not dispatch",
       );
       fail = false;
       hold = true;

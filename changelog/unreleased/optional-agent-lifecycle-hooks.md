@@ -24,4 +24,4 @@ pi.events.on("pi-agents:hooks:discover", (value) => {
 });
 ```
 
-Each agent keeps its captured state across follow-ups, compaction, and resumed sessions. Helpers inherit their creator's state. Extensions without this integration and users without consumer extensions keep their existing behavior.
+Each spawn captures one snapshot, which a graph's agents share. Each agent keeps it across follow-ups, compaction, and resumed sessions, and helpers inherit their creator's. A failing hook names its extension and error in the agent's error. Malformed or conflicting registrations are ignored with a notice, so a faulty extension never disables agents. Extensions without this integration and users without consumer extensions keep their existing behavior.

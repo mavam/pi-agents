@@ -9,7 +9,7 @@
  */
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Models } from "@earendil-works/pi-ai";
+import type { ClientIdentity, Models } from "@earendil-works/pi-ai";
 import {
   type Conversation,
   createRegistry,
@@ -33,6 +33,9 @@ const CONTEXT = BACKGROUND_CONTEXT;
 export interface AgentHarnessOptions {
   storage: Storage;
   models: Models;
+  /** How model requests of generation, compaction, and tools identify
+   * themselves; replaces the identity of `models`. */
+  identity: ClientIdentity;
   /** Fallback working directory for agents without one. */
   cwd: string;
   extensions: AgentExtensions;
@@ -98,6 +101,7 @@ export async function openAgentHarness(
       options.storage,
       {
         models: requests?.models ?? options.models,
+        identity: options.identity,
         registry,
         // Read at each use, so getters of the given settings are too.
         settings: () => ({

@@ -1,11 +1,12 @@
 /**
- * Harness setup derived from Pi: Harness settings read from Pi's settings,
- * and execution environments. Pi has configured HTTP already, since agents
- * run in its process.
+ * Harness setup derived from Pi: Harness settings and the identity of model
+ * requests read from Pi's settings, and execution environments. Pi has
+ * configured HTTP already, since agents run in its process.
  */
 
 import type { Context } from "@earendil-works/chord";
-import type { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { type ClientIdentity, PI_ATTRIBUTION } from "@earendil-works/pi-ai";
+import { type SettingsManager, VERSION } from "@earendil-works/pi-coding-agent";
 import type {
   CompactionSettings,
   EnvTarget,
@@ -81,6 +82,26 @@ export function createHarnessSettings(
     get followUpMode() {
       return settingsManager.getFollowUpMode();
     },
+  };
+}
+
+/**
+ * How agents' model requests identify themselves, as Pi's own do: a
+ * detailed `User-Agent` with Pi's version, and attribution to Pi while
+ * install telemetry is enabled. `PI_TELEMETRY` overrides the setting.
+ */
+export function harnessIdentity(
+  settingsManager: SettingsManager,
+  telemetry: string | undefined = process.env.PI_TELEMETRY,
+): ClientIdentity {
+  const enabled =
+    telemetry === undefined
+      ? settingsManager.getEnableInstallTelemetry()
+      : ["1", "true", "yes"].includes(telemetry.toLowerCase());
+  return {
+    userAgent: "detailed",
+    version: VERSION,
+    attribution: enabled ? PI_ATTRIBUTION : null,
   };
 }
 

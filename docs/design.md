@@ -188,6 +188,14 @@ conversation cache. An agent that waits for its agents yields its slot so
 the cap cannot prevent them from running; an agent that ends its turn
 instead holds no slot anyway.
 
+## Model requests
+
+Agents share the parent's models, so logins and providers that extensions
+registered work for them too. Pi adds how its requests identify themselves
+per request, outside the models, so agents set the same identity for every
+request they make, including compaction and scripts' model calls: Pi's
+`User-Agent`, and attribution to Pi only while install telemetry is on.
+
 ## Recovery
 
 Work that crashes Pi must not crash it on every resume. pi-durable parks a

@@ -295,6 +295,7 @@ export async function openService(
   const harness = await openAgentHarness({
     storage: options.storage ?? new MemoryStorage(),
     models: options.models ?? createFaux().models,
+    identity: { attribution: null },
     cwd: process.cwd(),
     extensions,
     lifecycle: { sessionId: "test-parent", hooks: options.hooks ?? [] },

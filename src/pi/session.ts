@@ -34,7 +34,10 @@ import { AgentError } from "../agents/types.js";
 import { SkillCatalog } from "../catalog/skills.js";
 import type { AgentHooks } from "../hooks.js";
 import { type AgentHarness, openAgentHarness } from "../host/harness.js";
-import { createHarnessSettings } from "../host/harness-setup.js";
+import {
+  createHarnessSettings,
+  harnessIdentity,
+} from "../host/harness-setup.js";
 import { beforeRequestHooks } from "../host/hooks.js";
 import { acquireLock, type StorageLock } from "../host/lock.js";
 import { resolveModels } from "../host/models.js";
@@ -242,6 +245,7 @@ export class SessionHost {
       harness = await openAgentHarness({
         storage,
         models,
+        identity: harnessIdentity(settingsManager),
         cwd,
         extensions,
         settings: createHarnessSettings(settingsManager),

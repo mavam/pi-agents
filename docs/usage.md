@@ -169,7 +169,8 @@ editor names the agent and sends your input to it:
 | ⏎ | Prompt an idle agent or steer a working one. An agent that waits for the agents its job needs takes input once it starts. |
 | Alt+⏎ | Queue a follow-up after the current answer. |
 | Esc | Interrupt a working agent; queued messages return to the editor. Go back from an idle one when the editor is empty. |
-| Ctrl+O | Expand or collapse tool output. |
+| Ctrl+O | Expand or collapse all tool output and messages. |
+| Click | Expand or collapse one tool result or message, as in Pi. Click the newer-lines note to jump back to new output. Needs fullscreen mode. |
 | ← or Ctrl+D | Detach when the editor is empty. |
 | Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. |
 | Mouse wheel | Scroll in fullscreen mode, with the pointer over the attached view. |

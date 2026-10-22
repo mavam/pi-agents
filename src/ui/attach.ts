@@ -18,7 +18,9 @@
  * follow-up, Esc interrupts a working agent and detaches from an idle one,
  * ← or Ctrl+D on an empty editor detach, Ctrl+O expands tool output, and
  * Shift+↑↓ and Shift+PgUp/PgDn scroll. In fullscreen mode, the mouse wheel
- * over the pane scrolls too; regular mode leaves the wheel to the terminal.
+ * over the pane scrolls too, and clicks reach the transcript's cards, which
+ * expand and collapse on their own as in Pi; regular mode leaves the mouse
+ * to the terminal.
  */
 
 import type { AttachedReplicatedState } from "@earendil-works/chord";
@@ -74,6 +76,7 @@ import {
 import type { AgentService } from "../agents/service.js";
 import { WAIT_TOOL } from "../agents/spawning.js";
 import type { AgentInfo } from "../agents/types.js";
+import { expandableCard } from "./expandable.js";
 import {
   type Colorize,
   fitLine,
@@ -84,6 +87,7 @@ import {
 } from "./format.js";
 import {
   firstLine,
+  type MessageParts,
   type MessageStyle,
   messageCard,
   messageLine,
@@ -355,21 +359,21 @@ class ChatView {
       // has it. Ctrl+O shows the whole text, as for tool output.
       this.transcript.addChild(new Spacer(1));
       this.transcript.addChild(
-        messageCard(
-          { from: input.from, to: this.name(), text: input.text },
-          () => this.expanded,
-          this.theme,
-        ),
+        this.messageCard({
+          from: input.from,
+          to: this.name(),
+          text: input.text,
+        }),
       );
     } else if (input?.kind === "results") {
       // The results of agents it spawned, as a message to it.
       this.transcript.addChild(new Spacer(1));
       this.transcript.addChild(
-        messageCard(
-          { from: "results", to: this.name(), text: input.text },
-          () => this.expanded,
-          this.theme,
-        ),
+        this.messageCard({
+          from: "results",
+          to: this.name(),
+          text: input.text,
+        }),
       );
     } else if (input) {
       this.transcript.addChild(new Spacer(1));
@@ -449,6 +453,15 @@ class ChatView {
     this.expanded = !this.expanded;
     for (const card of this.cards) card.setExpanded(this.expanded);
     this.transcript.invalidate();
+  }
+
+  /** A message card that a click expands or collapses, like Pi's; Ctrl+O
+   * sets every card again. */
+  private messageCard(parts: MessageParts): Component {
+    return expandableCard(
+      (expanded) => messageCard(parts, expanded, this.theme),
+      () => this.expanded,
+    );
   }
 
   private renderer(toolName: string): AnyDefinition | undefined {
@@ -548,6 +561,106 @@ function fitQueuedLines(
   return shown;
 }
 
+/** Where a frame showed the transcript: from pane row `top`, `rows` of its
+ * rendered lines from line `start` on, of `total`, then the newer-lines
+ * note when scrolled back. */
+export interface TranscriptWindow {
+  top: number;
+  start: number;
+  rows: number;
+  total: number;
+  indicator: boolean;
+}
+
+/**
+ * The transcript lines that fit `rows`, without trailing blank lines:
+ * the newest unless scrolled back by `scrollBack` lines, which leaves the
+ * last row for a note of the newer lines. Returns the scroll clamped to
+ * what the lines allow.
+ */
+export function windowTranscript(
+  lines: readonly string[],
+  rows: number,
+  scrollBack: number,
+): {
+  lines: string[];
+  start: number;
+  indicator: boolean;
+  scrollBack: number;
+  maxScroll: number;
+} {
+  let length = lines.length;
+  while (length > 0 && (lines[length - 1] ?? "").trim() === "") length--;
+  if (length <= rows)
+    return {
+      lines: lines.slice(0, length),
+      start: 0,
+      indicator: false,
+      scrollBack: 0,
+      maxScroll: 0,
+    };
+  if (scrollBack === 0)
+    return {
+      lines: lines.slice(length - rows, length),
+      start: length - rows,
+      indicator: false,
+      scrollBack: 0,
+      maxScroll: length - rows,
+    };
+  const contentRows = Math.max(1, rows - 1);
+  const maxScroll = length - contentRows;
+  const clamped = Math.min(scrollBack, maxScroll);
+  const start = length - clamped - contentRows;
+  return {
+    lines: lines.slice(start, start + contentRows),
+    start,
+    indicator: true,
+    scrollBack: clamped,
+    maxScroll,
+  };
+}
+
+/** What pane row `y` shows: a transcript line, by its index among all
+ * rendered lines, the newer-lines note, or neither, such as the separator,
+ * the status, or the editor. */
+export function transcriptTarget(
+  window: TranscriptWindow | undefined,
+  y: number,
+): number | "indicator" | undefined {
+  if (!window) return undefined;
+  const row = y - window.top;
+  if (row < 0) return undefined;
+  if (row < window.rows) return window.start + row;
+  if (window.indicator && row === window.rows) return "indicator";
+  return undefined;
+}
+
+/**
+ * Route a pane's non-wheel mouse event: over a transcript line, to the
+ * transcript at that line, whose container hands it to the card there;
+ * a left click on the newer-lines note calls `follow`. Events over other
+ * rows, such as the separator, the status, or the editor, pass on.
+ */
+export function routeTranscriptMouse(
+  transcript: Component,
+  window: TranscriptWindow | undefined,
+  event: TuiMouseEvent,
+  follow: () => void,
+): TuiMouseEventResult | undefined {
+  const target = transcriptTarget(window, event.y);
+  if (target === undefined || window === undefined) return undefined;
+  if (target === "indicator") {
+    if (event.type !== "click" || event.button !== "left") return undefined;
+    follow();
+    return { handled: true };
+  }
+  return transcript.handleMouse?.({
+    ...event,
+    y: target,
+    height: window.total,
+  });
+}
+
 /** The lines scrolled back after a wheel event over the pane; Pi reports
  * scrolling up as a negative delta. */
 export function wheelScrollBack(
@@ -580,6 +693,8 @@ class AgentPane implements Component {
   /** Lines scrolled back from the bottom; 0 follows new output. */
   private scrollBack = 0;
   private maxScroll = 0;
+  /** Where the last frame showed the transcript, for clicks. */
+  private window: TranscriptWindow | undefined;
 
   constructor(
     private readonly tui: TUI,
@@ -713,24 +828,26 @@ class AgentPane implements Component {
   }
 
   private windowTranscript(lines: string[], rows: number): string[] {
-    while (lines.length > 0 && (lines.at(-1) ?? "").trim() === "") lines.pop();
-    if (lines.length <= rows) {
-      this.maxScroll = 0;
-      this.scrollBack = 0;
-      return lines;
-    }
-    if (this.scrollBack === 0) {
-      this.maxScroll = lines.length - rows;
-      return lines.slice(-rows);
-    }
-    const contentRows = Math.max(1, rows - 1);
-    this.maxScroll = lines.length - contentRows;
-    this.scrollBack = Math.min(this.scrollBack, this.maxScroll);
-    const end = lines.length - this.scrollBack;
-    return [
-      ...lines.slice(end - contentRows, end),
-      this.color("dim", `… +${this.scrollBack} newer lines (shift+↓)`),
-    ];
+    const shown = windowTranscript(lines, rows, this.scrollBack);
+    this.scrollBack = shown.scrollBack;
+    this.maxScroll = shown.maxScroll;
+    this.window = {
+      // Below the separator.
+      top: 1,
+      start: shown.start,
+      rows: shown.lines.length,
+      total: lines.length,
+      indicator: shown.indicator,
+    };
+    return shown.indicator
+      ? [
+          ...shown.lines,
+          this.color(
+            "dim",
+            `… +${this.scrollBack} newer lines (shift+↓ or click)`,
+          ),
+        ]
+      : shown.lines;
   }
 
   render(width: number): string[] {
@@ -837,15 +954,28 @@ class AgentPane implements Component {
   }
 
   /** Pi routes mouse events only in fullscreen mode. Wheel events over the
-   * pane scroll its transcript instead of Pi's; everything else passes on. */
+   * pane scroll its transcript instead of Pi's. Other events over the
+   * transcript reach its cards, as Pi's own components handle them; a click
+   * on the newer-lines note follows new output again. Everything else
+   * passes on. */
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.type !== "wheel" || !event.wheelDelta) return undefined;
-    this.scrollBack = wheelScrollBack(
-      this.scrollBack,
-      this.maxScroll,
-      event.wheelDelta,
+    if (event.type === "wheel") {
+      if (!event.wheelDelta) return undefined;
+      this.scrollBack = wheelScrollBack(
+        this.scrollBack,
+        this.maxScroll,
+        event.wheelDelta,
+      );
+      return { handled: true };
+    }
+    return routeTranscriptMouse(
+      this.chat.transcript,
+      this.window,
+      event,
+      () => {
+        this.scrollBack = 0;
+      },
     );
-    return { handled: true };
   }
 
   invalidate(): void {

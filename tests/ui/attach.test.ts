@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import {
+  Container,
+  Spacer,
+  Text,
+  type TuiMouseEvent,
+} from "@earendil-works/pi-tui";
+import {
   agentMessageInput,
   inputOrigin,
   userInput,
@@ -11,8 +17,11 @@ import {
   openAgentPane,
   queuedTexts,
   restoredEditorText,
+  routeTranscriptMouse,
   wheelScrollBack,
+  windowTranscript,
 } from "../../src/ui/attach.js";
+import { expandableCard } from "../../src/ui/expandable.js";
 
 describe("attach view", () => {
   test("tells inputs apart by their entry", () => {
@@ -128,6 +137,106 @@ describe("attach view", () => {
     expect(wheelScrollBack(3, 10, 2)).toBe(1);
     expect(wheelScrollBack(8, 10, -5)).toBe(10);
     expect(wheelScrollBack(1, 10, 3)).toBe(0);
+  });
+
+  describe("clicks in the transcript", () => {
+    const click = (y: number): TuiMouseEvent => ({
+      type: "click",
+      button: "left",
+      x: 2,
+      y,
+      screenX: 2,
+      screenY: y + 10,
+      width: 40,
+      height: 20,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    });
+
+    /** A transcript of filler lines, a card of `cardLines` lines that a
+     * click expands, and a blank line, as the attach view stacks them. */
+    function transcript(cardLines: number) {
+      const container = new Container();
+      container.addChild(new Text(Array(6).fill("filler").join("\n"), 0, 0));
+      container.addChild(
+        expandableCard(
+          (expanded) =>
+            new Text(
+              expanded
+                ? "card\nwhole"
+                : Array(cardLines).fill("card").join("\n"),
+              0,
+              0,
+            ),
+          () => false,
+        ),
+      );
+      container.addChild(new Spacer(1));
+      return container;
+    }
+
+    /** The pane's window over the transcript, below its separator. */
+    function frame(container: Container, rows: number, scrollBack: number) {
+      const lines = container.render(40);
+      const shown = windowTranscript(lines, rows, scrollBack);
+      return {
+        shown,
+        window: {
+          top: 1,
+          start: shown.start,
+          rows: shown.lines.length,
+          total: lines.length,
+          indicator: shown.indicator,
+        },
+      };
+    }
+
+    test("reach the card on the row clicked, in a window cut at the start", () => {
+      const container = transcript(2);
+      // 8 lines without the trailing blank; 4 rows show the newest.
+      const { shown, window } = frame(container, 4, 0);
+      expect(shown.lines.map((line) => line.trim())).toEqual([
+        "filler",
+        "filler",
+        "card",
+        "card",
+      ]);
+      // The separator and rows above the card hit nothing that toggles.
+      expect(
+        routeTranscriptMouse(container, window, click(0), () => {}),
+      ).toBeUndefined();
+      expect(
+        routeTranscriptMouse(container, window, click(2), () => {}),
+      ).toBeUndefined();
+      expect(
+        routeTranscriptMouse(container, window, click(3), () => {}),
+      ).toMatchObject({ handled: true });
+      expect(container.render(40).join("\n")).toContain("whole");
+      // Below the transcript: the status and the editor.
+      expect(
+        routeTranscriptMouse(container, window, click(5), () => {}),
+      ).toBeUndefined();
+    });
+
+    test("skip the newer-lines note, whose click follows new output", () => {
+      const container = transcript(4);
+      const { shown, window } = frame(container, 4, 2);
+      // 3 content rows ending 2 lines above the newest, then the note.
+      expect(shown).toMatchObject({ start: 5, indicator: true, scrollBack: 2 });
+      let followed = false;
+      const follow = () => {
+        followed = true;
+      };
+      expect(routeTranscriptMouse(container, window, click(4), follow)).toEqual(
+        { handled: true },
+      );
+      expect(followed).toBe(true);
+      expect(container.render(40).join("\n")).not.toContain("whole");
+      // Row 2 shows line 6, the card's first line.
+      routeTranscriptMouse(container, window, click(2), follow);
+      expect(container.render(40).join("\n")).toContain("whole");
+    });
   });
 
   describe("working loader", () => {

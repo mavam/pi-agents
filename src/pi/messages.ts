@@ -8,14 +8,7 @@ import {
   getMarkdownTheme,
   type MessageRenderer,
 } from "@earendil-works/pi-coding-agent";
-import {
-  Box,
-  Container,
-  Markdown,
-  MouseRegion,
-  Spacer,
-  Text,
-} from "@earendil-works/pi-tui";
+import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import {
   graphReport,
   type NodeKind,
@@ -31,6 +24,7 @@ import type {
   GraphNode,
   GraphPolicy,
 } from "../agents/types.js";
+import { type Expansion, expandableCard, expansion } from "../ui/expandable.js";
 import {
   type Colorize,
   formatUsage,
@@ -361,39 +355,20 @@ const renderResult: MessageRenderer = (message, options, theme) => {
   return card;
 };
 
-/** Custom messages don't get Pi's tool-result click handler. Keep local
- * expansion across renderer rebuilds (for example, theme changes), but let
- * a change to Pi's global expansion setting override it. Nothing is stored
- * in the message or shared between cards. */
+/** Custom messages don't get Pi's tool-result click handler, so each card
+ * expands on its own click. Its toggle survives renderer rebuilds (for
+ * example, theme changes) until Pi's global expansion changes. Nothing is
+ * stored in the message or shared between cards. */
 function clickableResult(renderer: MessageRenderer): MessageRenderer {
-  const states = new WeakMap<
-    Parameters<MessageRenderer>[0],
-    { expanded: boolean; globalExpanded: boolean }
-  >();
+  const states = new WeakMap<Parameters<MessageRenderer>[0], Expansion>();
   return (message, options, theme) => {
-    const previous = states.get(message);
-    const state =
-      previous?.globalExpanded === options.expanded
-        ? previous
-        : { expanded: options.expanded, globalExpanded: options.expanded };
+    const state = states.get(message) ?? expansion(options.expanded);
     states.set(message, state);
-    const card = new Container();
-    const rebuild = () => {
-      card.clear();
-      const content = renderer(
-        message,
-        { ...options, expanded: state.expanded },
-        theme,
-      );
-      if (content) card.addChild(content);
-    };
-    rebuild();
-    return new MouseRegion(card, (event) => {
-      if (event.type !== "click" || event.button !== "left") return undefined;
-      state.expanded = !state.expanded;
-      rebuild();
-      return { handled: true, render: true };
-    });
+    return expandableCard(
+      (expanded) => renderer(message, { ...options, expanded }, theme),
+      () => options.expanded,
+      state,
+    );
   };
 }
 

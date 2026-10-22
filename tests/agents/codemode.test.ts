@@ -150,4 +150,46 @@ describe("codemode models", () => {
       }),
     ).rejects.toThrow("Unknown tools");
   });
+
+  test("scripts get the agent tools' results as data", async () => {
+    const service = await openService({ models: modelsWithClassifier() });
+    services.push(service);
+    const spawn = (name: string, job: string, tools: string[] = []) =>
+      service.spawnGraph({
+        agents: [
+          {
+            name,
+            job,
+            cwd: ".",
+            model: { provider: "faux", modelId: "faux-1" },
+            tools,
+          },
+        ],
+      });
+    const peer = await spawn("peer", "plain", ["read"]);
+    await service.wait([peer.name]);
+    const info = await spawn(
+      "scripter",
+      `script const status = await tools.agent_status({});
+        const sent = await tools.agent_send({ name: "peer", message: "hi", mode: "followUp" });
+        const refused = await tools.agent_send({ name: "nobody", message: "hi" }).catch((error) => String(error));
+        return JSON.stringify({ status, sent, refused });`,
+      ["codemode"],
+    );
+    await service.wait([info.name]);
+    const text = service.get(info.name)?.result?.text ?? "";
+    const value = JSON.parse(
+      text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1),
+    );
+    expect(value.status).toEqual({
+      agents: [{ name: "peer", state: "idle", model: "faux-1", job: "plain" }],
+    });
+    expect(value.sent).toEqual({
+      to: "peer",
+      mode: "followUp",
+      interrupted: false,
+      dropped: 0,
+    });
+    expect(value.refused).toContain("No agent named nobody");
+  });
 });

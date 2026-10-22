@@ -48,11 +48,16 @@ profile or spawn specifies others. They can't use MCP servers or tools
 from other extensions.
 
 `read` supports images. Codemode scripts can call the agent's other tools,
-except `agent_wait`, which the agent's model must call directly. Scripts can
-also use [`models`](https://pi.dev/docs/latest/codemode#models) to list models,
-run classifiers, and generate images. These calls count toward the agent's
-usage. Agents start agents of their own only when you let them
-[spawn](./graphs.md#agents-that-spawn-agents).
+except `agent_wait`, which the agent's model must call directly. Scripts get
+the agent tools' results as data: `agent_status` lists `agents` with their
+`name`, `state`, `model`, and `job`; `agent_send` returns the recipient as
+`to`, the `mode`, whether it `interrupted` the recipient, and how many
+queued messages it `dropped`; and `agent_spawn` returns the `group` and its
+`agents`, each with `id` and `name`. A refused call rejects with its reason.
+Scripts can also use [`models`](https://pi.dev/docs/latest/codemode#models)
+to list models, run classifiers, and generate images. These calls count
+toward the agent's usage. Agents start agents of their own only when you let
+them [spawn](./graphs.md#agents-that-spawn-agents).
 
 ## Skills
 

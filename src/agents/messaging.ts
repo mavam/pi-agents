@@ -51,7 +51,7 @@ import {
   type ToolExecutionResult,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { nodeRequestId } from "./graphs.js";
 import type { MessagingHub } from "./hub.js";
 import { agentMessageInput } from "./inputs.js";
@@ -69,6 +69,8 @@ import {
   resultsRequestId,
 } from "./records.js";
 import {
+  AGENT_STATES,
+  type AgentState,
   MESSAGE_MODES,
   type MessageMode,
   messageMode,
@@ -205,6 +207,41 @@ async function admit(
 function textResult(text: string, isError = false): ToolExecutionResult {
   return { output: [{ type: "text", text }], isError };
 }
+
+/** What scripts get from `agent_status`: the agents they can message. */
+export const StatusOutput = Type.Object(
+  {
+    agents: Type.Array(
+      Type.Object(
+        {
+          name: Type.String(),
+          state: StringEnum(AGENT_STATES),
+          model: Type.Optional(
+            Type.String({ description: "The model ID, without provider" }),
+          ),
+          job: Type.String({ description: "The job it was started with" }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+/** What scripts get from `agent_send`: whom the message reached, and how. */
+export const SendOutput = Type.Object(
+  {
+    to: Type.String({ description: "The recipient's name" }),
+    mode: StringEnum(MESSAGE_MODES),
+    interrupted: Type.Boolean({
+      description: "The message interrupted the recipient's work",
+    }),
+    dropped: Type.Integer({
+      description: "Queued messages the interrupt dropped",
+    }),
+  },
+  { additionalProperties: false },
+);
 
 /**
  * Whom an agent can reach: the agent that spawned it and the others it
@@ -349,6 +386,7 @@ export function createMessagingExtension(
         description:
           "List the agents you can message, with their state and job: the agent that spawned you and the others it spawned with you, or the parent's other agents, and the agents you spawned.",
         parameters: Type.Object({}),
+        structuredOutputSchema: StatusOutput,
         replay: "safe",
         outputLimits: UNBOUNDED_OUTPUT,
         async execute(_args, api, context) {
@@ -361,35 +399,42 @@ export function createMessagingExtension(
             graphs,
             String(api.conversationId),
           );
-          const agents = await Promise.all(
-            targets.map(async ([id, record]): Promise<AgentReceipt> => {
+          const listed = await Promise.all(
+            targets.map(async ([id, record]) => {
               const durable = (await api.snapshot(
                 AgentDoc,
                 Number(id) as ConversationId,
                 context,
               )) as DurableAgentState | undefined;
               const model = durable?.model?.modelId;
+              const state: AgentState = hub.state(id) ?? "idle";
               return {
                 name: record.name,
+                state,
                 ...(model ? { model } : {}),
-                outcome: stateOutcome(hub.state(id) ?? "idle"),
                 job: record.job.trim(),
               };
             }),
           );
-          const stateWord = (agent: AgentReceipt) =>
-            agent.outcome === "answered" ? "idle" : agent.outcome;
+          const agents = listed.map(
+            ({ state, ...agent }): AgentReceipt => ({
+              ...agent,
+              outcome: stateOutcome(state),
+            }),
+          );
           const text =
-            agents.length === 0
+            listed.length === 0
               ? "No other agents."
-              : agents
+              : listed
                   .map(
                     (agent) =>
-                      `## ${agent.name} (${stateWord(agent)})\nJob:\n${agent.job}`,
+                      `## ${agent.name} (${agent.state})\nJob:\n${agent.job}`,
                   )
                   .join("\n\n");
+          const structured: Static<typeof StatusOutput> = { agents: listed };
           return {
             output: [{ type: "text", text }],
+            structuredOutput: structured,
             details: { receipt: receipt({ agents }) },
           };
         },
@@ -406,6 +451,7 @@ export function createMessagingExtension(
           }),
           mode: messageModeParameter("recipient"),
         }),
+        structuredOutputSchema: SendOutput,
         replay: "safe",
         async execute(args, api, context) {
           // A rerun replays the first run's binding.
@@ -491,10 +537,21 @@ export function createMessagingExtension(
               `${bound.recipient} waits for the agents its job needs and hasn't started; message it once it works.`,
               true,
             );
-          const sent = interrupted?.working
+          const working = interrupted?.working === true;
+          const dropped = interrupted?.dropped ?? 0;
+          const sent = working
             ? `Interrupted ${bound.recipient} and sent the message.`
             : `Sent to ${bound.recipient}.`;
-          return textResult(`${sent}${droppedNote(interrupted?.dropped ?? 0)}`);
+          const structured: Static<typeof SendOutput> = {
+            to: bound.recipient,
+            mode: bound.mode,
+            interrupted: working,
+            dropped,
+          };
+          return {
+            output: [{ type: "text", text: `${sent}${droppedNote(dropped)}` }],
+            structuredOutput: structured,
+          };
         },
       }),
     ],

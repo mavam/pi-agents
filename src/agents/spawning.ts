@@ -41,7 +41,7 @@ import {
   type ToolExecutionResult,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { GraphTask, NodeTask } from "./graphs.js";
 import type { MessagingHub } from "./hub.js";
 import { UNBOUNDED_OUTPUT } from "./messaging.js";
@@ -495,11 +495,15 @@ async function spawnExecute(
   ]);
   const graph = now?.graphs[graphId];
   // Full names and IDs, which address them in agent_wait and agent_stop.
-  const names =
-    graph?.nodes.map(
-      (node) =>
-        `${records?.agents[node.agent]?.name ?? node.agent} (ID ${node.agent})`,
-    ) ?? [];
+  const members = (graph?.nodes ?? []).map((node) => ({
+    id: node.agent,
+    name: records?.agents[node.agent]?.name ?? node.agent,
+  }));
+  const names = members.map((agent) => `${agent.name} (ID ${agent.id})`);
+  const structured: Static<typeof SpawnOutput> = {
+    group: { id: graphId, name: graph?.name ?? graphId },
+    agents: members,
+  };
   const what = graph?.single
     ? `Started ${names[0]}.`
     : `Started group ${graph?.name ?? graphId} (ID ${graphId}): ${names.join(", ")}.`;
@@ -510,11 +514,34 @@ async function spawnExecute(
         text: `${what} The result arrives as a message once ${graph?.single ? "it answers" : "the group finished"}; call ${WAIT_TOOL} to wait for it instead.`,
       },
     ],
+    structuredOutput: structured,
     ...(started
       ? { details: { receipt: receipt({ graphs: [started] }) } }
       : {}),
   };
 }
+
+/** What scripts get from `agent_spawn`: the group and its agents, by
+ * the full names and IDs that address them in `agent_stop` and
+ * `agent_send`. */
+export const SpawnOutput = Type.Object(
+  {
+    group: Type.Object(
+      {
+        id: Type.String(),
+        name: Type.String(),
+      },
+      { additionalProperties: false },
+    ),
+    agents: Type.Array(
+      Type.Object(
+        { id: Type.String(), name: Type.String() },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 /** The agent's own groups whose results still count. */
 function ownGroups(
@@ -806,6 +833,7 @@ export function spawningTools(options: SpawningOptions): ToolRegistration[] {
       description:
         "Spawn one group of agents and return at once. Once all finished, the group's result arrives as one [results] input, or from agent_wait: the final messages of the agents that no other agent lists in after. For one merged answer, add an agent after the others that merges their results; for results that should arrive separately, call agent_spawn once per job.",
       parameters: spawnParameters,
+      structuredOutputSchema: SpawnOutput,
       prepareArguments: (args) => checkSpawnShape(args) as never,
       // A rerun finds the group the interrupted call started.
       replay: "safe",

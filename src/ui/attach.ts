@@ -738,7 +738,8 @@ class AgentPane implements Component {
     const color = this.color;
     if (this.flash && Date.now() - this.flash.at > FLASH_MS)
       this.flash = undefined;
-    this.syncLoader(statusText(liveOf(this.view)));
+    const stalled = info?.state === "working" ? info.stalled : undefined;
+    this.syncLoader(stalled ? "" : statusText(liveOf(this.view)));
 
     const editorLines = this.editor.render(width);
     if (editorLines.length > 0) {
@@ -755,9 +756,19 @@ class AgentPane implements Component {
         width,
       );
     }
-    const statusLines = this.loader
-      ? this.loader.render(width)
-      : ["", ` ${color("dim", "esc back")}`];
+    const statusLines = stalled
+      ? [
+          "",
+          ` ${color(
+            "warning",
+            stalled === "crashed"
+              ? "⚠ Stalled after repeated crashes: press r in /agents to retry (esc to interrupt)"
+              : "⚠ Stalled: this pi-agents version can't run its work (esc to interrupt)",
+          )}`,
+        ]
+      : this.loader
+        ? this.loader.render(width)
+        : ["", ` ${color("dim", "esc back")}`];
     const failure =
       info?.state === "failed" && info.result?.errorMessage
         ? [color("error", `⊗ ${info.result.errorMessage}`)]

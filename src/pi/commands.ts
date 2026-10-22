@@ -16,6 +16,7 @@ import type {
   AgentState,
   GraphInfo,
   NodeOutcome,
+  Stall,
 } from "../agents/types.js";
 import {
   confirmAndStop,
@@ -284,6 +285,16 @@ export function agentDetail(
       },
     );
   }
+  if (agent.stalled && agent.state === "working")
+    lines.push(
+      { divider: color("warning", "Stalled") },
+      color(
+        "warning",
+        agent.stalled === "crashed"
+          ? "Pi crashed or was killed repeatedly while this agent worked, so its work doesn't resume by itself. Press r to retry it, or s to stop it."
+          : "This version of pi-agents can't run the agent's unfinished work. Switch to the version that started it, or press s to stop it.",
+      ),
+    );
   if (agent.compactionFailure !== undefined)
     lines.push(
       { divider: color("warning", "Compaction failed") },
@@ -328,6 +339,12 @@ async function openMessagesOverlay(
   );
 }
 
+/** Why a row's work doesn't run, while it works. */
+function stalledRow(row: Row): Stall | undefined {
+  const info = row.kind === "agent" ? row.agent : row.graph;
+  return info.state === "working" ? info.stalled : undefined;
+}
+
 async function openAgentsOverlay(
   ctx: ExtensionContext,
   deps: CommandDeps,
@@ -359,6 +376,9 @@ async function openAgentsOverlay(
       "↑↓ move",
       "space fold",
       "⏎ attach",
+      ...(items().some((row) => stalledRow(row) === "crashed")
+        ? ["r retry"]
+        : []),
       "s stop",
       "m messages",
       "tab /messages",
@@ -439,6 +459,14 @@ async function openAgentsOverlay(
         if (!agentId) return undefined;
         after = () => deps.focus.attach(ctx, agentId);
         return "close";
+      }
+      if (key === "r") {
+        if (stalledRow(row) !== "crashed") return undefined;
+        const target = stopTarget(row);
+        void service
+          .retry(target.id)
+          .catch((error) => notify(ctx, errorText(error), "error"));
+        return undefined;
       }
       if (key === "s") {
         const target = stopTarget(row);

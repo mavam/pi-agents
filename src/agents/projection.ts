@@ -32,6 +32,7 @@ import {
   graphDeliveryId,
 } from "./records.js";
 import { SPAWNING_TOOLS, WAIT_TOOL } from "./spawning.js";
+import { type StalledTask, stallOf, type TaskStalls } from "./stalls.js";
 import type { AgentStore } from "./store.js";
 import { endNodes, stages } from "./topology.js";
 import {
@@ -43,7 +44,14 @@ import {
   isThinkingLevel,
   type NodeOutcome,
   type RequestOutcome,
+  type Stall,
 } from "./types.js";
+
+/** A `stalled` field for an info, when its tasks stalled. */
+function stalledField(tasks: readonly StalledTask[]): { stalled?: Stall } {
+  const stall = stallOf(tasks);
+  return stall ? { stalled: stall } : {};
+}
 
 /** The graph ended and every agent's job has an outcome. */
 export function isSettled(
@@ -69,6 +77,7 @@ export class Projection {
   private readonly store: AgentStore;
   private readonly observer: HarnessObserver;
   private readonly carried: (deliveryId: string) => boolean;
+  private readonly stalls: TaskStalls;
 
   constructor(options: {
     harness: Harness;
@@ -76,11 +85,60 @@ export class Projection {
     observer: HarnessObserver;
     /** Whether a delivery is in flight and carried by a wait's result. */
     carried: (deliveryId: string) => boolean;
+    stalls: TaskStalls;
   }) {
     this.harness = options.harness;
     this.store = options.store;
     this.observer = options.observer;
     this.carried = options.carried;
+    this.stalls = options.stalls;
+  }
+
+  /**
+   * The stalled tasks that keep agents busy: those of their conversations,
+   * their nodes', and the group task of an agent the parent started on its
+   * own, which shows as the agent. Also the own tasks of `graphs`.
+   */
+  stalledTasks(
+    agentIds: readonly string[],
+    graphs: readonly string[] = [],
+  ): StalledTask[] {
+    const owned = new Set(graphs);
+    const tasks = agentIds.flatMap((id) => {
+      const record = this.records[id];
+      const graph = record ? this.graphRecords[record.graph] : undefined;
+      if (graph?.single && record) owned.add(record.graph);
+      const node = graph?.nodes.find((each) => each.agent === id);
+      const nodeTask = node ? this.stalls.task(String(node.task)) : undefined;
+      return [
+        ...this.stalls.inConversation(id),
+        ...(nodeTask ? [nodeTask] : []),
+      ];
+    });
+    const own = [...owned].flatMap((id) => {
+      const task = this.stalls.task(id);
+      return task ? [task] : [];
+    });
+    return [...own, ...tasks];
+  }
+
+  /** The agents and everything below them: the groups they spawned, those
+   * groups' agents, and so on. */
+  below(agentIds: readonly string[]): { agents: string[]; graphs: string[] } {
+    const agents = new Set(agentIds);
+    const graphs = new Set<string>();
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const [id, graph] of Object.entries(this.graphRecords)) {
+        if (graphs.has(id) || !graph.owner || !agents.has(graph.owner.agent))
+          continue;
+        graphs.add(id);
+        grew = true;
+        for (const node of graph.nodes) agents.add(node.agent);
+      }
+    }
+    return { agents: [...agents], graphs: [...graphs] };
   }
 
   agents(): Readonly<Record<string, AgentRecord>> {
@@ -290,6 +348,7 @@ export class Projection {
       ...(endedAt !== undefined ? { endedAt } : {}),
       usage: addPartialUsage(summarizeUsage(usage), live),
       activity: activityOf(live),
+      ...stalledField(this.stalledTasks([id])),
       ...(live?.compactionFailure
         ? { compactionFailure: live.compactionFailure.error }
         : {}),
@@ -475,6 +534,9 @@ export class Projection {
         ...(record.owner ? { owner: record.owner.agent } : {}),
         ...(record.single ? { single: true } : {}),
         ...(record.cancelled ? { cancelled: true } : {}),
+        ...(ended === undefined
+          ? stalledField(this.stalledTasks([], [id]))
+          : {}),
         ...(record.pending &&
         ended !== undefined &&
         !isStopped &&

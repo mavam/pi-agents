@@ -45,6 +45,16 @@ the attach view show the error. The warning stays until a later compaction
 succeeds, since the agent's context may overflow meanwhile. Pi sees it in
 `agent_status` too.
 
+Pi resumes unfinished work after a crash. When Pi crashes or is killed
+several times in a row while an agent works, without the agent getting any
+further, the agent's work stops resuming by itself, so work that crashes Pi
+doesn't crash it again forever. The agent then stays `working` but shows
+`stalled after repeated crashes`. Open `/agents`, select it, and press `r` to
+retry it, or `s` to stop it; Esc in the attach view interrupts it. A wait for
+a stalled agent waits until you retry it or its timeout ends. An agent whose
+unfinished work this version of pi-agents can't run shows `stalled: needs
+another pi-agents version` until you switch back or stop it.
+
 ## Tools available to agents
 
 Agents use `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, and
@@ -192,7 +202,7 @@ the new session.
 
 | Command | Action |
 | --- | --- |
-| `/agents` | Browse all agents and graphs, including ended ones, with their jobs and latest results. Attach to, fold, or stop them. |
+| `/agents` | Browse all agents and graphs, including ended ones, with their jobs and latest results. Attach to, fold, retry, or stop them. |
 | `/agent <name>` | Attach to an agent. |
 | `/messages` | Read and filter the messages agents sent each other, newest first. |
 

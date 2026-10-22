@@ -91,6 +91,22 @@ describe("formatting", () => {
     );
   });
 
+  test("stalled work and failed compactions show instead of silence", () => {
+    expect(
+      formatAgentLine(
+        agent({
+          state: "working",
+          stalled: "crashed",
+          compactionFailure: "summary refused",
+          lastActivityAt: 0,
+        }),
+        5 * 60_000,
+      ),
+    ).toBe(
+      "◉ reviewer terra 5m00s stalled after repeated crashes compaction failed",
+    );
+  });
+
   test("settled agents show no elapsed time", () => {
     expect(formatAgentLine(agent({ state: "idle" }), 5_000)).toBe(
       "● reviewer terra",

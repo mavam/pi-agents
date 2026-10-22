@@ -31,6 +31,15 @@ const resultFields = {
   error: Type.Optional(Type.String({ description: "Why it failed" })),
 };
 
+const stalledField = {
+  stalled: Type.Optional(
+    StringEnum(["crashed", "incompatible"] as const, {
+      description:
+        "Its work doesn't run: crashes cut it off repeatedly and the user can retry it, or this pi-agents version can't run it",
+    }),
+  ),
+};
+
 export const AgentOutput = exact({
   kind: Type.Literal("agent"),
   id: Type.String({
@@ -38,6 +47,7 @@ export const AgentOutput = exact({
   }),
   name: Type.String(),
   state: StringEnum(AGENT_STATES),
+  ...stalledField,
   graph: Type.Optional(Type.String({ description: "The graph it belongs to" })),
   ...resultFields,
 });
@@ -74,6 +84,7 @@ export const GraphOutput = exact({
   }),
   name: Type.String(),
   state: StringEnum(AGENT_STATES),
+  ...stalledField,
   stopped: Type.Boolean(),
   outcome: Type.Optional(
     StringEnum(GRAPH_OUTCOMES, {
@@ -132,6 +143,9 @@ export function agentOutput(
     id: info.id,
     name: info.name,
     state: info.state,
+    ...(info.state === "working" && info.stalled
+      ? { stalled: info.stalled }
+      : {}),
     ...(graph ? { graph } : {}),
     ...(error !== undefined
       ? bodyFields("error", error)
@@ -156,6 +170,9 @@ export function graphOutput(
     id: graph.id,
     name: graph.name,
     state: graph.state,
+    ...(graph.state === "working" && graph.stalled
+      ? { stalled: graph.stalled }
+      : {}),
     stopped: graph.stopped,
     ...(outcome ? { outcome } : {}),
     agents: graph.nodes.map((node) => {

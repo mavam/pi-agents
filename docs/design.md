@@ -188,6 +188,16 @@ conversation cache. An agent that waits for its agents yields its slot so
 the cap cannot prevent them from running; an agent that ends its turn
 instead holds no slot anyway.
 
+## Recovery
+
+Work that crashes Pi must not crash it on every resume. pi-durable parks a
+task that crashes cut off too often in a row; its agent stays working but
+shows as stalled, since its run still holds the conversation. Only the user
+retries it, with everything the agent spawned: a crash loop needs a
+judgment the models can't make, so models see the stall but get no tool
+for it. Work this version can't run, such as a task of an extension it
+lacks, shows as stalled the same way.
+
 ## Views
 
 The panel shows live state; the transcript and message list show history;

@@ -532,6 +532,27 @@ describe("durability", () => {
     expect(third.get("w")?.state).toBe("idle");
   });
 
+  test("work that crashes too often stalls until retried", async () => {
+    const directory = tempDir();
+    const worker = fileURLToPath(new URL("./crash-worker.ts", import.meta.url));
+    const crashed = Bun.spawn(["bun", worker, directory], { stdout: "ignore" });
+    expect(await crashed.exited).toBe(0);
+
+    const service = await open({
+      storage: await jsonlStorage(directory),
+      models: createFaux().models,
+      // Park work at the first crash instead of the fifth.
+      settings: { restartLimit: 1 },
+    });
+    await until(() => service.get("victim")?.stalled === "crashed");
+    expect(service.get("victim")?.state).toBe("working");
+    expect(await service.retry("victim")).toBeGreaterThan(0);
+    await service.wait(["victim"]);
+    expect(service.get("victim")?.result?.text).toBe("done: hold");
+    expect(service.get("victim")?.stalled).toBeUndefined();
+    await expect(service.retry("victim")).rejects.toThrow("no stalled work");
+  });
+
   test("a crash while stopping an agent resumes nothing below it", async () => {
     const directory = tempDir();
     const worker = fileURLToPath(new URL("./stop-worker.ts", import.meta.url));

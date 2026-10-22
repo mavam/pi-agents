@@ -27,6 +27,7 @@ import {
   GRAPH_SIZE,
   type GraphInfo,
   messageMode,
+  type Stall,
   type Target,
   type TargetRef,
   THINKING_LEVELS,
@@ -106,7 +107,7 @@ function graphNow(service: AgentService, id: string): GraphOutput {
 
 /** The model-facing summary of one agent: its state and result. */
 function describeAgent(info: AgentInfo): string {
-  const head = `## ${info.name} (${info.state})`;
+  const head = `## ${info.name} (${info.state}${stallText(info)})`;
   const { result, error } = turnResult(info);
   if (error !== undefined) return `${head}\nError: ${error}`;
   if (info.state === "idle") return `${head}\n${result || "(empty)"}`;
@@ -130,13 +131,24 @@ function describeGraph(service: AgentService, graph: GraphInfo): string {
   return graphContent(details);
 }
 
+/** Why a working agent or graph doesn't progress, for the model. */
+function stallText(info: { state: string; stalled?: Stall }): string {
+  if (info.state !== "working" || !info.stalled) return "";
+  return info.stalled === "crashed"
+    ? ", stalled after repeated crashes until the user retries it in /agents"
+    : ", stalled because this pi-agents version can't run its work";
+}
+
 function statusLine(service: AgentService, info: AgentInfo): string {
   const spawning = info.activity.spawning;
-  const state = spawning
-    ? `${info.state}, spawned ${spawning.graph} (${spawning.done}/${spawning.total} done)`
-    : info.activity.tool
-      ? `${info.state}, using ${info.activity.tool}`
-      : info.state;
+  const state =
+    info.stalled && info.state === "working"
+      ? `${info.state}${stallText(info)}`
+      : spawning
+        ? `${info.state}, spawned ${spawning.graph} (${spawning.done}/${spawning.total} done)`
+        : info.activity.tool
+          ? `${info.state}, using ${info.activity.tool}`
+          : info.state;
   const graph = info.graph ? service.graphById(info.graph) : undefined;
   const owner = info.owner ? service.agentById(info.owner) : undefined;
   const where =
@@ -160,7 +172,7 @@ function graphLines(graphs: readonly GraphInfo[]): string[] {
 
 function graphStatusLine(graph: GraphInfo): string {
   const done = graph.nodes.filter((node) => node.outcome).length;
-  return `${graph.name} (graph, ${graph.stopped ? "stopped" : graph.state}, ${done}/${graph.nodes.length} done): ${graphShape(graph)}`;
+  return `${graph.name} (graph, ${graph.stopped ? "stopped" : graph.state}${stallText(graph)}, ${done}/${graph.nodes.length} done): ${graphShape(graph)}`;
 }
 
 /** Agents to show with graphs: theirs, in order, without repeats. */

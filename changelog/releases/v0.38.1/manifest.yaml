@@ -1,0 +1,9 @@
+created: 2026-10-30
+title: Prompt cache stays valid with agent guidance
+intro: >-
+  Pi-agents now adds its guidance as a Pi prompt section instead of replacing the
+  system prompt. This keeps provider prompt caches valid when agent guidance changes
+  mid-session.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.38.0

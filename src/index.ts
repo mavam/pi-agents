@@ -117,7 +117,8 @@ export default function agentExtension(pi: ExtensionAPI): void {
       ctx.scopedModels,
       ctx.mode === "print" || ctx.mode === "json",
     );
-    return { systemPrompt: `${event.systemPrompt}\n\n${appendix}` };
+    // A section, unlike a returned systemPrompt, keeps the prompt cache.
+    event.systemPromptOptions.sections["pi-agents"] = appendix;
   });
 
   pi.on("session_start", async (_event, ctx) => {

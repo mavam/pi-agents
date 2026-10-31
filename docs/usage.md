@@ -28,7 +28,7 @@ An agent is in one of these states:
 | ◉ `working` | The agent works on its job or a message. |
 | ◐ `queued` | The agent answered, and its result waits for Pi to take it. |
 | ● `idle` | The agent answered and waits for messages. |
-| ⊗ `failed` | The last answer ended with an error. |
+| ⊗ `failed` | The last answer ended with an error, or the agent's work ended without one, for example because of crashes or its turn limit. |
 | ⊘ `interrupted` | The last answer was interrupted before it finished. |
 | ○ `waiting` | In a graph: the agent waits for the agents whose results it needs. |
 | ⊖ `skipped` | In a graph: the agent never started because none of the agents it waited for answered. |
@@ -47,13 +47,18 @@ succeeds, since the agent's context may overflow meanwhile. Pi sees it in
 
 Pi resumes unfinished work after a crash. When Pi crashes or is killed
 several times in a row while an agent works, without the agent getting any
-further, the agent's work stops resuming by itself, so work that crashes Pi
-doesn't crash it again forever. The agent then stays `working` but shows
-`stalled after repeated crashes`. Open `/agents`, select it, and press `r` to
-retry it, or `s` to stop it; Esc in the attach view interrupts it. A wait for
-a stalled agent waits until you retry it or its timeout ends. An agent whose
-unfinished work this version of pi-agents can't run shows `stalled: needs
-another pi-agents version` until you switch back or stop it.
+further, the agent's work ends instead of resuming, so work that crashes Pi
+doesn't crash it again forever. A turn cut off this way, or a model request
+that Pi's crash interrupted with no retry left, fails the agent, and a
+notice says so. Its job, or Pi's message, stays open: open `/agents`, select
+the agent, and press `r` to continue it where it stopped, or `s` to stop it.
+A tool call cut off this way fails instead, and the agent sees the error. A
+wait for the agent waits until it answers or its timeout ends. `r`
+continues any agent whose work ended without an answer, after an error or
+an interrupt too.
+
+An agent whose unfinished work this version of pi-agents can't run shows
+`stalled: needs another pi-agents version` until you switch back or stop it.
 
 ## Tools available to agents
 
@@ -172,7 +177,7 @@ editor names the agent and sends your input to it:
 | Ctrl+O | Expand or collapse all tool output and messages. |
 | Click | Expand or collapse one tool result or message, as in Pi. Click the newer-lines note to jump back to new output. Needs fullscreen mode. |
 | ← or Ctrl+D | Detach when the editor is empty. |
-| Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. |
+| Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. Earlier entries load as you reach the top. |
 | Mouse wheel | Scroll in fullscreen mode, with the pointer over the attached view. |
 
 Messages you send while attached stay between you and the agent. Their
@@ -203,7 +208,7 @@ the new session.
 
 | Command | Action |
 | --- | --- |
-| `/agents` | Browse all agents and graphs, including ended ones, with their jobs and latest results. Attach to, fold, retry, or stop them. |
+| `/agents` | Browse all agents and graphs, including ended ones, with their jobs and latest results. Attach to, fold, continue, or stop them. |
 | `/agent <name>` | Attach to an agent. |
 | `/messages` | Read and filter the messages agents sent each other, newest first. |
 

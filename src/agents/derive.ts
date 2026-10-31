@@ -7,6 +7,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   EntryRecord,
   LiveState,
+  RunFailure,
   SubmissionRecord,
   UsageState,
 } from "@earendil-works/pi-durable";
@@ -24,63 +25,44 @@ export const ASSISTANT_KIND = "pi.assistant";
 /** The task kind that runs an agent's turns; the latest one ends a run. */
 export const GENERATION_KIND = "pi.generation";
 
-/** How the latest turn settled, as seen in this process. */
-export type TurnSettlement = "answered" | "interrupted" | "failed";
+/**
+ * Why runs end without an answer but not by the agent's fault: an
+ * interrupt (`aborted`), or crashes that cut its work off (`interrupted`,
+ * `restart_limit`). Such a run leaves the requests it answers open for a
+ * later answer, such as one after the user continued the agent.
+ */
+const CORRECTIONS: ReadonlySet<string> = new Set([
+  "aborted",
+  "interrupted",
+  "restart_limit",
+]);
 
-export function settlementOf(
-  submission: SubmissionRecord,
-): TurnSettlement | undefined {
-  if (submission.type !== "input") return undefined;
-  if (submission.status === "done") return "answered";
-  if (submission.status === "unanswered")
-    return submission.reason === "aborted" ? "interrupted" : "failed";
-  return undefined;
-}
-
-/** A turn without an answer: why, and the first entry of its inputs. */
-export interface EndedTurn {
-  reason: string;
-  detail?: string;
-  /** Absent when none of its inputs reached the transcript. */
-  since?: number;
+/** Whether a run that ended for `reason` keeps its requests open. */
+export function keepsRequestsOpen(reason: string): boolean {
+  return CORRECTIONS.has(reason);
 }
 
 /**
- * The turn an unanswered submission ended, merged with `turn`, what other
- * submissions of the same commit ended: a run settles all of its inputs
- * at once, and its output follows the first of them.
+ * Why the agent's latest run ended without an answer, from `pi.live`, which
+ * keeps it until the next run starts. A continue that found nothing to
+ * answer didn't fail: the agent's answer still stands.
  */
-export function endedTurnOf(
-  submission: SubmissionRecord,
-  turn?: EndedTurn,
-): EndedTurn | undefined {
-  if (submission.type !== "input" || submission.status !== "unanswered")
-    return undefined;
-  const detail = submission.detail;
-  const entries = [turn?.since, submission.entry].filter(
-    (entry): entry is number => entry !== undefined,
-  );
-  return {
-    reason: turn?.reason ?? submission.reason,
-    ...(turn?.detail !== undefined
-      ? { detail: turn.detail }
-      : typeof detail === "string"
-        ? { detail }
-        : {}),
-    ...(entries.length > 0 ? { since: Math.min(...entries) } : {}),
-  };
+export function runFailureOf(
+  live: LiveState | undefined,
+): RunFailure | undefined {
+  const failure = live?.runFailure;
+  return failure?.reason === "nothing_to_answer" ? undefined : failure;
 }
 
 export function deriveState(
   live: LiveState | undefined,
   last: AgentResult | undefined,
-  settlement?: TurnSettlement,
 ): AgentState {
   if (live?.run !== undefined) return "working";
-  // A turn can end without an answer entry, for example when it was
+  // A run can end without an answer entry, for example when it was
   // interrupted before the first token.
-  if (settlement === "interrupted") return "interrupted";
-  if (settlement === "failed") return "failed";
+  const failure = runFailureOf(live);
+  if (failure) return failure.reason === "aborted" ? "interrupted" : "failed";
   if (last?.stopReason === "aborted") return "interrupted";
   if (last?.stopReason === "error") return "failed";
   return "idle";
@@ -205,7 +187,7 @@ export function outcomeOf(
     return { kind: "answered", result };
   }
   if (submission.status === "unanswered") {
-    return submission.reason === "aborted"
+    return keepsRequestsOpen(submission.reason)
       ? interrupted
       : {
           kind: "failed",

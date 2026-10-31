@@ -77,8 +77,8 @@ async function fence(tx: Tx, roots: string[]): Promise<string[]> {
 }
 
 /** Why a run's inputs end unanswered when the run failed, rather than
- * being interrupted, reset, or superseded. */
-const FAILURES = new Set(["model_error", "no_model"]);
+ * being interrupted, cut off by crashes, reset, or superseded. */
+const FAILURES = new Set(["model_error", "no_model", "turn_limit"]);
 
 /** The agent's first entry from `from` on that presented the group;
  * inside a commit. */

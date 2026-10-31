@@ -532,7 +532,7 @@ describe("durability", () => {
     expect(third.get("w")?.state).toBe("idle");
   });
 
-  test("work that crashes too often stalls until retried", async () => {
+  test("a turn that crashes cut off fails, and its job waits for a continue", async () => {
     const directory = tempDir();
     const worker = fileURLToPath(new URL("./crash-worker.ts", import.meta.url));
     const crashed = Bun.spawn(["bun", worker, directory], { stdout: "ignore" });
@@ -541,16 +541,21 @@ describe("durability", () => {
     const service = await open({
       storage: await jsonlStorage(directory),
       models: createFaux().models,
-      // Park work at the first crash instead of the fifth.
-      settings: { restartLimit: 1 },
+      // The request the crash cut off doesn't run again.
+      settings: { retry: { enabled: false } },
     });
-    await until(() => service.get("victim")?.stalled === "crashed");
-    expect(service.get("victim")?.state).toBe("working");
-    expect(await service.retry("victim")).toBeGreaterThan(0);
+    await until(() => service.get("victim")?.state === "failed");
+    expect(service.get("victim")?.unanswered?.reason).toBe("interrupted");
+    const graph = service.get("victim")?.graph as string;
+    expect(service.graphById(graph)?.state).toBe("working");
+    await service.continue("victim");
     await service.wait(["victim"]);
     expect(service.get("victim")?.result?.text).toBe("done: hold");
-    expect(service.get("victim")?.stalled).toBeUndefined();
-    await expect(service.retry("victim")).rejects.toThrow("no stalled work");
+    expect(service.get("victim")?.unanswered).toBeUndefined();
+    await until(() => service.graphById(graph)?.state === "idle");
+    await expect(service.continue("victim")).rejects.toThrow(
+      "nothing to continue",
+    );
   });
 
   test("a crash while stopping an agent resumes nothing below it", async () => {

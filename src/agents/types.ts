@@ -96,13 +96,6 @@ export interface AgentActivity {
   spawning?: { graph: string; done: number; total: number };
 }
 
-/**
- * Why work that keeps an agent or graph busy doesn't run: `crashed` when
- * it was cut off by crashes too often in a row and waits for a retry,
- * `incompatible` when this version of pi-agents can't run it.
- */
-export type Stall = "crashed" | "incompatible";
-
 export interface AgentInfo {
   id: string;
   name: string;
@@ -141,9 +134,8 @@ export interface AgentInfo {
   owner?: string;
   /** An answer waits for delivery to the parent, which is still busy. */
   queued?: boolean;
-  /** Its work can't run: it crashed too often in a row and waits for a
-   * retry, or this version of pi-agents can't run it. */
-  stalled?: Stall;
+  /** Its work can't run: this version of pi-agents can't run it. */
+  stalled?: true;
   /** Why the latest compaction failed; stays until a compaction succeeds.
    * The agent keeps working, but its context may overflow. */
   compactionFailure?: string;
@@ -227,7 +219,7 @@ export interface GraphInfo {
   /** Withdrawn with the work that needed it; its result reaches nobody. */
   cancelled?: boolean;
   /** The graph's own work can't run (see `AgentInfo.stalled`). */
-  stalled?: Stall;
+  stalled?: true;
 }
 
 /** How many agents one spawn starts. */

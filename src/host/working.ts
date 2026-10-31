@@ -109,18 +109,22 @@ export class WorkingAgents {
    * request took the slot. Returns the function that stops observing.
    */
   observe(harness: Harness): () => void {
-    return harness.subscribeCommits((publication) => {
-      for (const change of publication.changes)
-        if (
-          change.type === "document" &&
-          change.record.kind === LiveDoc.definition.kind &&
-          change.conversationId !== undefined
-        )
-          this.onLive(
-            String(change.conversationId),
-            change.value as LiveState | null,
-          );
+    const observation = harness.observeCommits({
+      advance: (publication) => {
+        for (const change of publication.changes)
+          if (
+            change.type === "document" &&
+            change.record.kind === LiveDoc.definition.kind &&
+            change.conversationId !== undefined
+          )
+            this.onLive(
+              String(change.conversationId),
+              change.kind === "change" ? (change.value as LiveState) : null,
+            );
+      },
+      end: () => {},
     });
+    return () => observation.detach();
   }
 
   private onLive(agentId: string, state: LiveState | null): void {

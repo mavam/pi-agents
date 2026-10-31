@@ -7,10 +7,11 @@
  * creates agents and graphs. The host owns storage and the harness.
  */
 
-import type { AttachedReplicatedState } from "@earendil-works/chord";
 import {
   type Conversation,
-  type ConversationView,
+  ConversationBusy,
+  ConversationTranscript,
+  type ConversationWatch,
   type Cursor,
   type Harness,
   InboxDoc,
@@ -66,6 +67,12 @@ const REFRESH_DELAY_MS = 50;
 /** A group that must stop: withdrawn, or stopped by request. */
 function needsStop(graph: GraphRecord): boolean {
   return graph.cancelled === true || graph.stopped === true;
+}
+
+/** An agent's conversation as the attach view follows it. */
+export interface AgentConversation {
+  watch: ConversationWatch;
+  transcript: ConversationTranscript;
 }
 
 export interface AgentServiceOptions {
@@ -415,22 +422,27 @@ export class AgentService {
     return target;
   }
 
-  /** The agent's live durable conversation view, for the attach view. */
-  async view(
-    nameOrId: string,
-  ): Promise<AttachedReplicatedState<ConversationView>> {
+  /**
+   * The agent's live durable conversation, for the attach view: a watch of
+   * its newest entries and live state, and the transcript that holds what
+   * the view loaded, earlier entries included. Stop the watch when done.
+   */
+  async view(nameOrId: string): Promise<AgentConversation> {
     const info = this.require(nameOrId);
     const conversation = await this.harness.conversation(
       conversationId(info.id),
       CONTEXT,
     );
     if (!conversation) throw new AgentError(`Agent ${info.name} is missing`);
-    return conversation.viewState(CONTEXT);
+    const transcript = new ConversationTranscript((query, limit, context) =>
+      conversation.entries(query, limit, undefined, context),
+    );
+    return { watch: await conversation.watch(CONTEXT), transcript };
   }
 
   /** Every live task with its owner edge, for diagnostics and tests. */
   async liveTasks(): Promise<TaskNode[]> {
-    const graph = await this.harness.taskGraph(CONTEXT);
+    const graph = await this.harness.watchTaskGraph(CONTEXT);
     try {
       return Object.values(graph.value.tasks).map((node) => ({
         id: String(node.id),
@@ -441,7 +453,7 @@ export class AgentService {
         conversations: node.conversations.map(String),
       }));
     } finally {
-      graph.dispose();
+      await graph.stop();
     }
   }
 
@@ -545,29 +557,40 @@ export class AgentService {
   }
 
   /**
-   * Run the stalled work of an agent or graph again: the tasks that crashes
-   * cut off too often in a row, of the agent or the graph's agents, and of
-   * everything they spawned. Returns how many tasks run again.
+   * Continue an agent whose latest run ended without an answer, for example
+   * after crashes or a provider error cut it off, or after an interrupt: a
+   * new run on its conversation as it is, without a message. The groups a
+   * failed run withdrew stay withdrawn.
    */
-  async retry(nameOrId: string): Promise<number> {
-    const target = this.requireTarget(nameOrId);
-    const below = this.projection.below(
-      target.kind === "agent"
-        ? [target.info.id]
-        : target.info.nodes.map((node) => node.agentId),
+  async continue(nameOrId: string): Promise<void> {
+    const info = this.require(nameOrId);
+    if (info.state !== "failed" && info.state !== "interrupted")
+      throw new AgentError(`${info.name} has nothing to continue`);
+    const conversation = await this.harness.conversation(
+      conversationId(info.id),
+      CONTEXT,
     );
-    const tasks = this.projection.stalledTasks(below.agents, [
-      ...(target.kind === "graph" ? [target.info.id] : []),
-      ...below.graphs,
-    ]);
-    if (tasks.length === 0)
-      throw new AgentError(`${target.info.name} has no stalled work`);
-    const retried = await this.stalls.retry(tasks);
-    if (retried === 0)
+    if (!conversation) throw new AgentError(`Agent ${info.name} is missing`);
+    // The model only answers a user message or tool results; a run would
+    // end at once otherwise.
+    const { messages } = await conversation.context(CONTEXT);
+    const last = [...messages]
+      .reverse()
+      .find((message) => message.role !== "system");
+    if (last?.role !== "user" && last?.role !== "toolResult")
       throw new AgentError(
-        `${target.info.name} can't run with this version of pi-agents; stop it instead`,
+        `${info.name} has nothing to continue; message it instead`,
       );
-    return retried;
+    if (this.projection.agents()[info.id]?.stopped)
+      await this.store.clearStopped(info.id);
+    try {
+      await conversation.submit({ type: "continue" }, CONTEXT);
+    } catch (error) {
+      if (error instanceof ConversationBusy)
+        throw new AgentError(`${info.name} is working already`);
+      throw error;
+    }
+    await this.refresh([info.id]);
   }
 
   /**

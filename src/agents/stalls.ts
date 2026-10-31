@@ -1,24 +1,20 @@
 /**
- * Stalls: live tasks that pi-durable won't run. A task that crashes, is
- * evicted, or is reset too often in a row without progress is parked until
- * someone retries it (`restart_limit`), and a task whose definition this
- * version doesn't have or can't take is blocked until the extension changes.
- * Either keeps its agent busy without doing anything, so the agent shows as
- * stalled instead of silently working.
+ * Stalls: live tasks that pi-durable won't run, because this version
+ * doesn't have their definition or can't take their version. Such a task
+ * keeps its agent busy without doing anything until the extension changes,
+ * so the agent shows as stalled instead of silently working.
  *
  * The blocked reason is derived, not stored, so it comes from the harness's
  * task graph, which follows it without commits.
  */
 
-import type { AttachedReplicatedState } from "@earendil-works/chord";
 import type {
   BlockedReason,
   Harness,
+  Observation,
   TaskGraph,
-  TaskId,
 } from "@earendil-works/pi-durable";
 import { CONTEXT } from "./context.js";
-import type { Stall } from "./types.js";
 
 export interface StalledTask {
   id: string;
@@ -27,17 +23,8 @@ export interface StalledTask {
   reason: BlockedReason;
 }
 
-/** How a stall reads to the frontend: a parked task can run again. */
-export function stallOf(tasks: readonly StalledTask[]): Stall | undefined {
-  if (tasks.length === 0) return undefined;
-  return tasks.some((task) => task.reason === "restart_limit")
-    ? "crashed"
-    : "incompatible";
-}
-
 export class TaskStalls {
-  private state: AttachedReplicatedState<TaskGraph> | undefined;
-  private unsubscribe: (() => void) | undefined;
+  private observation: Observation<TaskGraph> | undefined;
   private tasks = new Map<string, StalledTask>();
 
   constructor(
@@ -48,15 +35,26 @@ export class TaskStalls {
   ) {}
 
   async start(): Promise<void> {
-    this.state = await this.harness.taskGraph(CONTEXT);
-    this.update(this.state.value);
-    this.unsubscribe = this.state.subscribe((value) => this.update(value));
+    // Calls can come before the observation resolves; each carries the
+    // whole graph, newer than the value at attachment.
+    let advanced = false;
+    this.observation = await this.harness.observeTaskGraph(
+      {
+        advance: (call) => {
+          if (call.kind !== "value") return;
+          advanced = true;
+          this.update(call.value);
+        },
+        end: () => {},
+      },
+      CONTEXT,
+    );
+    if (!advanced) this.update(this.observation.value);
   }
 
   stop(): void {
-    this.unsubscribe?.();
-    this.state?.dispose();
-    this.state = undefined;
+    this.observation?.detach();
+    this.observation = undefined;
   }
 
   /** Stalled tasks of a conversation. */
@@ -69,14 +67,6 @@ export class TaskStalls {
   /** A stalled task by its ID. */
   task(id: string): StalledTask | undefined {
     return this.tasks.get(id);
-  }
-
-  /** Run parked tasks again; tasks blocked for other reasons stay. */
-  async retry(tasks: readonly StalledTask[]): Promise<number> {
-    const parked = tasks.filter((task) => task.reason === "restart_limit");
-    for (const task of parked)
-      await this.harness.retryTask(Number(task.id) as TaskId, CONTEXT);
-    return parked.length;
   }
 
   private update(graph: TaskGraph): void {

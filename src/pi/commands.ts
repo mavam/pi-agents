@@ -9,6 +9,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { turnResult } from "../agents/report.js";
 import { isGraphVisible, isVisible } from "../agents/service.js";
 import { orderSentence } from "../agents/topology.js";
 import type {
@@ -16,7 +17,6 @@ import type {
   AgentState,
   GraphInfo,
   NodeOutcome,
-  Stall,
 } from "../agents/types.js";
 import {
   confirmAndStop,
@@ -266,7 +266,7 @@ export function agentDetail(
   if (agent.state === "failed") {
     lines.push(
       { divider: color("error", "Error") },
-      color("error", result?.errorMessage ?? "The last answer failed."),
+      color("error", turnResult(agent).error ?? "The last answer failed."),
     );
   } else if (result?.text) {
     const when =
@@ -290,9 +290,7 @@ export function agentDetail(
       { divider: color("warning", "Stalled") },
       color(
         "warning",
-        agent.stalled === "crashed"
-          ? "Pi crashed or was killed repeatedly while this agent worked, so its work doesn't resume by itself. Press r to retry it, or s to stop it."
-          : "This version of pi-agents can't run the agent's unfinished work. Switch to the version that started it, or press s to stop it.",
+        "This version of pi-agents can't run the agent's unfinished work. Switch to the version that started it, or press s to stop it.",
       ),
     );
   if (agent.compactionFailure !== undefined)
@@ -340,9 +338,12 @@ async function openMessagesOverlay(
 }
 
 /** Why a row's work doesn't run, while it works. */
-function stalledRow(row: Row): Stall | undefined {
-  const info = row.kind === "agent" ? row.agent : row.graph;
-  return info.state === "working" ? info.stalled : undefined;
+/** The agent of a row whose latest run ended without an answer, which
+ * `r` continues. */
+function continuable(row: Row): AgentInfo | undefined {
+  if (row.kind !== "agent") return undefined;
+  const { state } = row.agent;
+  return state === "failed" || state === "interrupted" ? row.agent : undefined;
 }
 
 async function openAgentsOverlay(
@@ -376,9 +377,7 @@ async function openAgentsOverlay(
       "↑↓ move",
       "space fold",
       "⏎ attach",
-      ...(items().some((row) => stalledRow(row) === "crashed")
-        ? ["r retry"]
-        : []),
+      ...(items().some((row) => continuable(row)) ? ["r continue"] : []),
       "s stop",
       "m messages",
       "tab /messages",
@@ -461,10 +460,10 @@ async function openAgentsOverlay(
         return "close";
       }
       if (key === "r") {
-        if (stalledRow(row) !== "crashed") return undefined;
-        const target = stopTarget(row);
+        const agent = continuable(row);
+        if (!agent) return undefined;
         void service
-          .retry(target.id)
+          .continue(agent.id)
           .catch((error) => notify(ctx, errorText(error), "error"));
         return undefined;
       }

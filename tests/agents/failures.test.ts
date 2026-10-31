@@ -9,17 +9,22 @@ describe("harness reports", () => {
   test("name the agent, its work, and what to do", () => {
     expect(
       describeReport(
-        { error: new Error("x"), type: "task_parked", task: task("pi.tool") },
+        {
+          error: new Error("x"),
+          kind: "task_interrupted",
+          reason: "restart_limit",
+          task: task("pi.generation"),
+        },
         subject,
       ),
     ).toBe(
-      "Agent api stalled: Pi crashed or was killed repeatedly while its tool call ran. Retry it with r in /agents, or stop it.",
+      "Agent api failed: Pi crashed or was killed repeatedly. Continue it with r in /agents.",
     );
     expect(
       describeReport(
         {
           error: new Error("boom"),
-          type: "task_faulted",
+          kind: "task_faulted",
           reason: "threw",
           task: task("pi-agents.graph"),
           extension: "pi-agents-graphs",
@@ -29,16 +34,16 @@ describe("harness reports", () => {
     ).toBe("Agent api: its graph (pi-agents-graphs) failed: boom");
     expect(
       describeReport(
-        { error: new Error("no key"), type: "host_error", callback: "models" },
+        { error: new Error("no key"), kind: "host_error", callback: "models" },
         subject,
       ),
     ).toBe("Pi's models failed for agents: no key");
   });
 
-  test("a failed session reports through the recovery only", () => {
+  test("a failed storage reports through the recovery only", () => {
     expect(
       describeReport(
-        { error: new Error("disk"), type: "session_failed" },
+        { error: new Error("disk"), kind: "storage_failed" },
         subject,
       ),
     ).toBeUndefined();

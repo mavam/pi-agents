@@ -33,9 +33,8 @@ const resultFields = {
 
 const stalledField = {
   stalled: Type.Optional(
-    StringEnum(["crashed", "incompatible"] as const, {
-      description:
-        "Its work doesn't run: crashes cut it off repeatedly and the user can retry it, or this pi-agents version can't run it",
+    Type.Literal(true, {
+      description: "Its work doesn't run: this pi-agents version can't run it",
     }),
   ),
 };

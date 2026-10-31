@@ -317,6 +317,7 @@ async function start(
         model: spec.model ?? null,
         thinkingLevel: spec.thinking ?? null,
         instructions: spec.instructions ?? null,
+        maxTurns: spec.maxTurns ?? null,
       });
       agents.push(String(conversation.id));
       tasks.push(task);

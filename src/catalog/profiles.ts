@@ -28,6 +28,8 @@ export interface Profile {
   tools?: string[];
   /** Whether agents of this profile may spawn agents of their own. */
   spawn?: boolean;
+  /** Tool rounds one run of an agent may take before it fails. */
+  maxTurns?: number;
   /** The Markdown body, appended to the agent's system prompt. */
   instructions: string;
   source: Source;
@@ -53,6 +55,7 @@ const ALLOWED_FRONTMATTER_KEYS = new Set([
   "skills",
   "tools",
   "spawn",
+  "maxTurns",
 ]);
 
 function toErrorMessage(error: unknown): string {
@@ -119,6 +122,14 @@ export function parseProfileFile(
   const spawn = frontmatter.spawn;
   if (spawn !== undefined && typeof spawn !== "boolean")
     return "Invalid 'spawn' (must be true or false)";
+  const maxTurns = frontmatter.maxTurns;
+  if (
+    maxTurns !== undefined &&
+    (typeof maxTurns !== "number" ||
+      !Number.isSafeInteger(maxTurns) ||
+      maxTurns < 1)
+  )
+    return "Invalid 'maxTurns' (must be a positive integer)";
 
   return {
     name: name.trim(),
@@ -130,6 +141,7 @@ export function parseProfileFile(
     ...(skills ? { skills } : {}),
     ...(tools ? { tools } : {}),
     ...(spawn !== undefined ? { spawn } : {}),
+    ...(maxTurns !== undefined ? { maxTurns } : {}),
     instructions: body.trim(),
     source,
     filePath,

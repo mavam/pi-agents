@@ -5,6 +5,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import {
   fauxAssistantMessage,
   fauxProvider,
+  fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import type { AgentService } from "../../src/agents/service.js";
@@ -492,6 +493,36 @@ describe("AgentService", () => {
   });
 });
 
+describe("turn limits", () => {
+  test("a run that reaches its limit fails, and continuing it goes on", async () => {
+    // Runs a command until it got its result, then answers.
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    faux.setResponses(
+      Array.from({ length: 10 }, () => (context) => {
+        const last = context.messages.at(-1);
+        return last?.role === "toolResult"
+          ? fauxAssistantMessage("ran")
+          : fauxAssistantMessage([fauxToolCall("bash", { command: "true" })], {
+              stopReason: "toolUse",
+            });
+      }),
+    );
+    const service = await open({ models });
+    await service.spawnGraph({
+      agents: [{ name: "a", job: "run", cwd: ".", model: MODEL, maxTurns: 1 }],
+    });
+    await until(() => service.get("a")?.state === "failed");
+    expect(service.get("a")?.unanswered).toMatchObject({
+      reason: "turn_limit",
+      detail: "1 turn",
+    });
+    await service.continue("a");
+    await until(() => service.get("a")?.result?.text === "ran");
+  });
+});
+
 describe("durability", () => {
   test("an interrupted turn resumes and delivers once after reopening", async () => {
     const directory = tempDir();
@@ -532,7 +563,7 @@ describe("durability", () => {
     expect(third.get("w")?.state).toBe("idle");
   });
 
-  test("work that crashes too often stalls until retried", async () => {
+  test("a turn that crashes cut off fails, and its job waits for a continue", async () => {
     const directory = tempDir();
     const worker = fileURLToPath(new URL("./crash-worker.ts", import.meta.url));
     const crashed = Bun.spawn(["bun", worker, directory], { stdout: "ignore" });
@@ -541,16 +572,21 @@ describe("durability", () => {
     const service = await open({
       storage: await jsonlStorage(directory),
       models: createFaux().models,
-      // Park work at the first crash instead of the fifth.
-      settings: { restartLimit: 1 },
+      // The request the crash cut off doesn't run again.
+      settings: { retry: { enabled: false } },
     });
-    await until(() => service.get("victim")?.stalled === "crashed");
-    expect(service.get("victim")?.state).toBe("working");
-    expect(await service.retry("victim")).toBeGreaterThan(0);
+    await until(() => service.get("victim")?.state === "failed");
+    expect(service.get("victim")?.unanswered?.reason).toBe("interrupted");
+    const graph = service.get("victim")?.graph as string;
+    expect(service.graphById(graph)?.state).toBe("working");
+    await service.continue("victim");
     await service.wait(["victim"]);
     expect(service.get("victim")?.result?.text).toBe("done: hold");
-    expect(service.get("victim")?.stalled).toBeUndefined();
-    await expect(service.retry("victim")).rejects.toThrow("no stalled work");
+    expect(service.get("victim")?.unanswered).toBeUndefined();
+    await until(() => service.graphById(graph)?.state === "idle");
+    await expect(service.continue("victim")).rejects.toThrow(
+      "nothing to continue",
+    );
   });
 
   test("a crash while stopping an agent resumes nothing below it", async () => {
@@ -570,7 +606,10 @@ describe("durability", () => {
     });
     await until(async () => (await service.liveTasks()).length === 0);
     expect(called).toEqual([]);
-    const agents = service.list({ includeClosed: true });
+    // Agents created in one commit have no order among themselves.
+    const agents = service
+      .list({ includeClosed: true })
+      .sort((left, right) => left.name.localeCompare(right.name));
     expect(agents.map((info) => [info.name, info.closed])).toEqual([
       ["victim", true],
       ["victim.c", true],

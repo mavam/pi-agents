@@ -96,14 +96,14 @@ describe("formatting", () => {
       formatAgentLine(
         agent({
           state: "working",
-          stalled: "crashed",
+          stalled: true,
           compactionFailure: "summary refused",
           lastActivityAt: 0,
         }),
         5 * 60_000,
       ),
     ).toBe(
-      "◉ reviewer terra 5m00s stalled after repeated crashes compaction failed",
+      "◉ reviewer terra 5m00s stalled: needs another pi-agents version compaction failed",
     );
   });
 

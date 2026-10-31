@@ -220,7 +220,7 @@ export class SessionHost {
     let harness: AgentHarness | undefined;
     let service: AgentService | undefined;
     // Reports name agents once the service knows them; the harness reports
-    // tasks it parks as it opens, before.
+    // tasks it recovers as it opens, before.
     let describe: AgentService | undefined;
     const early: HarnessReport[] = [];
     const onReport = (report: HarnessReport) => {
@@ -287,7 +287,7 @@ export class SessionHost {
       return service;
     } catch (error) {
       for (const report of early.splice(0))
-        if (report.type !== "session_failed") this.report(report.error);
+        if (report.kind !== "storage_failed") this.report(report.error);
       try {
         await service?.close();
       } finally {
@@ -305,7 +305,7 @@ export class SessionHost {
   private watchFailure(harness: AgentHarness): void {
     const epoch = this.epoch;
     void harness.harness.closed.then((end) => {
-      if (end.reason !== "failed" || this.harness !== harness) return;
+      if (end.kind !== "failed" || this.harness !== harness) return;
       if (this.epoch !== epoch || this.recovering) return;
       // Recovery reports its own failures, so shutdown can wait for it.
       this.recovering = this.recover(end.error, epoch)

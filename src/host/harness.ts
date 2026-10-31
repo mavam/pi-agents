@@ -15,7 +15,7 @@ import {
   createRegistry,
   Harness,
   type HarnessSettings,
-  type ReportInfo,
+  type Report,
   type Storage,
 } from "@earendil-works/pi-durable";
 import {
@@ -45,7 +45,7 @@ export interface AgentHarnessOptions {
 }
 
 /** A harness report as plain data, without pi-durable's types. */
-export function plainReport(error: unknown, info: ReportInfo): HarnessReport {
+export function plainReport(info: Report): HarnessReport {
   const task =
     "task" in info && info.task
       ? {
@@ -57,8 +57,8 @@ export function plainReport(error: unknown, info: ReportInfo): HarnessReport {
         }
       : {};
   return {
-    error,
-    type: info.type,
+    error: info.error,
+    kind: info.kind,
     ...task,
     ...("conversationId" in info && info.conversationId !== undefined
       ? { conversation: String(info.conversationId) }
@@ -112,8 +112,8 @@ export async function openAgentHarness(
         env: envs.env,
         ...(options.onReport
           ? {
-              onReport: (error: unknown, info: ReportInfo) =>
-                options.onReport?.(plainReport(error, info)),
+              onReport: (report: Report) =>
+                options.onReport?.(plainReport(report)),
             }
           : {}),
       },

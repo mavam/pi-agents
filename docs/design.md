@@ -175,6 +175,11 @@ The parent's request, or the agent's job in its graph, stays open for a
 later answer. Stopping the agent withdraws it. Pi can interrupt with the
 correcting message in one send, which keeps that answer open the same way.
 
+Within agent storage, an input commits together with the record that
+asks for it: a request with Pi's request, a message with the message log,
+and a group's result with its delivery attempt. A crash therefore can't
+record one without sending it, and nothing has to send it again later.
+
 Pi's session and agent storage are separate, so result delivery is
 **at least once**: a crash can repeat a result, but doesn't lose it.
 This does not guarantee exactly-once tool effects. See
@@ -198,13 +203,28 @@ request they make, including compaction and scripts' model calls: Pi's
 
 ## Recovery
 
-Work that crashes Pi must not crash it on every resume. pi-durable parks a
-task that crashes cut off too often in a row; its agent stays working but
-shows as stalled, since its run still holds the conversation. Only the user
-retries it, with everything the agent spawned: a crash loop needs a
-judgment the models can't make, so models see the stall but get no tool
-for it. Work this version can't run, such as a task of an extension it
-lacks, shows as stalled the same way.
+Work that crashes Pi must not crash it on every resume. pi-durable ends a
+task that crashes cut off too often in a row, visibly: a tool call with an
+error the agent sees, a compaction as failed, and a turn by ending the run
+without an answer. An agent whose run ended so fails, but a crash isn't the
+agent's fault, so it is a correction, like an interrupt: its job and its
+owner's requests stay open, and the groups it spawned keep working. Only
+the user continues it: a crash loop needs a judgment the models can't make,
+so models see the failure but get no tool for it.
+
+Graph steps only wait for their agents, whose own work pi-durable bounds.
+A step resumed after its agent got further counts that as progress, so Pi
+crashing now and then during a long job doesn't fail the job, while a step
+that crashes Pi itself still ends.
+
+Continuing starts a run on the agent's conversation as it is, without a
+message, so it works after any run that ended without an answer. A turn
+limit ends a run the same way, but as a failure: the agent spent what its
+profile allowed, so its job fails and its groups stop.
+
+Work this version can't run, such as a task of an extension it lacks,
+keeps its agent working but shows it as stalled until the extension
+changes.
 
 Reports from the harness name what failed: the agent or graph a task
 belongs to, and the extension or host callback whose code failed. A storage
@@ -215,6 +235,14 @@ failure reports once, through the recovery.
 The panel shows live state; the transcript and message list show history;
 the attach view shows one agent's conversation. Historical tool results
 describe what a call observed, not the agent's current state.
+
+Failures come from the durable run state, which says why the latest run
+ended without an answer, so they show the same after a restart.
+
+The attach view follows a window of an agent's newest entries and loads
+older ones as the user scrolls up, so attaching costs the same however
+long the agent worked. It shows the whole history, with compactions and new
+contexts as markers, like Pi's own transcript.
 
 ## Deferred
 

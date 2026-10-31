@@ -27,7 +27,6 @@ import {
   GRAPH_SIZE,
   type GraphInfo,
   messageMode,
-  type Stall,
   type Target,
   type TargetRef,
   THINKING_LEVELS,
@@ -132,11 +131,9 @@ function describeGraph(service: AgentService, graph: GraphInfo): string {
 }
 
 /** Why a working agent or graph doesn't progress, for the model. */
-function stallText(info: { state: string; stalled?: Stall }): string {
+function stallText(info: { state: string; stalled?: true }): string {
   if (info.state !== "working" || !info.stalled) return "";
-  return info.stalled === "crashed"
-    ? ", stalled after repeated crashes until the user retries it in /agents"
-    : ", stalled because this pi-agents version can't run its work";
+  return ", stalled because this pi-agents version can't run its work";
 }
 
 function statusLine(service: AgentService, info: AgentInfo): string {

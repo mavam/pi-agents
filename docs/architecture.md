@@ -12,9 +12,12 @@ switching sessions pauses them. Resume the original session, for example
 with `pi -c`, to continue interrupted work and receive pending results.
 
 Finished graph nodes don't run again, and messages between agents enter
-their recipient's conversation once. In-flight model calls or tool effects
-may repeat; a tool call that can't safely repeat reports its interruption
-to the agent instead.
+their recipient's conversation once. A model call a crash interrupted
+counts as a failed attempt and retries under Pi's retry settings; with no
+retry left, the agent fails until you continue it. Tool effects may repeat;
+a tool call that can't safely repeat reports its interruption to the agent
+instead. Work that crashes Pi repeatedly ends instead of resuming again; see
+[states](./usage.md#states).
 
 Pending results aren't lost, but can arrive more than once after a crash
 if Pi hadn't saved them, including results returned by a direct wait.

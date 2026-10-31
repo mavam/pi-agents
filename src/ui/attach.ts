@@ -2,7 +2,7 @@
  * The attach view: an agent's durable conversation rendered with Pi's own
  * message and tool components, plus an editor that talks to the agent.
  *
- * `ChatView` renders a pi-durable `ConversationView`. This module is the
+ * `ChatView` renders a pi-durable `TranscriptView`. This module is the
  * one frontend place that reads pi-durable view types.
  *
  * Tool calls draw with Pi's renderers for Pi's tools and with
@@ -23,7 +23,6 @@
  * to the terminal.
  */
 
-import type { AttachedReplicatedState } from "@earendil-works/chord";
 import type {
   AssistantMessage,
   ToolResultMessage,
@@ -49,10 +48,10 @@ import {
   UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
 import type {
-  ConversationView,
   EntryRecord,
   InboxState,
   LiveState,
+  TranscriptView,
 } from "@earendil-works/pi-durable";
 import {
   type Component,
@@ -67,13 +66,15 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { CONTEXT } from "../agents/context.js";
 import {
   INPUT_KINDS,
   type InputEntry,
   type InputOrigin,
   inputOrigin,
 } from "../agents/inputs.js";
-import type { AgentService } from "../agents/service.js";
+import { turnResult } from "../agents/report.js";
+import type { AgentConversation, AgentService } from "../agents/service.js";
 import { WAIT_TOOL } from "../agents/spawning.js";
 import type { AgentInfo } from "../agents/types.js";
 import { expandableCard } from "./expandable.js";
@@ -81,6 +82,7 @@ import {
   type Colorize,
   fitLine,
   formatUsage,
+  oneLine,
   QUEUED_NOTE,
   shortModel,
   statusIcon,
@@ -96,6 +98,8 @@ import {
 import { agentToolViews, type ScriptCall } from "./tool-views.js";
 
 const PANE_REFRESH_MS = 250;
+/** Above the oldest entry loaded while earlier ones exist. */
+const EARLIER_NOTE = "↑ earlier entries load as you scroll up";
 const FLASH_MS = 5_000;
 
 // biome-ignore lint/suspicious/noExplicitAny: Pi's tool definitions vary in schema.
@@ -111,11 +115,11 @@ const RENDERERS: Record<string, (cwd: string) => AnyDefinition> = {
   ls: createLsToolDefinition,
 };
 
-function liveOf(view: ConversationView): LiveState {
+function liveOf(view: TranscriptView): LiveState {
   return (view.docs["pi.live"] ?? {}) as LiveState;
 }
 
-function inboxOf(view: ConversationView): InboxState {
+function inboxOf(view: TranscriptView): InboxState {
   return (view.docs["pi.inbox"] ?? { items: [] }) as InboxState;
 }
 
@@ -262,6 +266,8 @@ class ChatView {
   private readonly streamingCalls = new Set<string>();
   private readonly renderers = new Map<string, AnyDefinition>();
   private renderedEntryIds: number[] = [];
+  /** Whether the rendered transcript starts with the earlier-entries note. */
+  private renderedEarlier = false;
   private streaming: AssistantMessageComponent | undefined;
   /** Tool output shown in full; Ctrl+O toggles it, like Pi. */
   private expanded = false;
@@ -279,13 +285,17 @@ class ChatView {
   /** Renderers of the agent's own tools. */
   private readonly views: ReturnType<typeof agentToolViews>;
 
-  apply(view: ConversationView): void {
+  apply(view: TranscriptView): void {
     const live = liveOf(view);
-    this.syncTranscript(view.entries);
+    const entries = view.items.flatMap((item) =>
+      item.kind === "entry" ? [item.entry] : [],
+    );
+    const earlier = view.items[0]?.kind === "earlier";
+    this.syncTranscript(entries, earlier);
     const message = live.generation?.message as AssistantMessage | undefined;
     // A partial without its entry was dropped, for example by a retry.
     if (message === undefined && this.streaming !== undefined)
-      this.rebuild(view.entries);
+      this.rebuild(entries, earlier);
     if (message !== undefined) this.syncStreaming(message);
     for (const slot of live.tools ?? []) {
       if (slot.status === "pending") continue;
@@ -324,21 +334,29 @@ class ChatView {
     this.streamingCalls.clear();
   }
 
-  private syncTranscript(entries: readonly EntryRecord[]): void {
-    // Compaction and resets replace the head of the active transcript.
-    if (this.renderedEntryIds.some((id, index) => entries[index]?.id !== id))
-      this.rebuild(entries);
+  private syncTranscript(
+    entries: readonly EntryRecord[],
+    earlier: boolean,
+  ): void {
+    // Earlier entries loaded go before those shown.
+    if (
+      earlier !== this.renderedEarlier ||
+      this.renderedEntryIds.some((id, index) => entries[index]?.id !== id)
+    )
+      this.rebuild(entries, earlier);
     for (const entry of entries.slice(this.renderedEntryIds.length)) {
       this.addEntry(entry);
       this.renderedEntryIds.push(entry.id);
     }
   }
 
-  private rebuild(entries: readonly EntryRecord[]): void {
+  private rebuild(entries: readonly EntryRecord[], earlier: boolean): void {
     this.transcript.clear();
     this.discardTools();
     this.renderedEntryIds = [];
+    this.renderedEarlier = earlier;
     this.streaming = undefined;
+    if (earlier) this.addText(this.theme.fg("muted", EARLIER_NOTE));
     for (const entry of entries) {
       this.addEntry(entry);
       this.renderedEntryIds.push(entry.id);
@@ -522,8 +540,8 @@ function statusText(live: LiveState): string {
     return "Waiting for deferred response...";
   if (compaction !== undefined)
     return compaction.retry
-      ? `Retrying ${compaction.reason} compaction (attempt ${compaction.attempt + 1})...`
-      : `Compacting (${compaction.reason})...`;
+      ? `Retrying ${compaction.trigger} compaction (attempt ${compaction.attempt + 1})...`
+      : `Compacting (${compaction.trigger})...`;
   // The agent waits for agents it spawned; Pi places messages only after
   // that. Esc ends the wait without stopping those agents.
   if (runningTool?.name === WAIT_TOOL)
@@ -674,7 +692,7 @@ export function wheelScrollBack(
 interface AgentPaneOptions {
   service: AgentService;
   agentId: string;
-  state: AttachedReplicatedState<ConversationView>;
+  conversation: AgentConversation;
   done: () => void;
 }
 
@@ -682,9 +700,10 @@ class AgentPane implements Component {
   private readonly editor: CustomEditor;
   private readonly chat: ChatView;
   private readonly color: Colorize;
-  private readonly unsubscribe: () => void;
   private readonly timer: ReturnType<typeof setInterval>;
-  private view: ConversationView;
+  private view: TranscriptView;
+  /** Whether earlier entries are being loaded. */
+  private loadingEarlier = false;
   private loader: Loader | undefined;
   private loaderText = "";
   private flash: { text: string; at: number } | undefined;
@@ -703,7 +722,8 @@ class AgentPane implements Component {
     private readonly options: AgentPaneOptions,
   ) {
     this.color = (name, text) => theme.fg(name, text);
-    this.view = options.state.value;
+    const { watch, transcript } = options.conversation;
+    this.view = transcript.merge(watch.value);
     this.chat = new ChatView(
       tui,
       this.info()?.cwd ?? process.cwd(),
@@ -711,11 +731,8 @@ class AgentPane implements Component {
       () => this.info()?.name ?? "",
     );
     this.chat.apply(this.view);
-    this.unsubscribe = options.state.subscribe((value) => {
-      this.view = value;
-      if (this.disposed) return;
-      this.chat.apply(value);
-      this.tui.requestRender();
+    watch.start(async (call) => {
+      if (call.kind === "value") this.show(transcript.merge(call.value));
     });
     this.editor = new CustomEditor(
       tui,
@@ -746,6 +763,28 @@ class AgentPane implements Component {
 
   private info(): AgentInfo | undefined {
     return this.options.service.agentById(this.options.agentId);
+  }
+
+  private show(view: TranscriptView): void {
+    if (this.disposed || view === this.view) return;
+    this.view = view;
+    this.chat.apply(view);
+    this.tui.requestRender();
+  }
+
+  /** Load the page before the oldest entry shown, once scrolled to it. */
+  private loadEarlier(): void {
+    if (this.loadingEarlier || this.view.items[0]?.kind !== "earlier") return;
+    this.loadingEarlier = true;
+    void this.options.conversation.transcript
+      .loadEarlier(CONTEXT)
+      .then((view) => this.show(view))
+      .catch((error) =>
+        this.showFlash(error instanceof Error ? error.message : String(error)),
+      )
+      .finally(() => {
+        this.loadingEarlier = false;
+      });
   }
 
   private showFlash(text: string): void {
@@ -831,6 +870,8 @@ class AgentPane implements Component {
     const shown = windowTranscript(lines, rows, this.scrollBack);
     this.scrollBack = shown.scrollBack;
     this.maxScroll = shown.maxScroll;
+    // The top shows: what came before it, also while it fits on screen.
+    if (this.scrollBack >= this.maxScroll) this.loadEarlier();
     this.window = {
       // Below the separator.
       top: 1,
@@ -878,18 +919,15 @@ class AgentPane implements Component {
           "",
           ` ${color(
             "warning",
-            stalled === "crashed"
-              ? "⚠ Stalled after repeated crashes: press r in /agents to retry (esc to interrupt)"
-              : "⚠ Stalled: this pi-agents version can't run its work (esc to interrupt)",
+            "⚠ Stalled: this pi-agents version can't run its work (esc to interrupt)",
           )}`,
         ]
       : this.loader
         ? this.loader.render(width)
         : ["", ` ${color("dim", "esc back")}`];
+    const error = info?.state === "failed" ? turnResult(info).error : undefined;
     const failure =
-      info?.state === "failed" && info.result?.errorMessage
-        ? [color("error", `⊗ ${info.result.errorMessage}`)]
-        : [];
+      error !== undefined ? [color("error", `⊗ ${oneLine(error, width)}`)] : [];
     const compaction =
       info?.compactionFailure !== undefined
         ? [color("warning", `⚠ Compaction failed: ${info.compactionFailure}`)]
@@ -986,10 +1024,9 @@ class AgentPane implements Component {
     if (this.disposed) return;
     this.disposed = true;
     clearInterval(this.timer);
-    this.unsubscribe();
+    void this.options.conversation.watch.stop();
     this.loader?.stop();
     this.chat.dispose();
-    this.options.state.dispose();
   }
 }
 
@@ -999,7 +1036,7 @@ export async function openAgentPane(
   service: AgentService,
   agentId: string,
 ): Promise<void> {
-  const state = await service.view(agentId);
+  const conversation = await service.view(agentId);
   // The pane draws its own status line; hide Pi's working loader for the
   // parent session so only one spinner shows.
   ctx.ui.setWorkingVisible(false);
@@ -1009,7 +1046,7 @@ export async function openAgentPane(
         new AgentPane(tui, theme, keybindings, {
           service,
           agentId,
-          state,
+          conversation,
           done: () => done(undefined),
         }),
     );

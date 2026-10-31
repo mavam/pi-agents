@@ -35,6 +35,7 @@ import {
   type TaskOutcome,
   type TaskRuntime,
 } from "@earendil-works/pi-durable";
+import { keepsRequestsOpen } from "./derive.js";
 import {
   coveringAnswer,
   covers,
@@ -66,10 +67,11 @@ export type NodeInput = { message: string };
 type NodeState =
   | { phase: "wait" }
   /** `inputs`: node task IDs whose results the agent receives. */
-  | { phase: "run"; inputs: number[] }
+  | { phase: "run"; inputs: number[]; progress?: number }
   /** The agent got its job at entry `since` but hasn't settled it: it was
-   * interrupted, or answered before results of its groups arrived. */
-  | { phase: "settle"; agent: number; since: number }
+   * interrupted, cut off by crashes, or answered before results of its
+   * groups arrived. */
+  | { phase: "settle"; agent: number; since: number; progress?: number }
   /** The agent's job failed in the run of input `submission`; the groups
    * that run spawned stop first. */
   | { phase: "fail"; agent: number; reason: string; submission?: number };
@@ -198,6 +200,41 @@ async function agentOf(
     const id = page.items[0]?.id;
     return id === undefined ? undefined : Number(id);
   });
+}
+
+/**
+ * A node that crashes cut off while it waited for its agent, after the
+ * agent got further: record that as the node's progress, which starts its
+ * restart count over. A node only waits, while its agent's own work ends
+ * once crashes cut it off too often; Pi crashing now and then during a long
+ * job is no reason to fail the job. `progress` is the agent's newest entry
+ * at the last such resume, so a node that crashes Pi itself still ends.
+ * Returns whether it committed, which ends the phase.
+ */
+async function resumeWithProgress(
+  task: { restarts?: number; state: { checkpoint: NodeState } },
+  runtime: Runtime,
+  context: Context,
+  agent: number,
+): Promise<boolean> {
+  const checkpoint = task.state.checkpoint;
+  if (task.restarts === undefined) return false;
+  if (checkpoint.phase !== "run" && checkpoint.phase !== "settle") return false;
+  let moved = false;
+  await runtime.commit(async (tx) => {
+    const page = await tx.scanEntries(
+      { conversationId: agent as ConversationId, order: "descending" },
+      1,
+    );
+    const newest = Number(page.items[0]?.id ?? 0);
+    if (newest <= (checkpoint.progress ?? -1)) return undefined;
+    moved = true;
+    return {
+      status: "running",
+      checkpoint: { ...checkpoint, progress: newest },
+    } as const;
+  }, context);
+  return moved;
 }
 
 /** Mark the agent's spawned groups that haven't ended cancelled, only
@@ -359,6 +396,7 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
           );
           return;
         }
+        if (await resumeWithProgress(task, runtime, context, agent)) return;
         // The stop fence: a stopped agent never gets its job. A stop that
         // lands while the job is submitted aborts it after the stop is
         // recorded, so checking again afterwards closes the gap.
@@ -433,9 +471,10 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
           }
           if (settled.status !== "unanswered") return undefined;
           // An interrupt corrects the agent rather than ending its job,
-          // so `failFast` keeps its siblings working. A job withdrawn
+          // so `failFast` keeps its siblings working, and so do crashes
+          // that cut it off until the user continues it. A job withdrawn
           // before the agent saw it ends.
-          if (settled.reason === "aborted")
+          if (keepsRequestsOpen(settled.reason))
             return settled.entry === undefined
               ? completed({ kind: "interrupted" })
               : settle(settled.entry);
@@ -449,6 +488,7 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
       const { agent, since } = task.state.checkpoint;
       const cid = agent as ConversationId;
       try {
+        if (await resumeWithProgress(task, runtime, context, agent)) return;
         for (;;) {
           const watches = (
             await Promise.all([

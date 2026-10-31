@@ -42,6 +42,7 @@ import { beforeRequestHooks } from "../host/hooks.js";
 import { acquireLock, type StorageLock } from "../host/lock.js";
 import { resolveModels } from "../host/models.js";
 import { pruneSessions, readRetention } from "../host/retention.js";
+import { readStringList } from "../host/settings.js";
 import { openStorage, type Storage } from "../host/storage.js";
 import { readWorkingLimit } from "../host/working.js";
 import { captureAgentState, discoverAgentHooks } from "./hooks.js";
@@ -231,6 +232,14 @@ export class SessionHost {
       const settingsManager = SettingsManager.create(cwd, getAgentDir());
       const { limit, error } = readWorkingLimit(settingsManager.getSettings());
       if (error) this.report(new Error(`${error}; agents aren't capped`));
+      const twinExtensions = readStringList(
+        settingsManager.getSettings(),
+        "twinExtensions",
+      );
+      if (twinExtensions.error)
+        this.report(
+          new Error(`${twinExtensions.error}; agents get no extension tools`),
+        );
       const models = await resolveModels(modelRegistry);
       const extensions = createAgentExtensions({
         ...(limit === undefined ? {} : { maxWorkingAgents: limit }),
@@ -251,6 +260,10 @@ export class SessionHost {
         settings: createHarnessSettings(settingsManager),
         lifecycle: { sessionId, hooks: this.hooks },
         onReport,
+        twin: {
+          extensions: twinExtensions.value,
+          onProblem: (problem) => this.report(new Error(problem)),
+        },
       });
       service = await AgentService.start({
         harness: harness.harness,

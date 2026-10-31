@@ -30,6 +30,7 @@ import {
 } from "@earendil-works/chord/context";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
+  type AgentChange,
   AgentDoc,
   configure,
   type AgentState as DurableAgentState,
@@ -92,7 +93,12 @@ type Api = ToolExecutionApi;
 /** What a new agent selects, by whether it may spawn. */
 export type Selection = (spawn: boolean) => {
   extensions: readonly Extension[];
+  /** The tools of the extensions besides its own tools. */
   tools: readonly ToolRegistration[];
+  /** The names of tools every agent gets, such as the tool twin's. */
+  always: readonly string[];
+  /** The tool filter of an agent with `own` tools. */
+  filter: (own: readonly ToolRegistration[]) => AgentChange["tools"];
 };
 
 export interface SpawningOptions {
@@ -127,7 +133,8 @@ const agentFields = Type.Object({
   ),
   tools: Type.Optional(
     Type.Array(Type.String(), {
-      description: "Tool allowlist, from your own tools",
+      description:
+        "Tool allowlist, from your own tools. Agents also get every MCP tool and the extension tools the user shares, in any case",
     }),
   ),
   skills: Type.Optional(
@@ -311,7 +318,7 @@ async function start(
       // not reach the new agent.
       await configure(tx, conversation.id, {
         extensions: extra.extensions,
-        tools: [...helper.tools, ...extra.tools],
+        tools: extra.filter(helper.tools),
         modelTools: null,
         cwd: spec.cwd,
         model: spec.model ?? null,
@@ -446,10 +453,14 @@ async function spawnExecute(
       context,
     )) ?? {}) as DurableAgentState;
     const agent = await api.agent(context);
-    const own = new Set(options.selection(true).tools.map((tool) => tool.name));
+    const selection = options.selection(true);
+    const own = new Set(selection.tools.map((tool) => tool.name));
+    const always = new Set(selection.always);
     // Agents get tools their spawner has, besides the tools that make
-    // them agents.
-    const ownTools = agent.tools.filter((tool) => !own.has(tool.name));
+    // them agents and those every agent gets.
+    const ownTools = agent.tools.filter(
+      (tool) => !own.has(tool.name) && !always.has(tool.name),
+    );
     let planned: Awaited<ReturnType<typeof plan>>;
     try {
       planned = await plan(
@@ -464,6 +475,7 @@ async function spawnExecute(
         },
         ownTools,
         agent.callable,
+        always,
       );
       // Only the call grants spawning, not a profile the model picked,
       // and never beyond the deepest level.

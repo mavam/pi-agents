@@ -27,6 +27,7 @@ import type { HarnessReport } from "../agents/failures.js";
 import type { AgentHooks } from "../hooks.js";
 import { ExecutionEnvs } from "./harness-setup.js";
 import { AgentRequestHooks } from "./hooks.js";
+import { ToolTwin, TWIN_STARTUP_WAIT_MS, twinWanted } from "./twin.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
 
@@ -42,6 +43,35 @@ export interface AgentHarnessOptions {
   settings?: HarnessSettings;
   lifecycle?: { sessionId: string; hooks: readonly AgentHooks[] };
   onReport?: (report: HarnessReport) => void;
+  /** Open a tool twin in `cwd` with Pi's MCP and these packages'
+   * extensions, whose tools agents get. */
+  twin?: {
+    extensions: readonly string[];
+    onProblem: (message: string) => void;
+  };
+}
+
+/**
+ * The tool twin, with its servers connected or `TWIN_STARTUP_WAIT_MS`
+ * passed, so tool calls that resume find their tools. Without it, agents
+ * keep their own tools.
+ */
+async function openTwin(
+  cwd: string,
+  options: NonNullable<AgentHarnessOptions["twin"]>,
+): Promise<ToolTwin | undefined> {
+  let twin: ToolTwin | undefined;
+  try {
+    twin = await ToolTwin.open({ cwd, ...options });
+    await twin.ready(TWIN_STARTUP_WAIT_MS);
+    return twin;
+  } catch (error) {
+    await twin?.close().catch(() => {});
+    options.onProblem(
+      `agents get no MCP or extension tools: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
 }
 
 /** A harness report as plain data, without pi-durable's types. */
@@ -93,10 +123,20 @@ export async function openAgentHarness(
         options.lifecycle.hooks,
       )
     : undefined;
-  const extensions = agentSelection(options.extensions);
   let harness: Harness | undefined;
   let unobserve: (() => void) | undefined;
+  let twin: ToolTwin | undefined;
+  // After the harness: work that a tool call waits for ends first.
+  const closeTwin = async () => {
+    options.extensions.twin.detach();
+    await twin?.close();
+  };
   try {
+    if (options.twin && twinWanted(options.cwd, options.twin.extensions))
+      twin = await openTwin(options.cwd, options.twin);
+    // Before the harness opens, so tool calls that resume find their tools.
+    options.extensions.twin.attach(registry, twin);
+    const extensions = agentSelection(options.extensions);
     harness = await Harness.open(
       options.storage,
       {
@@ -137,7 +177,11 @@ export async function openAgentHarness(
           try {
             await envs.cleanup(CONTEXT);
           } finally {
-            await options.extensions.close();
+            try {
+              await closeTwin();
+            } finally {
+              await options.extensions.close();
+            }
           }
         }
       },
@@ -151,7 +195,11 @@ export async function openAgentHarness(
       try {
         await envs.cleanup(CONTEXT);
       } finally {
-        await options.extensions.close();
+        try {
+          await closeTwin();
+        } finally {
+          await options.extensions.close();
+        }
       }
     }
     throw error;

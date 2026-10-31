@@ -123,6 +123,9 @@ export async function plan(
   defaults: HelperDefaults,
   own: readonly ToolRegistration[],
   callable: readonly ToolRegistration[],
+  /** Tools every agent gets, such as the tool twin's: naming them changes
+   * nothing. */
+  always: ReadonlySet<string> = new Set(),
 ): Promise<{ helpers: Planned[]; inputs: number[][] }> {
   if (args.agents.length > options.limits.perCall)
     throw new AgentError(
@@ -166,7 +169,9 @@ export async function plan(
     if (spec.thinking !== undefined && !isThinkingLevel(spec.thinking))
       throw new AgentError(`Invalid thinking level: ${spec.thinking}`);
     // Helpers never get tools their agent lacks.
-    const wanted = spec.tools ?? own.map((tool) => tool.name);
+    const wanted = (spec.tools ?? own.map((tool) => tool.name)).filter(
+      (tool) => !always.has(tool),
+    );
     const missing = wanted.filter(
       (tool) => !own.some((each) => each.name === tool),
     );

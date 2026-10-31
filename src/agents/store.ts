@@ -372,10 +372,10 @@ export class AgentStore {
     }, CONTEXT);
   }
 
-  /** Whether the run that settled `record` failed: it ended without an
-   * answer, or with an error for one. */
+  /** Whether the run that settled `record`, an input or a continue,
+   * failed: it ended without an answer, or with an error for one. */
   private async failed(record: SubmissionRecord | undefined): Promise<boolean> {
-    if (record?.type !== "input") return false;
+    if (record === undefined || record.type === "write") return false;
     if (record.status === "unanswered") return FAILURES.has(record.reason);
     if (record.status !== "done") return false;
     const answer = (await this.entry(record.answer))?.model?.[0];

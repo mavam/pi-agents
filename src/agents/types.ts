@@ -300,6 +300,8 @@ export interface SpawnSpec {
   ambientSkills?: boolean;
   /** Whether the agent may spawn agents of its own. */
   spawn?: boolean;
+  /** Tool rounds one run may take before it fails. */
+  maxTurns?: number;
 }
 
 /** What a spawning agent asks for one of its agents. */

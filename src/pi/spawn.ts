@@ -239,6 +239,7 @@ export async function resolveSpawn(
     ...(thinking ? { thinking: thinking as ThinkingLevel } : {}),
     ...(tools ? { tools } : {}),
     ...(instructions ? { instructions } : {}),
+    ...(profile?.maxTurns !== undefined ? { maxTurns: profile.maxTurns } : {}),
   };
 }
 

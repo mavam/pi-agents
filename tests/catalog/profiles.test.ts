@@ -22,7 +22,7 @@ describe("profiles", () => {
     const file = write(
       dir,
       "planner.md",
-      "---\nname: planner\ndescription: Plans\nmodel: openai/gpt\nthinking: high\ntools: read, grep\n---\n\nPlan carefully.\n",
+      "---\nname: planner\ndescription: Plans\nmodel: openai/gpt\nthinking: high\ntools: read, grep\nmaxTurns: 20\n---\n\nPlan carefully.\n",
     );
     expect(parseProfileFile(file, "project")).toEqual({
       name: "planner",
@@ -30,6 +30,7 @@ describe("profiles", () => {
       model: "openai/gpt",
       thinking: "high",
       tools: ["read", "grep"],
+      maxTurns: 20,
       instructions: "Plan carefully.",
       source: "project",
       filePath: file,
@@ -68,6 +69,12 @@ describe("profiles", () => {
         "user",
       ),
     ).toContain("Unsupported frontmatter keys: flow");
+    expect(
+      parseProfileFile(
+        write(dir, "d.md", "---\nname: d\ndescription: D\nmaxTurns: 0\n---\n"),
+        "user",
+      ),
+    ).toContain("maxTurns");
   });
 
   test("project profiles override user profiles", () => {

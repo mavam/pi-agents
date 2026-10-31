@@ -5,6 +5,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import {
   fauxAssistantMessage,
   fauxProvider,
+  fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import type { AgentService } from "../../src/agents/service.js";
@@ -489,6 +490,36 @@ describe("AgentService", () => {
     // The finished agent's result still arrives as a message.
     expect(service.pendingDeliveries().map((each) => each.name)).toEqual(["q"]);
     faux.release();
+  });
+});
+
+describe("turn limits", () => {
+  test("a run that reaches its limit fails, and continuing it goes on", async () => {
+    // Runs a command until it got its result, then answers.
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    faux.setResponses(
+      Array.from({ length: 10 }, () => (context) => {
+        const last = context.messages.at(-1);
+        return last?.role === "toolResult"
+          ? fauxAssistantMessage("ran")
+          : fauxAssistantMessage([fauxToolCall("bash", { command: "true" })], {
+              stopReason: "toolUse",
+            });
+      }),
+    );
+    const service = await open({ models });
+    await service.spawnGraph({
+      agents: [{ name: "a", job: "run", cwd: ".", model: MODEL, maxTurns: 1 }],
+    });
+    await until(() => service.get("a")?.state === "failed");
+    expect(service.get("a")?.unanswered).toMatchObject({
+      reason: "turn_limit",
+      detail: "1 turn",
+    });
+    await service.continue("a");
+    await until(() => service.get("a")?.result?.text === "ran");
   });
 });
 

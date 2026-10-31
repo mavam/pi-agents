@@ -499,8 +499,7 @@ export class AgentService {
       whenBusy: whenBusyOf(mode),
     };
     if (mode !== "interrupt") {
-      const rid = await this.store.addRequest(info.id, info.name, request);
-      await this.store.submit(info.id, rid, request);
+      await this.store.request(info.id, info.name, request);
       await this.refresh([info.id]);
       return { agent: this.requireAgent(info.id), dropped: 0 };
     }
@@ -520,12 +519,7 @@ export class AgentService {
         await this.harness.snapshot(InboxDoc, conversationId(info.id), CONTEXT),
       );
       await conversation.abort(CONTEXT);
-      const rid = await this.store.addInterruptingRequest(
-        info.id,
-        info.name,
-        request,
-      );
-      await this.store.submit(info.id, rid, request);
+      await this.store.request(info.id, info.name, request, true);
     });
     await this.refresh(this.projection.withHelpers([info.id]));
     return { agent: this.requireAgent(info.id), dropped };
@@ -534,26 +528,11 @@ export class AgentService {
   /** Message an agent on behalf of the user; results stay in the agent. */
   async prompt(nameOrId: string, text: string, mode: SendMode): Promise<void> {
     const info = this.require(nameOrId);
-    const conversation = await this.harness.conversation(
-      conversationId(info.id),
-      CONTEXT,
-    );
-    if (!conversation) throw new AgentError(`Agent ${info.name} is missing`);
-    // Input would start it without its job.
-    if (await this.store.awaitsJob(info.id))
-      throw new AgentError(
-        `${info.name} waits for the agents its job needs and hasn't started yet`,
-      );
-    if (this.projection.agents()[info.id]?.stopped)
-      await this.store.clearStopped(info.id);
-    await conversation.submit(
-      {
-        type: "input",
-        ...userInput(text),
-        whenBusy: mode === "followUp" ? "followUp" : "steer",
-      },
-      CONTEXT,
-    );
+    await this.store.submitInput(info.id, info.name, {
+      type: "input",
+      ...userInput(text),
+      whenBusy: mode === "followUp" ? "followUp" : "steer",
+    });
   }
 
   /**
@@ -581,10 +560,8 @@ export class AgentService {
       throw new AgentError(
         `${info.name} has nothing to continue; message it instead`,
       );
-    if (this.projection.agents()[info.id]?.stopped)
-      await this.store.clearStopped(info.id);
     try {
-      await conversation.submit({ type: "continue" }, CONTEXT);
+      await this.store.submitInput(info.id, info.name, { type: "continue" });
     } catch (error) {
       if (error instanceof ConversationBusy)
         throw new AgentError(`${info.name} is working already`);
@@ -1056,8 +1033,6 @@ export class AgentService {
       await this.extensions.hub.tryTurn(
         ownerId,
         async () => {
-          const reserved = await this.store.reserveAttempt(id, attempt);
-          if (reserved === undefined) return;
           const conversation = await this.harness.conversation(
             conversationId(ownerId),
             CONTEXT,
@@ -1069,15 +1044,15 @@ export class AgentService {
             id,
           );
           const data: ResultsEntryData = { groups: [id] };
-          await conversation.submit(
-            {
+          // The reservation and the input commit together.
+          await this.store.reserveAttempt(id, attempt, (tx) =>
+            conversation.submit(tx, {
               type: "input",
               content: `${RESULTS_PREFIX}${text}`,
               whenBusy: "followUp",
               requestId: resultsRequestId(id, graph, attempt),
               entry: { kind: RESULTS_ENTRY, data },
-            },
-            CONTEXT,
+            }),
           );
         },
         () => this.scheduleRefresh(),

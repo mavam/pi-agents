@@ -12,7 +12,6 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import type { ConversationId, Storage } from "@earendil-works/pi-durable";
 import type { MessagingOptions } from "../../src/agents/messaging.js";
-import { AgentsDoc } from "../../src/agents/records.js";
 import type { AgentService } from "../../src/agents/service.js";
 import { agentToolViews } from "../../src/ui/tool-views.js";
 import {
@@ -200,34 +199,6 @@ describe("messaging", () => {
     expect(after.messages()).toMatchObject([{ text: "hello" }]);
   });
 
-  test("a crash-left message to a stopped recipient is dropped, not delivered", async () => {
-    const directory = tempDir();
-    let held = false;
-    const before = await open({
-      storage: await jsonlStorage(directory),
-      messaging: {
-        afterLog: async (context) => {
-          held = true;
-          await awaitWithContext(new Promise(() => {}), context);
-        },
-      },
-    });
-    await before.spawnGraph({ agents: [spec("b", "idle")] });
-    await until(() => before.get("b")?.state === "idle");
-    await before.spawnGraph({ agents: [spec("a", SEND)] });
-    await until(() => held);
-    // b's stop is recorded, as when a stop ran while the send waited.
-    const b = before.get("b")?.id as string;
-    await hostOf(before).harness.harness.commit(async (tx) => {
-      const record = (await tx.doc(AgentsDoc)).agents[b];
-      if (record) record.stopped = true;
-    }, BACKGROUND_CONTEXT);
-
-    const after = await reopen(before, directory, {});
-    expect(after.messages()).toMatchObject([{ status: "dropped" }]);
-    expect(await transcript(after, "b")).not.toContain("[from a]");
-  });
-
   test("a rerun sends to the agent the first run bound, not to its name", async () => {
     const directory = tempDir();
     let held = false;
@@ -412,9 +383,8 @@ describe("messaging", () => {
     });
     await before.spawnGraph({ agents: [spec("a", `send ${now}`)] });
     await until(() => held);
-    await until(() => before.get("b")?.state === "interrupted");
 
-    // Recovery submits the logged message; the rerun only finishes the send.
+    // The message went out with its log; the rerun only finishes the send.
     const after = await reopen(before, directory, {});
     await until(() => after.get("a")?.state === "idle");
     await until(() => after.get("b")?.result?.text === "got: briefly hello");

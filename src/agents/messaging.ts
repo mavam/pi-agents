@@ -31,10 +31,7 @@
  */
 
 import type { Context } from "@earendil-works/chord";
-import {
-  awaitWithContext,
-  withoutAbortSignal,
-} from "@earendil-works/chord/context";
+import { awaitWithContext } from "@earendil-works/chord/context";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
@@ -90,8 +87,8 @@ export const UNBOUNDED_OUTPUT = {
 export interface MessagingOptions {
   /** Tests only: runs after the recipient is bound. */
   afterBind?: (context: Context) => Promise<void>;
-  /** Tests only: runs after the message is logged and before it's
-   * submitted, under the recipient's turn. */
+  /** Tests only: runs after the message is logged and submitted, under
+   * the recipient's turn. */
   afterLog?: (context: Context) => Promise<void>;
 }
 
@@ -487,9 +484,19 @@ export function createMessagingExtension(
                 await awaitWithContext(fence, context);
               }
             }
+            const conversation = await api.conversation(to, context);
+            if (!conversation) return "missing";
+            // The message is logged and submitted in one commit.
             const logged = await api.commit(async (tx) => {
               const admitted = await admit(tx, bound);
               if (admitted !== "new") return admitted;
+              await conversation.submit(
+                tx,
+                messageSubmission(
+                  { ...bound, mode: whenBusyOf(bound.mode) },
+                  bound.sender,
+                ),
+              );
               const log = await tx.doc(MessagesDoc);
               log.messages.push({
                 id: bound.id,
@@ -508,18 +515,6 @@ export function createMessagingExtension(
             }, context);
             if (logged !== "logged") return logged;
             await options.afterLog?.(context);
-            // Once logged, the message is submitted, also when the call is
-            // cancelled meanwhile.
-            const durable = withoutAbortSignal(context);
-            const conversation = await api.conversation(to, durable);
-            if (!conversation) return "missing";
-            await conversation.submit(
-              messageSubmission(
-                { ...bound, mode: whenBusyOf(bound.mode) },
-                bound.sender,
-              ),
-              durable,
-            );
             return "sent";
           };
           // A call cancelled while it waits for the recipient's turn gives

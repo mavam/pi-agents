@@ -4,14 +4,6 @@ Give [Pi](https://pi.dev) durable, named agents. Delegate a job, keep working
 while the agent runs, and get its result back as a message. Watch any agent
 live, talk to it, or stop it. Agents survive crashes and restarts.
 
-> [!CAUTION]
-> Agents can't use MCP servers
-> ([earendil-works/pi#10837](https://github.com/earendil-works/pi/issues/10837))
-> or tools from other extensions, such as web search
-> ([earendil-works/pi#10386](https://github.com/earendil-works/pi/issues/10386)).
-> They work with Pi's built-in tools: `read`, `bash`, `edit`, `write`, `grep`,
-> `find`, `ls`, and `codemode`.
-
 <table>
   <tr>
     <td width="50%"><img src="demo/agents.gif" alt="Pi starts an audit graph on three models whose reviewers delegate one helper per file, shows the live tree and the merged findings, browses the results in /agents, and spawns three agents that tell jokes"></td>
@@ -62,50 +54,54 @@ graph, agents pass results to each other and Pi gets one message at the end.
 
 ## 🏗️ Architecture
 
-Agents run inside Pi and use your Pi logins and models:
+Agents run inside Pi and use your Pi logins, models, MCP servers, and the
+extension tools you share with them:
 
 ```text
-╭─ Pi process ─────────────────────────────────────────────────────╮
-│                                                                  │
-│  ╭──────────────────╮ ╭────────────────────╮ ╭────────────────╮  │
-│ ╭┤ ◆ Pi session:    │ │ ◇ optional         │ │ ▤ panel        │  │
-│ ┊│   MCP, extension │ │   extensions, e.g. │ │ ⇄ attach view  │  │
-│ ┊│   tools          │ │   pi-service-tier  │ │ ≡ /agents      │  │
-│ ┊│                  │ │                    │ │ ✉ /messages    │  │
-│ ┊╰───┬─────────▲────╯ ╰─────────┬──────────╯ ╰────────▲───────╯  │
-│ ┊    │ agent_* │ results        ╎ hooks: capture at   │          │
-│ ┊    │         │                ╎ spawn, hold calls,  │          │
-│ ┊    ▼         │                ▼ adapt requests      │          │
-│ ┊╭─────────────┴──────────────────────────────────────┴───────╮  │
-│ ┊│  ✦ pi-agents: a thin bridge from Pi to pi-durable          │  │
-│ ┊╰───┬─────────▲──────────────────────────────────────────────╯  │
-│ ┊    │ start   │ state                                           │
-│ ┊    │ message │ results                                         │
-│ ┊    ▼ stop    │                                                 │
-│ ┊╭─────────────┴──────────────────────────────────────────────╮  │
-│ ┊│  pi-durable harness                                        │  │
-│ ┊│                                                            │  │
-│ ┊│   ◉ scout ─── message ──▶ ● notes                          │  │
-│ ┊│                                                            │  │
-│ ┊│   ╭─ graph ─────────────────────────╮  agent tools:        │  │
-│ ┊│   │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │  read  bash  edit    │  │
-│ ┊│   │        └─▶ ◉ ui ───┘            │  write  grep         │  │
-│ ┊│   │            └─ ◉ ◉ ◉ spawned     │  find  ls  codemode  │  │
-│ ┊│   ╰─────────────────────────────────╯                      │  │
-│ ┊│                                                            │  │
-│ ┊│   agents are conversations; turns, tool calls, and graphs  │  │
-│ ┊│   are durable tasks that own what they start; model        │  │
-│ ┊│   requests pass the hooks with each agent's snapshot       │  │
-│ ┊╰─────────────────────────────┬──────────────────────────────╯  │
-╰─┬──────────────────────────────┬─────────────────────────────────╯
-  ┊ saves                        │ checkpoint every step
-  ▼                              ▼
-╭──────────────────────╮    ╭──────────────────────────────╮
-│ ▤ Pi's session file  │    │ ▤ pi-agents store, one per   │
-│   your conversation, │    │   session: agents and their  │
-│   saved results, and │    │   hook snapshots, graphs,    │
-│   message cards      │    │   messages, tasks            │
-╰──────────────────────╯    ╰──────────────────────────────╯
+╭─ Pi process ─────────────────────────────────────────────────────────╮
+│                                                                      │
+│  ╭──────────────────╮ ╭────────────────────╮ ╭────────────────╮      │
+│ ╭┤ ◆ Pi session:    │ │ ◇ optional         │ │ ▤ panel        │      │
+│ ┊│   MCP, extension │ │   extensions, e.g. │ │ ⇄ attach view  │      │
+│ ┊│   tools          │ │   pi-service-tier  │ │ ≡ /agents      │      │
+│ ┊│                  │ │                    │ │ ✉ /messages    │      │
+│ ┊╰───┬─────────▲────╯ ╰─────────┬──────────╯ ╰────────▲───────╯      │
+│ ┊    │ agent_* │ results        ╎ hooks: capture at   │              │
+│ ┊    │         │                ╎ spawn, hold calls,  │              │
+│ ┊    ▼         │                ▼ adapt requests      │              │
+│ ┊╭─────────────┴──────────────────────────────────────┴───────╮      │
+│ ┊│  ✦ pi-agents: a thin bridge from Pi to pi-durable          │      │
+│ ┊│                                                            │      │
+│ ┊│  ◈ tool twin: a headless Pi session with Pi's MCP          ├───╮  │
+│ ┊│    and the extensions you share; agents call its tools     │   │  │
+│ ┊╰───┬─────────▲───────────────────────────▲──────────────────╯   │  │
+│ ┊    │ start   │ state                     │ tool calls           │  │
+│ ┊    │ message │ results                   │                      │  │
+│ ┊    ▼ stop    │                           │                      │  │
+│ ┊╭─────────────┴───────────────────────────┴──────────────────╮   │  │
+│ ┊│  pi-durable harness                                        │   │  │
+│ ┊│                                                            │   │  │
+│ ┊│   ◉ scout ─── message ──▶ ● notes                          │   │  │
+│ ┊│                                                            │   │  │
+│ ┊│   ╭─ graph ─────────────────────────╮  agent tools:        │   │  │
+│ ┊│   │ ● map ─┬─▶ ◉ core ─┬─▶ ○ report │  read  bash  edit    │   │  │
+│ ┊│   │        └─▶ ◉ ui ───┘            │  write  grep  find   │   │  │
+│ ┊│   │            └─ ◉ ◉ ◉ spawned     │  ls  codemode, and   │   │  │
+│ ┊│   ╰─────────────────────────────────╯  the twin's tools    │   │  │
+│ ┊│                                                            │   │  │
+│ ┊│   agents are conversations; turns, tool calls, and graphs  │   │  │
+│ ┊│   are durable tasks that own what they start; model        │   │  │
+│ ┊│   requests pass the hooks with each agent's snapshot       │   │  │
+│ ┊╰─────────────────────────────┬──────────────────────────────╯   │  │
+╰─┬──────────────────────────────┬──────────────────────────────────┬──╯
+  ┊ saves                        │ checkpoint every step            │ connects
+  ▼                              ▼                                  ▼
+╭──────────────────────╮    ╭──────────────────────────────╮  ╭─────────────╮
+│ ▤ Pi's session file  │    │ ▤ pi-agents store, one per   │  │ ◎ MCP       │
+│   your conversation, │    │   session: agents and their  │  │   servers,  │
+│   saved results, and │    │   hook snapshots, graphs,    │  │   web       │
+│   message cards      │    │   messages, tasks            │  │   providers │
+╰──────────────────────╯    ╰──────────────────────────────╯  ╰─────────────╯
 ```
 
 ## 📚 Documentation

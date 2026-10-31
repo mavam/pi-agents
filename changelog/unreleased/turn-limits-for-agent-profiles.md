@@ -17,3 +17,5 @@ maxTurns: 20
 ```
 
 The round that reaches the limit still runs its tools, then the agent fails with `reached its turn limit`. Press `r` in `/agents` to continue it for another run.
+
+Only profiles set the limit; `agent_spawn` has no argument for it. A turn limit is your budget for an agent, so the model that spawns agents can't loosen or skip it. It can pick a profile that has one, and it sees when an agent reached its limit, but only you can continue that agent.

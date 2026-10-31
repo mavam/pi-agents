@@ -606,7 +606,10 @@ describe("durability", () => {
     });
     await until(async () => (await service.liveTasks()).length === 0);
     expect(called).toEqual([]);
-    const agents = service.list({ includeClosed: true });
+    // Agents created in one commit have no order among themselves.
+    const agents = service
+      .list({ includeClosed: true })
+      .sort((left, right) => left.name.localeCompare(right.name));
     expect(agents.map((info) => [info.name, info.closed])).toEqual([
       ["victim", true],
       ["victim.c", true],

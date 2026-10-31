@@ -172,12 +172,17 @@ describe("hosts", () => {
     expect(service.get("lead")?.result?.text).toBe("merged");
 
     const ours = [extensions.tools.name, extensions.prompt.name];
-    // Every agent messages; only agents that may spawn select spawning.
-    const messaging = [...ours, extensions.messaging.name];
+    // Every agent messages and gets the tool twin's tools; only agents
+    // that may spawn select spawning.
+    const twin = extensions.twin.extension.name;
+    const messaging = [...ours, extensions.messaging.name, twin];
     for (const [name, selected] of [
       ["solo", messaging],
       ["x", messaging],
-      ["lead", [...ours, extensions.spawning.name, extensions.messaging.name]],
+      [
+        "lead",
+        [...ours, extensions.spawning.name, extensions.messaging.name, twin],
+      ],
       ["lead.h", messaging],
     ] as const) {
       const id = Number(service.get(name)?.id) as ConversationId;

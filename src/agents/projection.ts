@@ -10,7 +10,7 @@ import {
   LiveDoc,
   UsageDoc,
 } from "@earendil-works/pi-durable";
-import { isCodemodeModelTool } from "../host/tools.js";
+import { AGENT_TOOL_NAMES, isCodemodeModelTool } from "../host/tools.js";
 import { CONTEXT, conversationId } from "./context.js";
 import {
   activityOf,
@@ -32,7 +32,7 @@ import {
   type GraphRecord,
   graphDeliveryId,
 } from "./records.js";
-import { SPAWNING_TOOLS, WAIT_TOOL } from "./spawning.js";
+import { WAIT_TOOL } from "./spawning.js";
 import type { StalledTask, TaskStalls } from "./stalls.js";
 import type { AgentStore } from "./store.js";
 import { endNodes, stages } from "./topology.js";
@@ -314,13 +314,20 @@ export class Projection {
         ? undefined
         : await this.agentEndedAt(id, record);
     const durable = (agent ?? {}) as DurableAgentState;
-    const tools = Array.isArray(durable.tools)
-      ? durable.tools.filter(
-          (tool) =>
-            !(SPAWNING_TOOLS as readonly string[]).includes(tool) &&
-            !isCodemodeModelTool(tool),
-        )
-      : undefined;
+    // Agents name their own tools, or remove the agent tools they lack.
+    const named = Array.isArray(durable.tools)
+      ? durable.tools
+      : durable.tools
+        ? AGENT_TOOL_NAMES.filter(
+            (tool) =>
+              !(durable.tools as { remove: string[] }).remove.includes(tool),
+          )
+        : undefined;
+    const tools = named?.filter(
+      (tool) =>
+        (AGENT_TOOL_NAMES as readonly string[]).includes(tool) &&
+        !isCodemodeModelTool(tool),
+    );
     const group = this.graphRecords[record.graph];
     this.agentInfos.set(id, {
       id,

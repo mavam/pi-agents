@@ -16,7 +16,8 @@ their recipient's conversation once. A model call a crash interrupted
 counts as a failed attempt and retries under Pi's retry settings; with no
 retry left, the agent fails until you continue it. Tool effects may repeat;
 a tool call that can't safely repeat reports its interruption to the agent
-instead. Work that crashes Pi repeatedly ends instead of resuming again; see
+instead. Calls of MCP and extension tools run again only when their
+authors mark them as read-only or idempotent. Work that crashes Pi repeatedly ends instead of resuming again; see
 [states](./usage.md#states).
 
 Pending results aren't lost, but can arrive more than once after a crash

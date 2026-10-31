@@ -1,7 +1,7 @@
 # ⚙️ Configuration
 
-Configure the models agents use, cap how many agents work at once, and show
-agent counts in the footer.
+Configure the models agents use, share extension tools with them, cap how
+many agents work at once, and show agent counts in the footer.
 
 ## Models
 
@@ -21,6 +21,29 @@ aren't inherited automatically. For example, a compatible pi-service-tier
 version can pass its service tiers and `/fast` overrides to agents.
 Captured settings survive resumes and pass to the agents that agents
 spawn. Later parent changes affect future agents only.
+
+## Extension tools
+
+Agents get the tools of your MCP servers and of the extensions you list
+under `piAgents.twinExtensions`, as package sources like those in Pi's
+`packages` setting. For example, to give agents Webfox's web tools:
+
+```json
+{
+  "piAgents": {
+    "twinExtensions": ["npm:webfox"]
+  }
+}
+```
+
+Agents reach these tools through a tool twin: a second, headless Pi session
+that pi-agents runs alongside yours. It loads only Pi's MCP support and the
+listed packages, which must be installed in Pi, and uses your `mcp.json`
+files and MCP sign-ins. When agents first start, it waits up to ten seconds
+for your MCP servers to connect; servers that take longer reach agents once
+they do. List only extensions whose tools work on their own: the twin has no
+UI, and its tools see an empty conversation rather than yours. Restart Pi
+after changing the list, `mcp.json`, or your MCP sign-ins.
 
 ## Working agents
 

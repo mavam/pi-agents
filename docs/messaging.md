@@ -5,13 +5,12 @@ Agents in one Pi session can send each other one-way messages.
 ## Using messages
 
 <img
-  src="../demo/messaging.gif"
-  width="840"
-  alt="Scout messages fixer about a concurrency bug, fixer patches it and
-    replies, and Pi browses their exchange in /messages and attaches to both
-    agents"
+src="../demo/messaging.gif"
+width="840"
+alt="Scout messages fixer about a concurrency bug, fixer patches it and
+replies, and Pi browses their exchange in /messages and attaches to both
+agents"
 >
-
 Each agent gets `agent_status` to list the agents it can reach and their
 jobs, including finished agents but not stopped ones. It can use
 `agent_send` to message one of them by name or ID without waiting. An ID

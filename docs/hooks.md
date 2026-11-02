@@ -96,13 +96,13 @@ including `null`, replaces it.
 
 The context contains:
 
-| Field | Meaning |
-| --- | --- |
-| `sessionId` | Owning Pi session |
-| `agent.id`, `agent.name` | Committed agent identity |
-| `model.provider`, `model.api`, `model.id` | Actual dispatched model, after routing |
-| `state` | Your namespace's detached, deeply frozen JSON, or `undefined` |
-| `signal` | The child request's abort signal, when available |
+| Field                                     | Meaning                                                       |
+| ----------------------------------------- | ------------------------------------------------------------- |
+| `sessionId`                               | Owning Pi session                                             |
+| `agent.id`, `agent.name`                  | Committed agent identity                                      |
+| `model.provider`, `model.api`, `model.id` | Actual dispatched model, after routing                        |
+| `state`                                   | Your namespace's detached, deeply frozen JSON, or `undefined` |
+| `signal`                                  | The child request's abort signal, when available              |
 
 Hooks run in lexicographic namespace order, each seeing the preceding
 result. Request hooks run even without stored state; stateful consumers
@@ -139,14 +139,14 @@ discovery.register({
 
 The context contains:
 
-| Field | Meaning |
-| --- | --- |
-| `sessionId` | Owning Pi session |
-| `agent.id`, `agent.name` | Committed agent identity |
-| `model.provider`, `model.api`, `model.id` | The agent's model; routing may still dispatch to another |
-| `operation` | `generation` or `compaction` |
-| `state` | Your namespace's detached, deeply frozen JSON, or `undefined` |
-| `signal` | The agent's abort signal, when available |
+| Field                                     | Meaning                                                       |
+| ----------------------------------------- | ------------------------------------------------------------- |
+| `sessionId`                               | Owning Pi session                                             |
+| `agent.id`, `agent.name`                  | Committed agent identity                                      |
+| `model.provider`, `model.api`, `model.id` | The agent's model; routing may still dispatch to another      |
+| `operation`                               | `generation` or `compaction`                                  |
+| `state`                                   | Your namespace's detached, deeply frozen JSON, or `undefined` |
+| `signal`                                  | The agent's abort signal, when available                      |
 
 Holding isn't stopping. A held agent stays working: it receives messages,
 and tools it already called finish. Only the held call waits.

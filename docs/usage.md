@@ -6,33 +6,33 @@ Ask Pi to start agents: [see the example prompts](../README.md#-usage).
 
 ## Glossary
 
-| Term | Meaning |
-| --- | --- |
-| Agent | A separate Pi agent with its own name, model, working directory, and conversation. It keeps its conversation after it answers. |
-| Job | The instructions an agent starts with. They must stand on their own, because the agent doesn't see your conversation. |
-| Message | Any later input to an agent. A message to a working agent *steers* it; a *follow-up* waits until the current answer is done; an *interrupt* stops the current work first. |
-| Result | The agent's final message after its job or a message. |
-| Group | One spawn's runtime-owned set of agents, with one result for whoever spawned it. A group of one looks like its agent, but has a separate group ID. |
-| Graph | The `after` dependencies within a group: some agents run in parallel, others start after their inputs finish. |
-| Spawned agent | An agent that another agent started for part of its job. Its group's result goes to that agent, not to Pi. |
-| Profile | Reusable settings for agents, such as model, thinking level, tools, and instructions. |
-| Attach | Open an agent's conversation to watch it and talk to it. |
-| Stop | End an agent or group and remove it from the panel. Agents end on their own once their answer reaches their owner. Messaging an agent that ended starts it again. |
+| Term          | Meaning                                                                                                                                                                   |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent         | A separate Pi agent with its own name, model, working directory, and conversation. It keeps its conversation after it answers.                                            |
+| Job           | The instructions an agent starts with. They must stand on their own, because the agent doesn't see your conversation.                                                     |
+| Message       | Any later input to an agent. A message to a working agent _steers_ it; a _follow-up_ waits until the current answer is done; an _interrupt_ stops the current work first. |
+| Result        | The agent's final message after its job or a message.                                                                                                                     |
+| Group         | One spawn's runtime-owned set of agents, with one result for whoever spawned it. A group of one looks like its agent, but has a separate group ID.                        |
+| Graph         | The `after` dependencies within a group: some agents run in parallel, others start after their inputs finish.                                                             |
+| Spawned agent | An agent that another agent started for part of its job. Its group's result goes to that agent, not to Pi.                                                                |
+| Profile       | Reusable settings for agents, such as model, thinking level, tools, and instructions.                                                                                     |
+| Attach        | Open an agent's conversation to watch it and talk to it.                                                                                                                  |
+| Stop          | End an agent or group and remove it from the panel. Agents end on their own once their answer reaches their owner. Messaging an agent that ended starts it again.         |
 
 ## States
 
 An agent is in one of these states:
 
-| State | Meaning |
-| --- | --- |
-| ◉ `working` | The agent works on its job or a message. |
-| ◐ `queued` | The agent answered, and its result waits for Pi to take it. |
-| ● `idle` | The agent answered and waits for messages. |
-| ⊗ `failed` | The last answer ended with an error, or the agent's work ended without one, for example because of crashes or its turn limit. |
-| ⊘ `interrupted` | The last answer was interrupted before it finished. |
-| ○ `waiting` | In a graph: the agent waits for the agents whose results it needs. |
-| ⊖ `skipped` | In a graph: the agent never started because none of the agents it waited for answered. |
-| ◌ `closed` | The agent ended: its answer reached its owner, or it was stopped. Messaging it starts it again. |
+| State           | Meaning                                                                                                                       |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| ◉ `working`     | The agent works on its job or a message.                                                                                      |
+| ◐ `queued`      | The agent answered, and its result waits for Pi to take it.                                                                   |
+| ● `idle`        | The agent answered and waits for messages.                                                                                    |
+| ⊗ `failed`      | The last answer ended with an error, or the agent's work ended without one, for example because of crashes or its turn limit. |
+| ⊘ `interrupted` | The last answer was interrupted before it finished.                                                                           |
+| ○ `waiting`     | In a graph: the agent waits for the agents whose results it needs.                                                            |
+| ⊖ `skipped`     | In a graph: the agent never started because none of the agents it waited for answered.                                        |
+| ◌ `closed`      | The agent ended: its answer reached its owner, or it was stopped. Messaging it starts it again.                               |
 
 A group's row uses the same glyphs: it works until all of its agents finish,
 then shows the state of its last agents: failed if one failed or was skipped,
@@ -70,10 +70,11 @@ profile or spawn specifies others.
 Every agent also gets the tools of your MCP servers and of the extensions
 you [share with agents](./configuration.md#extension-tools), such as
 Webfox's web search, whatever its tool allowlist says. MCP tools work as in
-Pi: unless a server declares them directly, agents call them from
-`codemode` scripts and find them with `searchTools()`, so give agents that
-need them `codemode`. Agents use the servers in your `mcp.json` with your
-sign-ins; servers that other extensions register stay with your session.
+Pi: unless a server declares them directly, agents with `codemode` call
+them from scripts and find them with `searchTools()`, and agents without it
+load the ones they need with `tool_search`. Agents use the servers in your
+`mcp.json` with your sign-ins; servers that other extensions register stay
+with your session.
 Tools of extensions you don't share stay with your session too.
 
 `read` supports images. Codemode scripts can call the agent's other tools,
@@ -117,6 +118,7 @@ name it in a [profile](./profiles.md#agent-profiles). Say you run a
 
 ```md
 ---
+
 name: reviewer
 description: Reviews changes with the code-review skill
 tools: [read, bash, grep, find, ls]
@@ -162,14 +164,14 @@ shortcuts apply only while Pi's prompt editor has focus.
 
 In the focused panel:
 
-| Key | Action |
-| --- | --- |
-| ↑ ↓ | Select an agent or graph. |
-| Space | Fold or unfold a graph, or the agents an agent spawned. On a row inside one, fold what it sits in. |
-| ⏎ | Attach to the agent, or to a graph's first agent. |
-| Click | Attach like ⏎; a message attaches to its recipient. Needs Pi's fullscreen mode, its default. |
-| Tab | Open `/agents` at the same row. Tab cycles the panel, `/agents`, and `/messages`; Shift+Tab goes back. |
-| `s` | Stop the agent, or the graph with its agents. Pi asks first when it still works. |
+| Key      | Action                                                                                                    |
+| -------- | --------------------------------------------------------------------------------------------------------- |
+| ↑ ↓      | Select an agent or graph.                                                                                 |
+| Space    | Fold or unfold a graph, or the agents an agent spawned. On a row inside one, fold what it sits in.        |
+| ⏎        | Attach to the agent, or to a graph's first agent.                                                         |
+| Click    | Attach like ⏎; a message attaches to its recipient. Needs Pi's fullscreen mode, its default.              |
+| Tab      | Open `/agents` at the same row. Tab cycles the panel, `/agents`, and `/messages`; Shift+Tab goes back.    |
+| `s`      | Stop the agent, or the graph with its agents. Pi asks first when it still works.                          |
 | Esc or → | Go back to the editor. Other keys go back too and act there, so typed or pasted text lands in the editor. |
 
 Attaching opens the agent's conversation. A `codemode` call shows its
@@ -177,16 +179,16 @@ script, then each tool call the script made with its status, as the calls
 run and after the script finished, and then the script's output. The
 editor names the agent and sends your input to it:
 
-| Key | Action |
-| --- | --- |
-| ⏎ | Prompt an idle agent or steer a working one. An agent that waits for the agents its job needs takes input once it starts. |
-| Alt+⏎ | Queue a follow-up after the current answer. |
-| Esc | Interrupt a working agent; queued messages return to the editor. Go back from an idle one when the editor is empty. |
-| Ctrl+O | Expand or collapse all tool output and messages. |
-| Click | Expand or collapse one tool result or message, as in Pi. Click the newer-lines note to jump back to new output. Needs fullscreen mode. |
-| ← or Ctrl+D | Detach when the editor is empty. |
-| Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. Earlier entries load as you reach the top. |
-| Mouse wheel | Scroll in fullscreen mode, with the pointer over the attached view. |
+| Key                        | Action                                                                                                                                 |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| ⏎                          | Prompt an idle agent or steer a working one. An agent that waits for the agents its job needs takes input once it starts.              |
+| Alt+⏎                      | Queue a follow-up after the current answer.                                                                                            |
+| Esc                        | Interrupt a working agent; queued messages return to the editor. Go back from an idle one when the editor is empty.                    |
+| Ctrl+O                     | Expand or collapse all tool output and messages.                                                                                       |
+| Click                      | Expand or collapse one tool result or message, as in Pi. Click the newer-lines note to jump back to new output. Needs fullscreen mode. |
+| ← or Ctrl+D                | Detach when the editor is empty.                                                                                                       |
+| Shift+↑ ↓, Shift+PgUp/PgDn | Scroll. Earlier entries load as you reach the top.                                                                                     |
+| Mouse wheel                | Scroll in fullscreen mode, with the pointer over the attached view.                                                                    |
 
 Messages you send while attached stay between you and the agent. Their
 results don't post into the parent conversation, with one exception: when
@@ -214,23 +216,23 @@ the new session.
 
 ## Commands
 
-| Command | Action |
-| --- | --- |
-| `/agents` | Browse all agents and graphs, including ended ones, with their jobs and latest results. Attach to, fold, continue, or stop them. |
-| `/agent <name>` | Attach to an agent. |
-| `/messages` | Read and filter the messages agents sent each other, newest first. |
+| Command         | Action                                                                                                                           |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `/agents`       | Browse all agents and graphs, including ended ones, with their jobs and latest results. Attach to, fold, continue, or stop them. |
+| `/agent <name>` | Attach to an agent.                                                                                                              |
+| `/messages`     | Read and filter the messages agents sent each other, newest first.                                                               |
 
 ## Tools
 
 Pi uses these tools to work with agents:
 
-| Tool | Purpose |
-| --- | --- |
-| `agent_spawn` | Start one group of 1 to 12 agents, optionally with `after` dependencies or permission to spawn. |
-| `agent_send` | Message an agent: prompt, steer, queue a follow-up, or interrupt its work first. |
-| `agent_wait` | Block until agents or groups answer and return their results. |
-| `agent_status` | Show agent and group states. |
-| `agent_stop` | Stop an agent or a group. |
+| Tool           | Purpose                                                                                         |
+| -------------- | ----------------------------------------------------------------------------------------------- |
+| `agent_spawn`  | Start one group of 1 to 12 agents, optionally with `after` dependencies or permission to spawn. |
+| `agent_send`   | Message an agent: prompt, steer, queue a follow-up, or interrupt its work first.                |
+| `agent_wait`   | Block until agents or groups answer and return their results.                                   |
+| `agent_status` | Show agent and group states.                                                                    |
+| `agent_stop`   | Stop an agent or a group.                                                                       |
 
 `agent_spawn` always takes an `agents` list, even for one agent. Each entry
 uses `job` for its instructions and may set `spawn: true` to permit children.
@@ -248,7 +250,9 @@ Use `after` with names from the same call to make a dependency graph:
 To permit recursive spawning:
 
 ```json
-{ "agents": [{ "name": "scout", "job": "Map the API surface.", "spawn": true }] }
+{
+  "agents": [{ "name": "scout", "job": "Map the API surface.", "spawn": true }]
+}
 ```
 
 `agent_spawn` and `agent_send` return at once. Each spawn owns one group and

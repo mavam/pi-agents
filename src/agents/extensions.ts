@@ -15,6 +15,8 @@ import {
   type Registry,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
+import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
+import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { createPromptExtension, type PromptOptions } from "../host/prompt.js";
 import { createToolsExtension } from "../host/tools.js";
 import { TwinTools } from "../host/twin-tools.js";
@@ -44,6 +46,9 @@ export interface AgentExtensions {
   /** The tool twin's tools; every agent selects it with all of its tools.
    * The host attaches the twin once it opened. */
   twin: TwinTools;
+  /** `tool_search`, which loads the twin's tools that only scripts reach;
+   * agents without `codemode` select it. */
+  toolSearch: Extension;
   /** What the messaging tools share with the service. */
   hub: MessagingHub;
   /** The cap on agents that work at once; the host observes its harness
@@ -70,6 +75,7 @@ export function createAgentExtensions(
   options: AgentExtensionOptions,
 ): AgentExtensions {
   const twin = new TwinTools();
+  const toolSearch = createToolSearchExtension();
   const { extension, close } = createToolsExtension(twin.namespaces);
   const working =
     options.maxWorkingAgents === undefined
@@ -97,13 +103,14 @@ export function createAgentExtensions(
     hub,
     ...pause,
     // What a new agent selects besides its own tools.
-    selection: (spawn) => ({
+    selection: (spawn, own = []) => ({
       extensions: [
         tools,
         prompt,
         ...(spawn && spawning ? [spawning] : []),
         messaging,
         twin.extension,
+        ...(searchesTools(own, twin) ? [toolSearch] : []),
       ],
       tools: [
         ...(spawn ? (spawning?.tools ?? []) : []),
@@ -124,6 +131,7 @@ export function createAgentExtensions(
     spawning,
     messaging,
     twin,
+    toolSearch,
     hub,
     ...(working ? { working } : {}),
     close,
@@ -145,6 +153,20 @@ export function toolFilter(
   };
 }
 
+/**
+ * Whether an agent with `own` tools loads the twin's tools that only
+ * scripts reach with `tool_search`: it has no `codemode` to call them.
+ * Pi offers MCP tools the same two ways.
+ */
+export function searchesTools(
+  own: readonly ToolRegistration[],
+  twin: TwinTools,
+): boolean {
+  return (
+    twin.hasDeferred() && !own.some((tool) => tool.name === CODEMODE_TOOL_NAME)
+  );
+}
+
 export function installAgentExtensions(
   registry: Registry,
   extensions: AgentExtensions,
@@ -156,6 +178,7 @@ export function installAgentExtensions(
     extensions.spawning,
     extensions.messaging,
     extensions.twin.extension,
+    extensions.toolSearch,
   ])
     registry.install(extension);
 }
@@ -166,7 +189,7 @@ export function installAgentExtensions(
  */
 export function agentSelection(
   extensions: AgentExtensions,
-  options: { spawn?: boolean; messaging?: boolean } = {},
+  options: { spawn?: boolean; messaging?: boolean; toolSearch?: boolean } = {},
 ): Extension[] {
   return [
     extensions.tools,
@@ -174,5 +197,6 @@ export function agentSelection(
     ...(options.spawn ? [extensions.spawning] : []),
     ...(options.messaging ? [extensions.messaging] : []),
     extensions.twin.extension,
+    ...(options.toolSearch ? [extensions.toolSearch] : []),
   ];
 }

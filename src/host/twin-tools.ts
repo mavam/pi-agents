@@ -22,6 +22,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { CodemodeNamespace } from "@earendil-works/pi-durable/codemode";
 import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
+import { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
 import type { TSchema } from "typebox";
 import type { ToolTwin, TwinResult, TwinTool } from "./twin.js";
 
@@ -94,10 +95,10 @@ function summary(text: string | undefined): string {
 }
 
 /**
- * The servers whose tools agents reach only from scripts, so the model
- * knows of them, as Pi's `mcp_servers` section tells it.
+ * The servers whose tools agents reach only from scripts or by search, so
+ * the model knows of them, as Pi's `mcp_servers` section tells it.
  */
-function namespacesSection(tools: readonly TwinTool[]): string | undefined {
+function namespacesSection(tools: readonly TwinTool[]): string[] | undefined {
   const namespaces = new Map<string, string>();
   for (const tool of tools) {
     const namespace = tool.info.namespace;
@@ -108,11 +109,18 @@ function namespacesSection(tools: readonly TwinTool[]): string | undefined {
   const lines = [...namespaces]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, text]) => (text ? `- ${name}: ${text}` : `- ${name}`));
-  return [
-    "Tool namespaces whose tools are not declared to you, such as MCP servers. Call their tools from codemode scripts; find them with `searchTools()` and `describeNamespace()`.",
-    ...lines,
-  ].join("\n");
+  return lines;
 }
+
+const NAMESPACES_INTRO =
+  "Tool namespaces whose tools are not declared to you, such as MCP servers.";
+/** How an agent reaches those tools: from scripts, or by loading them. */
+const REACH = {
+  [CODEMODE_TOOL_NAME]:
+    "Call their tools from codemode scripts; find them with `searchTools()` and `describeNamespace()`.",
+  [TOOL_SEARCH_TOOL_NAME]:
+    "Load their tools with `tool_search`; they are available from your next call.",
+};
 
 /** The twin's namespaces for codemode, one per tool, so each tool belongs
  * exactly to its own. */
@@ -150,6 +158,12 @@ export class TwinTools {
   /** The extension as installed now. */
   get extension(): Extension {
     return this.current;
+  }
+
+  /** Whether the twin has tools only codemode scripts or `tool_search`
+   * reach. */
+  hasDeferred(): boolean {
+    return (this.current.tools ?? []).some((tool) => tool.deferred === true);
   }
 
   /** The names of the twin's tools, which agents always get. */
@@ -201,11 +215,17 @@ export class TwinTools {
       tools: proxies,
       sections: listing
         ? [
-            section("tool_namespaces", (input) =>
-              input.agent.tools.some((tool) => tool.name === CODEMODE_TOOL_NAME)
-                ? listing
-                : undefined,
-            ),
+            section("tool_namespaces", (input) => {
+              const names = new Set(input.agent.tools.map((tool) => tool.name));
+              const reach = names.has(CODEMODE_TOOL_NAME)
+                ? REACH[CODEMODE_TOOL_NAME]
+                : names.has(TOOL_SEARCH_TOOL_NAME)
+                  ? REACH[TOOL_SEARCH_TOOL_NAME]
+                  : undefined;
+              return reach
+                ? [`${NAMESPACES_INTRO} ${reach}`, ...listing].join("\n")
+                : undefined;
+            }),
           ]
         : [],
       // Servers that connect later reach agents at their next request.

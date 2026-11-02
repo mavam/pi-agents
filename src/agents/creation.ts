@@ -18,6 +18,7 @@ import { CONTEXT } from "./context.js";
 import {
   type AgentExtensions,
   agentSelection,
+  searchesTools,
   toolFilter,
 } from "./extensions.js";
 import { GraphTask, NodeTask } from "./graphs.js";
@@ -201,6 +202,7 @@ function capabilities(
   const extensions = agentSelection(deps.extensions, {
     spawn: !!spawn,
     messaging: true,
+    toolSearch: searchesTools(tools, deps.extensions.twin),
   });
   return { tools: toolFilter(deps.extensions.tools, tools), extensions };
 }

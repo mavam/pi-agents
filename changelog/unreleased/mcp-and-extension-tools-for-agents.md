@@ -6,7 +6,7 @@ authors:
 created: 2026-10-31T11:33:03.666267Z
 ---
 
-Agents can now use your MCP servers and the tools of extensions you share with them, such as Webfox's web search. Every agent gets the tools of the servers in your `mcp.json`, with your sign-ins, and calls them from `codemode` scripts as Pi does. To share an extension's tools, list its package:
+Agents can now use your MCP servers and the tools of extensions you share with them, such as Webfox's web search. Every agent gets the tools of the servers in your `mcp.json`, with your sign-ins. As in Pi, agents with `codemode` call them from scripts, and agents without it load the ones they need with `tool_search`. To share an extension's tools, list its package:
 
 ```json
 {

@@ -153,7 +153,9 @@ export class SessionHost {
       // session's host does.
       if (this.pruned || this.epoch !== epoch) return;
       this.pruned = true;
-      const settings = SettingsManager.create(cwd, getAgentDir());
+      const settings = SettingsManager.create(cwd, getAgentDir(), {
+        projectTrusted: this.trusted,
+      });
       const { days, error } = readRetention(settings.getSettings());
       if (error) this.report(new Error(`${error}; storage is kept`));
       if (days === undefined) return;
@@ -194,6 +196,7 @@ export class SessionHost {
     // before waiting.
     const { cwd, modelRegistry } = ctx;
     const persistent = isPersistent(ctx);
+    const trusted = this.trusted;
     const fallback = ctx.sessionManager.getSessionId();
     // The previous harness releases its lock and storage first.
     await this.closing;
@@ -229,7 +232,10 @@ export class SessionHost {
       else early.push(report);
     };
     try {
-      const settingsManager = SettingsManager.create(cwd, getAgentDir());
+      // An untrusted project's settings don't count, as in Pi.
+      const settingsManager = SettingsManager.create(cwd, getAgentDir(), {
+        projectTrusted: trusted,
+      });
       const { limit, error } = readWorkingLimit(settingsManager.getSettings());
       if (error) this.report(new Error(`${error}; agents aren't capped`));
       const twinExtensions = readStringList(
@@ -262,6 +268,7 @@ export class SessionHost {
         onReport,
         twin: {
           extensions: twinExtensions.value,
+          trusted,
           onProblem: (problem) => this.report(new Error(problem)),
         },
       });

@@ -43,6 +43,19 @@ export function keepsRequestsOpen(reason: string): boolean {
 }
 
 /**
+ * Whether crashes ended the agent's latest run, so it waits for the user
+ * to continue it: nothing automatic, such as its groups' results, may start
+ * it again, or work that crashes Pi would keep crashing it.
+ */
+export function crashEnded(live: Readonly<LiveState> | undefined): boolean {
+  const reason = live?.runFailure?.reason;
+  return (
+    live?.run === undefined &&
+    (reason === "interrupted" || reason === "restart_limit")
+  );
+}
+
+/**
  * Why the agent's latest run ended without an answer, from `pi.live`, which
  * keeps it until the next run starts. A continue that found nothing to
  * answer didn't fail: the agent's answer still stands.

@@ -16,4 +16,4 @@ Agents can now use your MCP servers and the tools of extensions you share with t
 }
 ```
 
-pi-agents runs these tools in a tool twin, a headless Pi session next to yours that loads only Pi's MCP support and the listed packages. A call to an external system isn't repeated after a crash unless its author marks it as read-only or idempotent.
+pi-agents runs these tools in a tool twin, a headless Pi session next to yours that loads only Pi's MCP support and the listed packages. As in Pi, an untrusted project's `mcp.json` and settings don't count. Agents started before the update keep the tools they had. A call to an external system isn't repeated after a crash unless its author marks it as read-only or idempotent.

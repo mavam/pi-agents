@@ -31,6 +31,26 @@ import type { ToolTwin, TwinResult, TwinTool } from "./twin.js";
 
 export const TWIN_EXTENSION = "pi-agents-twin";
 
+/** How often the twin's tools are compared while nothing else syncs them,
+ * as servers connect, reconnect, or change their tools. */
+const SYNC_INTERVAL_MS = 2_000;
+
+/** Pi registers a tool again with a new definition when it changes, such
+ * as when its server reconnects: an identity per definition tells them
+ * apart. */
+const revisions = new WeakMap<object, number>();
+let nextRevision = 0;
+
+function revisionOf(definition: object): number {
+  let revision = revisions.get(definition);
+  if (revision === undefined) {
+    nextRevision += 1;
+    revision = nextRevision;
+    revisions.set(definition, revision);
+  }
+  return revision;
+}
+
 /** A tool the twin declares only to codemode scripts or tool search. */
 function isDeferred(tool: TwinTool): boolean {
   return tool.info.exposure !== "direct";
@@ -163,6 +183,7 @@ export class TwinTools {
   private signature = "";
   private registry: Registry | undefined;
   private twin: ToolTwin | undefined;
+  private timer: ReturnType<typeof setInterval> | undefined;
 
   /** The extension as installed now. */
   get extension(): Extension {
@@ -179,9 +200,14 @@ export class TwinTools {
     this.registry = registry;
     this.twin = twin;
     this.sync();
+    if (!twin) return;
+    this.timer = setInterval(() => this.sync(), SYNC_INTERVAL_MS);
+    this.timer.unref?.();
   }
 
   detach(): void {
+    clearInterval(this.timer);
+    this.timer = undefined;
     this.registry = undefined;
     this.twin = undefined;
   }
@@ -193,7 +219,12 @@ export class TwinTools {
     const twin = this.twin;
     const tools = twin?.tools() ?? [];
     const signature = JSON.stringify(
-      tools.map(({ info }) => [info.name, info.exposure, info.namespace?.name]),
+      tools.map(({ info, definition }) => [
+        info.name,
+        info.exposure,
+        info.namespace?.name,
+        revisionOf(definition),
+      ]),
     );
     if (signature === this.signature) return;
     this.signature = signature;
@@ -232,7 +263,7 @@ export class TwinTools {
             }),
           ]
         : [],
-      // Servers that connect later reach agents at their next request.
+      // Between the timer's syncs, agents see changes at their next request.
       hooks: [
         hook(GenerationTask, {
           beforeRequest: () => {

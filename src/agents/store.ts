@@ -3,20 +3,22 @@
  * submissions and stored harness records that their bookkeeping needs.
  */
 
-import type {
-  Cursor,
-  EntryRecord,
-  Harness,
-  InputSubmissionDraft,
-  SubmissionDraft,
-  SubmissionId,
-  SubmissionRecord,
-  TaskId,
-  Tx,
+import {
+  type Cursor,
+  type EntryRecord,
+  type Harness,
+  type InputSubmissionDraft,
+  LiveDoc,
+  type SubmissionDraft,
+  type SubmissionId,
+  type SubmissionRecord,
+  type TaskId,
+  type Tx,
 } from "@earendil-works/pi-durable";
 import { CONTEXT, conversationId } from "./context.js";
 import {
   ASSISTANT_KIND,
+  crashEnded,
   GENERATION_KIND,
   outcomeOf,
   resultOf,
@@ -427,6 +429,11 @@ export class AgentStore {
         if (
           owner.interrupted !== undefined &&
           !(await answeredSince(tx, graph.owner.agent, owner.interrupted))
+        )
+          return undefined;
+        // Its results wait until the user continued it after crashes.
+        if (
+          crashEnded(await tx.doc(LiveDoc, conversationId(graph.owner.agent)))
         )
           return undefined;
       }

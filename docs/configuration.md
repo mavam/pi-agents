@@ -39,7 +39,9 @@ under `piAgents.twinExtensions`, as package sources like those in Pi's
 Agents reach these tools through a tool twin: a second, headless Pi session
 that pi-agents runs alongside yours. It loads only Pi's MCP support and the
 listed packages, which must be installed in Pi, and uses your `mcp.json`
-files and MCP sign-ins. When agents first start, it waits up to ten seconds
+files and MCP sign-ins. As in Pi, a project's `.pi/mcp.json`, its
+`piAgents` settings, and packages installed in it count only when you trust
+the project. When agents first start, it waits up to ten seconds
 for your MCP servers to connect; servers that take longer reach agents once
 they do. List only extensions whose tools work on their own: the twin has no
 UI, and its tools see an empty conversation rather than yours. Restart Pi
@@ -48,8 +50,8 @@ after changing the list, `mcp.json`, or your MCP sign-ins.
 ## Working agents
 
 Cap parallel work to reduce contention, for example on a local model
-server. Set the limit in `~/.pi/agent/settings.json` or your project's
-`.pi/settings.json`:
+server. Set the limit in `~/.pi/agent/settings.json` or, in a trusted
+project, its `.pi/settings.json`:
 
 ```json
 {
@@ -100,7 +102,7 @@ they name no app.
 
 [Agent storage](./architecture.md#storage) remains after Pi deletes its
 session file. To remove inactive stores, set a retention period in
-`~/.pi/agent/settings.json` or your project's `.pi/settings.json`:
+`~/.pi/agent/settings.json` or, in a trusted project, its `.pi/settings.json`:
 
 ```json
 {

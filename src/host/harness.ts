@@ -47,6 +47,8 @@ export interface AgentHarnessOptions {
    * extensions, whose tools agents get. */
   twin?: {
     extensions: readonly string[];
+    /** Whether the session trusts its project. */
+    trusted: boolean;
     onProblem: (message: string) => void;
   };
 }
@@ -132,7 +134,10 @@ export async function openAgentHarness(
     await twin?.close();
   };
   try {
-    if (options.twin && twinWanted(options.cwd, options.twin.extensions))
+    if (
+      options.twin &&
+      twinWanted(options.cwd, options.twin.extensions, options.twin.trusted)
+    )
       twin = await openTwin(options.cwd, options.twin);
     // Before the harness opens, so tool calls that resume find their tools.
     options.extensions.twin.attach(registry, twin);

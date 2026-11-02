@@ -1,0 +1,10 @@
+created: 2026-11-02
+title: MCP and extension tools for agents on Pi 1.5.0
+intro: >-
+  Agents can now use your MCP servers and the extension tools you share with them,
+  and you can continue agents that crashes or errors stopped. This release requires
+  Pi 1.5.0 or later and adds turn limits for profiles, an attach view with the whole
+  conversation, and failure reasons that survive restarts.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.38.1

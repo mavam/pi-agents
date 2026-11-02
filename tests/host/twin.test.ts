@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 /** A Pi package whose extension registers `twin_echo`, as Webfox
- * registers its web tools. */
+ * registers its web tools, and `twin_ping` for scripts, as MCP does. */
 function echoPackage(): string {
   const directory = tempDir("pi-agents-twin-");
   fs.writeFileSync(
@@ -42,6 +42,18 @@ export default function (pi) {
     async execute(_id, params, _signal, onUpdate) {
       onUpdate?.({ content: [{ type: "text", text: "echoing" }], details: {} });
       return { content: [{ type: "text", text: "echo: " + params.text }], details: { length: params.text.length } };
+    },
+  });
+  // Declared only to codemode, as MCP's tools are by default.
+  pi.registerTool({
+    name: "twin_ping",
+    label: "Ping",
+    description: "Ping the twin",
+    parameters: Type.Object({}),
+    exposure: "codemode",
+    namespace: { name: "twin", description: "The twin's tools" },
+    async execute() {
+      return { content: [{ type: "text", text: "pong" }], details: {} };
     },
   });
 }
@@ -91,4 +103,52 @@ test("agents call the tools of the extensions the twin loads", async () => {
   expect(problems).toEqual([]);
   expect(service.get("a")?.result?.text).toBe("echo: hi");
   expect(service.get("a")?.tools).toEqual(["read"]);
+});
+
+test("agents without codemode load the twin's script tools with tool_search", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  // Searches, calls what it loaded, then answers with its result.
+  const prompts: string[] = [];
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      // System messages, with their sections.
+      prompts.push(
+        JSON.stringify(
+          context.messages.filter((message) => message.role === "system"),
+        ),
+      );
+      const last = context.messages.at(-1);
+      if (last?.role !== "toolResult")
+        return fauxAssistantMessage(
+          [fauxToolCall("tool_search", { query: "ping" })],
+          { stopReason: "toolUse" },
+        );
+      if (last.toolName === "tool_search")
+        return fauxAssistantMessage([fauxToolCall("twin_ping", {})], {
+          stopReason: "toolUse",
+        });
+      return fauxAssistantMessage(
+        last.content
+          .map((block) => (block.type === "text" ? block.text : ""))
+          .join(""),
+      );
+    }),
+  );
+  const service = await openService({
+    models,
+    twinExtensions: [echoPackage()],
+  });
+  services.push(service);
+  await service.spawnGraph({
+    agents: [
+      { name: "a", job: "ping", cwd: ".", model: MODEL, tools: ["read"] },
+    ],
+  });
+  await service.wait(["a"]);
+  expect(service.get("a")?.result?.text).toBe("pong");
+  // The prompt names the namespace and how to reach its tools.
+  expect(prompts[0]).toContain("Load their tools with `tool_search`");
+  expect(prompts[0]).toContain("- twin: The twin's tools");
 });

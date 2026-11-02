@@ -72,8 +72,8 @@ extension tools you share with them:
 │ ┊╭─────────────┴──────────────────────────────────────┴───────╮      │
 │ ┊│  ✦ pi-agents: a thin bridge from Pi to pi-durable          │      │
 │ ┊│                                                            │      │
-│ ┊│  ◈ tool twin: a headless Pi session with Pi's MCP          ├───╮  │
-│ ┊│    and the extensions you share; agents call its tools     │   │  │
+│ ┊│  ◈ tool twin: a headless, non-durable Pi session that runs ├───╮  │
+│ ┊│    MCP and shared extensions, whose tools only run in Pi   │   │  │
 │ ┊╰───┬─────────▲───────────────────────────▲──────────────────╯   │  │
 │ ┊    │ start   │ state                     │ tool calls           │  │
 │ ┊    │ message │ results                   │                      │  │

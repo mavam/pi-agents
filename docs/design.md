@@ -197,12 +197,22 @@ instead holds no slot anyway.
 
 Agents get the tools of Pi's MCP servers and of extensions the user shares.
 Pi runs those tools only in its own sessions and has no durable version of
-them, so pi-agents runs a tool twin: a headless Pi session in the same
-process that loads Pi's own MCP support and the shared extensions, and
-whose tools agents call. Running Pi's code in a real Pi session keeps the
-tools as Pi has them, with no copy of Pi's MCP to maintain. The twin is
-meant to go: once Pi offers durable versions of these tools, agents use
-those instead.
+them. The user's session has them, but Pi lets an extension call another
+extension's tool only from inside one of the session's own tool calls, as
+part of that call. Agents work in the background, between and during the
+user's turns, so their calls would show up under unrelated calls in the
+user's transcript, stop with the user's interrupts, and have nothing to run
+in after a restart until the user's model called a pi-agents tool again.
+
+So pi-agents runs a tool twin: a headless Pi session in the same process
+that loads Pi's own MCP support and the shared extensions, and whose tools
+agents call. Running Pi's code in a real Pi session keeps the tools as Pi
+has them, with no copy of Pi's MCP to maintain. The twin isn't durable: it
+holds only connections and extension memory, which it builds again when
+agents' storage opens. Agents' calls to its tools are durable tool calls
+like any other. The twin is meant to go: once Pi offers durable versions of
+these tools, or a way to call the user's session's tools from outside its
+turns, agents use those instead.
 
 The twin is separate from the user's session: it connects to the servers
 again and never shares the user's conversation, UI, or session-only

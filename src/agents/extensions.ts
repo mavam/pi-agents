@@ -15,6 +15,7 @@ import {
   type Registry,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
+import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
 import { createPromptExtension, type PromptOptions } from "../host/prompt.js";
 import { createToolsExtension } from "../host/tools.js";
 import { TwinTools } from "../host/twin-tools.js";
@@ -110,7 +111,7 @@ export function createAgentExtensions(
         ...(messaging.tools ?? []),
       ],
       always: twin.names(),
-      filter: (own) => toolFilter(tools, own),
+      filter: (own) => toolFilter(tools, own, twin),
     }),
   });
   spawning = defineExtension({
@@ -134,14 +135,20 @@ export function createAgentExtensions(
  * The tool filter of an agent whose own tools are `own`: every tool of the
  * extensions it selects but the agent tools it lacks. The tool twin's
  * tools change as servers connect, so a filter that removes keeps them all.
+ * An agent with `codemode` reaches the twin's script tools from scripts,
+ * so it doesn't get `tool_search` for them too.
  */
 export function toolFilter(
   tools: Extension,
   own: readonly ToolRegistration[],
+  twin: TwinTools,
 ): AgentChange["tools"] {
   const names = new Set(own.map((tool) => tool.name));
   return {
-    remove: (tools.tools ?? []).filter((tool) => !names.has(tool.name)),
+    remove: [
+      ...(tools.tools ?? []).filter((tool) => !names.has(tool.name)),
+      ...(names.has(CODEMODE_TOOL_NAME) ? [twin.search] : []),
+    ],
   };
 }
 

@@ -53,12 +53,34 @@ export interface ToolTwinOptions {
   /** Package sources whose extensions the twin loads, as in Pi's
    * `packages` setting, for example `npm:webfox`. */
   extensions: readonly string[];
+  /** Whether the session trusts its project: only then do the project's
+   * `mcp.json` and installed packages count, as in Pi. */
+  trusted: boolean;
   /** A problem the user should know about; the twin keeps working. */
   onProblem: (message: string) => void;
 }
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Await `value`, but no longer than until `signal` aborts. */
+async function abortable<T>(
+  value: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return value;
+  signal.throwIfAborted();
+  let abort!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  try {
+    return await Promise.race([value, aborted]);
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
 }
 
 /** The twin's own extension: the readiness probe. */
@@ -76,11 +98,15 @@ const probe: ExtensionFactory = (pi: ExtensionAPI) => {
   });
 };
 
-/** Extension paths of the installed packages among `sources`. */
+/**
+ * Extension paths of the installed packages among `sources`, from the
+ * scope Pi installed each in: the project's when it is trusted, else the
+ * user's. The twin never installs anything.
+ */
 async function extensionPaths(
   cwd: string,
   agentDir: string,
-  settingsManager: SettingsManager,
+  trusted: boolean,
   sources: readonly string[],
   onProblem: (message: string) => void,
 ): Promise<string[]> {
@@ -88,22 +114,29 @@ async function extensionPaths(
   const packages = new DefaultPackageManager({
     cwd,
     agentDir,
-    settingsManager,
+    settingsManager: SettingsManager.create(cwd, agentDir, {
+      projectTrusted: trusted,
+    }),
   });
-  // Only what Pi installed: the twin never installs anything.
-  const installed = sources.filter(
-    (source) =>
-      packages.getInstalledPath(source, "user") !== undefined ||
-      packages.getInstalledPath(source, "project") !== undefined,
+  const project: string[] = [];
+  const user: string[] = [];
+  for (const source of sources) {
+    if (trusted && packages.getInstalledPath(source, "project"))
+      project.push(source);
+    else if (packages.getInstalledPath(source, "user")) user.push(source);
+    else onProblem(`${source} isn't installed; run pi install ${source}`);
+  }
+  const resolved = [
+    ...(project.length > 0
+      ? [await packages.resolveExtensionSources(project, { local: true })]
+      : []),
+    ...(user.length > 0 ? [await packages.resolveExtensionSources(user)] : []),
+  ];
+  return resolved.flatMap((paths) =>
+    paths.extensions
+      .filter((resource) => resource.enabled)
+      .map((resource) => resource.path),
   );
-  for (const source of sources)
-    if (!installed.includes(source))
-      onProblem(`${source} isn't installed; run pi install ${source}`);
-  if (installed.length === 0) return [];
-  const resolved = await packages.resolveExtensionSources([...installed]);
-  return resolved.extensions
-    .filter((resource) => resource.enabled)
-    .map((resource) => resource.path);
 }
 
 /**
@@ -114,11 +147,12 @@ async function extensionPaths(
 export function twinWanted(
   cwd: string,
   extensions: readonly string[],
+  trusted: boolean,
 ): boolean {
   return (
     extensions.length > 0 ||
     fs.existsSync(path.join(getAgentDir(), "mcp.json")) ||
-    fs.existsSync(path.join(cwd, ".pi", "mcp.json"))
+    (trusted && fs.existsSync(path.join(cwd, ".pi", "mcp.json")))
   );
 }
 
@@ -133,15 +167,20 @@ export class ToolTwin {
 
   /** Start the twin; its MCP servers connect in the background. */
   static async open(options: ToolTwinOptions): Promise<ToolTwin> {
-    const { cwd, onProblem } = options;
+    const { cwd, onProblem, trusted } = options;
     const agentDir = getAgentDir();
-    const settingsManager = SettingsManager.create(cwd, agentDir);
     const paths = await extensionPaths(
       cwd,
       agentDir,
-      settingsManager,
+      trusted,
       options.extensions,
       onProblem,
+    );
+    // No settings of its own: none of the user's packages to resolve, and
+    // the session's trust decides whether MCP reads the project's config.
+    const settingsManager = SettingsManager.inMemory(
+      {},
+      { projectTrusted: trusted },
     );
     const resourceLoader = new DefaultResourceLoader({
       cwd,
@@ -209,7 +248,9 @@ export class ToolTwin {
   /**
    * Run a tool as Pi would: its extensions' `tool_call` hooks first, which
    * wait until its MCP server is ready and may block the call, then the
-   * tool itself.
+   * tool, then the `tool_result` hooks, which may change its result. The
+   * hooks see the twin's context, which knows nothing of the call's
+   * cancellation, so the call stops waiting for them once it is aborted.
    */
   async call(
     name: string,
@@ -219,25 +260,68 @@ export class ToolTwin {
   ): Promise<TwinResult> {
     const runner = this.session.extensionRunner;
     const id = this.nextId();
-    const blocked = await runner.emitToolCall({
-      type: "tool_call",
-      toolName: name,
-      toolCallId: id,
-      input: args,
-    });
+    const blocked = await abortable(
+      runner.emitToolCall({
+        type: "tool_call",
+        toolName: name,
+        toolCallId: id,
+        input: args,
+      }),
+      signal,
+    );
     if (blocked?.block)
       throw new Error(blocked.reason ?? `The call of ${name} was blocked`);
+    signal?.throwIfAborted();
     // A server can reconnect meanwhile, which registers its tools again.
     const definition = this.session.getToolDefinition(name);
     if (!definition)
       throw new Error(`${name} isn't available: its server isn't connected`);
-    return definition.execute(
-      id,
-      args,
+    const context = runner.createToolContext(id, signal);
+    // The tool's `ctx.signal` is the call's, as in Pi.
+    Object.defineProperty(context, "signal", {
+      get: () => signal,
+      configurable: true,
+      enumerable: true,
+    });
+    let result: TwinResult;
+    try {
+      result = await definition.execute(id, args, signal, onUpdate, context);
+    } catch (error) {
+      signal?.throwIfAborted();
+      // Pi runs the result hooks on failures too.
+      result = {
+        content: [{ type: "text", text: message(error) }],
+        details: {},
+        isError: true,
+      };
+    }
+    if (!runner.hasHandlers("tool_result")) return result;
+    const hooked = await abortable(
+      runner.emitToolResult({
+        type: "tool_result",
+        toolName: name,
+        toolCallId: id,
+        input: args,
+        content: result.content,
+        details: result.details,
+        ...(result.structuredContent === undefined
+          ? {}
+          : { structuredContent: result.structuredContent }),
+        isError: result.isError === true,
+        usage: result.usage,
+      }),
       signal,
-      onUpdate,
-      runner.createToolContext(id, signal),
     );
+    if (!hooked) return result;
+    return {
+      content: hooked.content ?? result.content,
+      details: hooked.details,
+      ...(hooked.structuredContent === undefined
+        ? {}
+        : { structuredContent: hooked.structuredContent }),
+      ...(hooked.isError ? { isError: true } : {}),
+      ...(hooked.usage ? { usage: hooked.usage } : {}),
+    };
   }
 
   /** Close the twin's connections. */

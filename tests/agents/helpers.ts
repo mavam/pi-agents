@@ -307,6 +307,7 @@ export async function openService(
       ? {
           twin: {
             extensions: options.twinExtensions,
+            trusted: options.trusted ?? false,
             onProblem: options.onTwinProblem ?? (() => {}),
           },
         }

@@ -74,6 +74,8 @@ export async function createGraph(
     throw new AgentError(
       `A graph has ${GRAPH_SIZE.min} to ${GRAPH_SIZE.max} agents, not ${count}`,
     );
+  // New agents see the twin's tools as they are now.
+  deps.extensions.twin.sync();
   // Validate with the service's view first; the commit claims for real.
   const single = count === 1;
   const claim = (taken: Set<string>) => {
@@ -141,6 +143,8 @@ export async function createGraph(
       await configure(tx, conversation.id, {
         cwd: agent.cwd,
         ...capabilities(deps, node.tools, agent.spawn),
+        // As for helpers: tools the anchor loaded aren't the agent's.
+        modelTools: null,
         ...(agent.model ? { model: agent.model } : {}),
         ...(agent.thinking ? { thinkingLevel: agent.thinking } : {}),
         ...(agent.instructions ? { instructions: agent.instructions } : {}),
@@ -202,7 +206,10 @@ function capabilities(
     spawn: !!spawn,
     messaging: true,
   });
-  return { tools: toolFilter(deps.extensions.tools, tools), extensions };
+  return {
+    tools: toolFilter(deps.extensions.tools, tools, deps.extensions.twin),
+    extensions,
+  };
 }
 
 function resolveTools(

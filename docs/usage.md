@@ -50,8 +50,10 @@ several times in a row while an agent works, without the agent getting any
 further, the agent's work ends instead of resuming, so work that crashes Pi
 doesn't crash it again forever. A turn cut off this way, or a model request
 that Pi's crash interrupted with no retry left, fails the agent, and a
-notice says so. Its job, or Pi's message, stays open: open `/agents`, select
-the agent, and press `r` to continue it where it stopped, or `s` to stop it.
+notice says so. Its job, or Pi's message, stays open, and the agents it
+spawned keep working; their results wait until you continue it. Open
+`/agents`, select the agent, and press `r` to continue it where it stopped,
+or `s` to stop it.
 A tool call cut off this way fails instead, and the agent sees the error. A
 wait for the agent waits until it answers or its timeout ends. `r`
 continues any agent whose work ended without an answer, after an error or
@@ -70,11 +72,13 @@ profile or spawn specifies others.
 Every agent also gets the tools of your MCP servers and of the extensions
 you [share with agents](./configuration.md#extension-tools), such as
 Webfox's web search, whatever its tool allowlist says. MCP tools work as in
-Pi: unless a server declares them directly, agents call them from
-`codemode` scripts and find them with `searchTools()`, so give agents that
-need them `codemode`. Agents use the servers in your `mcp.json` with your
-sign-ins; servers that other extensions register stay with your session.
-Tools of extensions you don't share stay with your session too.
+Pi: unless a server declares them directly, agents with `codemode` call
+them from scripts and find them with `searchTools()`, and agents without it
+load the ones they need with `tool_search`. Agents use the servers in your
+`mcp.json` with your sign-ins; servers that other extensions register stay
+with your session. Tools of extensions you don't share stay with your
+session too. Agents started before you updated pi-agents keep the tools
+they had.
 
 `read` supports images. Codemode scripts can call the agent's other tools,
 except `agent_wait`, which the agent's model must call directly. Scripts get

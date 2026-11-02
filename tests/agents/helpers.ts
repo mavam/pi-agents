@@ -254,6 +254,9 @@ export interface HostOptions {
   /** Harness hooks on agents' tasks, such as their tools. */
   taskHooks?: readonly HookRegistration[];
   refreshDelayMs?: number;
+  /** Open a tool twin with these package sources' extensions. */
+  twinExtensions?: readonly string[];
+  onTwinProblem?: (problem: string) => void;
 }
 
 /** What a test host opened for a service: the harness and its anchor. */
@@ -300,6 +303,14 @@ export async function openService(
     extensions,
     lifecycle: { sessionId: "test-parent", hooks: options.hooks ?? [] },
     settings: options.settings,
+    ...(options.twinExtensions
+      ? {
+          twin: {
+            extensions: options.twinExtensions,
+            onProblem: options.onTwinProblem ?? (() => {}),
+          },
+        }
+      : {}),
   });
   const parent = options.parent ?? new TestParent();
   try {

@@ -8,13 +8,16 @@
  */
 
 import {
+  type AgentChange,
   defineExtension,
   type Extension,
   type HookRegistration,
   type Registry,
+  type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { createPromptExtension, type PromptOptions } from "../host/prompt.js";
 import { createToolsExtension } from "../host/tools.js";
+import { TwinTools } from "../host/twin-tools.js";
 import { WorkingAgents } from "../host/working.js";
 import { createGraphsExtension } from "./graphs.js";
 import { MessagingHub } from "./hub.js";
@@ -38,6 +41,9 @@ export interface AgentExtensions {
   spawning: Extension;
   /** `agent_send` and `agent_status`; every agent selects it. */
   messaging: Extension;
+  /** The tool twin's tools; every agent selects it with all of its tools.
+   * The host attaches the twin once it opened. */
+  twin: TwinTools;
   /** What the messaging tools share with the service. */
   hub: MessagingHub;
   /** The cap on agents that work at once; the host observes its harness
@@ -63,7 +69,8 @@ export interface AgentExtensionOptions {
 export function createAgentExtensions(
   options: AgentExtensionOptions,
 ): AgentExtensions {
-  const { extension, close } = createToolsExtension();
+  const twin = new TwinTools();
+  const { extension, close } = createToolsExtension(twin.namespaces);
   const working =
     options.maxWorkingAgents === undefined
       ? undefined
@@ -96,11 +103,14 @@ export function createAgentExtensions(
         prompt,
         ...(spawn && spawning ? [spawning] : []),
         messaging,
+        twin.extension,
       ],
       tools: [
         ...(spawn ? (spawning?.tools ?? []) : []),
         ...(messaging.tools ?? []),
       ],
+      always: twin.names(),
+      filter: (own) => toolFilter(tools, own),
     }),
   });
   spawning = defineExtension({
@@ -113,9 +123,25 @@ export function createAgentExtensions(
     graphs: createGraphsExtension(),
     spawning,
     messaging,
+    twin,
     hub,
     ...(working ? { working } : {}),
     close,
+  };
+}
+
+/**
+ * The tool filter of an agent whose own tools are `own`: every tool of the
+ * extensions it selects but the agent tools it lacks. The tool twin's
+ * tools change as servers connect, so a filter that removes keeps them all.
+ */
+export function toolFilter(
+  tools: Extension,
+  own: readonly ToolRegistration[],
+): AgentChange["tools"] {
+  const names = new Set(own.map((tool) => tool.name));
+  return {
+    remove: (tools.tools ?? []).filter((tool) => !names.has(tool.name)),
   };
 }
 
@@ -129,6 +155,7 @@ export function installAgentExtensions(
     extensions.graphs,
     extensions.spawning,
     extensions.messaging,
+    extensions.twin.extension,
   ])
     registry.install(extension);
 }
@@ -146,5 +173,6 @@ export function agentSelection(
     extensions.prompt,
     ...(options.spawn ? [extensions.spawning] : []),
     ...(options.messaging ? [extensions.messaging] : []),
+    extensions.twin.extension,
   ];
 }

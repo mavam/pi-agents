@@ -193,6 +193,24 @@ conversation cache. An agent that waits for its agents yields its slot so
 the cap cannot prevent them from running; an agent that ends its turn
 instead holds no slot anyway.
 
+## Tools from Pi
+
+Agents get the tools of Pi's MCP servers and of extensions the user shares.
+Pi runs those tools only in its own sessions and has no durable version of
+them, so pi-agents runs a tool twin: a headless Pi session in the same
+process that loads Pi's own MCP support and the shared extensions, and
+whose tools agents call. Running Pi's code in a real Pi session keeps the
+tools as Pi has them, with no copy of Pi's MCP to maintain. The twin is
+meant to go: once Pi offers durable versions of these tools, agents use
+those instead.
+
+The twin is separate from the user's session: it connects to the servers
+again and never shares the user's conversation, UI, or session-only
+changes. Every agent gets all of its tools: choosing among them would be
+policy, and an allowlist that named them would break as servers connect and
+change. A call to an external system isn't replayed
+after a crash unless its author marks it as read-only or idempotent.
+
 ## Model requests
 
 Agents share the parent's models, so logins and providers that extensions
@@ -257,5 +275,5 @@ contexts as markers, like Pi's own transcript.
 - Crash-idempotent spawning by the parent Pi. An agent's own durable spawn
   can recover its group, but retrying a parent spawn isn't guaranteed to
   reuse a group created before a crash.
-- MCP, extension tools, forking agents, a daemon or CLI, agents shared
-  across sessions, and model changes for running agents.
+- Forking agents, a daemon or CLI, agents shared across sessions, and model
+  changes for running agents.

@@ -1,6 +1,7 @@
 /** Create the parent's graphs atomically, after validating jobs, tools, and names. */
 
 import {
+  type AgentChange,
   type Conversation,
   configure,
   type Extension,
@@ -14,7 +15,11 @@ import {
   withCodemodeModels,
 } from "../host/tools.js";
 import { CONTEXT } from "./context.js";
-import { type AgentExtensions, agentSelection } from "./extensions.js";
+import {
+  type AgentExtensions,
+  agentSelection,
+  toolFilter,
+} from "./extensions.js";
 import { GraphTask, NodeTask } from "./graphs.js";
 import { claimName, NAME_BASE_LENGTH, takenNames } from "./names.js";
 import { AgentsDoc, GraphsDoc } from "./records.js";
@@ -191,16 +196,13 @@ function capabilities(
   deps: CreationDeps,
   tools: ToolRegistration[],
   spawn: boolean | undefined,
-): { tools: ToolRegistration[]; extensions: Extension[] } {
+): { tools: AgentChange["tools"]; extensions: Extension[] } {
+  // The tools of the spawning and messaging extensions come with them.
   const extensions = agentSelection(deps.extensions, {
     spawn: !!spawn,
     messaging: true,
   });
-  const extra = [
-    ...(spawn ? (deps.extensions.spawning.tools ?? []) : []),
-    ...(deps.extensions.messaging.tools ?? []),
-  ];
-  return { tools: [...tools, ...extra], extensions };
+  return { tools: toolFilter(deps.extensions.tools, tools), extensions };
 }
 
 function resolveTools(
@@ -210,7 +212,11 @@ function resolveTools(
   const all = deps.extensions.tools.tools ?? [];
   // Agents get the internal tools of codemode with it, never by name.
   const available = all.filter((tool) => !isCodemodeModelTool(tool.name));
-  const wanted = names ?? [...DEFAULT_AGENT_TOOLS];
+  // Every agent gets the tool twin's tools, named or not.
+  const twin = new Set(deps.extensions.twin.names());
+  const wanted = (names ?? [...DEFAULT_AGENT_TOOLS]).filter(
+    (name) => !twin.has(name),
+  );
   const unknown = wanted.filter(
     (name) => !available.some((tool) => tool.name === name),
   );

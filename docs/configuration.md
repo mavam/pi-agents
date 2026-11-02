@@ -37,7 +37,9 @@ under `piAgents.twinExtensions`, as package sources like those in Pi's
 ```
 
 Agents reach these tools through a tool twin: a second, headless Pi session
-that pi-agents runs alongside yours. It loads only Pi's MCP support and the
+that pi-agents runs alongside yours, since Pi runs these tools only in a Pi
+session and offers no way to call yours from the background
+([why](./design.md#tools-from-pi)). It loads only Pi's MCP support and the
 listed packages, which must be installed in Pi, and uses your `mcp.json`
 files and MCP sign-ins. As in Pi, a project's `.pi/mcp.json`, its
 `piAgents` settings, and packages installed in it count only when you trust

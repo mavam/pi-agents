@@ -12,14 +12,7 @@ import type {
   TaskOutcome,
 } from "@earendil-works/pi-durable";
 import { CONTEXT, taskId } from "./context.js";
-import {
-  ASSISTANT_KIND,
-  type EndedTurn,
-  endedTurnOf,
-  GENERATION_KIND,
-  settlementOf,
-  type TurnSettlement,
-} from "./derive.js";
+import { ASSISTANT_KIND, GENERATION_KIND } from "./derive.js";
 import { GRAPH_TASK, NODE_TASK } from "./graphs.js";
 import { isMessageRequest } from "./message-log.js";
 import {
@@ -48,9 +41,6 @@ interface HarnessObserverOptions {
 export class HarnessObserver {
   private readonly lastAssistant = new Map<string, EntryRecord>();
   private readonly activityAt = new Map<string, number>();
-  private readonly settlements = new Map<string, TurnSettlement>();
-  /** Per agent, the latest turn when it ended without an answer. */
-  private readonly endedTurns = new Map<string, EndedTurn>();
   /** Per agent, its latest generation task and when it ended, which is when
    * the agent's latest run ended; null when it never ran. */
   private readonly generations = new Map<
@@ -79,9 +69,11 @@ export class HarnessObserver {
   }
 
   start(): void {
-    this.unsubscribe = this.options.harness.subscribeCommits((publication) =>
-      this.onCommit(publication),
-    );
+    const observation = this.options.harness.observeCommits({
+      advance: (publication) => this.onCommit(publication),
+      end: () => {},
+    });
+    this.unsubscribe = () => observation.detach();
   }
 
   stop(): void {
@@ -115,21 +107,11 @@ export class HarnessObserver {
     return this.activityAt.get(id);
   }
 
-  settlementOf(id: string): TurnSettlement | undefined {
-    return this.settlements.get(id);
-  }
-
-  endedTurnOf(id: string): EndedTurn | undefined {
-    return this.endedTurns.get(id);
-  }
-
   /** Commit listener: record what changed. Must not call Session APIs. */
   private onCommit(publication: CommitPublication): void {
     const now = Date.now();
     let records = false;
     let graphs = false;
-    // Turns this commit ended, which may settle several inputs of one run.
-    const ended = new Map<string, EndedTurn>();
     for (const change of publication.changes) {
       if (change.type === "document") {
         if (change.record.kind === AgentsDoc.definition.kind) records = true;
@@ -148,14 +130,6 @@ export class HarnessObserver {
         const id = String(change.value.conversationId);
         if (isMessageRequest(change.value.requestId))
           this.options.onMessage(change.value);
-        const settlement = settlementOf(change.value);
-        if (settlement) this.settlements.set(id, settlement);
-        const turn = endedTurnOf(change.value, ended.get(id));
-        if (turn) ended.set(id, turn);
-        else if (settlement === "answered") {
-          ended.delete(id);
-          this.endedTurns.delete(id);
-        }
         this.touch(id, now);
       } else if (change.type === "task") {
         if (change.value.kind === GENERATION_KIND) {
@@ -181,7 +155,6 @@ export class HarnessObserver {
         }
       }
     }
-    for (const [id, turn] of ended) this.endedTurns.set(id, turn);
     if (records) for (const id of this.options.agentIds()) this.dirty.add(id);
     if (
       records ||

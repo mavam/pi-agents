@@ -3,7 +3,7 @@
  * agent_status, and agent_stop.
  */
 
-import { type JsonValue, StringEnum } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/pi-ai";
 import type {
   AgentToolUpdateCallback,
   ExtensionAPI,
@@ -27,13 +27,13 @@ import {
   GRAPH_SIZE,
   type GraphInfo,
   messageMode,
-  type Stall,
   type Target,
   type TargetRef,
   THINKING_LEVELS,
   WaitInterrupted,
 } from "../agents/types.js";
 import { AGENT_TOOL_NAMES } from "../host/tools.js";
+import { StringEnum } from "../schema.js";
 import { graphShape, oneLine } from "../ui/format.js";
 import { PARENT_TOOL_VIEWS, positiveSeconds } from "../ui/tool-views.js";
 import {
@@ -132,11 +132,9 @@ function describeGraph(service: AgentService, graph: GraphInfo): string {
 }
 
 /** Why a working agent or graph doesn't progress, for the model. */
-function stallText(info: { state: string; stalled?: Stall }): string {
+function stallText(info: { state: string; stalled?: true }): string {
   if (info.state !== "working" || !info.stalled) return "";
-  return info.stalled === "crashed"
-    ? ", stalled after repeated crashes until the user retries it in /agents"
-    : ", stalled because this pi-agents version can't run its work";
+  return ", stalled because this pi-agents version can't run its work";
 }
 
 function statusLine(service: AgentService, info: AgentInfo): string {

@@ -7,13 +7,13 @@
 import { GENERATION_KIND } from "./derive.js";
 import { GRAPH_TASK, NODE_TASK } from "./graphs.js";
 
-/** A harness report as plain data; see pi-durable's `ReportInfo`. */
+/** A harness report as plain data; see pi-durable's `Report`. */
 export interface HarnessReport {
   error: unknown;
-  type:
-    | "session_failed"
+  kind:
+    | "storage_failed"
     | "task_faulted"
-    | "task_parked"
+    | "task_interrupted"
     | "migration_failed"
     | "task_outdated"
     | "task_error"
@@ -42,6 +42,33 @@ function errorText(error: unknown): string {
 }
 
 /**
+ * What crashes cut off: Pi stopped too often while the work ran
+ * (`restart_limit`), or while the model answered with no retry left
+ * (`interrupted`). A turn ends its run, which the user can continue; a
+ * tool call ends with an error the agent sees, and a compaction fails.
+ */
+function interruptedText(
+  who: string,
+  kind: string | undefined,
+  reason: string | undefined,
+): string {
+  const cause =
+    reason === "interrupted"
+      ? "Pi stopped while the model answered"
+      : "Pi crashed or was killed repeatedly";
+  switch (kind) {
+    case GENERATION_KIND:
+      return `${who} failed: ${cause}. Continue it with r in /agents.`;
+    case "pi.tool":
+      return `${who}: ${cause} while a tool call ran, so the call failed`;
+    case "pi.compaction":
+      return `${who}: ${cause} while it compacted, so the compaction failed`;
+    default:
+      return `${who}: ${cause} while its ${kind ? (TASK_LABELS[kind] ?? kind) : "work"} ran, so it failed`;
+  }
+}
+
+/**
  * The report's text, or undefined when another notice covers it: a failed
  * session reports once, through the host's recovery. `subject` names the
  * agent or graph of a conversation or task, such as `Agent api`.
@@ -64,14 +91,14 @@ export function describeReport(
     }) ?? "An agent";
   const what = task ? (TASK_LABELS[task.kind] ?? task.kind) : "work";
   const extension = report.extension ? ` (${report.extension})` : "";
-  switch (report.type) {
-    case "session_failed":
+  switch (report.kind) {
+    case "storage_failed":
       return undefined;
-    case "task_parked":
-      return `${who} stalled: Pi crashed or was killed repeatedly while its ${what} ran. Retry it with r in /agents, or stop it.`;
+    case "task_interrupted":
+      return interruptedText(who, task?.kind, report.reason);
     case "task_faulted":
       return report.reason === "restart_limit"
-        ? `${who}: stopping its ${what} was cut off by crashes too often, so it failed`
+        ? `${who}: Pi crashed or was killed repeatedly while its ${what} ran, so it failed`
         : `${who}: its ${what}${extension} failed: ${error}`;
     case "migration_failed":
     case "task_outdated":

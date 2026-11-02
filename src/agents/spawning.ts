@@ -28,7 +28,6 @@ import {
   awaitWithContext,
   withAbortSignal,
 } from "@earendil-works/chord/context";
-import { StringEnum } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
   configure,
@@ -42,6 +41,7 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { type Static, Type } from "typebox";
+import { StringEnum } from "../schema.js";
 import { GraphTask, NodeTask } from "./graphs.js";
 import type { MessagingHub } from "./hub.js";
 import { UNBOUNDED_OUTPUT } from "./messaging.js";
@@ -317,6 +317,7 @@ async function start(
         model: spec.model ?? null,
         thinkingLevel: spec.thinking ?? null,
         instructions: spec.instructions ?? null,
+        maxTurns: spec.maxTurns ?? null,
       });
       agents.push(String(conversation.id));
       tasks.push(task);

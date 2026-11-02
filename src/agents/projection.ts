@@ -18,6 +18,7 @@ import {
   deriveGraphState,
   deriveState,
   resultOf,
+  runFailureOf,
   summarizeUsage,
   sumUsage,
 } from "./derive.js";
@@ -32,7 +33,7 @@ import {
   graphDeliveryId,
 } from "./records.js";
 import { SPAWNING_TOOLS, WAIT_TOOL } from "./spawning.js";
-import { type StalledTask, stallOf, type TaskStalls } from "./stalls.js";
+import type { StalledTask, TaskStalls } from "./stalls.js";
 import type { AgentStore } from "./store.js";
 import { endNodes, stages } from "./topology.js";
 import {
@@ -44,13 +45,11 @@ import {
   isThinkingLevel,
   type NodeOutcome,
   type RequestOutcome,
-  type Stall,
 } from "./types.js";
 
 /** A `stalled` field for an info, when its tasks stalled. */
-function stalledField(tasks: readonly StalledTask[]): { stalled?: Stall } {
-  const stall = stallOf(tasks);
-  return stall ? { stalled: stall } : {};
+function stalledField(tasks: readonly StalledTask[]): { stalled?: true } {
+  return tasks.length > 0 ? { stalled: true } : {};
 }
 
 /** The graph ended and every agent's job has an outcome. */
@@ -300,10 +299,14 @@ export class Projection {
     const jobAnswer = await this.jobAnswer(id, record);
     const state =
       (live?.run === undefined
-        ? await this.nodeState(id, record, result)
-        : undefined) ??
-      deriveState(live, result, this.observer.settlementOf(id));
-    const ended = this.observer.endedTurnOf(id);
+        ? await this.nodeState(
+            id,
+            record,
+            result,
+            live?.runFailure !== undefined,
+          )
+        : undefined) ?? deriveState(live, result);
+    const failure = runFailureOf(live);
     const previous = this.agentInfos.get(id);
     const now = Date.now();
     const endedAt =
@@ -353,15 +356,17 @@ export class Projection {
         ? { compactionFailure: live.compactionFailure.error }
         : {}),
       ...(result ? { result } : {}),
-      ...(ended && (state === "interrupted" || state === "failed")
+      ...(failure && (state === "interrupted" || state === "failed")
         ? {
             unanswered: {
-              reason: ended.reason,
-              ...(ended.detail !== undefined ? { detail: ended.detail } : {}),
+              reason: failure.reason,
+              ...(failure.detail !== undefined
+                ? { detail: failure.detail }
+                : {}),
               current:
                 result !== undefined &&
-                ended.since !== undefined &&
-                result.entryId > ended.since,
+                failure.first !== undefined &&
+                result.entryId > failure.first,
             },
           }
         : {}),
@@ -415,6 +420,8 @@ export class Projection {
     agentId: string,
     record: AgentRecord,
     result: AgentResult | undefined,
+    /** Whether a run of the agent ended without an answer. */
+    ran: boolean,
   ): Promise<AgentInfo["state"] | undefined> {
     const graph = this.graphRecords[record.graph];
     const node = graph?.nodes.find((each) => each.agent === agentId);
@@ -428,7 +435,7 @@ export class Projection {
       }
       // Once the agent ran, its job waits for an answer that settles it,
       // and the conversation tells how the agent is.
-      if (result || this.observer.settlementOf(agentId)) return undefined;
+      if (result || ran) return undefined;
       return "working";
     }
     if (result) return undefined;

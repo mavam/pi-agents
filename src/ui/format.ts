@@ -11,7 +11,6 @@ import {
   type AgentUsage,
   formatModelRef,
   type GraphInfo,
-  type Stall,
 } from "../agents/types.js";
 
 export type Colorize = (
@@ -93,10 +92,7 @@ export function statusCounts(
 export const WAIT_ENDED_STYLE = { icon: "⊠", color: "warning" } as const;
 
 /** What a stalled agent or graph says about its work. */
-export const STALL_NOTES: Record<Stall, string> = {
-  crashed: "stalled after repeated crashes",
-  incompatible: "stalled: needs another pi-agents version",
-};
+export const STALL_NOTE = "stalled: needs another pi-agents version";
 
 /** The note on agents whose latest compaction failed. */
 export const COMPACTION_FAILED = "compaction failed";
@@ -201,7 +197,7 @@ export function shortModel(info: Pick<AgentInfo, "model">): string {
 /** What the agent is doing right now, for working agents. */
 function activityText(info: AgentInfo, now: number): string | undefined {
   if (info.state !== "working") return undefined;
-  if (info.stalled) return STALL_NOTES[info.stalled];
+  if (info.stalled) return STALL_NOTE;
   const silent = now - info.lastActivityAt;
   if (silent >= STALL_AFTER_MS)
     return `no activity for ${formatElapsed(silent)}`;
@@ -324,7 +320,7 @@ export function formatGraphLine(
     usage ? color("dim", usage) : undefined,
     note ? color(graph.state === "failed" ? "error" : "dim", note) : undefined,
     graph.stalled && graph.state === "working"
-      ? color("warning", STALL_NOTES[graph.stalled])
+      ? color("warning", STALL_NOTE)
       : undefined,
     graph.queued ? color("dim", QUEUED_NOTE) : undefined,
   ]

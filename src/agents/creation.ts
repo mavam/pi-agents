@@ -139,6 +139,7 @@ export async function createGraph(
         ...(agent.model ? { model: agent.model } : {}),
         ...(agent.thinking ? { thinkingLevel: agent.thinking } : {}),
         ...(agent.instructions ? { instructions: agent.instructions } : {}),
+        maxTurns: agent.maxTurns ?? null,
       });
       agents.push(String(conversation.id));
       tasks.push(task);

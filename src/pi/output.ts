@@ -4,7 +4,6 @@
  * its output schema into a declaration. The model still reads the text.
  */
 
-import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, type TProperties, Type } from "typebox";
 import { NODE_KINDS, turnResult } from "../agents/report.js";
 import {
@@ -13,6 +12,7 @@ import {
   type GraphInfo,
   type Target,
 } from "../agents/types.js";
+import { StringEnum } from "../schema.js";
 import { nodeDetails } from "./messages.js";
 
 /** An object with exactly these fields. */
@@ -33,9 +33,8 @@ const resultFields = {
 
 const stalledField = {
   stalled: Type.Optional(
-    StringEnum(["crashed", "incompatible"] as const, {
-      description:
-        "Its work doesn't run: crashes cut it off repeatedly and the user can retry it, or this pi-agents version can't run it",
+    Type.Literal(true, {
+      description: "Its work doesn't run: this pi-agents version can't run it",
     }),
   ),
 };

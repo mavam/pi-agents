@@ -4,7 +4,31 @@
  * helpers. Pure functions over plain data.
  */
 
-import type { AgentInfo, AgentState, GraphNode } from "./types.js";
+import type {
+  AgentInfo,
+  AgentState,
+  GraphNode,
+  UnansweredTurn,
+} from "./types.js";
+
+/** Why a turn ended without an answer, in words; the reason code when
+ * there are none. */
+export function failureText(turn: Omit<UnansweredTurn, "current">): string {
+  switch (turn.reason) {
+    case "interrupted":
+      return "Pi stopped while the model answered, with no retry left";
+    case "restart_limit":
+      return "Pi crashed or was killed repeatedly while it worked";
+    case "turn_limit":
+      return `It reached its turn limit after ${turn.detail ?? "its turns"}`;
+    case "orphaned":
+      return "This version of pi-agents can't run its work";
+    case "reset":
+      return "Its conversation was reset";
+    default:
+      return turn.detail ?? turn.reason;
+  }
+}
 
 /**
  * What an agent's latest turn produced: its answer, what it wrote before it
@@ -26,8 +50,7 @@ export function turnResult(info: AgentInfo): {
       return {
         error:
           own?.errorMessage ??
-          ended?.detail ??
-          (own?.text || ended?.reason || "unknown"),
+          (ended ? failureText(ended) : own?.text || "unknown"),
       };
     default:
       return {};

@@ -7,6 +7,8 @@ import type {
   Cursor,
   EntryRecord,
   Harness,
+  InputSubmissionDraft,
+  SubmissionDraft,
   SubmissionId,
   SubmissionRecord,
   TaskId,
@@ -77,8 +79,8 @@ async function fence(tx: Tx, roots: string[]): Promise<string[]> {
 }
 
 /** Why a run's inputs end unanswered when the run failed, rather than
- * being interrupted, reset, or superseded. */
-const FAILURES = new Set(["model_error", "no_model"]);
+ * being interrupted, cut off by crashes, reset, or superseded. */
+const FAILURES = new Set(["model_error", "no_model", "turn_limit"]);
 
 /** The agent's first entry from `from` on that presented the group;
  * inside a commit. */
@@ -131,6 +133,19 @@ async function answeredSince(
     if (page.next === undefined) return false;
     cursor = page.next;
   }
+}
+
+/** The submission of a parent request. */
+function requestSubmission(
+  rid: string,
+  request: ParentRequest,
+): InputSubmissionDraft {
+  return {
+    type: "input",
+    content: request.message,
+    whenBusy: request.whenBusy,
+    requestId: rid,
+  };
 }
 
 /** Record a parent request, reopening the agent; inside a commit. */
@@ -186,18 +201,11 @@ export class AgentStore {
       CONTEXT,
     );
     if (!conversation) throw new AgentError(`Agent ${agentId} is missing`);
-    await conversation.submit(
-      {
-        type: "input",
-        content: request.message,
-        whenBusy: request.whenBusy,
-        requestId: rid,
-      },
-      CONTEXT,
-    );
+    await conversation.submit(requestSubmission(rid, request), CONTEXT);
   }
 
-  /** Outbox: submit recorded parent requests that lack their submission. */
+  /** Outbox: submit recorded parent requests that lack their submission,
+   * which versions that recorded and submitted them apart could leave. */
   async flushOutbox(agentId: string): Promise<void> {
     const state = await this.harness.snapshot(AgentsDoc, CONTEXT);
     const record = state?.agents[agentId];
@@ -364,10 +372,10 @@ export class AgentStore {
     }, CONTEXT);
   }
 
-  /** Whether the run that settled `record` failed: it ended without an
-   * answer, or with an error for one. */
+  /** Whether the run that settled `record`, an input or a continue,
+   * failed: it ended without an answer, or with an error for one. */
   private async failed(record: SubmissionRecord | undefined): Promise<boolean> {
-    if (record?.type !== "input") return false;
+    if (record === undefined || record.type === "write") return false;
     if (record.status === "unanswered") return FAILURES.has(record.reason);
     if (record.status !== "done") return false;
     const answer = (await this.entry(record.answer))?.model?.[0];
@@ -399,11 +407,13 @@ export class AgentStore {
 
   /**
    * Reserve the next attempt to hand a group's result to its owner, unless
-   * a live `agent_wait` call holds it. Returns the attempt.
+   * a live `agent_wait` call holds it, and `submit` its input in the same
+   * commit. Returns the attempt.
    */
   async reserveAttempt(
     graphId: string,
     attempt: number,
+    submit: (tx: Tx) => Promise<unknown>,
   ): Promise<number | undefined> {
     return this.harness.commit(async (tx) => {
       const graph = (await tx.doc(GraphsDoc)).graphs[graphId];
@@ -439,6 +449,8 @@ export class AgentStore {
         }
         delete graph.claim;
       }
+      // Admission comes before the commit's first table write.
+      await submit(tx);
       graph.attempt = attempt;
       delete graph.withdrawn;
       return attempt;
@@ -478,10 +490,29 @@ export class AgentStore {
     return Number(page.items[0]?.id ?? 0);
   }
 
-  async clearStopped(agentId: string): Promise<void> {
+  /**
+   * Submit the user's input or a continue to the agent, reopening it if
+   * it was stopped, in one commit. Refused while its graph still waits for
+   * the agents its job needs: input would start it without its job.
+   */
+  async submitInput(
+    agentId: string,
+    name: string,
+    draft: SubmissionDraft,
+  ): Promise<void> {
+    const conversation = await this.harness.conversation(
+      conversationId(agentId),
+      CONTEXT,
+    );
+    if (!conversation) throw new AgentError(`Agent ${name} is missing`);
     await this.harness.commit(async (tx) => {
       const record = (await tx.doc(AgentsDoc)).agents[agentId];
-      if (record) delete record.stopped;
+      if (record && (await awaitsJob(tx, agentId, record)))
+        throw new AgentError(
+          `${name} waits for the agents its job needs and hasn't started yet`,
+        );
+      await conversation.submit(tx, draft);
+      if (record?.stopped) delete record.stopped;
     }, CONTEXT);
   }
 
@@ -503,27 +534,27 @@ export class AgentStore {
     }, CONTEXT);
   }
 
-  async addRequest(
+  /**
+   * Record a parent request and submit it in one commit. An interrupting
+   * request also records the interrupt's watermark: the parent just
+   * aborted the agent to send it. Returns the request ID.
+   */
+  async request(
     agentId: string,
     name: string,
     request: ParentRequest,
+    interrupting = false,
   ): Promise<string> {
-    return this.harness.commit(
-      (tx) => addRequest(tx, agentId, name, request),
+    const conversation = await this.harness.conversation(
+      conversationId(agentId),
       CONTEXT,
     );
-  }
-
-  /** The parent interrupted the agent, which it just aborted, to send it a
-   * request: the interrupt's watermark and the request in one commit. */
-  async addInterruptingRequest(
-    agentId: string,
-    name: string,
-    request: ParentRequest,
-  ): Promise<string> {
+    if (!conversation) throw new AgentError(`Agent ${name} is missing`);
     return this.harness.commit(async (tx) => {
-      await markInterrupted(tx, agentId);
-      return addRequest(tx, agentId, name, request);
+      if (interrupting) await markInterrupted(tx, agentId);
+      const rid = await addRequest(tx, agentId, name, request);
+      await conversation.submit(tx, requestSubmission(rid, request));
+      return rid;
     }, CONTEXT);
   }
 

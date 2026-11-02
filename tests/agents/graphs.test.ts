@@ -292,8 +292,8 @@ describe("graphs", () => {
     expect(service.get("g-1")?.closed).toBe(true);
 
     const view = await service.view("g-1");
-    expect(view.value).toBeDefined();
-    view.dispose();
+    expect(view.watch.value.entries.length).toBeGreaterThan(0);
+    await view.watch.stop();
 
     // A graph's agent knows its job's answer, too.
     const answered = service.getGraph("g")?.nodes[0]?.outcome;

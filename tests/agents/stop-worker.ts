@@ -55,17 +55,20 @@ await until(() =>
   ),
 );
 let stopping = false;
-hostOf(service).harness.harness.subscribeCommits((publication) => {
-  if (
-    stopping &&
-    publication.changes.some(
-      (change) =>
-        change.type === "document" &&
-        (change.record.kind === "pi-agents.agents" ||
-          change.record.kind === "pi-agents.graphs"),
+hostOf(service).harness.harness.observeCommits({
+  advance: (publication) => {
+    if (
+      stopping &&
+      publication.changes.some(
+        (change) =>
+          change.type === "document" &&
+          (change.record.kind === "pi-agents.agents" ||
+            change.record.kind === "pi-agents.graphs"),
+      )
     )
-  )
-    process.exit(0);
+      process.exit(0);
+  },
+  end: () => {},
 });
 stopping = true;
 await service.stop("victim");

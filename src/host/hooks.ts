@@ -199,10 +199,14 @@ export class AgentRequestHooks {
   async start(harness: Harness): Promise<void> {
     const pending: CommitPublication[] = [];
     let bootstrapping = true;
-    this.unsubscribe = harness.subscribeCommits((publication) => {
-      if (bootstrapping) pending.push(publication);
-      else this.adopt(publication);
+    const observation = harness.observeCommits({
+      advance: (publication) => {
+        if (bootstrapping) pending.push(publication);
+        else this.adopt(publication);
+      },
+      end: () => {},
     });
+    this.unsubscribe = () => observation.detach();
     this.agents =
       (await harness.snapshot(AgentsDoc, BACKGROUND_CONTEXT))?.agents ?? {};
     const providers = await Promise.all(
@@ -228,8 +232,9 @@ export class AgentRequestHooks {
     // Both halves of the join are updated before any later request can run.
     for (const change of publication.changes) {
       if (change.type !== "document") continue;
+      const value = change.kind === "change" ? change.value : undefined;
       if (change.record.kind === AgentsDoc.definition.kind)
-        this.agents = (change.value as AgentsState | null)?.agents ?? {};
+        this.agents = (value as AgentsState | undefined)?.agents ?? {};
       else if (
         change.record.kind === ProviderDoc.definition.kind &&
         change.conversationId !== undefined
@@ -238,8 +243,8 @@ export class AgentRequestHooks {
         for (const [key, owner] of this.identities) {
           if (owner === id) this.identities.delete(key);
         }
-        if (typeof change.value?.sessionId === "string")
-          this.identities.set(change.value.sessionId, id);
+        if (typeof value?.sessionId === "string")
+          this.identities.set(value.sessionId, id);
       }
     }
   }

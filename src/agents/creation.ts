@@ -18,7 +18,6 @@ import { CONTEXT } from "./context.js";
 import {
   type AgentExtensions,
   agentSelection,
-  searchesTools,
   toolFilter,
 } from "./extensions.js";
 import { GraphTask, NodeTask } from "./graphs.js";
@@ -142,6 +141,8 @@ export async function createGraph(
       await configure(tx, conversation.id, {
         cwd: agent.cwd,
         ...capabilities(deps, node.tools, agent.spawn),
+        // As for helpers: tools the anchor loaded aren't the agent's.
+        modelTools: null,
         ...(agent.model ? { model: agent.model } : {}),
         ...(agent.thinking ? { thinkingLevel: agent.thinking } : {}),
         ...(agent.instructions ? { instructions: agent.instructions } : {}),
@@ -202,9 +203,11 @@ function capabilities(
   const extensions = agentSelection(deps.extensions, {
     spawn: !!spawn,
     messaging: true,
-    toolSearch: searchesTools(tools, deps.extensions.twin),
   });
-  return { tools: toolFilter(deps.extensions.tools, tools), extensions };
+  return {
+    tools: toolFilter(deps.extensions.tools, tools, deps.extensions.twin),
+    extensions,
+  };
 }
 
 function resolveTools(

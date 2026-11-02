@@ -22,7 +22,10 @@ import {
 } from "@earendil-works/pi-durable";
 import type { CodemodeNamespace } from "@earendil-works/pi-durable/codemode";
 import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
-import { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
+import {
+  createToolSearchTool,
+  TOOL_SEARCH_TOOL_NAME,
+} from "@earendil-works/pi-durable/tool-search";
 import type { TSchema } from "typebox";
 import type { ToolTwin, TwinResult, TwinTool } from "./twin.js";
 
@@ -151,6 +154,12 @@ export class TwinTools {
   /** Codemode's namespaces, which the tools extension reads at each use. */
   readonly namespaces: CodemodeNamespace[] = [];
   private current: Extension = defineExtension({ name: TWIN_EXTENSION });
+  /**
+   * `tool_search`, which loads the twin's tools that only scripts reach,
+   * for agents without `codemode`, as Pi offers MCP tools either way. It
+   * comes with those tools, also to agents created before they connected.
+   */
+  readonly search: ToolRegistration = createToolSearchTool();
   private signature = "";
   private registry: Registry | undefined;
   private twin: ToolTwin | undefined;
@@ -158,12 +167,6 @@ export class TwinTools {
   /** The extension as installed now. */
   get extension(): Extension {
     return this.current;
-  }
-
-  /** Whether the twin has tools only codemode scripts or `tool_search`
-   * reach. */
-  hasDeferred(): boolean {
-    return (this.current.tools ?? []).some((tool) => tool.deferred === true);
   }
 
   /** The names of the twin's tools, which agents always get. */
@@ -210,9 +213,10 @@ export class TwinTools {
       ...codemodeNamespaces(tools),
     );
     const listing = namespacesSection(tools);
+    const deferred = proxies.some((tool) => tool.deferred === true);
     this.current = defineExtension({
       name: TWIN_EXTENSION,
-      tools: proxies,
+      tools: [...proxies, ...(deferred ? [this.search] : [])],
       sections: listing
         ? [
             section("tool_namespaces", (input) => {

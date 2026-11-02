@@ -51,6 +51,7 @@ export default function (pi) {
     description: "Ping the twin",
     parameters: Type.Object({}),
     exposure: "codemode",
+    namespace: { name: "twin", description: "The twin's tools" },
     async execute() {
       return { content: [{ type: "text", text: "pong" }], details: {} };
     },
@@ -109,8 +110,15 @@ test("agents without codemode load the twin's script tools with tool_search", as
   const models = createModels();
   models.setProvider(faux.provider);
   // Searches, calls what it loaded, then answers with its result.
+  const prompts: string[] = [];
   faux.setResponses(
     Array.from({ length: 4 }, () => (context) => {
+      // System messages, with their sections.
+      prompts.push(
+        JSON.stringify(
+          context.messages.filter((message) => message.role === "system"),
+        ),
+      );
       const last = context.messages.at(-1);
       if (last?.role !== "toolResult")
         return fauxAssistantMessage(
@@ -140,4 +148,7 @@ test("agents without codemode load the twin's script tools with tool_search", as
   });
   await service.wait(["a"]);
   expect(service.get("a")?.result?.text).toBe("pong");
+  // The prompt names the namespace and how to reach its tools.
+  expect(prompts[0]).toContain("Load their tools with `tool_search`");
+  expect(prompts[0]).toContain("- twin: The twin's tools");
 });

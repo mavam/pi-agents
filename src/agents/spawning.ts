@@ -90,11 +90,8 @@ export const SPAWNING_TOOLS = [SPAWN_TOOL, WAIT_TOOL, STOP_TOOL] as const;
 
 type Api = ToolExecutionApi;
 
-/** What a new agent selects, by whether it may spawn and its own tools. */
-export type Selection = (
-  spawn: boolean,
-  own?: readonly ToolRegistration[],
-) => {
+/** What a new agent selects, by whether it may spawn. */
+export type Selection = (spawn: boolean) => {
   extensions: readonly Extension[];
   /** The tools of the extensions besides its own tools. */
   tools: readonly ToolRegistration[];
@@ -316,7 +313,7 @@ async function start(
         ownership: { kind: "task", taskId: task },
       });
       const { spec } = helper;
-      const extra = options.selection(spec.spawn === true, helper.tools);
+      const extra = options.selection(spec.spawn === true);
       // Everything explicit: the copy of the spawning agent's settings must
       // not reach the new agent.
       await configure(tx, conversation.id, {

@@ -1,6 +1,6 @@
 # Graphs
 
-Every `agent_spawn` starts one _group_ of agents with one owned result.
+Every `agent_spawn` starts one *group* of agents with one owned result.
 Within that group, `after` edges form a dependency graph: agents can work
 in parallel or build on each other's results. Agents use the same protocol
 when they spawn their own groups.
@@ -14,11 +14,11 @@ final messages with its job. A singleton uses the same group protocol and
 has a group ID distinct from its agent ID, but shows and reports as the
 agent. Common graph shapes:
 
-| Shape             | Example                      |
-| ----------------- | ---------------------------- |
+| Shape | Example |
+| --- | --- |
 | Fan-out and merge | `{api, tests, host} → merge` |
-| Pipeline          | `plan → implement → review`  |
-| Diamond           | `map → {api, tests} → merge` |
+| Pipeline | `plan → implement → review` |
+| Diamond | `map → {api, tests} → merge` |
 
 Only the agents nothing waits for contribute to the group's result, sent
 as one message to Pi or to the agent that spawned the group. With a single

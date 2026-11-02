@@ -32,7 +32,6 @@
 
 import type { Context } from "@earendil-works/chord";
 import { awaitWithContext } from "@earendil-works/chord/context";
-import { StringEnum } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
   type ConversationId,
@@ -49,6 +48,7 @@ import {
   type Tx,
 } from "@earendil-works/pi-durable";
 import { type Static, Type } from "typebox";
+import { StringEnum } from "../schema.js";
 import { nodeRequestId } from "./graphs.js";
 import type { MessagingHub } from "./hub.js";
 import { agentMessageInput } from "./inputs.js";

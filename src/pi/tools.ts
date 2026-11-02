@@ -3,7 +3,7 @@
  * agent_status, and agent_stop.
  */
 
-import { type JsonValue, StringEnum } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/pi-ai";
 import type {
   AgentToolUpdateCallback,
   ExtensionAPI,
@@ -33,6 +33,7 @@ import {
   WaitInterrupted,
 } from "../agents/types.js";
 import { AGENT_TOOL_NAMES } from "../host/tools.js";
+import { StringEnum } from "../schema.js";
 import { graphShape, oneLine } from "../ui/format.js";
 import { PARENT_TOOL_VIEWS, positiveSeconds } from "../ui/tool-views.js";
 import {

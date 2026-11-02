@@ -4,7 +4,6 @@
  * its output schema into a declaration. The model still reads the text.
  */
 
-import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, type TProperties, Type } from "typebox";
 import { NODE_KINDS, turnResult } from "../agents/report.js";
 import {
@@ -13,6 +12,7 @@ import {
   type GraphInfo,
   type Target,
 } from "../agents/types.js";
+import { StringEnum } from "../schema.js";
 import { nodeDetails } from "./messages.js";
 
 /** An object with exactly these fields. */

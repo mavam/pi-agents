@@ -3,7 +3,7 @@
  * with cached reads of task outcomes and entries that never change.
  */
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   CommitPublication,
   EntryRecord,

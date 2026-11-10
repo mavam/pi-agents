@@ -5,7 +5,7 @@
  * `codemode` come its internal model tools, which only scripts call.
  */
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import {
   createBashToolDefinition,

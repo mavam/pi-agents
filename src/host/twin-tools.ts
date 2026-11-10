@@ -8,7 +8,7 @@
  * again whenever they do; agents select it by name.
  */
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import {
   defineExtension,
   defineTool,

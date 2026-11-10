@@ -4,7 +4,7 @@
  * configured HTTP already, since agents run in its process.
  */
 
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { type ClientIdentity, PI_ATTRIBUTION } from "@earendil-works/pi-ai";
 import { type SettingsManager, VERSION } from "@earendil-works/pi-coding-agent";
 import type {

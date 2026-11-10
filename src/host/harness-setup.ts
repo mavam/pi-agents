@@ -4,7 +4,7 @@
  * configured HTTP already, since agents run in its process.
  */
 
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { type ClientIdentity, PI_ATTRIBUTION } from "@earendil-works/pi-ai";
 import { type SettingsManager, VERSION } from "@earendil-works/pi-coding-agent";
 import type {
@@ -56,12 +56,20 @@ export function createHarnessSettings(
     get stream() {
       const provider = settingsManager.getProviderRetrySettings();
       const idle = settingsManager.getHttpIdleTimeoutMs();
+      const thinkingBudgets = settingsManager.getThinkingBudgets();
+      const websocketConnectTimeoutMs =
+        settingsManager.getWebSocketConnectTimeoutMs();
       return {
+        transport: settingsManager.getTransport(),
         timeoutMs: provider.timeoutMs ?? (idle === 0 ? 2147483647 : idle),
         maxRetryDelayMs: provider.maxRetryDelayMs,
         ...(provider.maxRetries === undefined
           ? {}
           : { maxRetries: provider.maxRetries }),
+        ...(websocketConnectTimeoutMs === undefined
+          ? {}
+          : { websocketConnectTimeoutMs }),
+        ...(thinkingBudgets === undefined ? {} : { thinkingBudgets }),
       };
     },
     get compaction() {

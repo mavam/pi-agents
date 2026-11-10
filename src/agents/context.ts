@@ -2,7 +2,7 @@
  * Shared background context and durable IDs for the agent collaborators.
  */
 
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import {
   BACKGROUND_CONTEXT,
   withAbortSignal,

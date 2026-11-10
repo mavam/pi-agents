@@ -23,7 +23,7 @@
  * `agent_wait` waits for the groups its first run chose.
  */
 
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import {
   awaitWithContext,
   withAbortSignal,

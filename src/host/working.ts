@@ -12,7 +12,7 @@
  * passes no hook and runs without a slot.
  */
 
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import {
   CompactionTask,
   GenerationTask,

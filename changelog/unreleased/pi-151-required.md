@@ -3,7 +3,9 @@ title: Pi 1.5.1 required
 type: breaking
 authors:
   - mavam
-created: 2026-11-10T08:23:05.029867Z
+prs:
+  - 122
+created: 2026-11-10T08:29:19.218149Z
 ---
 
 pi-agents now requires Pi 1.5.1 or later, so update Pi before updating pi-agents. The update brings fixes to the runtime agents run on:

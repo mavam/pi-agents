@@ -83,8 +83,10 @@ children and never replenishes. See
 
 ## Pi settings agents follow
 
-Agents follow your Pi settings for provider retries and timeouts, retries
-after errors, compaction, and how steering and follow-up messages queue.
+Agents follow your Pi settings for provider retries and timeouts, the
+`transport` and `websocketConnectTimeoutMs` of model requests,
+`thinkingBudgets`, retries after errors, compaction, and how steering and
+follow-up messages queue.
 They read them when the session first uses agents, so restart Pi after
 changing them.
 

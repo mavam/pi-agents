@@ -30,6 +30,24 @@ describe("harness settings", () => {
     );
   });
 
+  test("agents stream with Pi's transport, thinking budgets, and timeouts", () => {
+    const stream = createHarnessSettings(
+      SettingsManager.inMemory({
+        transport: "websocket",
+        thinkingBudgets: { low: 1024 },
+        websocketConnectTimeoutMs: 5000,
+      }),
+    ).stream;
+    expect(stream).toMatchObject({
+      transport: "websocket",
+      thinkingBudgets: { low: 1024 },
+      websocketConnectTimeoutMs: 5000,
+    });
+    const defaults = createHarnessSettings(SettingsManager.inMemory()).stream;
+    expect(defaults).not.toHaveProperty("thinkingBudgets");
+    expect(defaults).not.toHaveProperty("websocketConnectTimeoutMs");
+  });
+
   test("agents attribute requests to Pi only while telemetry is enabled", () => {
     const enabled = SettingsManager.inMemory({ enableInstallTelemetry: true });
     const disabled = SettingsManager.inMemory({

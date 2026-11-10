@@ -1,0 +1,9 @@
+created: 2026-11-10
+title: More reliable agents on Pi 1.5.1
+intro: >-
+  Agents now benefit from fixes for stalled parallel tool calls and MCP schema handling,
+  and honor your Pi transport, WebSocket connection timeout, and thinking-budget settings.
+  Update Pi to 1.5.1 or later before updating pi-agents.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.39.0

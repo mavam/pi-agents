@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import type { ProgramStatus, TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { AgentInfo, MessageInfo } from "../../src/agents/types.js";
 import { EMPTY_USAGE } from "../../src/agents/types.js";
 import type { SessionHost } from "../../src/pi/session.js";
@@ -42,8 +42,14 @@ function mount(
   panel.onAttach = (id) => attached.push(id);
   // biome-ignore lint/suspicious/noExplicitAny: a minimal widget host.
   let component: any;
+  const reports: ProgramStatus[] = [];
+  const terminal = {
+    rows: 40,
+    setProgramStatus: (status: ProgramStatus) => reports.push(status),
+  };
   panel.update({
     mode: "tui",
+    isIdle: () => true,
     ui: {
       setWidget: (
         _key: string,
@@ -52,7 +58,7 @@ function mount(
         if (!factory) return;
         component = factory(
           {
-            terminal: { rows: 40 },
+            terminal,
             requestRender() {},
             hasOverlay: () => false,
           },
@@ -76,10 +82,30 @@ function mount(
   // Lines start after one column of padding.
   const render = (width: number): string[] =>
     component.render(width).map((line: string) => line.slice(1).trimEnd());
-  return { click, attached, panel, render };
+  return { click, attached, panel, render, terminal, reports };
 }
 
 describe("panel", () => {
+  test("reports working until the last child settles, even with the panel hidden", () => {
+    const scout = agent("1", "scout");
+    const notes = agent("2", "notes");
+    const { panel, terminal, reports } = mount([], [scout, notes]);
+    try {
+      expect(reports.at(-1)?.state).toBe("working");
+      terminal.setProgramStatus({ app: "pi", state: "idle" });
+      expect(reports.at(-1)?.state).toBe("working");
+      panel.setSuppressed(true);
+      scout.state = "idle";
+      panel.update();
+      expect(reports.at(-1)?.state).toBe("working");
+      notes.state = "waiting";
+      panel.update();
+      expect(reports.at(-1)?.state).toBe("idle");
+    } finally {
+      panel.dispose();
+    }
+  });
+
   test("a click on the summary focuses the panel; on a row, it attaches", () => {
     const message: MessageInfo = {
       id: "m",

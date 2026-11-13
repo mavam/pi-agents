@@ -86,21 +86,26 @@ function mount(
 }
 
 describe("panel", () => {
-  test("reports working until the last child settles, even with the panel hidden", () => {
+  test("reports working until no child is working or waiting, even with the panel hidden", () => {
     const scout = agent("1", "scout");
     const notes = agent("2", "notes");
     const { panel, terminal, reports } = mount([], [scout, notes]);
     try {
       expect(reports.at(-1)?.state).toBe("working");
-      terminal.setProgramStatus({ app: "pi", state: "idle" });
+      terminal.setProgramStatus({ app: "pi", state: "done", message: "Done" });
       expect(reports.at(-1)?.state).toBe("working");
       panel.setSuppressed(true);
       scout.state = "idle";
-      panel.update();
-      expect(reports.at(-1)?.state).toBe("working");
       notes.state = "waiting";
       panel.update();
-      expect(reports.at(-1)?.state).toBe("idle");
+      expect(reports.at(-1)?.state).toBe("working");
+      notes.state = "idle";
+      panel.update();
+      expect(reports.at(-1)).toEqual({
+        app: "pi",
+        state: "done",
+        message: "Done",
+      });
     } finally {
       panel.dispose();
     }

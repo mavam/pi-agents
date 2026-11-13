@@ -239,11 +239,14 @@ export class AgentPanel {
     const context = ctx ?? this.lastContext;
     if (context?.mode !== "tui") return;
     this.lastContext = context;
+    // A waiting graph node is pending on its inputs, not on the user.
     this.programStatus.setActive(
       this.host
         .current()
         ?.list()
-        .some((agent) => agent.state === "working") ?? false,
+        .some(
+          (agent) => agent.state === "working" || agent.state === "waiting",
+        ) ?? false,
     );
     if (!this.shouldShow()) this.focused = false;
     // Only the focused panel shows times; the summary line changes with the

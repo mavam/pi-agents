@@ -110,4 +110,6 @@ is active **or** any child's state is `working` or `waiting`. A graph
 node's `waiting` state means its work is still pending on its inputs, which
 can outlast every `working` child, for example while stored work resumes.
 It does not mean waiting for the user, so it must not be interpreted as a
-blocked user dialog.
+blocked user dialog. pi-agents already applies this rule to Pi's own
+terminal status in interactive mode, so terminals that read it need no
+integration.

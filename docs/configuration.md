@@ -122,18 +122,6 @@ keeps the current session's store and stores another running Pi holds, and
 deleting one removes its agents for good. Without the setting, stores stay
 forever. Changes apply the next time Pi starts.
 
-## Terminal status
-
-In interactive mode, terminals that support Pi's program-status reports,
-including Herdr, show Pi as working while any child agent is working, even
-when the parent session is idle or done. This includes agents working again
-after being closed, and continues while the agents panel is hidden.
-
-Questions and permission dialogs still report that Pi needs attention;
-errors and explicit status clearing are preserved too. When the last child
-stops working, the terminal returns to the parent's latest status. Waiting
-children do not themselves request attention. No setting is required.
-
 ## Footer counters
 
 With [pi-fancy-footer](https://github.com/mavam/pi-fancy-footer), enable the

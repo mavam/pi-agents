@@ -40,7 +40,7 @@ export class AgentProgramStatus {
   }
 
   /**
-   * Replace whether any child is working; other child states are inactive.
+   * Replace whether any child is working or waiting on its inputs.
    */
   setActive(active: boolean): void {
     if (this.disposed || this.active === active) return;

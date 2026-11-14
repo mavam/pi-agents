@@ -43,8 +43,11 @@ session and offers no way to call yours from the background
 listed packages, which must be installed in Pi, and uses your `mcp.json`
 files and MCP sign-ins. As in Pi, a project's `.pi/mcp.json`, its
 `piAgents` settings, and packages installed in it count only when you trust
-the project. When agents first start, it waits up to ten seconds
-for your MCP servers to connect; servers that take longer reach agents once
+the project. The twin starts in the background, so agents never wait for
+it to open. In a session that used it before, agents get its tools at once,
+and a call waits until its server connected, up to ten seconds after the
+twin started. Otherwise, starting the first agents waits up to ten seconds
+for your MCP servers to connect. Servers that take longer reach agents once
 they do. List only extensions whose tools work on their own: the twin has no
 UI, and its tools see an empty conversation rather than yours. Restart Pi
 after changing the list, `mcp.json`, or your MCP sign-ins.

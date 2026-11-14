@@ -28,6 +28,7 @@ import type { AgentHooks } from "../hooks.js";
 import { ExecutionEnvs } from "./harness-setup.js";
 import { AgentRequestHooks } from "./hooks.js";
 import { ToolTwin, TWIN_STARTUP_WAIT_MS, twinWanted } from "./twin.js";
+import { TwinCatalogDoc, type TwinTools } from "./twin-tools.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
 
@@ -54,26 +55,42 @@ export interface AgentHarnessOptions {
 }
 
 /**
- * The tool twin, with its servers connected or `TWIN_STARTUP_WAIT_MS`
- * passed, so tool calls that resume find their tools. Without it, agents
- * keep their own tools.
+ * Start the tool twin in the background. Its tools replace the catalog's
+ * stand-ins as they connect, and the stand-ins go once its servers
+ * connected or `TWIN_STARTUP_WAIT_MS` passed. Returns how to close it, also
+ * while it still starts.
  */
-async function openTwin(
+function startTwin(
   cwd: string,
   options: NonNullable<AgentHarnessOptions["twin"]>,
-): Promise<ToolTwin | undefined> {
-  let twin: ToolTwin | undefined;
-  try {
-    twin = await ToolTwin.open({ cwd, ...options });
-    await twin.ready(TWIN_STARTUP_WAIT_MS);
-    return twin;
-  } catch (error) {
-    await twin?.close().catch(() => {});
-    options.onProblem(
-      `agents get no MCP or extension tools: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return undefined;
-  }
+  tools: TwinTools,
+): () => Promise<void> {
+  const closing = new AbortController();
+  const opening = (async (): Promise<ToolTwin | undefined> => {
+    let twin: ToolTwin | undefined;
+    try {
+      twin = await ToolTwin.open({ cwd, ...options });
+      if (closing.signal.aborted) {
+        await twin.close();
+        return undefined;
+      }
+      tools.connect(twin);
+      await twin.ready(TWIN_STARTUP_WAIT_MS, closing.signal);
+      return twin;
+    } catch (error) {
+      await twin?.close().catch(() => {});
+      options.onProblem(
+        `agents get no MCP or extension tools: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    } finally {
+      tools.settle();
+    }
+  })();
+  return async () => {
+    closing.abort();
+    await (await opening)?.close();
+  };
 }
 
 /** A harness report as plain data, without pi-durable's types. */
@@ -127,21 +144,14 @@ export async function openAgentHarness(
     : undefined;
   let harness: Harness | undefined;
   let unobserve: (() => void) | undefined;
-  let twin: ToolTwin | undefined;
+  const tools = options.extensions.twin;
+  let stopTwin: (() => Promise<void>) | undefined;
   // After the harness: work that a tool call waits for ends first.
   const closeTwin = async () => {
-    options.extensions.twin.detach();
-    await twin?.close();
+    tools.detach();
+    await stopTwin?.();
   };
   try {
-    if (
-      options.twin &&
-      twinWanted(options.cwd, options.twin.extensions, options.twin.trusted)
-    )
-      twin = await openTwin(options.cwd, options.twin);
-    // Before the harness opens, so tool calls that resume find their tools.
-    options.extensions.twin.attach(registry, twin);
-    const extensions = agentSelection(options.extensions);
     harness = await Harness.open(
       options.storage,
       {
@@ -152,7 +162,7 @@ export async function openAgentHarness(
         settings: () => ({
           ...options.settings,
           // Agents select their own extensions; the anchor uses this default.
-          extensions,
+          extensions: agentSelection(options.extensions),
         }),
         env: envs.env,
         ...(options.onReport
@@ -169,12 +179,33 @@ export async function openAgentHarness(
     unobserve = options.extensions.working?.observe(harness);
     // The durable root owns the parent's background graphs.
     const anchor = await harness.root(CONTEXT);
+    // Before the core starts, so tool calls that resume find their tools.
+    const twin = options.twin;
+    const wanted =
+      twin !== undefined &&
+      twinWanted(options.cwd, twin.extensions, twin.trusted);
+    if (wanted) tools.start();
+    tools.restore(
+      wanted ? await harness.snapshot(TwinCatalogDoc, CONTEXT) : undefined,
+      (catalog) =>
+        anchor.commit(async (tx) => {
+          (await tx.doc(TwinCatalogDoc)).tools = catalog.tools;
+        }, CONTEXT),
+      (error) =>
+        twin?.onProblem(
+          `couldn't store the tool twin's catalog: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+    );
+    if (wanted && twin) stopTwin = startTwin(options.cwd, twin, tools);
+    else tools.settle();
     const opened = harness;
     return {
       harness: opened,
       anchor,
       close: async () => {
         try {
+          // While the harness can still store the catalog.
+          await tools.flush();
           await opened.close(CONTEXT);
         } finally {
           unobserve?.();

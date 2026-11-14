@@ -1,19 +1,39 @@
 import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import type { AgentService } from "../../src/agents/service.js";
+import {
+  createRegistry,
+  Harness,
+  MemoryStorage,
+} from "@earendil-works/pi-durable";
+import {
+  agentSelection,
+  installAgentExtensions,
+} from "../../src/agents/extensions.js";
+import { AgentService } from "../../src/agents/service.js";
+import { ToolTwin } from "../../src/host/twin.js";
+import { TwinCatalogDoc } from "../../src/host/twin-tools.js";
 import {
   closeService,
+  hostOf,
+  jsonlStorage,
   MODEL,
   openService,
+  TEST_REFRESH_MS,
+  TestParent,
   tempDir,
+  testExtensions,
+  until,
 } from "../agents/helpers.js";
+
+const CONTEXT = BACKGROUND_CONTEXT;
 
 let services: AgentService[] = [];
 
@@ -151,4 +171,154 @@ test("agents without codemode load the twin's script tools with tool_search", as
   // The prompt names the namespace and how to reach its tools.
   expect(prompts[0]).toContain("Load their tools with `tool_search`");
   expect(prompts[0]).toContain("- twin: The twin's tools");
+});
+
+test("codemode lists the twin's namespaces and describes them", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const prompts: string[] = [];
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      prompts.push(
+        JSON.stringify(
+          context.messages.filter((message) => message.role === "system"),
+        ),
+      );
+      const last = context.messages.at(-1);
+      if (last?.role === "toolResult")
+        return fauxAssistantMessage(
+          last.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join(""),
+        );
+      return fauxAssistantMessage(
+        [
+          fauxToolCall("codemode", {
+            code: 'return await describeNamespace("twin")',
+          }),
+        ],
+        { stopReason: "toolUse" },
+      );
+    }),
+  );
+  const service = await openService({
+    models,
+    twinExtensions: [echoPackage()],
+  });
+  services.push(service);
+  await service.spawnGraph({
+    agents: [
+      {
+        name: "a",
+        job: "describe",
+        cwd: ".",
+        model: MODEL,
+        tools: ["codemode"],
+      },
+    ],
+  });
+  await service.wait(["a"]);
+  const result = service.get("a")?.result?.text ?? "";
+  expect(result).toContain("The twin's tools");
+  expect(result).toContain("twin_ping");
+  expect(prompts[0]).toContain("## twin");
+});
+
+test("the twin's tools are stored for the next start", async () => {
+  const service = await openService({
+    storage: await jsonlStorage(tempDir("pi-agents-twin-store-")),
+    twinExtensions: [echoPackage()],
+  });
+  services.push(service);
+  // Spawning waits for the twin's startup, after which it stores its tools.
+  await service.spawnGraph({
+    agents: [{ name: "a", job: "a", cwd: ".", model: MODEL }],
+  });
+  const harness = hostOf(service).harness.harness;
+  await until(async () =>
+    ((await harness.snapshot(TwinCatalogDoc, CONTEXT))?.tools ?? []).some(
+      (tool) => tool.name === "twin_echo",
+    ),
+  );
+});
+
+test("calls of stored tools wait for the twin to start", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      const last = context.messages.at(-1);
+      if (last?.role === "toolResult")
+        return fauxAssistantMessage(
+          last.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join(""),
+        );
+      return fauxAssistantMessage([fauxToolCall("twin_echo", { text: "hi" })], {
+        stopReason: "toolUse",
+      });
+    }),
+  );
+  // A host whose twin starts late, with the tools a previous start stored.
+  const extensions = testExtensions();
+  const registry = createRegistry();
+  installAgentExtensions(registry, extensions);
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models, registry, settings: { extensions: agentSelection(extensions) } },
+    CONTEXT,
+  );
+  const twin = extensions.twin;
+  twin.start();
+  twin.restore(
+    {
+      tools: [
+        {
+          name: "twin_echo",
+          description: "Echo the text",
+          parameters: {
+            type: "object",
+            properties: { text: { type: "string" } },
+            required: ["text"],
+          },
+          deferred: false,
+          replaySafe: false,
+        },
+      ],
+    },
+    async () => {},
+    () => {},
+  );
+  const service = await AgentService.start({
+    harness,
+    anchor: await harness.root(CONTEXT),
+    extensions,
+    parent: new TestParent(),
+    refreshDelayMs: TEST_REFRESH_MS,
+  });
+  harness.resume();
+  let opened: ToolTwin | undefined;
+  try {
+    await service.spawnGraph({
+      agents: [{ name: "a", job: "echo", cwd: ".", model: MODEL }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(service.get("a")?.state).toBe("working");
+    opened = await ToolTwin.open({
+      cwd: process.cwd(),
+      extensions: [echoPackage()],
+      trusted: false,
+      onProblem: () => {},
+    });
+    twin.connect(opened);
+    await service.wait(["a"]);
+    expect(service.get("a")?.result?.text).toBe("echo: hi");
+  } finally {
+    await service.close();
+    twin.detach();
+    await harness.close(CONTEXT);
+    await opened?.close();
+  }
 });

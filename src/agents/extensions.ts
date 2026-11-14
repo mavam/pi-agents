@@ -9,6 +9,9 @@
 
 import {
   type AgentChange,
+  AgentDoc,
+  type Conversation,
+  type ConversationId,
   defineExtension,
   type Extension,
   type HookRegistration,
@@ -18,14 +21,20 @@ import {
 import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
 import { createPromptExtension, type PromptOptions } from "../host/prompt.js";
 import { createToolsExtension } from "../host/tools.js";
-import { TwinTools } from "../host/twin-tools.js";
+import {
+  isTwinNamespace,
+  TWIN_EXTENSION,
+  TwinTools,
+} from "../host/twin-tools.js";
 import { WorkingAgents } from "../host/working.js";
+import { CONTEXT } from "./context.js";
 import { createGraphsExtension } from "./graphs.js";
 import { MessagingHub } from "./hub.js";
 import {
   createMessagingExtension,
   type MessagingOptions,
 } from "./messaging.js";
+import { AgentsDoc } from "./records.js";
 import { SPAWNING_LIMITS, type SpawningLimits } from "./spawn-support.js";
 import { spawningTools } from "./spawning.js";
 import type { HelperResolver } from "./types.js";
@@ -42,8 +51,8 @@ export interface AgentExtensions {
   spawning: Extension;
   /** `agent_send` and `agent_status`; every agent selects it. */
   messaging: Extension;
-  /** The tool twin's tools; every agent selects it with all of its tools.
-   * The host attaches the twin once it opened. */
+  /** The tool twin's tools; every agent selects their extensions with all
+   * of its tools. The host attaches the twin once it opened. */
   twin: TwinTools;
   /** What the messaging tools share with the service. */
   hub: MessagingHub;
@@ -71,7 +80,7 @@ export function createAgentExtensions(
   options: AgentExtensionOptions,
 ): AgentExtensions {
   const twin = new TwinTools();
-  const { extension, close } = createToolsExtension(twin.namespaces);
+  const { extension, close } = createToolsExtension();
   const working =
     options.maxWorkingAgents === undefined
       ? undefined
@@ -104,7 +113,7 @@ export function createAgentExtensions(
         prompt,
         ...(spawn && spawning ? [spawning] : []),
         messaging,
-        twin.extension,
+        ...twin.extensions(),
       ],
       tools: [
         ...(spawn ? (spawning?.tools ?? []) : []),
@@ -162,9 +171,9 @@ export function installAgentExtensions(
     extensions.graphs,
     extensions.spawning,
     extensions.messaging,
-    extensions.twin.extension,
   ])
     registry.install(extension);
+  extensions.twin.attach(registry);
 }
 
 /**
@@ -180,6 +189,34 @@ export function agentSelection(
     extensions.prompt,
     ...(options.spawn ? [extensions.spawning] : []),
     ...(options.messaging ? [extensions.messaging] : []),
-    extensions.twin.extension,
+    ...extensions.twin.extensions(),
   ];
+}
+
+/**
+ * Give every agent the tool twin's extensions as they are now: one per
+ * namespace, which come and go as MCP servers connect. Agents name the
+ * extensions they select, so the change is written to each. Agents of
+ * earlier versions that didn't select the twin keep going without it.
+ */
+export async function syncTwinSelections(
+  anchor: Conversation,
+  extensions: AgentExtensions,
+): Promise<void> {
+  const names = extensions.twin.extensions().map((each) => each.name);
+  await anchor.commit(async (tx) => {
+    const { agents } = await tx.doc(AgentsDoc);
+    for (const id of Object.keys(agents)) {
+      const state = await tx.doc(AgentDoc, Number(id) as ConversationId);
+      const selected = state.extensions;
+      if (!Array.isArray(selected) || !selected.includes(TWIN_EXTENSION))
+        continue;
+      const others = selected.filter(
+        (name) => name !== TWIN_EXTENSION && !isTwinNamespace(name),
+      );
+      const next = [...others, ...names];
+      if (JSON.stringify(next) !== JSON.stringify(selected))
+        state.extensions = next;
+    }
+  }, CONTEXT);
 }

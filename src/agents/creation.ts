@@ -74,7 +74,8 @@ export async function createGraph(
     throw new AgentError(
       `A graph has ${GRAPH_SIZE.min} to ${GRAPH_SIZE.max} agents, not ${count}`,
     );
-  // New agents see the twin's tools as they are now.
+  // New agents see the twin's tools as they are now, once it knows them.
+  await deps.extensions.twin.ready();
   deps.extensions.twin.sync();
   // Validate with the service's view first; the commit claims for real.
   const single = count === 1;

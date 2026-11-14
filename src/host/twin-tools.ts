@@ -1,15 +1,24 @@
 /**
  * The tool twin's tools as pi-durable tools agents call: one proxy per
- * tool, in an extension every agent selects with all of its tools. Tools
- * MCP declares only to codemode stay deferred, so scripts call them and the
- * model learns of their servers from a prompt section, as in Pi.
+ * tool. Tools MCP declares only to codemode stay deferred, so scripts call
+ * them, as in Pi.
  *
- * The twin's tools change as servers connect, so the extension is installed
- * again whenever they do; agents select it by name.
+ * Each namespace, such as an MCP server, gets an extension of its own, so
+ * codemode lists it with its description and `describeNamespace()` returns
+ * its instructions. Tools without a namespace, `tool_search`, and the
+ * namespace listing for agents without codemode are in the base extension.
+ * The twin's tools change as servers connect, so the extensions are
+ * installed again whenever they do; agents select them by name, and the
+ * service updates their selection as namespaces come and go.
+ *
+ * A catalog of the tools, stored with the agents, stands in for the twin
+ * while it starts: agents and calls that resume find their tools at once,
+ * and a call parks until its server connected.
  */
 
 import type { JsonValue } from "@earendil-works/chord/json";
 import {
+  defineDoc,
   defineExtension,
   defineTool,
   type Extension,
@@ -18,9 +27,10 @@ import {
   type Registry,
   section,
   type ToolExecutionResult,
+  type ToolNamespace,
+  type ToolPark,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
-import type { CodemodeNamespace } from "@earendil-works/pi-durable/codemode";
 import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
 import {
   createToolSearchTool,
@@ -31,9 +41,46 @@ import type { ToolTwin, TwinResult, TwinTool } from "./twin.js";
 
 export const TWIN_EXTENSION = "pi-agents-twin";
 
+/** The extension of a namespace's tools. */
+const NAMESPACE_EXTENSION = `${TWIN_EXTENSION}/`;
+
+/** Whether `name` is the extension of one of the twin's namespaces. */
+export function isTwinNamespace(name: string): boolean {
+  return name.startsWith(NAMESPACE_EXTENSION);
+}
+
 /** How often the twin's tools are compared while nothing else syncs them,
  * as servers connect, reconnect, or change their tools. */
 const SYNC_INTERVAL_MS = 2_000;
+
+/** How long a parked call sleeps before it looks for its tool again. */
+const PARK_MS = 1_000;
+
+/** How long a call waits for its tool at most, whatever the twin does. */
+const PARK_LIMIT_MS = 60_000;
+
+/** One of the twin's tools as agents saw it last. */
+type CatalogTool = {
+  name: string;
+  description: string;
+  parameters: JsonValue;
+  deferred: boolean;
+  replaySafe: boolean;
+  namespace?: { name: string; description: string; instructions?: string };
+};
+
+type TwinCatalog = { tools: CatalogTool[] };
+
+/** The twin's tools when its startup last ended, which stand in for them
+ * while it starts again. */
+export const TwinCatalogDoc = defineDoc<TwinCatalog>({
+  kind: "pi-agents.twin-catalog",
+  version: 1,
+  scope: "session",
+  initial: () => ({ tools: [] }),
+  // Each change replaces the whole catalog.
+  checkpointWhen: () => true,
+});
 
 /** Pi registers a tool again with a new definition when it changes, such
  * as when its server reconnects: an identity per definition tells them
@@ -51,17 +98,6 @@ function revisionOf(definition: object): number {
   return revision;
 }
 
-/** A tool the twin declares only to codemode scripts or tool search. */
-function isDeferred(tool: TwinTool): boolean {
-  return tool.info.exposure !== "direct";
-}
-
-/** Whether rerunning a call after a crash is harmless, as its author says. */
-function replaySafe(tool: TwinTool): boolean {
-  const hints = tool.info.annotations;
-  return hints?.readOnlyHint === true || hints?.idempotentHint === true;
-}
-
 function toJson(value: unknown): JsonValue | undefined {
   if (value === undefined) return undefined;
   return JSON.parse(JSON.stringify(value)) as JsonValue;
@@ -73,107 +109,72 @@ function textOf(result: TwinResult): string {
     .join("\n");
 }
 
-function proxy(twin: ToolTwin, tool: TwinTool): ToolRegistration {
-  const { definition } = tool;
-  return defineTool({
-    name: definition.name,
-    description: definition.description,
-    parameters: definition.parameters as TSchema,
-    ...(isDeferred(tool) ? { deferred: true as const } : {}),
-    // Tools reach other systems; only their authors know a rerun is safe.
-    replay: replaySafe(tool) ? "safe" : "unsafe",
-    ...(definition.prepareArguments
-      ? { prepareArguments: definition.prepareArguments }
-      : {}),
-    async execute(args, api, context): Promise<ToolExecutionResult> {
-      // Progress arrives as the result so far: show what it adds.
-      let shown = "";
-      const result = await twin.call(
-        definition.name,
-        args as Record<string, unknown>,
-        context.abortSignal,
-        (partial) => {
-          const text = textOf(partial);
-          if (!text || text === shown) return;
-          api.output(
-            text.startsWith(shown) ? text.slice(shown.length) : `\n${text}`,
-          );
-          shown = text;
-        },
-      );
-      const details = toJson(result.details);
-      return {
-        output: result.content,
-        ...(details === undefined ? {} : { details }),
-        ...(result.isError ? { isError: true } : {}),
-        ...(result.usage ? { usage: result.usage } : {}),
-      };
-    },
-  });
-}
-
 /** First line of a namespace's description, as Pi lists MCP servers. */
 function summary(text: string | undefined): string {
   return (text?.split("\n", 1)[0] ?? "").trim();
 }
 
+/** A live tool as the catalog keeps it; undefined for parameters JSON
+ * can't hold. */
+function entryOf({ info, definition }: TwinTool): CatalogTool | undefined {
+  const parameters = toJson(definition.parameters);
+  if (parameters === undefined) return undefined;
+  const hints = info.annotations;
+  const namespace = info.namespace;
+  return {
+    name: info.name,
+    description: definition.description,
+    parameters,
+    // A tool the twin declares only to codemode scripts or tool search.
+    deferred: info.exposure !== "direct",
+    // Whether rerunning a call after a crash is harmless, as its author says.
+    replaySafe: hints?.readOnlyHint === true || hints?.idempotentHint === true,
+    ...(namespace
+      ? {
+          namespace: {
+            name: namespace.name,
+            description: summary(namespace.description),
+            ...(namespace.instructions
+              ? { instructions: namespace.instructions }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function failure(text: string): ToolExecutionResult {
+  return { output: [{ type: "text", text }], isError: true };
+}
+
+/** What a parked call keeps: when it first looked for its tool. */
+type ParkState = { since: number };
+
 /**
  * The servers whose tools agents reach only from scripts or by search, so
- * the model knows of them, as Pi's `mcp_servers` section tells it.
+ * agents without codemode know of them, as Pi's `mcp_servers` section
+ * tells the model. Codemode lists them itself.
  */
-function namespacesSection(tools: readonly TwinTool[]): string[] | undefined {
+function namespacesSection(tools: readonly CatalogTool[]): string[] {
   const namespaces = new Map<string, string>();
-  for (const tool of tools) {
-    const namespace = tool.info.namespace;
-    if (!isDeferred(tool) || !namespace) continue;
-    namespaces.set(namespace.name, summary(namespace.description));
-  }
-  if (namespaces.size === 0) return undefined;
-  const lines = [...namespaces]
+  for (const tool of tools)
+    if (tool.deferred && tool.namespace)
+      namespaces.set(tool.namespace.name, tool.namespace.description);
+  return [...namespaces]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, text]) => (text ? `- ${name}: ${text}` : `- ${name}`));
-  return lines;
 }
 
 const NAMESPACES_INTRO =
-  "Tool namespaces whose tools are not declared to you, such as MCP servers.";
-/** How an agent reaches those tools: from scripts, or by loading them. */
-const REACH = {
-  [CODEMODE_TOOL_NAME]:
-    "Call their tools from codemode scripts; find them with `searchTools()` and `describeNamespace()`.",
-  [TOOL_SEARCH_TOOL_NAME]:
-    "Load their tools with `tool_search`; they are available from your next call.",
-};
-
-/** The twin's namespaces for codemode, one per tool, so each tool belongs
- * exactly to its own. */
-function codemodeNamespaces(tools: readonly TwinTool[]): CodemodeNamespace[] {
-  return tools.flatMap(({ info }) =>
-    info.namespace
-      ? [
-          {
-            name: info.namespace.name,
-            prefix: info.name,
-            ...(info.namespace.description
-              ? { description: info.namespace.description }
-              : {}),
-            ...(info.namespace.instructions
-              ? { instructions: info.namespace.instructions }
-              : {}),
-          },
-        ]
-      : [],
-  );
-}
+  "Tool namespaces whose tools are not declared to you, such as MCP servers. Load their tools with `tool_search`; they are available from your next call.";
 
 /**
- * The extension that holds the twin's tools. Agents select it from the
- * start, also while it is empty, as without a twin.
+ * The extensions that hold the twin's tools. Agents select them from the
+ * start, also while they are empty, as without a twin.
  */
 export class TwinTools {
-  /** Codemode's namespaces, which the tools extension reads at each use. */
-  readonly namespaces: CodemodeNamespace[] = [];
-  private current: Extension = defineExtension({ name: TWIN_EXTENSION });
+  private base: Extension = defineExtension({ name: TWIN_EXTENSION });
+  private namespaced: Extension[] = [];
   /**
    * `tool_search`, which loads the twin's tools that only scripts reach,
    * for agents without `codemode`, as Pi offers MCP tools either way. It
@@ -184,25 +185,95 @@ export class TwinTools {
   private registry: Registry | undefined;
   private twin: ToolTwin | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
+  /** The catalog's tools that stand in for the twin's. */
+  private standIns: CatalogTool[] = [];
+  /** The catalog as stored, to write it only when it changed. */
+  private stored = "";
+  private persist: ((catalog: TwinCatalog) => Promise<void>) | undefined;
+  private persisting: Promise<void> = Promise.resolve();
+  private report: (error: unknown) => void = () => {};
+  /** Whether no twin is starting: its servers connected, failed, or took
+   * too long, or there is none. */
+  private settled = true;
+  private resolveStarted: () => void = () => {};
+  private started: Promise<void> = Promise.resolve();
+  /** The signature of the tools the catalog stored last. */
+  private storedSignature = "";
+  /** Calls parked for a tool, by name: their stand-ins stay until they
+   * woke. */
+  private readonly parked = new Map<string, number>();
+  private readonly listeners = new Set<() => void>();
 
-  /** The extension as installed now. */
-  get extension(): Extension {
-    return this.current;
+  /** The extensions as installed now: the base, then one per namespace. */
+  extensions(): Extension[] {
+    return [this.base, ...this.namespaced];
   }
 
   /** The names of the twin's tools, which agents always get. */
   names(): string[] {
-    return (this.current.tools ?? []).map((tool) => tool.name);
+    return this.extensions().flatMap((extension) =>
+      (extension.tools ?? []).map((tool) => tool.name),
+    );
   }
 
-  /** Follow `twin` in `registry` from now on. */
-  attach(registry: Registry, twin: ToolTwin | undefined): void {
+  /** Call `listener` when namespaces come or go. */
+  onNamespaces(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /** Install the extensions in `registry` from now on. */
+  attach(registry: Registry): void {
     this.registry = registry;
+    this.sync();
+  }
+
+  /**
+   * Stand in for the twin with `catalog` until its startup ended, and keep
+   * the catalog current with `persist` from then on.
+   */
+  restore(
+    catalog: TwinCatalog | undefined,
+    persist: (catalog: TwinCatalog) => Promise<void>,
+    report: (error: unknown) => void,
+  ): void {
+    this.standIns = catalog?.tools ?? [];
+    this.stored = JSON.stringify(catalog?.tools ?? []);
+    this.persist = persist;
+    this.report = report;
+    this.sync();
+  }
+
+  /** A twin starts: until it settles, the catalog stands in for it. */
+  start(): void {
+    if (!this.settled) return;
+    this.settled = false;
+    this.started = new Promise((resolve) => {
+      this.resolveStarted = resolve;
+    });
+  }
+
+  /** Follow `twin`'s tools from now on. */
+  connect(twin: ToolTwin): void {
     this.twin = twin;
     this.sync();
-    if (!twin) return;
     this.timer = setInterval(() => this.sync(), SYNC_INTERVAL_MS);
     this.timer.unref?.();
+  }
+
+  /** The twin's startup ended: the stand-ins go, and the catalog follows
+   * the twin's tools. */
+  settle(): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.resolveStarted();
+    this.sync();
+  }
+
+  /** Write no more of the catalog, once what is being written is stored. */
+  async flush(): Promise<void> {
+    this.persist = undefined;
+    await this.persisting;
   }
 
   detach(): void {
@@ -210,6 +281,15 @@ export class TwinTools {
     this.timer = undefined;
     this.registry = undefined;
     this.twin = undefined;
+    this.persist = undefined;
+    this.settle();
+  }
+
+  /** While a twin starts without a catalog of its tools, wait until it
+   * settled, as Pi's first prompt waits for its servers. */
+  async ready(): Promise<void> {
+    if (this.settled || this.standIns.length > 0) return;
+    await this.started;
   }
 
   /** Install the twin's tools again when they changed. */
@@ -217,62 +297,197 @@ export class TwinTools {
     const registry = this.registry;
     if (!registry) return;
     const twin = this.twin;
-    const tools = twin?.tools() ?? [];
-    const signature = JSON.stringify(
-      tools.map(({ info, definition }) => [
-        info.name,
-        info.exposure,
-        info.namespace?.name,
-        revisionOf(definition),
+    const live = twin?.tools() ?? [];
+    const entries = live.flatMap((tool) => {
+      const entry = entryOf(tool);
+      return entry ? [{ entry, tool }] : [];
+    });
+    const names = new Set(entries.map(({ entry }) => entry.name));
+    const standIns = this.standIns.filter(
+      (tool) =>
+        !names.has(tool.name) &&
+        (!this.settled || (this.parked.get(tool.name) ?? 0) > 0),
+    );
+    const signature = JSON.stringify([
+      entries.map(({ entry, tool }) => [
+        entry.name,
+        entry.deferred,
+        entry.namespace,
+        revisionOf(tool.definition),
       ]),
-    );
-    if (signature === this.signature) return;
-    this.signature = signature;
-    const proxies = twin
-      ? tools.flatMap((tool) => {
-          try {
-            return [proxy(twin, tool)];
-          } catch {
-            // A schema pi-durable can't take; the other tools still work.
-            return [];
-          }
-        })
-      : [];
-    this.namespaces.splice(
-      0,
-      this.namespaces.length,
-      ...codemodeNamespaces(tools),
-    );
-    const listing = namespacesSection(tools);
+      standIns.map((tool) => tool.name),
+    ]);
+    if (signature !== this.signature) {
+      this.signature = signature;
+      this.install(
+        registry,
+        [
+          ...entries.map(({ entry, tool }) => this.proxy(entry, tool)),
+          ...standIns.map((entry) => this.proxy(entry, undefined)),
+        ],
+        [...entries.map(({ entry }) => entry), ...standIns],
+      );
+    }
+    if (this.settled && signature !== this.storedSignature) {
+      this.storedSignature = signature;
+      this.store(entries.map(({ entry }) => entry));
+    }
+  }
+
+  private install(
+    registry: Registry,
+    proxies: ToolRegistration[],
+    catalog: CatalogTool[],
+  ): void {
+    const ungrouped: ToolRegistration[] = [];
+    const groups = new Map<
+      string,
+      { namespace: ToolNamespace; tools: ToolRegistration[] }
+    >();
+    catalog.forEach((entry, index) => {
+      const tool = proxies[index] as ToolRegistration;
+      if (!entry.namespace) {
+        ungrouped.push(tool);
+        return;
+      }
+      const group = groups.get(entry.namespace.name);
+      if (group) group.tools.push(tool);
+      else
+        groups.set(entry.namespace.name, {
+          namespace: entry.namespace,
+          tools: [tool],
+        });
+    });
+    const listing = namespacesSection(catalog);
     const deferred = proxies.some((tool) => tool.deferred === true);
-    this.current = defineExtension({
+    this.base = defineExtension({
       name: TWIN_EXTENSION,
-      tools: [...proxies, ...(deferred ? [this.search] : [])],
-      sections: listing
-        ? [
-            section("tool_namespaces", (input) => {
-              const names = new Set(input.agent.tools.map((tool) => tool.name));
-              const reach = names.has(CODEMODE_TOOL_NAME)
-                ? REACH[CODEMODE_TOOL_NAME]
-                : names.has(TOOL_SEARCH_TOOL_NAME)
-                  ? REACH[TOOL_SEARCH_TOOL_NAME]
+      tools: [...ungrouped, ...(deferred ? [this.search] : [])],
+      sections:
+        listing.length > 0
+          ? [
+              section("tool_namespaces", (input) => {
+                const names = new Set(
+                  input.agent.tools.map((tool) => tool.name),
+                );
+                return names.has(TOOL_SEARCH_TOOL_NAME) &&
+                  !names.has(CODEMODE_TOOL_NAME)
+                  ? [NAMESPACES_INTRO, ...listing].join("\n")
                   : undefined;
-              return reach
-                ? [`${NAMESPACES_INTRO} ${reach}`, ...listing].join("\n")
-                : undefined;
-            }),
-          ]
-        : [],
+              }),
+            ]
+          : [],
       // Between the timer's syncs, agents see changes at their next request.
       hooks: [
         hook(GenerationTask, {
-          beforeRequest: () => {
+          beforeRequest: async () => {
             this.sync();
+            await this.ready();
             return undefined;
           },
         }),
       ],
     });
-    registry.install(this.current);
+    registry.install(this.base);
+    const before = this.namespaced.map((extension) => extension.name);
+    const next = [...groups.values()]
+      .sort((a, b) => a.namespace.name.localeCompare(b.namespace.name))
+      .map(({ namespace, tools }) =>
+        defineExtension({
+          name: `${NAMESPACE_EXTENSION}${namespace.name}`,
+          namespace,
+          tools,
+        }),
+      );
+    const kept = new Set(next.map((extension) => extension.name));
+    for (const extension of this.namespaced)
+      if (!kept.has(extension.name)) registry.uninstall(extension);
+    for (const extension of next) registry.install(extension);
+    this.namespaced = next;
+    const after = next.map((extension) => extension.name);
+    if (JSON.stringify(before) !== JSON.stringify(after))
+      for (const listener of this.listeners) listener();
+  }
+
+  /** Store the catalog when it changed, one write after another. */
+  private store(tools: CatalogTool[]): void {
+    const persist = this.persist;
+    const text = JSON.stringify(tools);
+    if (!persist || text === this.stored) return;
+    this.stored = text;
+    this.persisting = this.persisting
+      .then(() => persist({ tools }))
+      .catch((error) => this.report(error));
+  }
+
+  /** The tool agents call; `live` is the twin's, absent for a stand-in. */
+  private proxy(entry: CatalogTool, live: TwinTool | undefined) {
+    const definition = live?.definition;
+    return defineTool({
+      name: entry.name,
+      description: entry.description,
+      parameters: entry.parameters as unknown as TSchema,
+      ...(entry.deferred ? { deferred: true as const } : {}),
+      // Tools reach other systems; only their authors know a rerun is safe.
+      replay: entry.replaySafe ? "safe" : "unsafe",
+      ...(definition?.prepareArguments
+        ? { prepareArguments: definition.prepareArguments }
+        : {}),
+      execute: async (
+        args,
+        api,
+        context,
+      ): Promise<ToolExecutionResult | ToolPark> => {
+        const parked = api.checkpoint as ParkState | undefined;
+        if (parked) this.unpark(entry.name);
+        const twin = this.twin;
+        if (!twin?.tool(entry.name)) {
+          // Its server may connect yet: wait for it, parked.
+          const since = parked?.since ?? api.now();
+          if (this.settled || api.now() - since >= PARK_LIMIT_MS)
+            return failure(
+              `${entry.name} isn't available: its server isn't connected`,
+            );
+          this.parked.set(entry.name, (this.parked.get(entry.name) ?? 0) + 1);
+          return {
+            sleep: {
+              until: api.now() + PARK_MS,
+              checkpoint: { since } satisfies ParkState,
+            },
+          };
+        }
+        // Progress arrives as the result so far: show what it adds.
+        let shown = "";
+        const result = await twin.call(
+          entry.name,
+          args as Record<string, unknown>,
+          context.abortSignal,
+          (partial) => {
+            const text = textOf(partial);
+            if (!text || text === shown) return;
+            api.output(
+              text.startsWith(shown) ? text.slice(shown.length) : `\n${text}`,
+            );
+            shown = text;
+          },
+        );
+        const details = toJson(result.details);
+        return {
+          output: result.content,
+          ...(details === undefined ? {} : { details }),
+          ...(result.isError ? { isError: true } : {}),
+          ...(result.usage ? { usage: result.usage } : {}),
+        };
+      },
+      cancel: async (_args, api) => {
+        if (api.checkpoint) this.unpark(entry.name);
+      },
+    });
+  }
+
+  private unpark(name: string): void {
+    const count = (this.parked.get(name) ?? 0) - 1;
+    if (count > 0) this.parked.set(name, count);
+    else this.parked.delete(name);
   }
 }

@@ -58,7 +58,7 @@ export class AgentProgramStatus {
     return {
       app: this.parent.app,
       state: "working",
-      message: "Agents working",
+      message: this.parent.message ?? "Agents working",
     };
   }
 
@@ -86,7 +86,6 @@ export class AgentProgramStatus {
       terminal.setProgramStatus(this.parent);
     this.terminal = undefined;
     this.original = undefined;
-    this.wrapper = undefined;
     this.lastReport = undefined;
   }
 

@@ -92,8 +92,16 @@ describe("panel", () => {
     const { panel, terminal, reports } = mount([], [scout, notes]);
     try {
       expect(reports.at(-1)?.state).toBe("working");
-      terminal.setProgramStatus({ app: "pi", state: "done", message: "Done" });
-      expect(reports.at(-1)?.state).toBe("working");
+      terminal.setProgramStatus({
+        app: "pi",
+        state: "done",
+        message: "Review",
+      });
+      expect(reports.at(-1)).toEqual({
+        app: "pi",
+        state: "working",
+        message: "Review",
+      });
       panel.setSuppressed(true);
       scout.state = "idle";
       notes.state = "waiting";
@@ -104,7 +112,7 @@ describe("panel", () => {
       expect(reports.at(-1)).toEqual({
         app: "pi",
         state: "done",
-        message: "Done",
+        message: "Review",
       });
     } finally {
       panel.dispose();

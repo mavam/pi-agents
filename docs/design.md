@@ -267,6 +267,14 @@ describe what a call observed, not the agent's current state.
 Failures come from the durable run state, which says why the latest run
 ended without an answer, so they show the same after a restart.
 
+Pi's own terminal status follows the parent session, so it would report
+idle while children still work. In interactive mode the panel therefore
+reports working whenever the parent is idle or done and any child is
+working or waiting, following the rule for
+[terminal status integrations](./architecture.md#requesting-current-state).
+Questions, permissions, errors, and clearing pass through unchanged, and
+the parent's latest status returns once no child is active.
+
 The attach view follows a window of an agent's newest entries and loads
 older ones as the user scrolls up, so attaching costs the same however
 long the agent worked. It shows the whole history, with compactions and new

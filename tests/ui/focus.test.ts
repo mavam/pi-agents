@@ -151,10 +151,14 @@ describe("focus", () => {
 
   test("the empty panel retains overlay detection without rendering content", () => {
     let overlay = true;
-    const tui = { hasOverlay: () => overlay } as unknown as TUI;
+    const tui = {
+      hasOverlay: () => overlay,
+      terminal: { setProgramStatus() {} },
+    } as unknown as TUI;
     let widget: Component | undefined;
     const ctx = {
       mode: "tui",
+      isIdle: () => true,
       ui: {
         setWidget: (
           _key: string,

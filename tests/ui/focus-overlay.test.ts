@@ -97,6 +97,7 @@ function setup({ closed = false } = {}) {
   const theme = { fg: (_name: string, text: string) => text } as Theme;
   const ctx = {
     mode: "tui",
+    isIdle: () => true,
     ui: {
       onTerminalInput: (listener: Parameters<TUI["addInputListener"]>[0]) =>
         tui.addInputListener(listener),

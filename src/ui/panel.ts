@@ -63,6 +63,7 @@ import {
   messageParts,
   themeStyle,
 } from "./messages.js";
+import { AgentProgramStatus } from "./program-status.js";
 import {
   attachTarget,
   buildRows,
@@ -159,6 +160,7 @@ interface HeldSummary {
 export class AgentPanel {
   private lastContext: ExtensionContext | undefined;
   private lastTui: TUI | undefined;
+  private readonly programStatus = new AgentProgramStatus();
   private timer: ReturnType<typeof setInterval> | undefined;
   private mounted = false;
   private disposed = false;
@@ -237,6 +239,15 @@ export class AgentPanel {
     const context = ctx ?? this.lastContext;
     if (context?.mode !== "tui") return;
     this.lastContext = context;
+    // A waiting graph node is pending on its inputs, not on the user.
+    this.programStatus.setActive(
+      this.host
+        .current()
+        ?.list()
+        .some(
+          (agent) => agent.state === "working" || agent.state === "waiting",
+        ) ?? false,
+    );
     if (!this.shouldShow()) this.focused = false;
     // Only the focused panel shows times; the summary line changes with the
     // agents, which update the panel themselves.
@@ -248,6 +259,10 @@ export class AgentPanel {
       // widget mounted too, so keyboard guards always have the current TUI.
       context.ui.setWidget(WIDGET_KEY, (tui, theme) => {
         this.lastTui = tui;
+        this.programStatus.attach(tui.terminal, {
+          app: "pi",
+          state: context.isIdle() ? "idle" : "working",
+        });
         return new PanelLines(
           (width) => this.frame(tui, theme, width),
           (line, column) => this.click(line, column),
@@ -595,6 +610,7 @@ export class AgentPanel {
 
   dispose(): void {
     this.disposed = true;
+    this.programStatus.dispose();
     if (this.mounted) this.lastContext?.ui.setWidget(WIDGET_KEY, undefined);
     this.mounted = false;
     this.lastContext = undefined;

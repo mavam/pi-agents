@@ -1,0 +1,8 @@
+created: 2026-11-14
+title: Terminal status that follows your agents
+intro: >-
+  Terminals that show Pi's status, such as Rex and Herdr, now keep showing Pi as working
+  while your agents work or wait on their inputs, even after your own turn ends.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.40.0

@@ -20,7 +20,7 @@ import {
 import { CONTEXT, contextFor, conversationId, taskId } from "./context.js";
 import { type CreationDeps, createGraph } from "./creation.js";
 import { Delivery } from "./delivery.js";
-import type { AgentExtensions } from "./extensions.js";
+import { type AgentExtensions, syncTwinSelections } from "./extensions.js";
 import { describeReport, type HarnessReport } from "./failures.js";
 import { userInput } from "./inputs.js";
 import { MessageLog } from "./message-log.js";
@@ -123,6 +123,9 @@ export class AgentService {
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshChain: Promise<void> = Promise.resolve();
   private unsubscribeParent: (() => void) | undefined;
+  private unsubscribeTwin: (() => void) | undefined;
+  /** Updates of agents' twin extensions, one after another. */
+  private twinChain: Promise<void> = Promise.resolve();
   private closed = false;
 
   private readonly creation: CreationDeps;
@@ -215,6 +218,17 @@ export class AgentService {
   // --- Lifecycle ---
 
   private async initialize(): Promise<void> {
+    // Before any work resumes, so it sees the twin's namespaces.
+    await syncTwinSelections(this.creation.anchor, this.extensions);
+    this.unsubscribeTwin = this.extensions.twin.onNamespaces(() => {
+      this.twinChain = this.twinChain
+        .then(() =>
+          this.closed
+            ? undefined
+            : syncTwinSelections(this.creation.anchor, this.extensions),
+        )
+        .catch((error) => this.onReport(error));
+    });
     // Work a crash left running behind a stop fence ends before it can
     // go on: the stop may have recorded the fence before its aborts.
     // Before observing, whose refreshes can resume scheduling.
@@ -287,10 +301,12 @@ export class AgentService {
     this.observer.stop();
     this.stalls.stop();
     this.unsubscribeParent?.();
+    this.unsubscribeTwin?.();
     this.listeners.clear();
     this.waits.check();
     await this.refreshChain.catch(() => {});
     await this.reconcileChain.catch(() => {});
+    await this.twinChain;
     await this.delivery.settle();
   }
 

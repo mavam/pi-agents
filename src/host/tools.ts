@@ -26,7 +26,6 @@ import {
 } from "@earendil-works/pi-durable";
 import {
   CODEMODE_TOOL_NAME,
-  type CodemodeNamespace,
   createCodemodeExtension,
 } from "@earendil-works/pi-durable/codemode";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
@@ -194,14 +193,10 @@ export function withCodemodeModels(
  * also get `models.*`; their classifier and image calls run as internal
  * tools, which agents with `codemode` enable along with it.
  */
-export function createToolsExtension(
-  /** Namespaces of other tools scripts call, such as MCP servers; read at
-   * each use, so they may change. */
-  namespaces: readonly CodemodeNamespace[] = [],
-): ToolsExtension {
+export function createToolsExtension(): ToolsExtension {
   // Like Pi, scripts have no deadline unless they ask for one.
   const sandbox = new CodemodeSandbox({ timeoutMs: Number.POSITIVE_INFINITY });
-  const codemode = createCodemodeExtension({ sandbox, namespaces });
+  const codemode = createCodemodeExtension({ sandbox });
   const sections = (codemode.sections ?? []).map(
     (each): PromptSection => ({
       ...each,

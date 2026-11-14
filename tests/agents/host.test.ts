@@ -174,14 +174,14 @@ describe("hosts", () => {
     const ours = [extensions.tools.name, extensions.prompt.name];
     // Every agent messages and gets the tool twin's tools; only agents
     // that may spawn select spawning.
-    const twin = extensions.twin.extension.name;
-    const messaging = [...ours, extensions.messaging.name, twin];
+    const twin = extensions.twin.extensions().map((each) => each.name);
+    const messaging = [...ours, extensions.messaging.name, ...twin];
     for (const [name, selected] of [
       ["solo", messaging],
       ["x", messaging],
       [
         "lead",
-        [...ours, extensions.spawning.name, extensions.messaging.name, twin],
+        [...ours, extensions.spawning.name, extensions.messaging.name, ...twin],
       ],
       ["lead.h", messaging],
     ] as const) {

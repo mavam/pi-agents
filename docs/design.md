@@ -125,6 +125,11 @@ return, or truncate it before the model sees it. For this reason,
 codemode. Other agent tools remain composable from scripts. Settlement and
 recovery use the same transcript evidence.
 
+Waiting holds nothing. A node that sent its agent the job, and an agent's
+wait for its groups, sleep until the work they wait for signals that it
+settled, so they occupy no running work meanwhile, and a restart finds
+them where they were, timeouts included.
+
 Cancellation follows the work. Interrupting an agent corrects it: its
 agents keep working, and their results wait until the agent answered
 again, so they don't restart the work the user just stopped. Stopping an
@@ -213,6 +218,20 @@ agents' storage opens. Agents' calls to its tools are durable tool calls
 like any other. The twin is meant to go: once Pi offers durable versions of
 these tools, or a way to call the user's session's tools from outside its
 turns, agents use those instead.
+
+Servers can take seconds to connect, so the twin starts in the background
+and opening agents never waits for it. The agents' store keeps the twin's
+tools as they were when its startup last ended, and until it ends again
+they stand in for them: agents see their tools at once, and a call that
+resumes after a restart finds its tool instead of failing because its
+server isn't connected yet. Such a call parks until its server connected,
+holding nothing while it waits. Without that record, starting the first
+agents waits for the startup, as Pi's first prompt waits for its servers.
+
+Each namespace of tools, such as an MCP server, is a group of its own, as
+in Pi: scripts see it listed with its description, and
+`describeNamespace()` returns its instructions. Namespaces come and go as
+servers connect, so every agent's selection follows them.
 
 The twin is separate from the user's session: it connects to the servers
 again and never shares the user's conversation, UI, or session-only

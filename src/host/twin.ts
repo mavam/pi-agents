@@ -27,7 +27,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-/** How long opening waits for servers to connect, as Pi waits at start. */
+/** How long the twin's startup waits for servers to connect at most, as
+ * Pi waits at start. */
 export const TWIN_STARTUP_WAIT_MS = 10_000;
 
 /** A tool that reaches every tool, so Pi's MCP extension waits for every
@@ -215,11 +216,14 @@ export class ToolTwin {
   }
 
   /**
-   * Wait until every MCP server connected or failed, at most `timeoutMs`.
-   * Servers that take longer add their tools once they connect.
+   * Wait until every MCP server connected or failed, at most `timeoutMs`
+   * or until `cancel` aborts. Servers that take longer add their tools
+   * once they connect.
    */
-  async ready(timeoutMs: number): Promise<void> {
-    const signal = AbortSignal.timeout(timeoutMs);
+  async ready(timeoutMs: number, cancel?: AbortSignal): Promise<void> {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = cancel ? AbortSignal.any([timeout, cancel]) : timeout;
+    if (signal.aborted) return;
     await Promise.race([
       this.session.extensionRunner.emitToolCall({
         type: "tool_call",
@@ -231,6 +235,11 @@ export class ToolTwin {
         signal.addEventListener("abort", resolve, { once: true }),
       ),
     ]);
+  }
+
+  /** One of the tools agents can call, if the twin has it now. */
+  tool(name: string): TwinTool | undefined {
+    return this.tools().find((tool) => tool.info.name === name);
   }
 
   /** The tools agents can call: MCP's and the allowed extensions'. */

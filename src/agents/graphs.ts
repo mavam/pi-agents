@@ -28,14 +28,18 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   type ConversationId,
   defineExtension,
+  defineSignal,
   defineTask,
   type EntryRecord,
   type Extension,
   LiveDoc,
+  type SettledSubmissionRecord,
+  SubmissionSettled,
   type TaskId,
   type TaskOutcome,
   type TaskRuntime,
 } from "@earendil-works/pi-durable";
+import { Type } from "typebox";
 import { keepsRequestsOpen } from "./derive.js";
 import {
   coveringAnswer,
@@ -69,13 +73,18 @@ type NodeState =
   | { phase: "wait" }
   /** `inputs`: node task IDs whose results the agent receives. */
   | { phase: "run"; inputs: number[]; progress?: number }
+  /** The agent got its job; its submission signals the node once it
+   * settled. */
+  | { phase: "answer"; agent: number }
   /** The agent got its job at entry `since` but hasn't settled it: it was
    * interrupted, cut off by crashes, or answered before results of its
    * groups arrived. */
   | { phase: "settle"; agent: number; since: number; progress?: number }
   /** The agent's job failed in the run of input `submission`; the groups
    * that run spawned stop first. */
-  | { phase: "fail"; agent: number; reason: string; submission?: number };
+  | { phase: "fail"; agent: number; reason: string; submission?: number }
+  /** The withdrawn groups ended; the job fails with `reason`. */
+  | { phase: "failed"; reason: string };
 
 export type GraphInput = { policy: GraphPolicy };
 type GraphState = { phase: "join" } | { phase: "report"; nodes: number[] };
@@ -88,6 +97,30 @@ type ReadTx = Parameters<Parameters<Runtime["commit"]>[0]>[0];
 /** Request ID of a node's submission, so a rerun finds the same one. */
 export function nodeRequestId(node: number): string {
   return `node:${node}`;
+}
+
+/** The key under which a node's submission signals that it settled. */
+const ANSWER_KEY = "answer";
+
+/** Tells the `agent_wait` call that claimed a group's result that the
+ * group ended, under the group's key. */
+export const GroupEnded = defineSignal({
+  name: "pi-agents.group-ended",
+  version: 1,
+  schema: Type.Object({}),
+});
+
+/** The key of a group's `GroupEnded` signal. */
+export function groupKey(group: number): string {
+  return `group:${group}`;
+}
+
+/** Signal the call that claimed the group's result, if any, in the commit
+ * that ends the group. Before the commit writes anything. */
+async function signalClaim(tx: ReadTx, group: number): Promise<void> {
+  const claim = (await tx.doc(GraphsDoc)).graphs[String(group)]?.claim;
+  if (claim !== undefined)
+    await tx.signal(claim as TaskId, GroupEnded, groupKey(group), {});
 }
 
 function textOf(value: unknown): string | undefined {
@@ -318,19 +351,85 @@ async function nextChange(
   runtime.signal.throwIfAborted();
 }
 
+/**
+ * End the node's job with how its submission settled: answered, failed,
+ * or still open, as `settle` decides for answers before results the agent
+ * was owed and for interrupted runs.
+ */
+async function finish(
+  runtime: Runtime,
+  context: Context,
+  agent: number,
+  settled: SettledSubmissionRecord,
+): Promise<void> {
+  await runtime.commit(async (tx) => {
+    // Only the groups of the failed run: a later run's are another
+    // request's work, also when this phase reruns after a restart.
+    const failed = (reason: string) =>
+      ({
+        status: "running",
+        checkpoint: {
+          phase: "fail",
+          agent,
+          reason,
+          submission: Number(settled.id),
+        },
+      }) as const;
+    const settle = (since: number) =>
+      ({
+        status: "running",
+        checkpoint: { phase: "settle", agent, since },
+      }) as const;
+    const completed = (result: NodeResult) =>
+      ({
+        status: "terminal",
+        outcome: { status: "completed", result },
+      }) as const;
+    if (settled.type !== "input") return failed("unexpected submission");
+    if (settled.status === "done") {
+      const entry = await tx.entry(settled.answer);
+      const answer = entry?.model?.[0] as AssistantMessage | undefined;
+      if (answer?.stopReason === "error")
+        return failed(answer.errorMessage ?? "error");
+      if (answer?.stopReason === "aborted") return settle(settled.entry);
+      const graphs = (await tx.doc(GraphsDoc)).graphs;
+      // An answer before results it was owed is an intermediate one.
+      return covers(settled.answer, obligationsOf(String(agent), graphs))
+        ? completed({ kind: "answered", entryId: settled.answer })
+        : settle(settled.entry);
+    }
+    if (settled.status !== "unanswered") return undefined;
+    // An interrupt corrects the agent rather than ending its job,
+    // so `failFast` keeps its siblings working, and so do crashes
+    // that cut it off until the user continues it. A job withdrawn
+    // before the agent saw it ends.
+    if (keepsRequestsOpen(settled.reason))
+      return settled.entry === undefined
+        ? completed({ kind: "interrupted" })
+        : settle(settled.entry);
+    return failed(textOf(settled.detail) ?? settled.reason);
+  }, context);
+}
+
 /** How often a settling node checks again without a change it saw. */
 const SETTLE_RECHECK_MS = 5_000;
 
 /**
  * One agent of a graph. It waits for the nodes it needs, then sends its
  * agent its job with their results appended, using a request ID derived
- * from the node, so a node interrupted by a restart waits for the same
- * submission instead of sending it again.
+ * from the node, so a node interrupted by a restart finds the same
+ * submission instead of sending it again. It sleeps until the submission
+ * signals that it settled.
  */
 export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
   name: NODE_TASK,
-  version: 2,
+  // Version 3 added the phases `answer` and `failed`.
+  version: 3,
   initial: () => ({ phase: "wait" }),
+  migrate: (input, checkpoint) => ({
+    input: input as NodeInput,
+    checkpoint: checkpoint as NodeState,
+  }),
   phases: {
     wait: async (task, runtime, context) => {
       try {
@@ -425,6 +524,8 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
             content: message,
             whenBusy: "followUp",
             requestId: nodeRequestId(task.id),
+            // Settling signals the node, which holds nothing meanwhile.
+            notify: { taskId: task.id as TaskId, key: ANSWER_KEY },
           },
           context,
         );
@@ -433,54 +534,52 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
           await interrupted();
           return;
         }
-        const settled = await submission.wait(context);
-        await runtime.commit(async (tx) => {
-          // Only the groups of the failed run: a later run's are another
-          // request's work, also when this phase reruns after a restart.
-          const failed = (reason: string) =>
-            ({
-              status: "running",
-              checkpoint: {
-                phase: "fail",
-                agent,
-                reason,
-                submission: Number(settled.id),
-              },
-            }) as const;
-          const settle = (since: number) =>
-            ({
-              status: "running",
-              checkpoint: { phase: "settle", agent, since },
-            }) as const;
-          const completed = (result: NodeResult) =>
-            ({
+        const record = await read(runtime, context, (tx) =>
+          tx.submission(submission.id),
+        );
+        if (record?.notify?.taskId !== task.id) {
+          // Sent by an earlier version, which doesn't signal: wait for it.
+          await finish(runtime, context, agent, await submission.wait(context));
+          return;
+        }
+        await runtime.commit(
+          () => ({
+            status: "sleeping",
+            checkpoint: { phase: "answer", agent },
+            signals: [SubmissionSettled.key(ANSWER_KEY)],
+          }),
+          context,
+        );
+      } catch (error) {
+        rethrowUnlessAborted(runtime.signal, error);
+      }
+    },
+    answer: async (task, runtime, context) => {
+      try {
+        const signal = await runtime.readSignal(
+          SubmissionSettled,
+          ANSWER_KEY,
+          context,
+        );
+        if (signal === undefined || !("value" in signal)) {
+          await runtime.commit(
+            () => ({
               status: "terminal",
-              outcome: { status: "completed", result },
-            }) as const;
-          if (settled.type !== "input") return failed("unexpected submission");
-          if (settled.status === "done") {
-            const entry = await tx.entry(settled.answer);
-            const answer = entry?.model?.[0] as AssistantMessage | undefined;
-            if (answer?.stopReason === "error")
-              return failed(answer.errorMessage ?? "error");
-            if (answer?.stopReason === "aborted") return settle(settled.entry);
-            const graphs = (await tx.doc(GraphsDoc)).graphs;
-            // An answer before results it was owed is an intermediate one.
-            return covers(settled.answer, obligationsOf(String(agent), graphs))
-              ? completed({ kind: "answered", entryId: settled.answer })
-              : settle(settled.entry);
-          }
-          if (settled.status !== "unanswered") return undefined;
-          // An interrupt corrects the agent rather than ending its job,
-          // so `failFast` keeps its siblings working, and so do crashes
-          // that cut it off until the user continues it. A job withdrawn
-          // before the agent saw it ends.
-          if (keepsRequestsOpen(settled.reason))
-            return settled.entry === undefined
-              ? completed({ kind: "interrupted" })
-              : settle(settled.entry);
-          return failed(textOf(settled.detail) ?? settled.reason);
-        }, context);
+              outcome: {
+                status: "failed",
+                error: { message: "the agent's answer is missing" },
+              },
+            }),
+            context,
+          );
+          return;
+        }
+        await finish(
+          runtime,
+          context,
+          task.state.checkpoint.agent,
+          signal.value,
+        );
       } catch (error) {
         rethrowUnlessAborted(runtime.signal, error);
       }
@@ -553,15 +652,29 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
     fail: async (task, runtime, context) => {
       const { agent, reason, submission } = task.state.checkpoint;
       try {
-        let live: number[] = [];
-        await runtime.commit(async (tx) => {
-          live = await cancelGroups(tx, agent, submission);
-          return undefined;
-        }, context);
         // The service stops the withdrawn groups; the job fails once they
         // ended, so nothing they do outlives the failure.
-        for (const group of live)
-          await runtime.waitForTask(group as TaskId, context);
+        await runtime.commit(async (tx) => {
+          const live = await cancelGroups(tx, agent, submission);
+          return live.length === 0
+            ? {
+                status: "terminal",
+                outcome: { status: "failed", error: { message: reason } },
+              }
+            : {
+                status: "waiting",
+                checkpoint: { phase: "failed", reason },
+                on: live as TaskId[],
+                policy: "allSettled",
+              };
+        }, context);
+      } catch (error) {
+        rethrowUnlessAborted(runtime.signal, error);
+      }
+    },
+    failed: async (task, runtime, context) => {
+      const { reason } = task.state.checkpoint;
+      try {
         await runtime.commit(
           () => ({
             status: "terminal",
@@ -632,26 +745,26 @@ export const GraphTask = defineTask<GraphInput, GraphState, GraphResult>({
           task.state.checkpoint.nodes as TaskId<NodeResult>[],
           context,
         );
-        await runtime.commit(
-          () => ({
+        await runtime.commit(async (tx) => {
+          await signalClaim(tx, task.id);
+          return {
             status: "terminal",
             outcome: {
               status: "completed",
               result: { outcomes: outcomes.map((outcome) => outcome.status) },
             },
-          }),
-          context,
-        );
+          } as const;
+        }, context);
       } catch (error) {
         rethrowUnlessAborted(runtime.signal, error);
       }
     },
   },
-  abort: (_task, runtime, context) =>
-    runtime.commit(
-      () => ({ status: "terminal", outcome: { status: "aborted" } }),
-      context,
-    ),
+  abort: (task, runtime, context) =>
+    runtime.commit(async (tx) => {
+      await signalClaim(tx, task.id);
+      return { status: "terminal", outcome: { status: "aborted" } } as const;
+    }, context),
 });
 
 export function createGraphsExtension(): Extension {

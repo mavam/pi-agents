@@ -187,14 +187,17 @@ export async function openAgentHarness(
     if (wanted) tools.start();
     tools.restore(
       wanted ? await harness.snapshot(TwinCatalogDoc, CONTEXT) : undefined,
-      (catalog) =>
-        anchor.commit(async (tx) => {
-          (await tx.doc(TwinCatalogDoc)).tools = catalog.tools;
-        }, CONTEXT),
-      (error) =>
-        twin?.onProblem(
-          `couldn't store the tool twin's catalog: ${error instanceof Error ? error.message : String(error)}`,
-        ),
+      {
+        persist: (catalog) =>
+          anchor.commit(async (tx) => {
+            (await tx.doc(TwinCatalogDoc)).tools = catalog.tools;
+          }, CONTEXT),
+        harness,
+        report: (error) =>
+          twin?.onProblem(
+            `the tool twin's tools: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+      },
     );
     if (wanted && twin) stopTwin = startTwin(options.cwd, twin, tools);
     else tools.settle();

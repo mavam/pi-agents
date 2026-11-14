@@ -85,6 +85,10 @@ before showing it, so a raw return isn't evidence that the model received
 the result. Scripts can still compose spawning, messaging, status, and stop
 calls; results arrive asynchronously.
 
+An agent's `agent_wait` holds nothing while its agents work: it sleeps
+until each of its groups ends, gives the agent's working slot up
+meanwhile, and keeps its timeout across a restart.
+
 Peer messages don't wake `agent_wait`. A child that needs clarification
 from its waiting spawner must wait until that call ends; prefer asynchronous
 results when the agents need to exchange questions.

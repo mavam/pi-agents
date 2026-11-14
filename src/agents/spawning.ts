@@ -20,14 +20,12 @@
  * another conversation's tasks.
  *
  * A rerun of `agent_spawn` finds the group its call started; one of
- * `agent_wait` waits for the groups its first run chose.
+ * `agent_wait` waits for the groups its first run chose. A wait parks, so
+ * it holds nothing while the groups work.
  */
 
 import type { Context } from "@earendil-works/chord/context";
-import {
-  awaitWithContext,
-  withAbortSignal,
-} from "@earendil-works/chord/context";
+import { awaitWithContext } from "@earendil-works/chord/context";
 import {
   type AgentChange,
   AgentDoc,
@@ -39,11 +37,12 @@ import {
   type TaskId,
   type ToolExecutionApi,
   type ToolExecutionResult,
+  type ToolPark,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { type Static, Type } from "typebox";
 import { StringEnum } from "../schema.js";
-import { GraphTask, NodeTask } from "./graphs.js";
+import { GraphTask, GroupEnded, groupKey, NodeTask } from "./graphs.js";
 import type { MessagingHub } from "./hub.js";
 import { UNBOUNDED_OUTPUT } from "./messaging.js";
 import { claimName, takenNames } from "./names.js";
@@ -610,13 +609,27 @@ function resolveGroup(
 
 type WaitBinding = { groups: string[] };
 
+/** What a parked wait keeps: when it gives up, if it does. */
+type WaitPark = { deadline?: number };
+
+/** Resumes the working-agent slots that parked waits gave up, by call. */
+const pausedWaits = new Map<number, () => void>();
+
+/**
+ * Wait for the agent's groups by parking: the call holds nothing while they
+ * work, and each group that ends signals the call that claimed its result.
+ * The timeout is part of the park, so a restart doesn't reset it.
+ */
 async function waitExecute(
   args: { names?: string[]; timeout?: number },
   api: Api,
   context: Context,
   options: SpawningOptions,
-): Promise<ToolExecutionResult> {
+): Promise<ToolExecutionResult | ToolPark> {
   const id = String(api.conversationId);
+  pausedWaits.get(api.taskId)?.();
+  pausedWaits.delete(api.taskId);
+  const parked = api.checkpoint as WaitPark | undefined;
   // The first run chooses the groups; every run claims them again, so a
   // rerun after a restart never returns a result that went out as input
   // meanwhile.
@@ -669,33 +682,40 @@ async function waitExecute(
         : "Those results already reached you, or arrive as a message.",
     );
   const groups = claimed;
-  const progress = await Promise.all(
-    groups.map((group) => startedReceipt(api, context, group)),
-  );
-  await api.details(
-    {
-      receipt: receipt({
-        graphs: progress.filter((each) => each !== undefined),
-      }),
-    },
-    context,
-  );
-  const timeout =
-    args.timeout !== undefined && args.timeout > 0
-      ? AbortSignal.timeout(args.timeout * 1000)
-      : undefined;
-  const waitContext = timeout ? withAbortSignal(timeout, context) : context;
-  const resume = options.pause?.(id);
-  try {
-    await Promise.all(
-      groups.map((group) =>
-        api.waitForTask(Number(group) as TaskId, waitContext).catch((error) => {
-          if (!timeout?.aborted) throw error;
-        }),
-      ),
+  if (!parked) {
+    const progress = await Promise.all(
+      groups.map((group) => startedReceipt(api, context, group)),
     );
-  } finally {
-    resume?.();
+    await api.details(
+      {
+        receipt: receipt({
+          graphs: progress.filter((each) => each !== undefined),
+        }),
+      },
+      context,
+    );
+  }
+  const deadline =
+    parked?.deadline ??
+    (args.timeout !== undefined && args.timeout > 0
+      ? api.now() + args.timeout * 1000
+      : undefined);
+  const open: string[] = [];
+  for (const group of groups) {
+    const task = await api.getTask(Number(group) as TaskId, context);
+    if (task?.state.status !== "terminal") open.push(group);
+  }
+  if (open.length > 0 && (deadline === undefined || api.now() < deadline)) {
+    // The agent gives its working slot up while its groups work.
+    const resume = options.pause?.(id);
+    if (resume) pausedWaits.set(api.taskId, resume);
+    return {
+      sleep: {
+        checkpoint: (deadline === undefined ? {} : { deadline }) as WaitPark,
+        signals: open.map((group) => GroupEnded.key(groupKey(Number(group)))),
+        ...(deadline === undefined ? {} : { until: deadline }),
+      },
+    };
   }
   const results = await Promise.all(
     groups.map(async (group) => ({
@@ -864,6 +884,11 @@ export function spawningTools(options: SpawningOptions): ToolRegistration[] {
       replay: "safe",
       outputLimits: UNBOUNDED_OUTPUT,
       execute: (args, api, context) => waitExecute(args, api, context, options),
+      // A wait the agent stops holds its slot again.
+      cancel: async (_args, api) => {
+        pausedWaits.get(api.taskId)?.();
+        pausedWaits.delete(api.taskId);
+      },
     }),
     defineTool({
       name: STOP_TOOL,

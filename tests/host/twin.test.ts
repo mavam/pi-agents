@@ -288,8 +288,7 @@ test("calls of stored tools wait for the twin to start", async () => {
         },
       ],
     },
-    async () => {},
-    () => {},
+    { persist: async () => {}, harness, report: () => {} },
   );
   const service = await AgentService.start({
     harness,

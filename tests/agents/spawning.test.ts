@@ -37,7 +37,8 @@ afterEach(async () => {
 /**
  * A faux model for agents that spawn. A job `spawn <json>` calls
  * agent_spawn with that JSON; after its result, the agent answers
- * `checking`, or with `wait` in the job, calls agent_wait. A job
+ * `checking`, or with `wait` at the end of the job, calls agent_wait,
+ * with `wait <seconds>` as its timeout. A job
  * `script <code>` runs codemode. Results that arrive as input or from
  * other tools, and failed calls, are answered `final: <first line>`. Jobs
  * with `hold` work until aborted (unless `hold` is false); others answer
@@ -54,12 +55,20 @@ function scripted(options: { hold?: boolean } = {}) {
     const job = textOf(messages.find((each) => each.role === "user")?.content);
     const text = textOf(last?.content);
     if (last?.role === "toolResult") {
-      if (last.toolName === "agent_spawn" && !last.isError)
-        return job.includes(" wait")
-          ? fauxAssistantMessage([fauxToolCall("agent_wait", {})], {
-              stopReason: "toolUse",
-            })
+      if (last.toolName === "agent_spawn" && !last.isError) {
+        const wait = / wait(?: (\d+))?$/.exec(job);
+        return wait
+          ? fauxAssistantMessage(
+              [
+                fauxToolCall(
+                  "agent_wait",
+                  wait[1] ? { timeout: Number(wait[1]) } : {},
+                ),
+              ],
+              { stopReason: "toolUse" },
+            )
           : fauxAssistantMessage([fauxText("checking")]);
+      }
       return fauxAssistantMessage([fauxText(`final: ${text.split("\n")[0]}`)]);
     }
     const first = text.split("\n")[0] ?? "";
@@ -67,7 +76,7 @@ function scripted(options: { hold?: boolean } = {}) {
     if (first.startsWith("[results] "))
       return fauxAssistantMessage(`final: ${first}`);
     if (first.startsWith("spawn ")) {
-      const json = first.slice(6).replace(/ wait$/, "");
+      const json = first.slice(6).replace(/ wait(?: \d+)?$/, "");
       return fauxAssistantMessage(
         [fauxToolCall("agent_spawn", JSON.parse(json))],
         { stopReason: "toolUse" },
@@ -113,8 +122,10 @@ async function reopen(
   return open(options);
 }
 
-function spawnJob(agents: unknown[], wait = false): string {
-  return `spawn ${JSON.stringify({ agents })}${wait ? " wait" : ""}`;
+function spawnJob(agents: unknown[], wait: boolean | number = false): string {
+  const suffix =
+    wait === false ? "" : wait === true ? " wait" : ` wait ${wait}`;
+  return `spawn ${JSON.stringify({ agents })}${suffix}`;
 }
 
 function lead(job: string, extra: Record<string, unknown> = {}) {
@@ -338,6 +349,25 @@ describe("spawning", () => {
       "agent_wait",
     );
     expect(textOf(message?.content)).toContain("done: look");
+  });
+
+  test("agent_wait gives up at its timeout", async () => {
+    const service = await open();
+    await service.spawnGraph({
+      agents: [lead(spawnJob([{ name: "scout", job: "hold" }], 1))],
+    });
+    await until(async () =>
+      (await entries(service, "lead")).some((entry) => {
+        const message = entry.model?.[0];
+        return (
+          message?.role === "toolResult" &&
+          message.toolName === "agent_wait" &&
+          textOf(message.content).startsWith("Timed out; still working")
+        );
+      }),
+    );
+    // The group still works; its result arrives as input once it ended.
+    expect(service.get("lead.scout")?.state).toBe("working");
   });
 
   test("codemode cannot consume results without showing them to the model", async () => {

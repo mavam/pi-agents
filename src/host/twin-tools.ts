@@ -13,19 +13,23 @@
  *
  * A catalog of the tools, stored with the agents, stands in for the twin
  * while it starts: agents and calls that resume find their tools at once,
- * and a call parks until its server connected.
+ * and a call parks until the twin signals that its server connected.
  */
 
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
 import {
   defineDoc,
   defineExtension,
+  defineSignal,
   defineTool,
   type Extension,
   GenerationTask,
+  type Harness,
   hook,
   type Registry,
   section,
+  type TaskId,
   type ToolExecutionResult,
   type ToolNamespace,
   type ToolPark,
@@ -36,10 +40,12 @@ import {
   createToolSearchTool,
   TOOL_SEARCH_TOOL_NAME,
 } from "@earendil-works/pi-durable/tool-search";
-import type { TSchema } from "typebox";
+import { type TSchema, Type } from "typebox";
 import type { ToolTwin, TwinResult, TwinTool } from "./twin.js";
 
 export const TWIN_EXTENSION = "pi-agents-twin";
+
+const CONTEXT = BACKGROUND_CONTEXT;
 
 /** The extension of a namespace's tools. */
 const NAMESPACE_EXTENSION = `${TWIN_EXTENSION}/`;
@@ -53,8 +59,9 @@ export function isTwinNamespace(name: string): boolean {
  * as servers connect, reconnect, or change their tools. */
 const SYNC_INTERVAL_MS = 2_000;
 
-/** How long a parked call sleeps before it looks for its tool again. */
-const PARK_MS = 1_000;
+/** How long a parked call sleeps at most before it looks for its tool
+ * again, in case nothing signals it, as after a restart. */
+const RECHECK_MS = 5_000;
 
 /** How long a call waits for its tool at most, whatever the twin does. */
 const PARK_LIMIT_MS = 60_000;
@@ -147,8 +154,19 @@ function failure(text: string): ToolExecutionResult {
   return { output: [{ type: "text", text }], isError: true };
 }
 
-/** What a parked call keeps: when it first looked for its tool. */
-type ParkState = { since: number };
+/** What a parked call keeps: when it first looked for its tool, and how
+ * often it parked, which names the key it waits on. */
+type ParkState = { since: number; parks: number };
+
+/** Tells a parked call that its tool arrived, or that it won't. */
+const TwinToolReady = defineSignal({
+  name: "pi-agents.twin-tool",
+  version: 1,
+  schema: Type.Object({}),
+});
+
+/** What signals the calls parked for the twin's tools. */
+type Signaller = Pick<Harness, "signal">;
 
 /**
  * The servers whose tools agents reach only from scripts or by search, so
@@ -190,6 +208,7 @@ export class TwinTools {
   /** The catalog as stored, to write it only when it changed. */
   private stored = "";
   private persist: ((catalog: TwinCatalog) => Promise<void>) | undefined;
+  private harness: Signaller | undefined;
   private persisting: Promise<void> = Promise.resolve();
   private report: (error: unknown) => void = () => {};
   /** Whether no twin is starting: its servers connected, failed, or took
@@ -199,9 +218,12 @@ export class TwinTools {
   private started: Promise<void> = Promise.resolve();
   /** The signature of the tools the catalog stored last. */
   private storedSignature = "";
-  /** Calls parked for a tool, by name: their stand-ins stay until they
+  /** Calls parked for a tool, by task: their stand-ins stay until they
    * woke. */
-  private readonly parked = new Map<string, number>();
+  private readonly parked = new Map<
+    number,
+    { name: string; key: string; signaled: boolean }
+  >();
   private readonly listeners = new Set<() => void>();
 
   /** The extensions as installed now: the base, then one per namespace. */
@@ -229,18 +251,23 @@ export class TwinTools {
   }
 
   /**
-   * Stand in for the twin with `catalog` until its startup ended, and keep
-   * the catalog current with `persist` from then on.
+   * Stand in for the twin with `catalog` until its startup ended, keep the
+   * catalog current with `persist` from then on, and wake parked calls
+   * through `harness`.
    */
   restore(
     catalog: TwinCatalog | undefined,
-    persist: (catalog: TwinCatalog) => Promise<void>,
-    report: (error: unknown) => void,
+    options: {
+      persist: (catalog: TwinCatalog) => Promise<void>;
+      harness: Signaller;
+      report: (error: unknown) => void;
+    },
   ): void {
     this.standIns = catalog?.tools ?? [];
     this.stored = JSON.stringify(catalog?.tools ?? []);
-    this.persist = persist;
-    this.report = report;
+    this.persist = options.persist;
+    this.harness = options.harness;
+    this.report = options.report;
     this.sync();
   }
 
@@ -283,6 +310,7 @@ export class TwinTools {
     this.twin = undefined;
     this.persist = undefined;
     this.settle();
+    this.harness = undefined;
   }
 
   /** While a twin starts without a catalog of its tools, wait until it
@@ -306,7 +334,8 @@ export class TwinTools {
     const standIns = this.standIns.filter(
       (tool) =>
         !names.has(tool.name) &&
-        (!this.settled || (this.parked.get(tool.name) ?? 0) > 0),
+        (!this.settled ||
+          [...this.parked.values()].some((call) => call.name === tool.name)),
     );
     const signature = JSON.stringify([
       entries.map(({ entry, tool }) => [
@@ -331,6 +360,21 @@ export class TwinTools {
     if (this.settled && signature !== this.storedSignature) {
       this.storedSignature = signature;
       this.store(entries.map(({ entry }) => entry));
+    }
+    this.wake(names);
+  }
+
+  /** Signal the parked calls whose tool arrived, and all of them once the
+   * startup ended: those won't get theirs. */
+  private wake(live: ReadonlySet<string>): void {
+    const harness = this.harness;
+    if (!harness) return;
+    for (const [task, call] of this.parked) {
+      if (call.signaled || !(this.settled || live.has(call.name))) continue;
+      call.signaled = true;
+      harness
+        .signal(task as TaskId, TwinToolReady, call.key, {}, CONTEXT)
+        .catch((error) => this.report(error));
     }
   }
 
@@ -439,20 +483,29 @@ export class TwinTools {
         context,
       ): Promise<ToolExecutionResult | ToolPark> => {
         const parked = api.checkpoint as ParkState | undefined;
-        if (parked) this.unpark(entry.name);
+        this.parked.delete(api.taskId);
         const twin = this.twin;
         if (!twin?.tool(entry.name)) {
-          // Its server may connect yet: wait for it, parked.
+          // Its server may connect yet: wait for it, parked, until the twin
+          // signals that it did or that its startup ended.
           const since = parked?.since ?? api.now();
           if (this.settled || api.now() - since >= PARK_LIMIT_MS)
             return failure(
               `${entry.name} isn't available: its server isn't connected`,
             );
-          this.parked.set(entry.name, (this.parked.get(entry.name) ?? 0) + 1);
+          const parks = (parked?.parks ?? 0) + 1;
+          // A key serves one wait, so each park has its own.
+          const key = `${entry.name}#${parks}`;
+          this.parked.set(api.taskId, {
+            name: entry.name,
+            key,
+            signaled: false,
+          });
           return {
             sleep: {
-              until: api.now() + PARK_MS,
-              checkpoint: { since } satisfies ParkState,
+              until: Math.min(api.now() + RECHECK_MS, since + PARK_LIMIT_MS),
+              signals: [TwinToolReady.key(key)],
+              checkpoint: { since, parks } satisfies ParkState,
             },
           };
         }
@@ -480,14 +533,8 @@ export class TwinTools {
         };
       },
       cancel: async (_args, api) => {
-        if (api.checkpoint) this.unpark(entry.name);
+        this.parked.delete(api.taskId);
       },
     });
-  }
-
-  private unpark(name: string): void {
-    const count = (this.parked.get(name) ?? 0) - 1;
-    if (count > 0) this.parked.set(name, count);
-    else this.parked.delete(name);
   }
 }

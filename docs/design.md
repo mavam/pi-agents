@@ -125,6 +125,11 @@ return, or truncate it before the model sees it. For this reason,
 codemode. Other agent tools remain composable from scripts. Settlement and
 recovery use the same transcript evidence.
 
+Waiting holds nothing. A node that sent its agent the job, and an agent's
+wait for its groups, sleep until the work they wait for signals that it
+settled, so they occupy no running work meanwhile, and a restart finds
+them where they were, timeouts included.
+
 Cancellation follows the work. Interrupting an agent corrects it: its
 agents keep working, and their results wait until the agent answered
 again, so they don't restart the work the user just stopped. Stopping an

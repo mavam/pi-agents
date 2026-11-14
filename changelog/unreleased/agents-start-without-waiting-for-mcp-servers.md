@@ -3,6 +3,8 @@ title: Agents start without waiting for MCP servers
 type: change
 authors:
   - mavam
+prs:
+  - 124
 created: 2026-11-14T08:21:34.851172Z
 ---
 

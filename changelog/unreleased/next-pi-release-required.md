@@ -3,6 +3,8 @@ title: Next Pi release required
 type: breaking
 authors:
   - mavam
+prs:
+  - 124
 created: 2026-11-14T08:21:35.629312Z
 ---
 

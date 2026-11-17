@@ -866,7 +866,7 @@ class AgentPane implements Component {
     return ` ${parts.join(" ")} `;
   }
 
-  private windowTranscript(lines: string[], rows: number): string[] {
+  private windowTranscript(lines: readonly string[], rows: number): string[] {
     const shown = windowTranscript(lines, rows, this.scrollBack);
     this.scrollBack = shown.scrollBack;
     this.maxScroll = shown.maxScroll;

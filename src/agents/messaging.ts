@@ -96,7 +96,7 @@ export interface MessagingOptions {
 export function messageModeParameter(recipient: string) {
   return Type.Optional(
     StringEnum(MESSAGE_MODES, {
-      description: `How a working ${recipient} gets the message: "steer" (default) joins its current work at its next step, which can change its current answer; "followUp" waits until that work ends; "interrupt" first aborts that work and drops the messages queued for it, keeping its job and the agents it started`,
+      description: `How a working ${recipient} gets the message: "steer" (default) joins its current work at its next step, which can change its current answer; "followUp" waits until that work ends; "interrupt" first aborts that work and drops the messages the user and Pi queued for it, keeping its job, the agents it started, and other agents' queued messages`,
     }),
   );
 }
@@ -109,13 +109,17 @@ export function droppedNote(dropped: number): string {
     : "";
 }
 
-/** How many inputs an interrupt would drop from the inbox: what the user,
- * the parent, and other agents sent, not results, which come again. */
+/** How many inputs an interrupt would drop from the inbox: what the user
+ * and the parent sent, not other agents' messages, which stay queued, nor
+ * results, which come again. */
 export function queuedMessages(
   inbox: Readonly<InboxState> | undefined,
 ): number {
   return (inbox?.items ?? []).filter(
-    (item) => item.mode !== "write" && item.entry?.kind !== RESULTS_ENTRY,
+    (item) =>
+      item.mode !== "write" &&
+      item.onAbort !== "keep" &&
+      item.entry?.kind !== RESULTS_ENTRY,
   ).length;
 }
 
@@ -155,7 +159,8 @@ export async function markInterrupted(
   }
 }
 
-/** The submission of a logged message. */
+/** The submission of a logged message. Its sender can't take it back, so
+ * an interrupt of the recipient keeps it queued for its next input. */
 export function messageSubmission(
   message: Pick<MessageRecord, "id" | "text" | "mode">,
   sender: string,
@@ -165,6 +170,7 @@ export function messageSubmission(
     ...agentMessageInput(sender, message.text),
     whenBusy: message.mode,
     requestId: message.id,
+    onAbort: "keep",
   };
 }
 

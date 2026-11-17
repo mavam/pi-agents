@@ -449,13 +449,27 @@ describe("messaging", () => {
     expect(service.get("b")?.state).toBe("interrupted");
   });
 
-  test("interrupting a busy recipient drops its queued messages", async () => {
+  test("an interrupt keeps other agents' queued messages for the next input", async () => {
     const service = await open();
     await service.spawnGraph({ agents: [spec("b", "hold")] });
     await until(() => service.get("b")?.state === "working");
     await service.spawnGraph({ agents: [spec("a", SEND)] });
     await until(() => service.messages()[0]?.status === "queued");
     await service.interrupt("b");
+    await until(() => service.get("b")?.state !== "working");
+    expect(service.messages()[0]?.status).toBe("queued");
+    await service.prompt("b", "go on", "followUp");
+    await until(() => service.messages()[0]?.status === "delivered");
+    expect(await transcript(service, "b")).toContain("[from a]");
+  });
+
+  test("a stop drops other agents' queued messages", async () => {
+    const service = await open();
+    await service.spawnGraph({ agents: [spec("b", "hold")] });
+    await until(() => service.get("b")?.state === "working");
+    await service.spawnGraph({ agents: [spec("a", SEND)] });
+    await until(() => service.messages()[0]?.status === "queued");
+    await service.stop("b");
     await until(() => service.messages()[0]?.status === "dropped");
     expect(await transcript(service, "b")).not.toContain("[from a]");
   });

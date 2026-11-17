@@ -81,7 +81,10 @@ with your session. Tools of extensions you don't share stay with your
 session too. Agents started before you updated pi-agents keep the tools
 they had.
 
-`read` supports images. Codemode scripts can call the agent's other tools,
+`read` supports images. Images that other tools return, such as an MCP
+server's screenshots or a script's `image()`, are scaled to fit the agent's
+model before they enter its conversation, or left out with a note if they
+can't be. Codemode scripts can call the agent's other tools,
 except `agent_wait`, which the agent's model must call directly. Scripts get
 the agent tools' results as data: `agent_status` lists `agents` with their
 `name`, `state`, `model`, and `job`; `agent_send` returns the recipient as

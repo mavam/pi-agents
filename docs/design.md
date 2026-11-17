@@ -151,6 +151,12 @@ blocked wait, so a child asking its waiting spawner for clarification can't
 make progress through that exchange until the wait ends. Asynchronous
 results avoid this limitation; waits aren't a general coordination loop.
 
+An interrupt keeps the messages other agents queued for its target. Their
+senders can't take them back or learn that they were lost, unlike the
+user, whose queued text returns to the editor, so dropping them would lose
+work nobody asked to undo. The
+target's next input brings them. A stop is final, so it drops them.
+
 A message can interrupt its recipient first, so a correction doesn't wait
 for work it makes pointless. The interrupt belongs to the send, not to a
 separate authority: whoever may message an agent may interrupt it, and

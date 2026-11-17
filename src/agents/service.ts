@@ -237,6 +237,9 @@ export class AgentService {
     await this.stalls.start();
     await this.projection.reload();
     for (const id of stopped) await this.abortAgent(id);
+    // A stop a crash cut short may have left messages queued.
+    for (const [id, record] of Object.entries(this.projection.agents()))
+      if (record.stopped) await this.withdrawMessages(id);
     for (const id of Object.keys(this.projection.agents())) {
       await this.observer.loadLastAssistant(id);
       // A request recorded before a crash may lack its submission.
@@ -666,11 +669,15 @@ export class AgentService {
       // Again, for work that started between the abort and the stop, such
       // as the job of a graph's agent; nothing starts after the stop.
       await this.abortAgent(agentId);
+      await this.withdrawMessages(agentId);
     });
     // The agents below it stopped with it: end their work in their turns,
     // so a send to one lands before and is aborted, or is refused.
     for (const id of stopped.slice(1))
-      await this.extensions.hub.turn(id, () => this.abortAgent(id));
+      await this.extensions.hub.turn(id, async () => {
+        await this.abortAgent(id);
+        await this.withdrawMessages(id);
+      });
     for (const id of stopped) this.projection.clearSettled(id);
     await this.refresh(this.projection.withHelpers(stopped));
     // Their groups were withdrawn with them; stop them now.
@@ -683,6 +690,19 @@ export class AgentService {
       CONTEXT,
     );
     await conversation?.abort(CONTEXT);
+  }
+
+  /**
+   * Withdraw the messages of other agents still queued for a stopped agent.
+   * An interrupt keeps them for its next input, as their senders can't take
+   * them back, but a stop is final: they show as dropped.
+   */
+  private async withdrawMessages(agentId: string): Promise<void> {
+    const cid = conversationId(agentId);
+    const inbox = await this.harness.snapshot(InboxDoc, cid, CONTEXT);
+    for (const item of inbox?.items ?? [])
+      if (item.mode !== "write" && item.onAbort === "keep")
+        await this.harness.abortSubmission(item.id, CONTEXT, cid);
   }
 
   private async stopGraph(graphId: string): Promise<void> {
@@ -970,7 +990,10 @@ export class AgentService {
     for (const [id, record] of Object.entries(this.projection.agents())) {
       if (this.closed) return;
       if (record.stopped && this.projection.info(id)?.state === "working")
-        await this.extensions.hub.turn(id, () => this.abortAgent(id));
+        await this.extensions.hub.turn(id, async () => {
+          await this.abortAgent(id);
+          await this.withdrawMessages(id);
+        });
     }
   }
 

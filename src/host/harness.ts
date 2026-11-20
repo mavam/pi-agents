@@ -28,7 +28,11 @@ import type { AgentHooks } from "../hooks.js";
 import { ExecutionEnvs } from "./harness-setup.js";
 import { AgentRequestHooks } from "./hooks.js";
 import { ToolTwin, TWIN_STARTUP_WAIT_MS, twinWanted } from "./twin.js";
-import { TwinCatalogDoc, type TwinTools } from "./twin-tools.js";
+import {
+  type TwinCatalog,
+  TwinCatalogDoc,
+  type TwinTools,
+} from "./twin-tools.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
 
@@ -189,10 +193,16 @@ export async function openAgentHarness(
       ? await harness.snapshot(TwinCatalogDoc, CONTEXT)
       : undefined;
     tools.restore(catalog, {
-      persist: (catalog) =>
-        anchor.commit(async (tx) => {
-          (await tx.doc(TwinCatalogDoc)).tools = catalog.tools;
-        }, CONTEXT),
+      // Only a twin's tools make a catalog: storing one without a twin
+      // would skip the first start's wait once it is configured.
+      ...(wanted
+        ? {
+            persist: (catalog: TwinCatalog) =>
+              anchor.commit(async (tx) => {
+                (await tx.doc(TwinCatalogDoc)).tools = catalog.tools;
+              }, CONTEXT),
+          }
+        : {}),
       harness,
       report: (error) =>
         twin?.onProblem(

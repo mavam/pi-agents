@@ -261,9 +261,11 @@ export class ToolTwin {
    * tool, then the `tool_result` hooks, which may change its result. The
    * hooks see the twin's context, which knows nothing of the call's
    * cancellation, so the call stops waiting for them once it is aborted.
-   * `checked` is the definition whose preparation and schema the arguments
-   * passed; the tool that runs prepares and checks them again unless it is
-   * that one, such as when its server registered it again meanwhile.
+   * The arguments are checked against the tool that runs. They are also
+   * prepared as its author prepares them, unless they already were by
+   * `checked`, the definition whose preparation the call phase applied:
+   * the tool may have changed meanwhile, as when its server registered it
+   * again or a parked call waited for it.
    */
   async call(
     name: string,
@@ -290,37 +292,38 @@ export class ToolTwin {
     const definition = this.session.getToolDefinition(name);
     if (!definition)
       throw new Error(`${name} isn't available: its server isn't connected`);
+    // Always against the schema of the tool that runs: a call that resumes
+    // after a restart passes its stored arguments unchecked.
     let input = args;
-    if (definition !== checked) {
-      try {
-        const prepared = definition.prepareArguments
+    try {
+      const prepared =
+        definition !== checked && definition.prepareArguments
           ? definition.prepareArguments(args)
           : args;
-        input = validateToolArguments(
+      input = validateToolArguments(
+        {
+          name,
+          description: definition.description,
+          parameters: definition.parameters,
+        },
+        {
+          type: "toolCall",
+          id,
+          name,
+          arguments: prepared as ToolCall["arguments"],
+        },
+      ) as Record<string, unknown>;
+    } catch (error) {
+      return {
+        content: [
           {
-            name,
-            description: definition.description,
-            parameters: definition.parameters,
+            type: "text",
+            text: `${name} doesn't accept these arguments: ${message(error)}`,
           },
-          {
-            type: "toolCall",
-            id,
-            name,
-            arguments: prepared as ToolCall["arguments"],
-          },
-        ) as Record<string, unknown>;
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${name} doesn't accept these arguments: ${message(error)}`,
-            },
-          ],
-          details: {},
-          isError: true,
-        };
-      }
+        ],
+        details: {},
+        isError: true,
+      };
     }
     const context = runner.createToolContext(id, signal);
     // The tool's `ctx.signal` is the call's, as in Pi.
@@ -347,7 +350,7 @@ export class ToolTwin {
         type: "tool_result",
         toolName: name,
         toolCallId: id,
-        input: args,
+        input,
         content: result.content,
         details: result.details,
         ...(result.structuredContent === undefined

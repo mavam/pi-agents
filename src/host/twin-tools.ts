@@ -76,7 +76,7 @@ type CatalogTool = {
   namespace?: { name: string; description: string; instructions?: string };
 };
 
-type TwinCatalog = { tools: CatalogTool[] };
+export type TwinCatalog = { tools: CatalogTool[] };
 
 /** The twin's tools when its startup last ended, which stand in for them
  * while it starts again. */
@@ -262,7 +262,7 @@ export class TwinTools {
   restore(
     catalog: TwinCatalog | undefined,
     options: {
-      persist: (catalog: TwinCatalog) => Promise<void>;
+      persist?: (catalog: TwinCatalog) => Promise<void>;
       harness: Signaller;
       report: (error: unknown) => void;
     },

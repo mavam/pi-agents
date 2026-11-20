@@ -243,6 +243,31 @@ test("the twin's tools are stored for the next start", async () => {
   );
 });
 
+test("a twin without tools stores an empty catalog", async () => {
+  const directory = tempDir("pi-agents-twin-empty-");
+  fs.writeFileSync(
+    path.join(directory, "package.json"),
+    JSON.stringify({ name: "twin-empty", pi: { extensions: ["./empty.ts"] } }),
+  );
+  fs.writeFileSync(
+    path.join(directory, "empty.ts"),
+    "export default function () {}\n",
+  );
+  const service = await openService({
+    storage: await jsonlStorage(tempDir("pi-agents-twin-store-")),
+    twinExtensions: [directory],
+  });
+  services.push(service);
+  await service.spawnGraph({
+    agents: [{ name: "a", job: "a", cwd: ".", model: MODEL }],
+  });
+  const harness = hostOf(service).harness.harness;
+  await until(
+    async () =>
+      (await harness.snapshot(TwinCatalogDoc, CONTEXT))?.tools.length === 0,
+  );
+});
+
 test("calls of stored tools wait for the twin to start", async () => {
   const faux = fauxProvider();
   const models = createModels();

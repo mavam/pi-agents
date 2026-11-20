@@ -18,7 +18,6 @@
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
-import { type ToolCall, validateToolArguments } from "@earendil-works/pi-ai";
 import {
   defineDoc,
   defineExtension,
@@ -220,6 +219,9 @@ export class TwinTools {
   private started: Promise<void> = Promise.resolve();
   /** The signature of the tools the catalog stored last. */
   private storedSignature = "";
+  /** Whether a catalog was stored, also an empty one: then nothing needs
+   * to wait for the twin. */
+  private catalogKnown = false;
   /** Calls parked for a tool, by task: their stand-ins stay until they
    * woke. */
   private readonly parked = new Map<
@@ -266,6 +268,7 @@ export class TwinTools {
     },
   ): void {
     this.standIns = catalog?.tools ?? [];
+    this.catalogKnown = catalog !== undefined;
     this.stored =
       catalog === undefined ? undefined : JSON.stringify(catalog.tools);
     this.persist = options.persist;
@@ -320,7 +323,7 @@ export class TwinTools {
    * settled, as Pi's first prompt waits for its servers. New agents and
    * resumed work then find its tools. */
   async ready(): Promise<void> {
-    if (this.settled || this.standIns.length > 0) return;
+    if (this.settled || this.catalogKnown) return;
     await this.started;
   }
 
@@ -361,7 +364,7 @@ export class TwinTools {
         [...entries.map(({ entry }) => entry), ...standIns],
       );
     }
-    if (this.settled && signature !== this.storedSignature) {
+    if (this.settled && this.persist && signature !== this.storedSignature) {
       this.storedSignature = signature;
       this.store(entries.map(({ entry }) => entry));
     }
@@ -464,7 +467,12 @@ export class TwinTools {
     this.stored = text;
     this.persisting = this.persisting
       .then(() => persist({ tools }))
-      .catch((error) => this.report(error));
+      .catch((error) => {
+        // The next sync writes it again.
+        this.stored = undefined;
+        this.storedSignature = "";
+        this.report(error);
+      });
   }
 
   /** The tool agents call; `live` is the twin's, absent for a stand-in. */
@@ -513,40 +521,14 @@ export class TwinTools {
             },
           };
         }
-        let input = args as Record<string, unknown>;
-        if (parked) {
-          // The arguments were checked against the tool as it was when the
-          // call parked, possibly a stand-in's: check them again against the
-          // tool as it is now, as Pi would.
-          const { definition: tool } = current;
-          try {
-            const prepared = tool.prepareArguments
-              ? tool.prepareArguments(input)
-              : input;
-            input = validateToolArguments(
-              {
-                name: entry.name,
-                description: tool.description,
-                parameters: tool.parameters,
-              },
-              {
-                type: "toolCall",
-                id: api.callId,
-                name: entry.name,
-                arguments: prepared as ToolCall["arguments"],
-              },
-            ) as Record<string, unknown>;
-          } catch (error) {
-            return failure(
-              `${entry.name} no longer accepts these arguments: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        }
         // Progress arrives as the result so far: show what it adds.
         let shown = "";
+        // The call phase prepared and checked the arguments with this
+        // proxy's definition, unless the call parked: then a stand-in's or
+        // an earlier one did, and the tool that runs checks them again.
         const result = await twin.call(
           entry.name,
-          input,
+          args as Record<string, unknown>,
           context.abortSignal,
           (partial) => {
             const text = textOf(partial);
@@ -556,6 +538,7 @@ export class TwinTools {
             );
             shown = text;
           },
+          parked ? undefined : definition,
         );
         const details = toJson(result.details);
         return {

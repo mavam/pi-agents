@@ -12,6 +12,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { type ToolCall, validateToolArguments } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   createMcpExtension,
@@ -260,12 +261,16 @@ export class ToolTwin {
    * tool, then the `tool_result` hooks, which may change its result. The
    * hooks see the twin's context, which knows nothing of the call's
    * cancellation, so the call stops waiting for them once it is aborted.
+   * `checked` is the definition whose preparation and schema the arguments
+   * passed; the tool that runs prepares and checks them again unless it is
+   * that one, such as when its server registered it again meanwhile.
    */
   async call(
     name: string,
     args: Record<string, unknown>,
     signal: AbortSignal | undefined,
     onUpdate: (partial: TwinResult) => void,
+    checked?: AnyDefinition,
   ): Promise<TwinResult> {
     const runner = this.session.extensionRunner;
     const id = this.nextId();
@@ -285,6 +290,38 @@ export class ToolTwin {
     const definition = this.session.getToolDefinition(name);
     if (!definition)
       throw new Error(`${name} isn't available: its server isn't connected`);
+    let input = args;
+    if (definition !== checked) {
+      try {
+        const prepared = definition.prepareArguments
+          ? definition.prepareArguments(args)
+          : args;
+        input = validateToolArguments(
+          {
+            name,
+            description: definition.description,
+            parameters: definition.parameters,
+          },
+          {
+            type: "toolCall",
+            id,
+            name,
+            arguments: prepared as ToolCall["arguments"],
+          },
+        ) as Record<string, unknown>;
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${name} doesn't accept these arguments: ${message(error)}`,
+            },
+          ],
+          details: {},
+          isError: true,
+        };
+      }
+    }
     const context = runner.createToolContext(id, signal);
     // The tool's `ctx.signal` is the call's, as in Pi.
     Object.defineProperty(context, "signal", {
@@ -294,7 +331,7 @@ export class ToolTwin {
     });
     let result: TwinResult;
     try {
-      result = await definition.execute(id, args, signal, onUpdate, context);
+      result = await definition.execute(id, input, signal, onUpdate, context);
     } catch (error) {
       signal?.throwIfAborted();
       // Pi runs the result hooks on failures too.

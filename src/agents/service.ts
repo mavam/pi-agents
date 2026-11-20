@@ -223,11 +223,11 @@ export class AgentService {
   private async initialize(): Promise<void> {
     // Listen first, so a namespace that comes during the first update
     // updates again; before any work resumes, so it sees the namespaces.
-    this.unsubscribeTwin = this.extensions.twin.onNamespaces(() =>
-      this.syncSelections(),
-    );
-    this.syncSelections();
-    await this.twinChain;
+    this.unsubscribeTwin = this.extensions.twin.onNamespaces(() => {
+      this.syncSelections().catch((error) => this.onReport(error));
+    });
+    // A failure fails startup rather than resume with stale selections.
+    await this.syncSelections();
     // Work a crash left running behind a stop fence ends before it can
     // go on: the stop may have recorded the fence before its aborts.
     // Before observing, whose refreshes can resume scheduling.
@@ -289,15 +289,15 @@ export class AgentService {
   }
 
   /** Update agents' selections of the twin's extensions, one update after
-   * another. */
-  private syncSelections(): void {
-    this.twinChain = this.twinChain
-      .then(() =>
-        this.closed
-          ? undefined
-          : syncTwinSelections(this.creation.anchor, this.extensions),
-      )
-      .catch((error) => this.onReport(error));
+   * another. Resolves once this update ran. */
+  private syncSelections(): Promise<void> {
+    const run = this.twinChain.then(() =>
+      this.closed
+        ? undefined
+        : syncTwinSelections(this.creation.anchor, this.extensions),
+    );
+    this.twinChain = run.catch(() => {});
+    return run;
   }
 
   /** Stop observing the harness; the host closes it afterwards. */

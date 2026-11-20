@@ -113,13 +113,16 @@ async function open(
   return service;
 }
 
+/** Close the service, then open its directory again, never both at once:
+ * opening JSONL storage recovers it, which a writer still open would race. */
 async function reopen(
   service: AgentService,
+  directory: string,
   options: Parameters<typeof open>[0],
 ): Promise<AgentService> {
   await closeService(service);
   services = services.filter((each) => each !== service);
-  return open(options);
+  return open({ ...options, storage: await jsonlStorage(directory) });
 }
 
 function spawnJob(agents: unknown[], wait: boolean | number = false): string {
@@ -616,8 +619,7 @@ describe("spawning durability", () => {
       );
     }, 10_000);
     const second = scripted({ hold: false });
-    const after = await reopen(before, {
-      storage: await jsonlStorage(directory),
+    const after = await reopen(before, directory, {
       models: second.models,
     });
     const delivery = await resultOf(after, "lead");

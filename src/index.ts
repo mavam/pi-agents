@@ -138,11 +138,32 @@ export default function agentExtension(pi: ExtensionAPI): void {
     focus.install(ctx);
     panel.update(ctx);
     transcript.start(ctx);
-    await host.start(ctx);
-    state.start(ctx.sessionManager.getSessionId());
-    panel.update(ctx);
-    footer.update();
-    parent.notify();
+    const sessionId = ctx.sessionManager.getSessionId();
+    const restored = host.start(ctx);
+    const generation = host.generation;
+    const finish = () => {
+      // A newer session took over meanwhile.
+      if (host.generation !== generation) return;
+      state.start(sessionId);
+      panel.update(ctx);
+      footer.update();
+      parent.notify();
+    };
+    // In Pi's terminal, a resumed session's agents open in the background,
+    // so Pi starts without waiting for them or their MCP servers. Other
+    // modes wait, so a run sees what its agents deliver.
+    if (ctx.mode === "tui")
+      void restored.then(finish, (error) => {
+        if (host.generation === generation)
+          notify(
+            ctx,
+            `pi-agents: ${error instanceof Error ? error.message : String(error)}`,
+          );
+      });
+    else {
+      await restored;
+      finish();
+    }
   });
 
   pi.on("agent_start", (_event, ctx) => track(ctx));

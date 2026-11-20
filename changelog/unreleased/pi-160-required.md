@@ -3,6 +3,8 @@ title: Pi 1.6.0 required
 type: breaking
 authors:
   - mavam
+prs:
+  - 125
 created: 2026-11-14T08:21:35.629312Z
 ---
 

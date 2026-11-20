@@ -214,6 +214,11 @@ like any other. The twin is meant to go: once Pi offers durable versions of
 these tools, or a way to call the user's session's tools from outside its
 turns, agents use those instead.
 
+Each namespace of tools, such as an MCP server, is a group of its own, as
+in Pi: scripts see it listed with its description, and
+`describeNamespace()` returns its instructions. Namespaces come and go as
+servers connect, so every agent's selection follows them.
+
 The twin is separate from the user's session: it connects to the servers
 again and never shares the user's conversation, UI, or session-only
 changes. Every agent gets all of its tools: choosing among them would be

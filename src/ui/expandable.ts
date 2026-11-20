@@ -71,7 +71,7 @@ class ExpandableCard implements Component {
     if (content) this.card.addChild(content);
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     this.sync();
     return this.region.render(width);
   }

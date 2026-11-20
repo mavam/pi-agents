@@ -140,8 +140,7 @@ export async function openAgentHarness(
     )
       twin = await openTwin(options.cwd, options.twin);
     // Before the harness opens, so tool calls that resume find their tools.
-    options.extensions.twin.attach(registry, twin);
-    const extensions = agentSelection(options.extensions);
+    if (twin) options.extensions.twin.connect(twin);
     harness = await Harness.open(
       options.storage,
       {
@@ -152,7 +151,7 @@ export async function openAgentHarness(
         settings: () => ({
           ...options.settings,
           // Agents select their own extensions; the anchor uses this default.
-          extensions,
+          extensions: agentSelection(options.extensions),
         }),
         env: envs.env,
         ...(options.onReport

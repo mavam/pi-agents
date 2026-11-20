@@ -1,11 +1,15 @@
 /**
  * The tool twin's tools as pi-durable tools agents call: one proxy per
- * tool, in an extension every agent selects with all of its tools. Tools
- * MCP declares only to codemode stay deferred, so scripts call them and the
- * model learns of their servers from a prompt section, as in Pi.
+ * tool. Tools MCP declares only to codemode stay deferred, so scripts call
+ * them, as in Pi.
  *
- * The twin's tools change as servers connect, so the extension is installed
- * again whenever they do; agents select it by name.
+ * Each namespace, such as an MCP server, gets an extension of its own, so
+ * codemode lists it with its description and `describeNamespace()` returns
+ * its instructions. Tools without a namespace, `tool_search`, and the
+ * namespace listing for agents without codemode are in the base extension.
+ * The twin's tools change as servers connect, so the extensions are
+ * installed again whenever they do; agents select them by name, and the
+ * service updates their selection as namespaces come and go.
  */
 
 import type { JsonValue } from "@earendil-works/chord/json";
@@ -18,9 +22,9 @@ import {
   type Registry,
   section,
   type ToolExecutionResult,
+  type ToolNamespace,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
-import type { CodemodeNamespace } from "@earendil-works/pi-durable/codemode";
 import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
 import {
   createToolSearchTool,
@@ -30,6 +34,14 @@ import type { TSchema } from "typebox";
 import type { ToolTwin, TwinResult, TwinTool } from "./twin.js";
 
 export const TWIN_EXTENSION = "pi-agents-twin";
+
+/** The extension of a namespace's tools. */
+const NAMESPACE_EXTENSION = `${TWIN_EXTENSION}/`;
+
+/** Whether `name` is the extension of one of the twin's namespaces. */
+export function isTwinNamespace(name: string): boolean {
+  return name.startsWith(NAMESPACE_EXTENSION);
+}
 
 /** How often the twin's tools are compared while nothing else syncs them,
  * as servers connect, reconnect, or change their tools. */
@@ -119,7 +131,8 @@ function summary(text: string | undefined): string {
 
 /**
  * The servers whose tools agents reach only from scripts or by search, so
- * the model knows of them, as Pi's `mcp_servers` section tells it.
+ * agents without codemode know of them, as Pi's `mcp_servers` section
+ * tells the model. Codemode lists them itself.
  */
 function namespacesSection(tools: readonly TwinTool[]): string[] | undefined {
   const namespaces = new Map<string, string>();
@@ -136,34 +149,17 @@ function namespacesSection(tools: readonly TwinTool[]): string[] | undefined {
 }
 
 const NAMESPACES_INTRO =
-  "Tool namespaces whose tools are not declared to you, such as MCP servers.";
-/** How an agent reaches those tools: from scripts, or by loading them. */
-const REACH = {
-  [CODEMODE_TOOL_NAME]:
-    "Call their tools from codemode scripts; find them with `searchTools()` and `describeNamespace()`.",
-  [TOOL_SEARCH_TOOL_NAME]:
-    "Load their tools with `tool_search`; they are available from your next call.",
-};
+  "Tool namespaces whose tools are not declared to you, such as MCP servers. Load their tools with `tool_search`; they are available from your next call.";
 
-/** The twin's namespaces for codemode, one per tool, so each tool belongs
- * exactly to its own. */
-function codemodeNamespaces(tools: readonly TwinTool[]): CodemodeNamespace[] {
-  return tools.flatMap(({ info }) =>
-    info.namespace
-      ? [
-          {
-            name: info.namespace.name,
-            prefix: info.name,
-            ...(info.namespace.description
-              ? { description: info.namespace.description }
-              : {}),
-            ...(info.namespace.instructions
-              ? { instructions: info.namespace.instructions }
-              : {}),
-          },
-        ]
-      : [],
-  );
+/** A tool's namespace as pi-durable's codemode takes it. */
+function namespaceOf(tool: TwinTool): ToolNamespace | undefined {
+  const namespace = tool.info.namespace;
+  if (!namespace) return undefined;
+  return {
+    name: namespace.name,
+    description: summary(namespace.description),
+    ...(namespace.instructions ? { instructions: namespace.instructions } : {}),
+  };
 }
 
 /**
@@ -171,9 +167,8 @@ function codemodeNamespaces(tools: readonly TwinTool[]): CodemodeNamespace[] {
  * start, also while it is empty, as without a twin.
  */
 export class TwinTools {
-  /** Codemode's namespaces, which the tools extension reads at each use. */
-  readonly namespaces: CodemodeNamespace[] = [];
-  private current: Extension = defineExtension({ name: TWIN_EXTENSION });
+  private base: Extension = defineExtension({ name: TWIN_EXTENSION });
+  private namespaced: Extension[] = [];
   /**
    * `tool_search`, which loads the twin's tools that only scripts reach,
    * for agents without `codemode`, as Pi offers MCP tools either way. It
@@ -184,23 +179,37 @@ export class TwinTools {
   private registry: Registry | undefined;
   private twin: ToolTwin | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private readonly listeners = new Set<() => void>();
 
-  /** The extension as installed now. */
-  get extension(): Extension {
-    return this.current;
+  /** The extensions as installed now: the base, then one per namespace. */
+  extensions(): Extension[] {
+    return [this.base, ...this.namespaced];
   }
 
   /** The names of the twin's tools, which agents always get. */
   names(): string[] {
-    return (this.current.tools ?? []).map((tool) => tool.name);
+    return this.extensions().flatMap((extension) =>
+      (extension.tools ?? []).map((tool) => tool.name),
+    );
   }
 
-  /** Follow `twin` in `registry` from now on. */
-  attach(registry: Registry, twin: ToolTwin | undefined): void {
+  /** Call `listener` when namespaces come or go. */
+  onNamespaces(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /** Install the extensions in `registry` from now on, without a twin
+   * until `connect`. */
+  attach(registry: Registry): void {
     this.registry = registry;
+    this.sync();
+  }
+
+  /** Follow `twin`'s tools from now on. */
+  connect(twin: ToolTwin): void {
     this.twin = twin;
     this.sync();
-    if (!twin) return;
     this.timer = setInterval(() => this.sync(), SYNC_INTERVAL_MS);
     this.timer.unref?.();
   }
@@ -228,37 +237,42 @@ export class TwinTools {
     );
     if (signature === this.signature) return;
     this.signature = signature;
-    const proxies = twin
-      ? tools.flatMap((tool) => {
-          try {
-            return [proxy(twin, tool)];
-          } catch {
-            // A schema pi-durable can't take; the other tools still work.
-            return [];
-          }
-        })
-      : [];
-    this.namespaces.splice(
-      0,
-      this.namespaces.length,
-      ...codemodeNamespaces(tools),
-    );
+    const ungrouped: ToolRegistration[] = [];
+    const groups = new Map<
+      string,
+      { namespace: ToolNamespace; tools: ToolRegistration[] }
+    >();
+    let deferred = false;
+    if (twin)
+      for (const tool of tools) {
+        let registration: ToolRegistration;
+        try {
+          registration = proxy(twin, tool);
+        } catch {
+          // A schema pi-durable can't take; the other tools still work.
+          continue;
+        }
+        if (registration.deferred === true) deferred = true;
+        const namespace = namespaceOf(tool);
+        if (!namespace) {
+          ungrouped.push(registration);
+          continue;
+        }
+        const group = groups.get(namespace.name);
+        if (group) group.tools.push(registration);
+        else groups.set(namespace.name, { namespace, tools: [registration] });
+      }
     const listing = namespacesSection(tools);
-    const deferred = proxies.some((tool) => tool.deferred === true);
-    this.current = defineExtension({
+    this.base = defineExtension({
       name: TWIN_EXTENSION,
-      tools: [...proxies, ...(deferred ? [this.search] : [])],
+      tools: [...ungrouped, ...(deferred ? [this.search] : [])],
       sections: listing
         ? [
             section("tool_namespaces", (input) => {
               const names = new Set(input.agent.tools.map((tool) => tool.name));
-              const reach = names.has(CODEMODE_TOOL_NAME)
-                ? REACH[CODEMODE_TOOL_NAME]
-                : names.has(TOOL_SEARCH_TOOL_NAME)
-                  ? REACH[TOOL_SEARCH_TOOL_NAME]
-                  : undefined;
-              return reach
-                ? [`${NAMESPACES_INTRO} ${reach}`, ...listing].join("\n")
+              return names.has(TOOL_SEARCH_TOOL_NAME) &&
+                !names.has(CODEMODE_TOOL_NAME)
+                ? [NAMESPACES_INTRO, ...listing].join("\n")
                 : undefined;
             }),
           ]
@@ -273,6 +287,24 @@ export class TwinTools {
         }),
       ],
     });
-    registry.install(this.current);
+    registry.install(this.base);
+    const before = this.namespaced.map((extension) => extension.name);
+    const next = [...groups.values()]
+      .sort((a, b) => a.namespace.name.localeCompare(b.namespace.name))
+      .map(({ namespace, tools: grouped }) =>
+        defineExtension({
+          name: `${NAMESPACE_EXTENSION}${namespace.name}`,
+          namespace,
+          tools: grouped,
+        }),
+      );
+    const kept = new Set(next.map((extension) => extension.name));
+    for (const extension of this.namespaced)
+      if (!kept.has(extension.name)) registry.uninstall(extension);
+    for (const extension of next) registry.install(extension);
+    this.namespaced = next;
+    const after = next.map((extension) => extension.name);
+    if (JSON.stringify(before) !== JSON.stringify(after))
+      for (const listener of this.listeners) listener();
   }
 }

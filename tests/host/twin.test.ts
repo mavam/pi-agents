@@ -152,3 +152,55 @@ test("agents without codemode load the twin's script tools with tool_search", as
   expect(prompts[0]).toContain("Load their tools with `tool_search`");
   expect(prompts[0]).toContain("- twin: The twin's tools");
 });
+
+test("codemode lists the twin's namespaces and describes them", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const prompts: string[] = [];
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      prompts.push(
+        JSON.stringify(
+          context.messages.filter((message) => message.role === "system"),
+        ),
+      );
+      const last = context.messages.at(-1);
+      if (last?.role === "toolResult")
+        return fauxAssistantMessage(
+          last.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join(""),
+        );
+      return fauxAssistantMessage(
+        [
+          fauxToolCall("codemode", {
+            code: 'return await describeNamespace("twin")',
+          }),
+        ],
+        { stopReason: "toolUse" },
+      );
+    }),
+  );
+  const service = await openService({
+    models,
+    twinExtensions: [echoPackage()],
+  });
+  services.push(service);
+  await service.spawnGraph({
+    agents: [
+      {
+        name: "a",
+        job: "describe",
+        cwd: ".",
+        model: MODEL,
+        tools: ["codemode"],
+      },
+    ],
+  });
+  await service.wait(["a"]);
+  const result = service.get("a")?.result?.text ?? "";
+  expect(result).toContain("The twin's tools");
+  expect(result).toContain("twin_ping");
+  expect(prompts[0]).toContain("## twin");
+});

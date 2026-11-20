@@ -73,7 +73,8 @@ Every agent also gets the tools of your MCP servers and of the extensions
 you [share with agents](./configuration.md#extension-tools), such as
 Webfox's web search, whatever its tool allowlist says. MCP tools work as in
 Pi: unless a server declares them directly, agents with `codemode` call
-them from scripts and find them with `searchTools()`, and agents without it
+them from scripts, see each server listed with its description, and find
+its tools with `searchTools()` and `describeNamespace()`, and agents without it
 load the ones they need with `tool_search`. Agents use the servers in your
 `mcp.json` with your sign-ins; servers that other extensions register stay
 with your session. Tools of extensions you don't share stay with your

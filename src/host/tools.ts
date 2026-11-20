@@ -28,6 +28,7 @@ import {
   CODEMODE_TOOL_NAME,
   createCodemodeExtension,
 } from "@earendil-works/pi-durable/codemode";
+import { createFitImagesExtension } from "@earendil-works/pi-durable/images/fit";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import {
   createBashTool,
@@ -191,12 +192,18 @@ export function withCodemodeModels(
  * nested calls, which pi-durable replays after a restart. Its prompt
  * section lists those tools only for agents that have `codemode`. Scripts
  * also get `models.*`; their classifier and image calls run as internal
- * tools, which agents with `codemode` enable along with it.
+ * tools, which agents with `codemode` enable along with it. Images in the
+ * results of any tool fit the agent's model before they are stored.
  */
 export function createToolsExtension(): ToolsExtension {
   // Like Pi, scripts have no deadline unless they ask for one.
   const sandbox = new CodemodeSandbox({ timeoutMs: Number.POSITIVE_INFINITY });
   const codemode = createCodemodeExtension({ sandbox });
+  const images = lazyImages();
+  // Images of other tools' results, such as an MCP server's screenshot or a
+  // script's `image()`, fit the agent's model before they are stored, as
+  // `read` fits its own.
+  const fit = createFitImagesExtension(images);
   const sections = (codemode.sections ?? []).map(
     (each): PromptSection => ({
       ...each,
@@ -209,7 +216,7 @@ export function createToolsExtension(): ToolsExtension {
   const extension = defineExtension({
     name: TOOLS_EXTENSION,
     tools: [
-      createReadTool({ images: lazyImages() }),
+      createReadTool({ images }),
       createBashTool(),
       createEditTool(),
       createWriteTool(),
@@ -219,6 +226,7 @@ export function createToolsExtension(): ToolsExtension {
       ...(codemode.tools ?? []),
     ],
     sections,
+    hooks: fit.hooks ?? [],
   });
   return { extension, close: () => sandbox.close() };
 }

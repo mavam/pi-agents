@@ -37,7 +37,8 @@ afterEach(async () => {
 /**
  * A faux model for agents that spawn. A job `spawn <json>` calls
  * agent_spawn with that JSON; after its result, the agent answers
- * `checking`, or with `wait` in the job, calls agent_wait. A job
+ * `checking`, or with `wait` at the end of the job, calls agent_wait,
+ * with `wait <seconds>` as its timeout. A job
  * `script <code>` runs codemode. Results that arrive as input or from
  * other tools, and failed calls, are answered `final: <first line>`. Jobs
  * with `hold` work until aborted (unless `hold` is false); others answer
@@ -54,12 +55,20 @@ function scripted(options: { hold?: boolean } = {}) {
     const job = textOf(messages.find((each) => each.role === "user")?.content);
     const text = textOf(last?.content);
     if (last?.role === "toolResult") {
-      if (last.toolName === "agent_spawn" && !last.isError)
-        return job.includes(" wait")
-          ? fauxAssistantMessage([fauxToolCall("agent_wait", {})], {
-              stopReason: "toolUse",
-            })
+      if (last.toolName === "agent_spawn" && !last.isError) {
+        const wait = / wait(?: (\d+))?$/.exec(job);
+        return wait
+          ? fauxAssistantMessage(
+              [
+                fauxToolCall(
+                  "agent_wait",
+                  wait[1] ? { timeout: Number(wait[1]) } : {},
+                ),
+              ],
+              { stopReason: "toolUse" },
+            )
           : fauxAssistantMessage([fauxText("checking")]);
+      }
       return fauxAssistantMessage([fauxText(`final: ${text.split("\n")[0]}`)]);
     }
     const first = text.split("\n")[0] ?? "";
@@ -67,7 +76,7 @@ function scripted(options: { hold?: boolean } = {}) {
     if (first.startsWith("[results] "))
       return fauxAssistantMessage(`final: ${first}`);
     if (first.startsWith("spawn ")) {
-      const json = first.slice(6).replace(/ wait$/, "");
+      const json = first.slice(6).replace(/ wait(?: \d+)?$/, "");
       return fauxAssistantMessage(
         [fauxToolCall("agent_spawn", JSON.parse(json))],
         { stopReason: "toolUse" },
@@ -104,17 +113,22 @@ async function open(
   return service;
 }
 
+/** Close the service, then open its directory again, never both at once:
+ * opening JSONL storage recovers it, which a writer still open would race. */
 async function reopen(
   service: AgentService,
+  directory: string,
   options: Parameters<typeof open>[0],
 ): Promise<AgentService> {
   await closeService(service);
   services = services.filter((each) => each !== service);
-  return open(options);
+  return open({ ...options, storage: await jsonlStorage(directory) });
 }
 
-function spawnJob(agents: unknown[], wait = false): string {
-  return `spawn ${JSON.stringify({ agents })}${wait ? " wait" : ""}`;
+function spawnJob(agents: unknown[], wait: boolean | number = false): string {
+  const suffix =
+    wait === false ? "" : wait === true ? " wait" : ` wait ${wait}`;
+  return `spawn ${JSON.stringify({ agents })}${suffix}`;
 }
 
 function lead(job: string, extra: Record<string, unknown> = {}) {
@@ -340,6 +354,63 @@ describe("spawning", () => {
     expect(textOf(message?.content)).toContain("done: look");
   });
 
+  test("agent_wait waits until its group ended, not just decided", async () => {
+    const service = await open();
+    await service.spawnGraph({
+      agents: [
+        lead(
+          spawnJob(
+            [
+              { name: "x", job: "x" },
+              { name: "y", job: "hold y" },
+            ],
+            true,
+          ),
+        ),
+      ],
+    });
+    await until(
+      () =>
+        service.get("lead.x")?.result?.text === "done: x" &&
+        service.get("lead.y")?.state === "working",
+      10_000,
+    );
+    // x works again, so ending y decides the group but doesn't end it.
+    await service.prompt("lead.x", "hold x", "followUp");
+    await until(() => service.get("lead.x")?.state === "working");
+    await service.stop("lead.y");
+    await service.interrupt("lead.x");
+    const delivery = await resultOf(service, "lead");
+    expect(answerOf(delivery)).toStartWith("final: ");
+    const waits = (await entries(service, "lead"))
+      .map((entry) => entry.model?.[0])
+      .filter(
+        (message) =>
+          message?.role === "toolResult" && message.toolName === "agent_wait",
+      );
+    expect(waits).toHaveLength(1);
+    expect(waits[0]?.role === "toolResult" && waits[0].isError).toBe(false);
+  });
+
+  test("agent_wait gives up at its timeout", async () => {
+    const service = await open();
+    await service.spawnGraph({
+      agents: [lead(spawnJob([{ name: "scout", job: "hold" }], 1))],
+    });
+    await until(async () =>
+      (await entries(service, "lead")).some((entry) => {
+        const message = entry.model?.[0];
+        return (
+          message?.role === "toolResult" &&
+          message.toolName === "agent_wait" &&
+          textOf(message.content).startsWith("Timed out; still working")
+        );
+      }),
+    );
+    // The group still works; its result arrives as input once it ended.
+    expect(service.get("lead.scout")?.state).toBe("working");
+  });
+
   test("codemode cannot consume results without showing them to the model", async () => {
     const service = await open();
     const code = [
@@ -548,8 +619,7 @@ describe("spawning durability", () => {
       );
     }, 10_000);
     const second = scripted({ hold: false });
-    const after = await reopen(before, {
-      storage: await jsonlStorage(directory),
+    const after = await reopen(before, directory, {
       models: second.models,
     });
     const delivery = await resultOf(after, "lead");

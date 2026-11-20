@@ -70,10 +70,13 @@ appear in red. A session keeps its latest 1,000 messages.
   waits until the current work ends. With `interrupt`, the recipient's
   current work stops first and the message starts its next. An idle
   recipient starts working.
-- **Interrupts correct, not end.** An interrupt drops the messages queued
-  for the recipient and keeps its job and the agents it spawned, as your
-  interrupt does. No other agent's message lands between the interrupt and
-  its message, but input from you or Pi can. A send resumed after a crash
+- **Interrupts correct, not end.** An interrupt drops the messages you and
+  Pi queued for the recipient and keeps its job and the agents it spawned,
+  as your interrupt does. Messages from other agents stay queued, since
+  their senders can't take them back, and arrive with the recipient's next
+  input. No message another agent sends after the interrupt lands between
+  the interrupt and its message, but messages queued before it, and input
+  from you or Pi, can. A send resumed after a crash
   never interrupts the work its message started; one that crashed before
   its message was recorded interrupts again, then sends.
 - **No delivery of its own.** A message produces nothing that reaches the
@@ -87,8 +90,8 @@ appear in red. A session keeps its latest 1,000 messages.
   agent never interleave: the send lands first and the stop interrupts it,
   or the send is refused.
 - **Visible outcome.** Each message is queued, delivered once it entered
-  the recipient's conversation, or dropped, shown in red, when an interrupt
-  or stop of the recipient came while it was still queued. Delivered
+  the recipient's conversation, or dropped, shown in red, when a stop of
+  the recipient came while it was still queued. Delivered
   means it arrived, not that the recipient handled it: a turn that fails
   after a message arrived is the recipient's state, not the message's.
 - **Known sender.** The recipient's model reads the sender from the

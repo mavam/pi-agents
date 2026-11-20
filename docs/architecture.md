@@ -9,7 +9,9 @@ and [design rationale](./design.md).
 
 Agents belong to the Pi session that started them. Quitting, crashing, or
 switching sessions pauses them. Resume the original session, for example
-with `pi -c`, to continue interrupted work and receive pending results.
+with `pi -c`, to continue interrupted work and receive pending results. In
+Pi's terminal, they open in the background, so Pi starts without waiting
+for them; print, JSON, and RPC modes wait until they opened.
 
 Finished graph nodes don't run again, and messages between agents enter
 their recipient's conversation once. A model call a crash interrupted

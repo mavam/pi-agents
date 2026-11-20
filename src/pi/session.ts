@@ -107,6 +107,11 @@ export class SessionHost {
     private readonly options: SessionHostOptions = {},
   ) {}
 
+  /** Which session start is current; each start counts up. */
+  get generation(): number {
+    return this.epoch;
+  }
+
   /** Session start: remember the context and resume existing agents. */
   async start(ctx: ExtensionContext): Promise<void> {
     this.epoch++;

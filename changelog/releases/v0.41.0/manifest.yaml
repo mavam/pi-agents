@@ -1,0 +1,10 @@
+created: 2026-11-20
+title: Faster startup and sturdier agents on Pi 1.6.0
+intro: >-
+  Pi now starts without waiting for a resumed session's agents, agents keep the messages
+  other agents queued for them through interrupts, and images from MCP tools fit the
+  agent's model. This release requires Pi 1.6.0 or later and keeps an agent's wait
+  timeout across restarts.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.40.1

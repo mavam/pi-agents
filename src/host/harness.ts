@@ -185,22 +185,27 @@ export async function openAgentHarness(
       twin !== undefined &&
       twinWanted(options.cwd, twin.extensions, twin.trusted);
     if (wanted) tools.start();
-    tools.restore(
-      wanted ? await harness.snapshot(TwinCatalogDoc, CONTEXT) : undefined,
-      {
-        persist: (catalog) =>
-          anchor.commit(async (tx) => {
-            (await tx.doc(TwinCatalogDoc)).tools = catalog.tools;
-          }, CONTEXT),
-        harness,
-        report: (error) =>
-          twin?.onProblem(
-            `the tool twin's tools: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-      },
-    );
-    if (wanted && twin) stopTwin = startTwin(options.cwd, twin, tools);
-    else tools.settle();
+    const catalog = wanted
+      ? await harness.snapshot(TwinCatalogDoc, CONTEXT)
+      : undefined;
+    tools.restore(catalog, {
+      persist: (catalog) =>
+        anchor.commit(async (tx) => {
+          (await tx.doc(TwinCatalogDoc)).tools = catalog.tools;
+        }, CONTEXT),
+      harness,
+      report: (error) =>
+        twin?.onProblem(
+          `the tool twin's tools: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+    });
+    if (wanted && twin) {
+      stopTwin = startTwin(options.cwd, twin, tools);
+      // Without a catalog, nothing stands in for the twin's tools, so work
+      // that resumes would find none: wait for the twin, at most its
+      // startup's time.
+      if (catalog === undefined) await tools.ready();
+    } else tools.settle();
     const opened = harness;
     return {
       harness: opened,

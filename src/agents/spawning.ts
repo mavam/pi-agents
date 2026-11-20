@@ -612,8 +612,9 @@ type WaitBinding = { groups: string[] };
 /** What a parked wait keeps: when it gives up, if it does. */
 type WaitPark = { deadline?: number };
 
-/** Resumes the working-agent slots that parked waits gave up, by call. */
-const pausedWaits = new Map<number, () => void>();
+/** Resumes the working-agent slots that parked waits gave up, by call:
+ * one per set of spawning tools, so harnesses never share them. */
+type PausedWaits = Map<number, () => void>;
 
 /**
  * Wait for the agent's groups by parking: the call holds nothing while they
@@ -625,6 +626,7 @@ async function waitExecute(
   api: Api,
   context: Context,
   options: SpawningOptions,
+  pausedWaits: PausedWaits,
 ): Promise<ToolExecutionResult | ToolPark> {
   const id = String(api.conversationId);
   pausedWaits.get(api.taskId)?.();
@@ -860,6 +862,7 @@ async function stopExecute(
 
 /** The tools available to agents that may spawn. */
 export function spawningTools(options: SpawningOptions): ToolRegistration[] {
+  const pausedWaits: PausedWaits = new Map();
   return [
     defineTool({
       name: SPAWN_TOOL,
@@ -883,7 +886,8 @@ export function spawningTools(options: SpawningOptions): ToolRegistration[] {
       parameters: waitParameters,
       replay: "safe",
       outputLimits: UNBOUNDED_OUTPUT,
-      execute: (args, api, context) => waitExecute(args, api, context, options),
+      execute: (args, api, context) =>
+        waitExecute(args, api, context, options, pausedWaits),
       // A wait the agent stops holds its slot again.
       cancel: async (_args, api) => {
         pausedWaits.get(api.taskId)?.();

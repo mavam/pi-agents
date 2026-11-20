@@ -22,6 +22,7 @@ import { type CreationDeps, createGraph } from "./creation.js";
 import { Delivery } from "./delivery.js";
 import { type AgentExtensions, syncTwinSelections } from "./extensions.js";
 import { describeReport, type HarnessReport } from "./failures.js";
+import { GroupEnded, groupKey } from "./graphs.js";
 import { userInput } from "./inputs.js";
 import { MessageLog } from "./message-log.js";
 import { queuedMessages } from "./messaging.js";
@@ -124,6 +125,8 @@ export class AgentService {
   private refreshChain: Promise<void> = Promise.resolve();
   private unsubscribeParent: (() => void) | undefined;
   private unsubscribeTwin: (() => void) | undefined;
+  /** The claims of `agent_wait` calls signalled that their group ended. */
+  private readonly signaledClaims = new Set<string>();
   /** Updates of agents' twin extensions, one after another. */
   private twinChain: Promise<void> = Promise.resolve();
   private closed = false;
@@ -218,17 +221,13 @@ export class AgentService {
   // --- Lifecycle ---
 
   private async initialize(): Promise<void> {
-    // Before any work resumes, so it sees the twin's namespaces.
-    await syncTwinSelections(this.creation.anchor, this.extensions);
-    this.unsubscribeTwin = this.extensions.twin.onNamespaces(() => {
-      this.twinChain = this.twinChain
-        .then(() =>
-          this.closed
-            ? undefined
-            : syncTwinSelections(this.creation.anchor, this.extensions),
-        )
-        .catch((error) => this.onReport(error));
-    });
+    // Listen first, so a namespace that comes during the first update
+    // updates again; before any work resumes, so it sees the namespaces.
+    this.unsubscribeTwin = this.extensions.twin.onNamespaces(() =>
+      this.syncSelections(),
+    );
+    this.syncSelections();
+    await this.twinChain;
     // Work a crash left running behind a stop fence ends before it can
     // go on: the stop may have recorded the fence before its aborts.
     // Before observing, whose refreshes can resume scheduling.
@@ -287,6 +286,18 @@ export class AgentService {
     }, CONTEXT);
     for (const task of tasks) await this.harness.abortTask(task.id, CONTEXT);
     return [...new Set(tasks.map((task) => task.agent))];
+  }
+
+  /** Update agents' selections of the twin's extensions, one update after
+   * another. */
+  private syncSelections(): void {
+    this.twinChain = this.twinChain
+      .then(() =>
+        this.closed
+          ? undefined
+          : syncTwinSelections(this.creation.anchor, this.extensions),
+      )
+      .catch((error) => this.onReport(error));
   }
 
   /** Stop observing the harness; the host closes it afterwards. */
@@ -940,6 +951,7 @@ export class AgentService {
       if (stopped.length > 0) await this.store.clearPending(stopped);
       await this.closeEndedHelpers();
       await this.cancelForFailures();
+      await this.signalClaims();
       await this.presentResults();
       this.waits.check();
       this.delivery.schedule();
@@ -1008,6 +1020,30 @@ export class AgentService {
       // A quick retry can replace the projected failure before refresh.
       // Durable run boundaries preserve earlier work and exclude retries.
       await this.store.cancelFailedGroups(id);
+    }
+  }
+
+  /**
+   * Wake the `agent_wait` calls that hold the results of groups that ended.
+   * A group's outcome can be decided while its agents still work, and a
+   * group can end without running its own code, so only its terminal task
+   * counts. A repeated signal is a duplicate, so a restart signals again.
+   */
+  private async signalClaims(): Promise<void> {
+    for (const [id, graph] of Object.entries(this.projection.graphs())) {
+      if (!isSpawned(graph) || graph.claim === undefined) continue;
+      const key = `${graph.claim}:${id}`;
+      if (this.signaledClaims.has(key)) continue;
+      if (!(await this.observer.isFinished(Number(id)))) continue;
+      if (await this.observer.isFinished(graph.claim)) continue;
+      await this.harness.signal(
+        graph.claim as TaskId,
+        GroupEnded,
+        groupKey(Number(id)),
+        {},
+        CONTEXT,
+      );
+      this.signaledClaims.add(key);
     }
   }
 

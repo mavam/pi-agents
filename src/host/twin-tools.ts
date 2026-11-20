@@ -18,6 +18,7 @@
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
+import { type ToolCall, validateToolArguments } from "@earendil-works/pi-ai";
 import {
   defineDoc,
   defineExtension,
@@ -205,8 +206,9 @@ export class TwinTools {
   private timer: ReturnType<typeof setInterval> | undefined;
   /** The catalog's tools that stand in for the twin's. */
   private standIns: CatalogTool[] = [];
-  /** The catalog as stored, to write it only when it changed. */
-  private stored = "";
+  /** The catalog as stored, to write it only when it changed; undefined
+   * while none is. */
+  private stored: string | undefined;
   private persist: ((catalog: TwinCatalog) => Promise<void>) | undefined;
   private harness: Signaller | undefined;
   private persisting: Promise<void> = Promise.resolve();
@@ -264,7 +266,8 @@ export class TwinTools {
     },
   ): void {
     this.standIns = catalog?.tools ?? [];
-    this.stored = JSON.stringify(catalog?.tools ?? []);
+    this.stored =
+      catalog === undefined ? undefined : JSON.stringify(catalog.tools);
     this.persist = options.persist;
     this.harness = options.harness;
     this.report = options.report;
@@ -314,7 +317,8 @@ export class TwinTools {
   }
 
   /** While a twin starts without a catalog of its tools, wait until it
-   * settled, as Pi's first prompt waits for its servers. */
+   * settled, as Pi's first prompt waits for its servers. New agents and
+   * resumed work then find its tools. */
   async ready(): Promise<void> {
     if (this.settled || this.standIns.length > 0) return;
     await this.started;
@@ -424,9 +428,8 @@ export class TwinTools {
       // Between the timer's syncs, agents see changes at their next request.
       hooks: [
         hook(GenerationTask, {
-          beforeRequest: async () => {
+          beforeRequest: () => {
             this.sync();
-            await this.ready();
             return undefined;
           },
         }),
@@ -485,7 +488,8 @@ export class TwinTools {
         const parked = api.checkpoint as ParkState | undefined;
         this.parked.delete(api.taskId);
         const twin = this.twin;
-        if (!twin?.tool(entry.name)) {
+        const current = twin?.tool(entry.name);
+        if (!twin || !current) {
           // Its server may connect yet: wait for it, parked, until the twin
           // signals that it did or that its startup ended.
           const since = parked?.since ?? api.now();
@@ -509,11 +513,40 @@ export class TwinTools {
             },
           };
         }
+        let input = args as Record<string, unknown>;
+        if (parked) {
+          // The arguments were checked against the tool as it was when the
+          // call parked, possibly a stand-in's: check them again against the
+          // tool as it is now, as Pi would.
+          const { definition: tool } = current;
+          try {
+            const prepared = tool.prepareArguments
+              ? tool.prepareArguments(input)
+              : input;
+            input = validateToolArguments(
+              {
+                name: entry.name,
+                description: tool.description,
+                parameters: tool.parameters,
+              },
+              {
+                type: "toolCall",
+                id: api.callId,
+                name: entry.name,
+                arguments: prepared as ToolCall["arguments"],
+              },
+            ) as Record<string, unknown>;
+          } catch (error) {
+            return failure(
+              `${entry.name} no longer accepts these arguments: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
         // Progress arrives as the result so far: show what it adds.
         let shown = "";
         const result = await twin.call(
           entry.name,
-          args as Record<string, unknown>,
+          input,
           context.abortSignal,
           (partial) => {
             const text = textOf(partial);

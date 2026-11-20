@@ -203,8 +203,9 @@ export async function syncTwinSelections(
   anchor: Conversation,
   extensions: AgentExtensions,
 ): Promise<void> {
-  const names = extensions.twin.extensions().map((each) => each.name);
   await anchor.commit(async (tx) => {
+    // Inside the commit, so a change that comes meanwhile updates again.
+    const names = extensions.twin.extensions().map((each) => each.name);
     const { agents } = await tx.doc(AgentsDoc);
     for (const id of Object.keys(agents)) {
       const state = await tx.doc(AgentDoc, Number(id) as ConversationId);

@@ -103,7 +103,9 @@ export function nodeRequestId(node: number): string {
 const ANSWER_KEY = "answer";
 
 /** Tells the `agent_wait` call that claimed a group's result that the
- * group ended, under the group's key. */
+ * group ended, under the group's key. The service sends it once it sees
+ * the group's task terminal: a group's outcome can be decided while its
+ * agents still work, and a group can end without running its own code. */
 export const GroupEnded = defineSignal({
   name: "pi-agents.group-ended",
   version: 1,
@@ -113,14 +115,6 @@ export const GroupEnded = defineSignal({
 /** The key of a group's `GroupEnded` signal. */
 export function groupKey(group: number): string {
   return `group:${group}`;
-}
-
-/** Signal the call that claimed the group's result, if any, in the commit
- * that ends the group. Before the commit writes anything. */
-async function signalClaim(tx: ReadTx, group: number): Promise<void> {
-  const claim = (await tx.doc(GraphsDoc)).graphs[String(group)]?.claim;
-  if (claim !== undefined)
-    await tx.signal(claim as TaskId, GroupEnded, groupKey(group), {});
 }
 
 function textOf(value: unknown): string | undefined {
@@ -745,26 +739,26 @@ export const GraphTask = defineTask<GraphInput, GraphState, GraphResult>({
           task.state.checkpoint.nodes as TaskId<NodeResult>[],
           context,
         );
-        await runtime.commit(async (tx) => {
-          await signalClaim(tx, task.id);
-          return {
+        await runtime.commit(
+          () => ({
             status: "terminal",
             outcome: {
               status: "completed",
               result: { outcomes: outcomes.map((outcome) => outcome.status) },
             },
-          } as const;
-        }, context);
+          }),
+          context,
+        );
       } catch (error) {
         rethrowUnlessAborted(runtime.signal, error);
       }
     },
   },
-  abort: (task, runtime, context) =>
-    runtime.commit(async (tx) => {
-      await signalClaim(tx, task.id);
-      return { status: "terminal", outcome: { status: "aborted" } } as const;
-    }, context),
+  abort: (_task, runtime, context) =>
+    runtime.commit(
+      () => ({ status: "terminal", outcome: { status: "aborted" } }),
+      context,
+    ),
 });
 
 export function createGraphsExtension(): Extension {

@@ -351,6 +351,44 @@ describe("spawning", () => {
     expect(textOf(message?.content)).toContain("done: look");
   });
 
+  test("agent_wait waits until its group ended, not just decided", async () => {
+    const service = await open();
+    await service.spawnGraph({
+      agents: [
+        lead(
+          spawnJob(
+            [
+              { name: "x", job: "x" },
+              { name: "y", job: "hold y" },
+            ],
+            true,
+          ),
+        ),
+      ],
+    });
+    await until(
+      () =>
+        service.get("lead.x")?.result?.text === "done: x" &&
+        service.get("lead.y")?.state === "working",
+      10_000,
+    );
+    // x works again, so ending y decides the group but doesn't end it.
+    await service.prompt("lead.x", "hold x", "followUp");
+    await until(() => service.get("lead.x")?.state === "working");
+    await service.stop("lead.y");
+    await service.interrupt("lead.x");
+    const delivery = await resultOf(service, "lead");
+    expect(answerOf(delivery)).toStartWith("final: ");
+    const waits = (await entries(service, "lead"))
+      .map((entry) => entry.model?.[0])
+      .filter(
+        (message) =>
+          message?.role === "toolResult" && message.toolName === "agent_wait",
+      );
+    expect(waits).toHaveLength(1);
+    expect(waits[0]?.role === "toolResult" && waits[0].isError).toBe(false);
+  });
+
   test("agent_wait gives up at its timeout", async () => {
     const service = await open();
     await service.spawnGraph({

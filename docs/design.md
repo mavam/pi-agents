@@ -225,14 +225,15 @@ like any other. The twin is meant to go: once Pi offers durable versions of
 these tools, or a way to call the user's session's tools from outside its
 turns, agents use those instead.
 
-Servers can take seconds to connect, so the twin starts in the background
-and opening agents never waits for it. The agents' store keeps the twin's
-tools as they were when its startup last ended, and until it ends again
-they stand in for them: agents see their tools at once, and a call that
-resumes after a restart finds its tool instead of failing because its
-server isn't connected yet. Such a call parks until its server connected,
-holding nothing while it waits. Without that record, starting the first
-agents waits for the startup, as Pi's first prompt waits for its servers.
+Servers can take seconds to connect, so the twin starts in the background.
+The agents' store keeps the twin's tools as they were when its startup last
+ended, and until it ends again they stand in for them: agents see their
+tools at once, and a call that resumes after a restart finds its tool
+instead of failing because its server isn't connected yet. Such a call
+parks until its server connected, holding nothing while it waits, and
+then is checked again against the tool as it is now. Without that record,
+nothing could stand in for the tools, so opening agents waits for the
+startup, as Pi's first prompt waits for its servers.
 
 Each namespace of tools, such as an MCP server, is a group of its own, as
 in Pi: scripts see it listed with its description, and

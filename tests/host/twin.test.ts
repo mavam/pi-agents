@@ -53,7 +53,41 @@ export default function (pi) {
     exposure: "codemode",
     namespace: { name: "twin", description: "The twin's tools" },
     async execute() {
-      return { content: [{ type: "text", text: "pong" }], details: {} };
+      // Schema-less tool returning structuredContent: twin must not forward it.
+      return {
+        content: [{ type: "text", text: "pong" }],
+        details: {},
+        structuredContent: { ignored: true },
+      };
+    },
+  });
+  // Declares an outputSchema, as MCP and structured Pi extension tools do.
+  pi.registerTool({
+    name: "twin_data",
+    label: "Data",
+    description: "Return structured data",
+    parameters: Type.Object({ fail: Type.Optional(Type.Boolean()) }),
+    outputSchema: Type.Object({
+      items: Type.Array(Type.String()),
+      count: Type.Number(),
+      isError: Type.Optional(Type.Boolean()),
+    }),
+    exposure: "codemode",
+    namespace: { name: "twin", description: "The twin's tools" },
+    async execute(_id, params) {
+      if (params.fail) {
+        return {
+          content: [{ type: "text", text: "failed" }],
+          details: {},
+          isError: true,
+          structuredContent: { items: [], count: 0, isError: true },
+        };
+      }
+      return {
+        content: [{ type: "text", text: "summary" }],
+        details: {},
+        structuredContent: { items: ["alpha", "beta"], count: 0 },
+      };
     },
   });
 }
@@ -203,4 +237,65 @@ test("codemode lists the twin's namespaces and describes them", async () => {
   expect(result).toContain("The twin's tools");
   expect(result).toContain("twin_ping");
   expect(prompts[0]).toContain("## twin");
+});
+
+test("codemode scripts see a twin tool's output schema and structured output", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      const last = context.messages.at(-1);
+      if (last?.role === "toolResult")
+        return fauxAssistantMessage(
+          last.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join(""),
+        );
+      return fauxAssistantMessage(
+        [
+          fauxToolCall("codemode", {
+            code: `
+              const schema = await describeTool("twin_data");
+              const ok = await tools.twin_data({});
+              const err = await tools.twin_data({ fail: true });
+              const ping = await tools.twin_ping({});
+              return JSON.stringify({ schema, ok, err, ping });
+            `,
+          }),
+        ],
+        { stopReason: "toolUse" },
+      );
+    }),
+  );
+  const service = await openService({
+    models,
+    twinExtensions: [echoPackage()],
+  });
+  services.push(service);
+  await service.spawnGraph({
+    agents: [
+      {
+        name: "a",
+        job: "structured",
+        cwd: ".",
+        model: MODEL,
+        tools: ["codemode"],
+      },
+    ],
+  });
+  await service.wait(["a"]);
+  const text = service.get("a")?.result?.text ?? "";
+  const line = text.split("\n").find((entry) => entry.startsWith("{")) ?? "";
+  const payload = JSON.parse(line) as {
+    schema: string;
+    ok: unknown;
+    err: unknown;
+    ping: unknown;
+  };
+  expect(payload.schema).toContain("items: Array<string>");
+  expect(payload.schema).toContain("count: number");
+  expect(payload.ok).toEqual({ items: ["alpha", "beta"], count: 0 });
+  expect(payload.err).toEqual({ items: [], count: 0, isError: true });
+  expect(payload.ping).toBe("pong");
 });

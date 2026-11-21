@@ -7,6 +7,7 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
+import { getCurrentSystemMessage } from "@earendil-works/pi-ai/utils/transcript";
 import type { AgentService } from "../../src/agents/service.js";
 import {
   closeService,
@@ -312,20 +313,10 @@ test("direct twin tools contribute prompt snippets and guidelines; deferred tool
   const faux = fauxProvider();
   const models = createModels();
   models.setProvider(faux.provider);
-  const snapshots: Array<Record<string, string>> = [];
+  const snapshots: Array<Record<string, string | null>> = [];
   faux.setResponses(
     Array.from({ length: 4 }, () => (context) => {
-      const sections: Record<string, string> = {};
-      for (const message of context.messages) {
-        if ((message.role as string) !== "system") continue;
-        const patch = (message as { sections?: Record<string, string | null> })
-          .sections;
-        for (const [key, value] of Object.entries(patch ?? {})) {
-          if (value === null) delete sections[key];
-          else sections[key] = value;
-        }
-      }
-      snapshots.push(sections);
+      snapshots.push(getCurrentSystemMessage(context.messages)?.sections ?? {});
       const last = context.messages.at(-1);
       if (last?.role !== "toolResult")
         return fauxAssistantMessage(
@@ -367,4 +358,103 @@ test("direct twin tools contribute prompt snippets and guidelines; deferred tool
   const afterLoad = snapshots[1];
   expect(afterLoad?.tools).toContain("- twin_ping: Ping the twin service");
   expect(afterLoad?.rules).toContain("- Only ping when explicitly asked");
+});
+
+test("malformed prompt metadata does not crash startup and shadowed names do not inherit built-in prompt text", async () => {
+  const directory = tempDir("pi-agents-twin-edge-");
+  fs.writeFileSync(
+    path.join(directory, "package.json"),
+    JSON.stringify({ name: "twin-edge", pi: { extensions: ["./edge.ts"] } }),
+  );
+  fs.writeFileSync(
+    path.join(directory, "edge.ts"),
+    `import { Type } from "typebox";
+export default function (pi) {
+  pi.registerTool({
+    name: "twin_malformed",
+    label: "Malformed",
+    description: "Has non-string promptSnippet and false promptGuidelines",
+    promptSnippet: false,
+    promptGuidelines: false,
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }], details: {} };
+    },
+  });
+  pi.registerTool({
+    name: "twin_bad_guidelines",
+    label: "Bad guidelines",
+    description: "Has non-array promptGuidelines",
+    promptSnippet: "Keep valid snippet",
+    promptGuidelines: "not-an-array",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }], details: {} };
+    },
+  });
+  pi.registerTool({
+    name: "agent_spawn",
+    label: "Custom spawn",
+    description: "Shadows spawning tool name without prompt metadata",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "custom" }], details: {} };
+    },
+  });
+  pi.registerTool({
+    name: "toString",
+    label: "Prototype name",
+    description: "Named after an Object.prototype key",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }], details: {} };
+    },
+  });
+}
+`,
+  );
+
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const problems: string[] = [];
+  let sections: Record<string, string | null> | undefined;
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      sections ??= getCurrentSystemMessage(context.messages)?.sections;
+      const last = context.messages.at(-1);
+      if (last?.role === "toolResult")
+        return fauxAssistantMessage(
+          last.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join(""),
+        );
+      return fauxAssistantMessage([fauxToolCall("twin_malformed", {})], {
+        stopReason: "toolUse",
+      });
+    }),
+  );
+  const service = await openService({
+    models,
+    twinExtensions: [directory],
+    onTwinProblem: (problem) => problems.push(problem),
+  });
+  services.push(service);
+  await service.spawnGraph({
+    agents: [
+      { name: "a", job: "edge", cwd: ".", model: MODEL, tools: ["read"] },
+    ],
+  });
+  await service.wait(["a"]);
+
+  expect(problems).toEqual([]);
+  expect(service.get("a")?.result?.text).toBe("ok");
+  expect(sections?.tools).toContain(
+    "- twin_bad_guidelines: Keep valid snippet",
+  );
+  expect(sections?.tools).not.toContain("twin_malformed");
+  expect(sections?.tools).not.toContain("agent_spawn");
+  expect(sections?.tools).not.toContain("toString");
+  expect(sections?.rules).not.toContain("\n- n\n");
+  expect(sections?.rules).not.toContain("Use agent_spawn when");
 });

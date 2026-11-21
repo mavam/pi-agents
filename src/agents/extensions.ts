@@ -95,8 +95,8 @@ export function createAgentExtensions(
   const tools = hooks.length > 0 ? { ...extension, hooks } : extension;
   const prompt = createPromptExtension({
     ...options.prompt,
-    toolPrompt: (name) =>
-      options.prompt.toolPrompt?.(name) ?? twin.promptContribution(name),
+    toolPrompt: (tool) =>
+      options.prompt.toolPrompt?.(tool) ?? twin.promptContribution(tool),
   });
   const hub = new MessagingHub();
   const limits = { ...SPAWNING_LIMITS, ...options.spawningLimits };

@@ -74,9 +74,24 @@ function replaySafe(tool: TwinTool): boolean {
   return hints?.readOnlyHint === true || hints?.idempotentHint === true;
 }
 
+/** A tool's output schema when it is a JSON Schema object pi-durable accepts. */
+function outputSchemaOf(
+  definition: TwinTool["definition"],
+): object | undefined {
+  const schema: unknown = definition.outputSchema;
+  return typeof schema === "object" && schema !== null && !Array.isArray(schema)
+    ? schema
+    : undefined;
+}
+
 function toJson(value: unknown): JsonValue | undefined {
   if (value === undefined) return undefined;
-  return JSON.parse(JSON.stringify(value)) as JsonValue;
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? undefined : (JSON.parse(json) as JsonValue);
+  } catch {
+    return undefined;
+  }
 }
 
 function textOf(result: TwinResult): string {
@@ -87,10 +102,12 @@ function textOf(result: TwinResult): string {
 
 function proxy(twin: ToolTwin, tool: TwinTool): ToolRegistration {
   const { definition } = tool;
+  const structuredOutputSchema = outputSchemaOf(definition);
   return defineTool({
     name: definition.name,
     description: definition.description,
     parameters: definition.parameters as TSchema,
+    ...(structuredOutputSchema === undefined ? {} : { structuredOutputSchema }),
     ...(isDeferred(tool) ? { deferred: true as const } : {}),
     // Tools reach other systems; only their authors know a rerun is safe.
     replay: replaySafe(tool) ? "safe" : "unsafe",
@@ -114,9 +131,16 @@ function proxy(twin: ToolTwin, tool: TwinTool): ToolRegistration {
         },
       );
       const details = toJson(result.details);
+      // Only emit structuredOutput when the tool declares a schema:
+      // pi-durable rejects structuredOutput on schema-less tools.
+      const structuredOutput =
+        structuredOutputSchema === undefined
+          ? undefined
+          : toJson(result.structuredContent);
       return {
         output: result.content,
         ...(details === undefined ? {} : { details }),
+        ...(structuredOutput === undefined ? {} : { structuredOutput }),
         ...(result.isError ? { isError: true } : {}),
         ...(result.usage ? { usage: result.usage } : {}),
       };
@@ -228,12 +252,16 @@ export class TwinTools {
     const twin = this.twin;
     const tools = twin?.tools() ?? [];
     const signature = JSON.stringify(
-      tools.map(({ info, definition }) => [
-        info.name,
-        info.exposure,
-        info.namespace?.name,
-        revisionOf(definition),
-      ]),
+      tools.map(({ info, definition }) => {
+        const outputSchema = outputSchemaOf(definition);
+        return [
+          info.name,
+          info.exposure,
+          info.namespace?.name,
+          revisionOf(definition),
+          outputSchema ? revisionOf(outputSchema) : 0,
+        ];
+      }),
     );
     if (signature === this.signature) return;
     this.signature = signature;

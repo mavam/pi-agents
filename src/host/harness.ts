@@ -9,25 +9,38 @@
  */
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { ClientIdentity, Models } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
+import type { ClientIdentity, Models, ToolCall } from "@earendil-works/pi-ai";
 import {
   type Conversation,
+  type ConversationId,
   createRegistry,
+  defineDoc,
+  type EntryId,
+  type GenerationCheckpoint,
+  GenerationTask,
   Harness,
   type HarnessSettings,
+  LiveDoc,
   type Report,
   type Storage,
+  ToolTask,
+  type ToolTaskCheckpoint,
+  type ToolTaskInput,
 } from "@earendil-works/pi-durable";
+import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
 import {
   type AgentExtensions,
   agentSelection,
   installAgentExtensions,
 } from "../agents/extensions.js";
 import type { HarnessReport } from "../agents/failures.js";
+import { GraphTask, NodeTask } from "../agents/graphs.js";
 import type { AgentHooks } from "../hooks.js";
 import { ExecutionEnvs } from "./harness-setup.js";
 import { AgentRequestHooks } from "./hooks.js";
-import { ToolTwin, TWIN_STARTUP_WAIT_MS, twinWanted } from "./twin.js";
+import { ToolTwin, twinWanted } from "./twin.js";
+import { reachForToolCall, type TwinTools } from "./twin-tools.js";
 
 const CONTEXT = BACKGROUND_CONTEXT;
 
@@ -50,13 +63,15 @@ export interface AgentHarnessOptions {
     /** Whether the session trusts its project. */
     trusted: boolean;
     onProblem: (message: string) => void;
+    /** How long to wait for a connecting MCP server when needed. */
+    startupWaitMs?: number;
   };
 }
 
 /**
- * The tool twin, with its servers connected or `TWIN_STARTUP_WAIT_MS`
- * passed, so tool calls that resume find their tools. Without it, agents
- * keep their own tools.
+ * Start the tool twin without waiting for MCP servers: shared extensions
+ * load synchronously and MCP servers connect in the background. Without it,
+ * agents keep their own tools.
  */
 async function openTwin(
   cwd: string,
@@ -65,7 +80,6 @@ async function openTwin(
   let twin: ToolTwin | undefined;
   try {
     twin = await ToolTwin.open({ cwd, ...options });
-    await twin.ready(TWIN_STARTUP_WAIT_MS);
     return twin;
   } catch (error) {
     await twin?.close().catch(() => {});
@@ -74,6 +88,174 @@ async function openTwin(
     );
     return undefined;
   }
+}
+
+/** Minimal read-only view of pi-durable's `pi.codemode.run` document to check
+ * whether an `execute`-phase codemode task already saved its initial catalog. */
+const CodemodeRunSnapshotDoc = defineDoc<{ start?: JsonValue }>({
+  kind: "pi.codemode.run",
+  version: 1,
+  scope: "task",
+  initial: () => ({}),
+  checkpointWhen: () => false,
+});
+
+/**
+ * Wait only for MCP servers reached by unfinished tasks that are about to
+ * resume (and for `direct` servers when a generation or graph is resuming), so
+ * recovered calls do not fail `tool_unavailable` while healthy opens with
+ * no pending MCP work take 0ms.
+ */
+async function waitForResumedMcp(
+  harness: Harness,
+  twin: ToolTwin,
+  twinTools: TwinTools,
+): Promise<void> {
+  const servers = twin.mcpServers();
+  if (servers.length === 0) return;
+  const { tasks, submissions } = await harness.inspect(CONTEXT);
+  if (tasks.length === 0 && submissions.length === 0) return;
+  const hasDirect = servers.some((server) => server.hasDirect);
+  let needsDirect = hasDirect && submissions.length > 0;
+  const assistantCalls = new Map<string, ToolCall[]>();
+  const loadAssistantCalls = async (
+    conversationId: ConversationId,
+    assistantId: EntryId,
+  ): Promise<ToolCall[]> => {
+    const key = `${conversationId}:${assistantId}`;
+    const cached = assistantCalls.get(key);
+    if (cached !== undefined) return cached;
+    const conversation = await harness.conversation(conversationId, CONTEXT);
+    const page = conversation
+      ? await conversation.entries(
+          { minEntryId: assistantId, maxEntryId: assistantId },
+          1,
+          undefined,
+          CONTEXT,
+        )
+      : undefined;
+    const message = page?.items[0]?.model?.[0];
+    const calls =
+      message?.role === "assistant"
+        ? message.content.filter(
+            (block): block is ToolCall => block.type === "toolCall",
+          )
+        : [];
+    assistantCalls.set(key, calls);
+    return calls;
+  };
+  const unofferedByConversation = new Map<ConversationId, Set<string>>();
+  const loadUnoffered = async (
+    conversationId: ConversationId,
+  ): Promise<Set<string>> => {
+    const cached = unofferedByConversation.get(conversationId);
+    if (cached !== undefined) return cached;
+    const live = await harness.snapshot(LiveDoc, conversationId, CONTEXT);
+    const unoffered = new Set(
+      (live?.tools ?? [])
+        .filter((slot) => slot.unoffered === true)
+        .map((slot) => slot.callId),
+    );
+    unofferedByConversation.set(conversationId, unoffered);
+    return unoffered;
+  };
+  let needAll = false;
+  let needIndirect = false;
+  const words = new Set<string>();
+  const addCall = (name: string, args: unknown) => {
+    const reach = reachForToolCall(name, args);
+    if (reach === undefined) return;
+    if (reach === "all") {
+      needAll = true;
+      return;
+    }
+    if (reach === "indirect") {
+      needIndirect = true;
+      return;
+    }
+    for (const word of reach) {
+      if (twin.matchedServers([word]).length > 0) words.add(word);
+    }
+  };
+  for (const { record } of tasks) {
+    if (record.abortRequested || record.state.status === "completing") continue;
+    if (record.kind === ToolTask.definition.name) {
+      const input = record.input as Partial<ToolTaskInput> | null;
+      // Unoffered calls always settle `tool_unavailable`; never wait for them.
+      if (input?.kind === "model" && input.unoffered === true) continue;
+      let call: { name: string; arguments: unknown } | undefined;
+      if (input?.kind === "nested" && input.call) {
+        call = input.call;
+      } else if (
+        input &&
+        typeof (input as { assistant?: unknown }).assistant === "number" &&
+        typeof (input as { callId?: unknown }).callId === "string"
+      ) {
+        const { assistant, callId } = input as {
+          assistant: EntryId;
+          callId: string;
+        };
+        call = (
+          await loadAssistantCalls(record.conversationId, assistant)
+        ).find((item) => item.id === callId);
+      }
+      if (!call) continue;
+      if (call.name === CODEMODE_TOOL_NAME) {
+        const checkpoint = record.state
+          .checkpoint as Partial<ToolTaskCheckpoint> | null;
+        // A codemode call that crashed after committing `execute` but before
+        // saving `pi.codemode.run.start` skips `beforeTool` and must build its
+        // initial catalog on resume (including any dynamically computed tools).
+        // Once `start` is saved, `beforeNestedTool` handles new calls lazily
+        // and skips already-settled calls.
+        if (checkpoint?.phase === "execute") {
+          const run = await harness.snapshot(
+            CodemodeRunSnapshotDoc,
+            record.id,
+            CONTEXT,
+          );
+          if (run?.start === undefined) needAll = true;
+        }
+        continue;
+      }
+      addCall(call.name, call.arguments);
+    } else if (
+      record.kind === GraphTask.definition.name ||
+      record.kind === NodeTask.definition.name
+    ) {
+      if (hasDirect) needsDirect = true;
+    } else if (record.kind === GenerationTask.definition.name) {
+      if (hasDirect) needsDirect = true;
+      const checkpoint = record.state
+        .checkpoint as Partial<GenerationCheckpoint> | null;
+      if (
+        checkpoint?.phase === "tools" &&
+        typeof checkpoint.assistant === "number" &&
+        Array.isArray(checkpoint.pending) &&
+        checkpoint.pending.length > 0
+      ) {
+        const pending = new Set(checkpoint.pending);
+        const unoffered = await loadUnoffered(record.conversationId);
+        for (const call of await loadAssistantCalls(
+          record.conversationId,
+          checkpoint.assistant,
+        ))
+          if (pending.has(call.id) && !unoffered.has(call.id))
+            addCall(call.name, call.arguments);
+      }
+    }
+  }
+  if (!needAll && !needIndirect && words.size === 0 && !needsDirect) return;
+  const waits: Array<Promise<void>> = [];
+  if (needAll) {
+    waits.push(twin.waitFor("all"));
+  } else {
+    if (needIndirect) waits.push(twin.waitFor("indirect"));
+    if (words.size > 0) waits.push(twin.waitFor([...words]));
+  }
+  if (needsDirect) waits.push(twin.waitForDirect());
+  await Promise.all(waits);
+  twinTools.sync();
 }
 
 /** A harness report as plain data, without pi-durable's types. */
@@ -139,7 +321,8 @@ export async function openAgentHarness(
       twinWanted(options.cwd, options.twin.extensions, options.twin.trusted)
     )
       twin = await openTwin(options.cwd, options.twin);
-    // Before the harness opens, so tool calls that resume find their tools.
+    // Before the harness opens, so pre-registered namespaces and shared
+    // extension tools are installed in the registry.
     if (twin) options.extensions.twin.connect(twin);
     harness = await Harness.open(
       options.storage,
@@ -163,6 +346,8 @@ export async function openAgentHarness(
       },
       CONTEXT,
     );
+    // Wait only for MCP servers reached by unfinished resumed tasks.
+    if (twin) await waitForResumedMcp(harness, twin, options.extensions.twin);
     await requests?.start(harness);
     // Before any work starts, so the cap sees every run end.
     unobserve = options.extensions.working?.observe(harness);

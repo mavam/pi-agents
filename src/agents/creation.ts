@@ -74,7 +74,9 @@ export async function createGraph(
     throw new AgentError(
       `A graph has ${GRAPH_SIZE.min} to ${GRAPH_SIZE.max} agents, not ${count}`,
     );
-  // New agents see the twin's tools as they are now.
+  // Wait once for `direct`-exposure MCP servers, matching Pi's first prompt,
+  // then sync so new agents see the twin's tools as they are now.
+  await deps.extensions.twin.waitForDirect();
   deps.extensions.twin.sync();
   // Validate with the service's view first; the commit claims for real.
   const single = count === 1;

@@ -5,6 +5,7 @@
  * `codemode` come its internal model tools, which only scripts call.
  */
 
+import type { Context } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import {
@@ -21,7 +22,10 @@ import {
   defineExtension,
   defineTool,
   type Extension,
+  type JsonObject,
+  NestedCallDoc,
   type PromptSection,
+  type ToolExecutionApi,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import {
@@ -191,6 +195,12 @@ export function withCodemodeModels(
   ];
 }
 
+export interface ToolsExtensionOptions {
+  /** Called before a `codemode` script admits a nested tool call, so
+   * connecting MCP servers needed by dynamically computed calls can settle. */
+  beforeNestedTool?: (name: string, signal?: AbortSignal) => Promise<void>;
+}
+
 /**
  * The tools of agents. `codemode` scripts call the agent's other tools as
  * nested calls, which pi-durable replays after a restart. Its prompt
@@ -199,7 +209,9 @@ export function withCodemodeModels(
  * tools, which agents with `codemode` enable along with it. Images in the
  * results of any tool fit the agent's model before they are stored.
  */
-export function createToolsExtension(): ToolsExtension {
+export function createToolsExtension(
+  options: ToolsExtensionOptions = {},
+): ToolsExtension {
   // Like Pi, scripts have no deadline unless they ask for one.
   const sandbox = new CodemodeSandbox({ timeoutMs: Number.POSITIVE_INFINITY });
   const codemode = createCodemodeExtension({ sandbox });
@@ -217,6 +229,43 @@ export function createToolsExtension(): ToolsExtension {
           : undefined,
     }),
   );
+  const beforeNestedTool = options.beforeNestedTool;
+  const codemodeTools = (codemode.tools ?? []).map((tool): ToolRegistration => {
+    if (tool.name !== CODEMODE_TOOL_NAME || !beforeNestedTool) return tool;
+    return {
+      ...tool,
+      execute(args, api, context) {
+        const executeTool = (async (
+          name: string,
+          toolArgs: JsonObject,
+          callContext: Context,
+          callOptions?: {
+            readonly key?: string;
+            readonly progress?: boolean;
+            readonly wait?: boolean;
+          },
+        ) => {
+          const key = callOptions?.key;
+          const existing =
+            key !== undefined
+              ? await api.snapshot(NestedCallDoc, api.taskId, key, callContext)
+              : undefined;
+          // Skip waiting when reattaching to an already-recorded keyed call
+          // (settled or admitted before a restart), so durable results return
+          // immediately even if the server now hangs.
+          if (existing?.taskId === undefined)
+            await beforeNestedTool(name, callContext.abortSignal);
+          return api.executeTool(
+            name,
+            toolArgs,
+            callContext,
+            callOptions as never,
+          );
+        }) as ToolExecutionApi["executeTool"];
+        return tool.execute(args, { ...api, executeTool }, context);
+      },
+    };
+  });
   const extension = defineExtension({
     name: TOOLS_EXTENSION,
     tools: [
@@ -227,7 +276,7 @@ export function createToolsExtension(): ToolsExtension {
       adaptReadOnly(createGrepToolDefinition),
       adaptReadOnly(createFindToolDefinition),
       adaptReadOnly(createLsToolDefinition),
-      ...(codemode.tools ?? []),
+      ...codemodeTools,
     ],
     sections,
     hooks: fit.hooks ?? [],

@@ -80,7 +80,9 @@ export function createAgentExtensions(
   options: AgentExtensionOptions,
 ): AgentExtensions {
   const twin = new TwinTools();
-  const { extension, close } = createToolsExtension();
+  const { extension, close } = createToolsExtension({
+    beforeNestedTool: (name, signal) => twin.prepareNestedTool(name, signal),
+  });
   const working =
     options.maxWorkingAgents === undefined
       ? undefined

@@ -227,8 +227,15 @@ turns, agents use those instead.
 
 Each namespace of tools, such as an MCP server, is a group of its own, as
 in Pi: scripts see it listed with its description, and
-`describeNamespace()` returns its instructions. Namespaces come and go as
-servers connect, so every agent's selection follows them.
+`describeNamespace()` returns its instructions. Configured MCP namespaces
+are declared right away while their servers connect in the background, so
+agents see them on their first turn without stalling startup on slow or
+unreachable servers. Only calls that actually reach a connecting server wait for it, as in Pi
+(and recovery waits only for servers needed by unfinished tool calls, or up
+to the startup budget for pending servers when a `codemode` call was
+interrupted before saving its initial tool catalog), while servers with
+`direct` tools are waited for once before agents start work. Namespaces
+that appear or disappear later still update every agent's selection.
 
 The twin is separate from the user's session: it connects to the servers
 again and never shares the user's conversation, UI, or session-only

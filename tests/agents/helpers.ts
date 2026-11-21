@@ -254,8 +254,13 @@ export interface HostOptions {
   /** Harness hooks on agents' tasks, such as their tools. */
   taskHooks?: readonly HookRegistration[];
   refreshDelayMs?: number;
+  /** Working directory for the harness and tool twin. */
+  cwd?: string;
+  /** Enable the tool twin even without `twinExtensions` (for example for `mcp.json`). */
+  twin?: boolean;
   /** Open a tool twin with these package sources' extensions. */
   twinExtensions?: readonly string[];
+  twinStartupWaitMs?: number;
   onTwinProblem?: (problem: string) => void;
 }
 
@@ -299,16 +304,19 @@ export async function openService(
     storage: options.storage ?? new MemoryStorage(),
     models: options.models ?? createFaux().models,
     identity: { attribution: null },
-    cwd: process.cwd(),
+    cwd: options.cwd ?? process.cwd(),
     extensions,
     lifecycle: { sessionId: "test-parent", hooks: options.hooks ?? [] },
     settings: options.settings,
-    ...(options.twinExtensions
+    ...(options.twin || options.twinExtensions
       ? {
           twin: {
-            extensions: options.twinExtensions,
+            extensions: options.twinExtensions ?? [],
             trusted: options.trusted ?? false,
             onProblem: options.onTwinProblem ?? (() => {}),
+            ...(options.twinStartupWaitMs === undefined
+              ? {}
+              : { startupWaitMs: options.twinStartupWaitMs }),
           },
         }
       : {}),

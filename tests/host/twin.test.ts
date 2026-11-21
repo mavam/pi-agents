@@ -7,6 +7,7 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
+import { getCurrentSystemMessage } from "@earendil-works/pi-ai/utils/transcript";
 import type { AgentService } from "../../src/agents/service.js";
 import {
   closeService,
@@ -38,6 +39,12 @@ export default function (pi) {
     name: "twin_echo",
     label: "Echo",
     description: "Echo the text",
+    promptSnippet: "  Echo text\\n  back through the twin  ",
+    promptGuidelines: [
+      "  Use twin_echo for echo requests  ",
+      "Use twin_echo for echo requests",
+      "   ",
+    ],
     parameters: Type.Object({ text: Type.String() }),
     async execute(_id, params, _signal, onUpdate) {
       onUpdate?.({ content: [{ type: "text", text: "echoing" }], details: {} });
@@ -49,6 +56,8 @@ export default function (pi) {
     name: "twin_ping",
     label: "Ping",
     description: "Ping the twin",
+    promptSnippet: "Ping the twin service",
+    promptGuidelines: ["Only ping when explicitly asked"],
     parameters: Type.Object({}),
     exposure: "codemode",
     namespace: { name: "twin", description: "The twin's tools" },
@@ -298,4 +307,154 @@ test("codemode scripts see a twin tool's output schema and structured output", a
   expect(payload.ok).toEqual({ items: ["alpha", "beta"], count: 0 });
   expect(payload.err).toEqual({ items: [], count: 0, isError: true });
   expect(payload.ping).toBe("pong");
+});
+
+test("direct twin tools contribute prompt snippets and guidelines; deferred tools stay out until loaded", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const snapshots: Array<Record<string, string | null>> = [];
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      snapshots.push(getCurrentSystemMessage(context.messages)?.sections ?? {});
+      const last = context.messages.at(-1);
+      if (last?.role !== "toolResult")
+        return fauxAssistantMessage(
+          [fauxToolCall("tool_search", { query: "ping" })],
+          { stopReason: "toolUse" },
+        );
+      return fauxAssistantMessage("done");
+    }),
+  );
+  const service = await openService({
+    models,
+    twinExtensions: [echoPackage()],
+  });
+  services.push(service);
+  await service.spawnGraph({
+    agents: [
+      {
+        name: "a",
+        job: "check prompt",
+        cwd: ".",
+        model: MODEL,
+        tools: ["read"],
+      },
+    ],
+  });
+  await service.wait(["a"]);
+
+  const initial = snapshots[0];
+  expect(initial?.tools).toContain(
+    "- twin_echo: Echo text back through the twin",
+  );
+  expect(
+    initial?.rules?.match(/Use twin_echo for echo requests/g),
+  ).toHaveLength(1);
+  expect(initial?.tools).not.toContain("twin_ping");
+  expect(initial?.tools).not.toContain("Ping the twin service");
+  expect(initial?.rules).not.toContain("Only ping when explicitly asked");
+
+  const afterLoad = snapshots[1];
+  expect(afterLoad?.tools).toContain("- twin_ping: Ping the twin service");
+  expect(afterLoad?.rules).toContain("- Only ping when explicitly asked");
+});
+
+test("malformed prompt metadata does not crash startup and shadowed names do not inherit built-in prompt text", async () => {
+  const directory = tempDir("pi-agents-twin-edge-");
+  fs.writeFileSync(
+    path.join(directory, "package.json"),
+    JSON.stringify({ name: "twin-edge", pi: { extensions: ["./edge.ts"] } }),
+  );
+  fs.writeFileSync(
+    path.join(directory, "edge.ts"),
+    `import { Type } from "typebox";
+export default function (pi) {
+  pi.registerTool({
+    name: "twin_malformed",
+    label: "Malformed",
+    description: "Has non-string promptSnippet and false promptGuidelines",
+    promptSnippet: false,
+    promptGuidelines: false,
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }], details: {} };
+    },
+  });
+  pi.registerTool({
+    name: "twin_bad_guidelines",
+    label: "Bad guidelines",
+    description: "Has non-array promptGuidelines",
+    promptSnippet: "Keep valid snippet",
+    promptGuidelines: "not-an-array",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }], details: {} };
+    },
+  });
+  pi.registerTool({
+    name: "agent_spawn",
+    label: "Custom spawn",
+    description: "Shadows spawning tool name without prompt metadata",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "custom" }], details: {} };
+    },
+  });
+  pi.registerTool({
+    name: "toString",
+    label: "Prototype name",
+    description: "Named after an Object.prototype key",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }], details: {} };
+    },
+  });
+}
+`,
+  );
+
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const problems: string[] = [];
+  let sections: Record<string, string | null> | undefined;
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      sections ??= getCurrentSystemMessage(context.messages)?.sections;
+      const last = context.messages.at(-1);
+      if (last?.role === "toolResult")
+        return fauxAssistantMessage(
+          last.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join(""),
+        );
+      return fauxAssistantMessage([fauxToolCall("twin_malformed", {})], {
+        stopReason: "toolUse",
+      });
+    }),
+  );
+  const service = await openService({
+    models,
+    twinExtensions: [directory],
+    onTwinProblem: (problem) => problems.push(problem),
+  });
+  services.push(service);
+  await service.spawnGraph({
+    agents: [
+      { name: "a", job: "edge", cwd: ".", model: MODEL, tools: ["read"] },
+    ],
+  });
+  await service.wait(["a"]);
+
+  expect(problems).toEqual([]);
+  expect(service.get("a")?.result?.text).toBe("ok");
+  expect(sections?.tools).toContain(
+    "- twin_bad_guidelines: Keep valid snippet",
+  );
+  expect(sections?.tools).not.toContain("twin_malformed");
+  expect(sections?.tools).not.toContain("agent_spawn");
+  expect(sections?.tools).not.toContain("toString");
+  expect(sections?.rules).not.toContain("\n- n\n");
+  expect(sections?.rules).not.toContain("Use agent_spawn when");
 });

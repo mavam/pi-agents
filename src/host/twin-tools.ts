@@ -31,6 +31,7 @@ import {
   TOOL_SEARCH_TOOL_NAME,
 } from "@earendil-works/pi-durable/tool-search";
 import type { TSchema } from "typebox";
+import type { ToolPromptContribution } from "./tools.js";
 import type { ToolTwin, TwinResult, TwinTool } from "./twin.js";
 
 export const TWIN_EXTENSION = "pi-agents-twin";
@@ -186,6 +187,34 @@ function namespaceOf(tool: TwinTool): ToolNamespace | undefined {
   };
 }
 
+/** A tool's prompt snippet and guidelines, normalized as Pi normalizes them. */
+function promptContributionOf(
+  definition: TwinTool["definition"],
+): ToolPromptContribution {
+  const rawSnippet: unknown = definition.promptSnippet;
+  const snippet =
+    typeof rawSnippet === "string"
+      ? rawSnippet
+          .replace(/[\r\n]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+      : undefined;
+  const rawGuidelines: unknown = definition.promptGuidelines;
+  const guidelines: string[] = [];
+  if (Array.isArray(rawGuidelines)) {
+    for (const guideline of rawGuidelines) {
+      if (typeof guideline !== "string") continue;
+      const normalized = guideline.trim();
+      if (normalized && !guidelines.includes(normalized))
+        guidelines.push(normalized);
+    }
+  }
+  return {
+    ...(snippet ? { snippet } : {}),
+    guidelines,
+  };
+}
+
 /**
  * The extension that holds the twin's tools. Agents select it from the
  * start, also while it is empty, as without a twin.
@@ -193,6 +222,10 @@ function namespaceOf(tool: TwinTool): ToolNamespace | undefined {
 export class TwinTools {
   private base: Extension = defineExtension({ name: TWIN_EXTENSION });
   private namespaced: Extension[] = [];
+  private readonly contributions = new WeakMap<
+    ToolRegistration,
+    ToolPromptContribution
+  >();
   /**
    * `tool_search`, which loads the twin's tools that only scripts reach,
    * for agents without `codemode`, as Pi offers MCP tools either way. It
@@ -215,6 +248,13 @@ export class TwinTools {
     return this.extensions().flatMap((extension) =>
       (extension.tools ?? []).map((tool) => tool.name),
     );
+  }
+
+  /** A twin tool registration's prompt snippet and guidelines, when it came from this twin. */
+  promptContribution(
+    tool: ToolRegistration,
+  ): ToolPromptContribution | undefined {
+    return this.contributions.get(tool);
   }
 
   /** Call `listener` when namespaces come or go. */
@@ -243,6 +283,7 @@ export class TwinTools {
     this.timer = undefined;
     this.registry = undefined;
     this.twin = undefined;
+    this.signature = "";
   }
 
   /** Install the twin's tools again when they changed. */
@@ -251,8 +292,12 @@ export class TwinTools {
     if (!registry) return;
     const twin = this.twin;
     const tools = twin?.tools() ?? [];
+    const prepared = tools.map((tool) => ({
+      tool,
+      contribution: promptContributionOf(tool.definition),
+    }));
     const signature = JSON.stringify(
-      tools.map(({ info, definition }) => {
+      prepared.map(({ tool: { info, definition }, contribution }) => {
         const outputSchema = outputSchemaOf(definition);
         return [
           info.name,
@@ -260,6 +305,8 @@ export class TwinTools {
           info.namespace?.name,
           revisionOf(definition),
           outputSchema ? revisionOf(outputSchema) : 0,
+          contribution.snippet ?? "",
+          contribution.guidelines,
         ];
       }),
     );
@@ -272,7 +319,7 @@ export class TwinTools {
     >();
     let deferred = false;
     if (twin)
-      for (const tool of tools) {
+      for (const { tool, contribution } of prepared) {
         let registration: ToolRegistration;
         try {
           registration = proxy(twin, tool);
@@ -280,6 +327,7 @@ export class TwinTools {
           // A schema pi-durable can't take; the other tools still work.
           continue;
         }
+        this.contributions.set(registration, contribution);
         if (registration.deferred === true) deferred = true;
         const namespace = namespaceOf(tool);
         if (!namespace) {

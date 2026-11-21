@@ -38,6 +38,12 @@ export default function (pi) {
     name: "twin_echo",
     label: "Echo",
     description: "Echo the text",
+    promptSnippet: "  Echo text\\n  back through the twin  ",
+    promptGuidelines: [
+      "  Use twin_echo for echo requests  ",
+      "Use twin_echo for echo requests",
+      "   ",
+    ],
     parameters: Type.Object({ text: Type.String() }),
     async execute(_id, params, _signal, onUpdate) {
       onUpdate?.({ content: [{ type: "text", text: "echoing" }], details: {} });
@@ -49,6 +55,8 @@ export default function (pi) {
     name: "twin_ping",
     label: "Ping",
     description: "Ping the twin",
+    promptSnippet: "Ping the twin service",
+    promptGuidelines: ["Only ping when explicitly asked"],
     parameters: Type.Object({}),
     exposure: "codemode",
     namespace: { name: "twin", description: "The twin's tools" },
@@ -298,4 +306,65 @@ test("codemode scripts see a twin tool's output schema and structured output", a
   expect(payload.ok).toEqual({ items: ["alpha", "beta"], count: 0 });
   expect(payload.err).toEqual({ items: [], count: 0, isError: true });
   expect(payload.ping).toBe("pong");
+});
+
+test("direct twin tools contribute prompt snippets and guidelines; deferred tools stay out until loaded", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const snapshots: Array<Record<string, string>> = [];
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      const sections: Record<string, string> = {};
+      for (const message of context.messages) {
+        if ((message.role as string) !== "system") continue;
+        const patch = (message as { sections?: Record<string, string | null> })
+          .sections;
+        for (const [key, value] of Object.entries(patch ?? {})) {
+          if (value === null) delete sections[key];
+          else sections[key] = value;
+        }
+      }
+      snapshots.push(sections);
+      const last = context.messages.at(-1);
+      if (last?.role !== "toolResult")
+        return fauxAssistantMessage(
+          [fauxToolCall("tool_search", { query: "ping" })],
+          { stopReason: "toolUse" },
+        );
+      return fauxAssistantMessage("done");
+    }),
+  );
+  const service = await openService({
+    models,
+    twinExtensions: [echoPackage()],
+  });
+  services.push(service);
+  await service.spawnGraph({
+    agents: [
+      {
+        name: "a",
+        job: "check prompt",
+        cwd: ".",
+        model: MODEL,
+        tools: ["read"],
+      },
+    ],
+  });
+  await service.wait(["a"]);
+
+  const initial = snapshots[0];
+  expect(initial?.tools).toContain(
+    "- twin_echo: Echo text back through the twin",
+  );
+  expect(
+    initial?.rules?.match(/Use twin_echo for echo requests/g),
+  ).toHaveLength(1);
+  expect(initial?.tools).not.toContain("twin_ping");
+  expect(initial?.tools).not.toContain("Ping the twin service");
+  expect(initial?.rules).not.toContain("Only ping when explicitly asked");
+
+  const afterLoad = snapshots[1];
+  expect(afterLoad?.tools).toContain("- twin_ping: Ping the twin service");
+  expect(afterLoad?.rules).toContain("- Only ping when explicitly asked");
 });

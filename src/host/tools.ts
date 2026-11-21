@@ -84,21 +84,25 @@ const DEFINITIONS: Record<PiToolName, (cwd: string) => AnyDefinition> = {
   ls: createLsToolDefinition,
 };
 
+export interface ToolPromptContribution {
+  readonly snippet?: string;
+  readonly guidelines: readonly string[];
+}
+
 /** Pi's prompt contribution of its `codemode` tool, which Pi doesn't export. */
-const CODEMODE_PROMPT = {
+const CODEMODE_PROMPT: ToolPromptContribution = {
   snippet: "Run JavaScript that calls other tools",
   guidelines: [
     "Use codemode to batch independent tool calls (Promise.allSettled), chain them, or filter large output, instead of many separate calls.",
   ],
 };
 
-/** Pi's prompt snippet and guidelines for a tool, so agents read like Pi. */
-export function toolPromptContribution(name: string): {
-  snippet?: string;
-  guidelines: readonly string[];
-} {
+/** Pi's prompt snippet and guidelines for a built-in tool, so agents read like Pi. */
+export function toolPromptContribution(
+  name: string,
+): ToolPromptContribution | undefined {
   if (name === CODEMODE_TOOL_NAME) return CODEMODE_PROMPT;
-  if (!isPiToolName(name)) return { guidelines: [] };
+  if (!isPiToolName(name)) return undefined;
   const definition = DEFINITIONS[name](process.cwd());
   return {
     snippet: definition.promptSnippet,

@@ -21,7 +21,10 @@ import { AgentsDoc } from "../agents/records.js";
 import { SPAWN_TOOL, STOP_TOOL, WAIT_TOOL } from "../agents/spawning.js";
 import { USER_MESSAGE_PREFIX } from "../agents/types.js";
 import type { SkillSource } from "../catalog/skills.js";
-import { toolPromptContribution } from "./tools.js";
+import {
+  type ToolPromptContribution,
+  toolPromptContribution,
+} from "./tools.js";
 
 const PROMPT_EXTENSION = "pi-agents-prompt";
 
@@ -36,11 +39,33 @@ export interface PromptOptions {
   trusted: () => boolean;
   /** The skills of a directory under the given trust. */
   skills: SkillSource;
+  /** Prompt snippets and guidelines for tools beyond Pi's built-ins, such as the tool twin's. */
+  toolPrompt?: (name: string) => ToolPromptContribution | undefined;
 }
 
 type ContextFiles = Array<{ path: string; content: string }>;
+type ToolPromptLookup = PromptOptions["toolPrompt"];
 
-function buildRules(tools: readonly string[]): string {
+function normalizeSnippet(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const oneLine = text
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return oneLine.length > 0 ? oneLine : undefined;
+}
+
+function contributionOf(
+  name: string,
+  extra?: ToolPromptLookup,
+): ToolPromptContribution | undefined {
+  return toolPromptContribution(name) ?? extra?.(name);
+}
+
+function buildRules(
+  tools: readonly string[],
+  extra?: ToolPromptLookup,
+): string {
   const rules: string[] = [];
   const add = (rule: string) => {
     const trimmed = rule.trim();
@@ -49,8 +74,10 @@ function buildRules(tools: readonly string[]): string {
   const searches = ["grep", "find", "ls"].some((name) => tools.includes(name));
   if (tools.includes("bash") && !searches)
     add("Use bash for file operations like ls, rg, find");
-  for (const name of tools)
-    for (const rule of toolPromptContribution(name).guidelines) add(rule);
+  for (const name of tools) {
+    if (name in SPAWNING_SNIPPETS || name in MESSAGING_SNIPPETS) continue;
+    for (const rule of contributionOf(name, extra)?.guidelines ?? []) add(rule);
+  }
   if (tools.includes(SPAWN_TOOL)) add(SPAWN_RULE);
   if (tools.includes(SEND_TOOL)) add(MESSAGING_RULE);
   add("Be concise in your responses");
@@ -75,13 +102,16 @@ const MESSAGING_SNIPPETS: Record<string, string> = {
 const MESSAGING_RULE =
   "Messages that start with [from <name>] come from other agents, not the user. To hear back from an agent, ask it to message you with agent_send";
 
-function renderTools(tools: readonly string[]): string {
+function renderTools(
+  tools: readonly string[],
+  extra?: ToolPromptLookup,
+): string {
   const lines = tools.flatMap((name) => {
     const spawning = SPAWNING_SNIPPETS[name];
     if (spawning) return [`- ${name}: ${spawning}`];
     const messaging = MESSAGING_SNIPPETS[name];
     if (messaging) return [`- ${name}: ${messaging}`];
-    const snippet = toolPromptContribution(name).snippet;
+    const snippet = normalizeSnippet(contributionOf(name, extra)?.snippet);
     return snippet ? [`- ${name}: ${snippet}`] : [];
   });
   return lines.length > 0 ? lines.join("\n") : "(none)";
@@ -119,8 +149,12 @@ export function createPromptExtension(options: PromptOptions): Extension {
     name: PROMPT_EXTENSION,
     sections: [
       section("preamble", () => AGENT_PREAMBLE, { tag: false }),
-      section("tools", (input) => renderTools(toolNames(input))),
-      section("rules", (input) => buildRules(toolNames(input))),
+      section("tools", (input) =>
+        renderTools(toolNames(input), options.toolPrompt),
+      ),
+      section("rules", (input) =>
+        buildRules(toolNames(input), options.toolPrompt),
+      ),
       section("project_context", (input) => {
         const files = contextFiles(cwdOf(input));
         return files.length > 0 ? renderProjectContext(files) : undefined;

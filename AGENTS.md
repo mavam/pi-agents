@@ -29,6 +29,9 @@ manually.
 
 ## Development
 
+- For questions about upstream `pi-durable` / `p3` (Pi Roam) progress, shim
+  status, or when to port `pi-agents` onto `p3`, follow
+  `.agents/references/p3-trajectory.md`.
 - Keep the docs in sync with user-facing changes: the manual under `docs/`
   (`usage.md`, `graphs.md`, `messaging.md`, `profiles.md`,
   `configuration.md`, `architecture.md`, `hooks.md`) and `docs/design.md` for design

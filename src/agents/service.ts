@@ -524,6 +524,7 @@ export class AgentService {
     const info = target.info;
     const text = message.trim();
     if (!text) throw new AgentError("The message must not be empty");
+    await this.extensions.twin.waitForDirect();
     const request: ParentRequest = {
       message: text,
       whenBusy: whenBusyOf(mode),
@@ -558,6 +559,7 @@ export class AgentService {
   /** Message an agent on behalf of the user; results stay in the agent. */
   async prompt(nameOrId: string, text: string, mode: SendMode): Promise<void> {
     const info = this.require(nameOrId);
+    await this.extensions.twin.waitForDirect();
     await this.store.submitInput(info.id, info.name, {
       type: "input",
       ...userInput(text),
@@ -590,6 +592,7 @@ export class AgentService {
       throw new AgentError(
         `${info.name} has nothing to continue; message it instead`,
       );
+    await this.extensions.twin.waitForDirect();
     try {
       await this.store.submitInput(info.id, info.name, { type: "continue" });
     } catch (error) {

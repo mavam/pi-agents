@@ -1,0 +1,8 @@
+created: 2026-11-26
+title: Blank profile handling
+intro: >-
+  Agent creation now treats empty or whitespace-only profile names as omitted instead
+  of reporting an unknown profile error.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.43.0

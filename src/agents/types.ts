@@ -294,6 +294,8 @@ export interface SpawnSpec {
   thinking?: ThinkingLevel;
   /** Tool allowlist; absent selects the defaults. */
   tools?: string[];
+  /** Whether tools explicitly restrict all working tools, including shared tools. */
+  strictTools?: boolean;
   /** Extra system prompt text, such as a profile body and its skills. */
   instructions?: string;
   /** Whether the agent sees the ambient skill catalog. */

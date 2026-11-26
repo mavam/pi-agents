@@ -41,6 +41,7 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { type Static, Type } from "typebox";
+import { isCodemodeModelTool } from "../host/tools.js";
 import { StringEnum } from "../schema.js";
 import { GraphTask, GroupEnded, groupKey, NodeTask } from "./graphs.js";
 import type { MessagingHub } from "./hub.js";
@@ -97,7 +98,10 @@ export type Selection = (spawn: boolean) => {
   /** The names of tools every agent gets, such as the tool twin's. */
   always: readonly string[];
   /** The tool filter of an agent with `own` tools. */
-  filter: (own: readonly ToolRegistration[]) => AgentChange["tools"];
+  filter: (
+    own: readonly ToolRegistration[],
+    strict: boolean,
+  ) => AgentChange["tools"];
 };
 
 export interface SpawningOptions {
@@ -133,7 +137,7 @@ const agentFields = Type.Object({
   tools: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "Tool allowlist, from your own tools. Agents also get every MCP tool and the extension tools the user shares, in any case",
+        "Working tool allowlist from your authorized tools, including shared MCP and extension tools; [] for none. Omit to inherit your tools",
     }),
   ),
   skills: Type.Optional(
@@ -317,7 +321,7 @@ async function start(
       // not reach the new agent.
       await configure(tx, conversation.id, {
         extensions: extra.extensions,
-        tools: extra.filter(helper.tools),
+        tools: extra.filter(helper.tools, helper.spec.strictTools === true),
         modelTools: null,
         cwd: spec.cwd,
         model: spec.model ?? null,
@@ -455,11 +459,20 @@ async function spawnExecute(
     const selection = options.selection(true);
     const own = new Set(selection.tools.map((tool) => tool.name));
     const always = new Set(selection.always);
-    // Agents get tools their spawner has, besides the tools that make
-    // them agents and those every agent gets.
-    const ownTools = agent.tools.filter(
-      (tool) => !own.has(tool.name) && !always.has(tool.name),
-    );
+    const strict = Array.isArray(durable.tools);
+    const permitted = strict ? new Set(durable.tools as string[]) : undefined;
+    const ownTools = [
+      ...new Map(
+        [...agent.tools, ...agent.callable]
+          .filter(
+            (tool) =>
+              !own.has(tool.name) &&
+              !isCodemodeModelTool(tool.name) &&
+              (!permitted || permitted.has(tool.name)),
+          )
+          .map((tool) => [tool.name, tool]),
+      ).values(),
+    ];
     let planned: Awaited<ReturnType<typeof plan>>;
     try {
       planned = await plan(
@@ -473,8 +486,14 @@ async function spawnExecute(
             : {}),
         },
         ownTools,
-        agent.callable,
+        agent.callable.filter((tool) => !permitted || permitted.has(tool.name)),
         always,
+        strict,
+        agent.tools
+          .filter(
+            (tool) => !own.has(tool.name) && !isCodemodeModelTool(tool.name),
+          )
+          .map((tool) => tool.name),
       );
       // Only the call grants spawning, not a profile the model picked,
       // and never beyond the deepest level.

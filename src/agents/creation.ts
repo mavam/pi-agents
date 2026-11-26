@@ -51,7 +51,7 @@ function prepare(
 ): { job: string; tools: ToolRegistration[] } {
   if (spec.thinking !== undefined && !isThinkingLevel(spec.thinking))
     throw new AgentError(`Invalid thinking level: ${spec.thinking}`);
-  const tools = resolveTools(deps, spec.tools);
+  const tools = resolveTools(deps, spec.tools, spec.strictTools === true);
   const job = spec.job.trim();
   if (!job) throw new AgentError("The job must not be empty");
   return { job, tools };
@@ -144,7 +144,12 @@ export async function createGraph(
       const { spec: agent } = node;
       await configure(tx, conversation.id, {
         cwd: agent.cwd,
-        ...capabilities(deps, node.tools, agent.spawn),
+        ...capabilities(
+          deps,
+          node.tools,
+          agent.spawn,
+          agent.strictTools === true,
+        ),
         // As for helpers: tools the anchor loaded aren't the agent's.
         modelTools: null,
         ...(agent.model ? { model: agent.model } : {}),
@@ -202,6 +207,7 @@ function capabilities(
   deps: CreationDeps,
   tools: ToolRegistration[],
   spawn: boolean | undefined,
+  strict: boolean,
 ): { tools: AgentChange["tools"]; extensions: Extension[] } {
   // The tools of the spawning and messaging extensions come with them.
   const extensions = agentSelection(deps.extensions, {
@@ -209,7 +215,13 @@ function capabilities(
     messaging: true,
   });
   return {
-    tools: toolFilter(deps.extensions.tools, tools, deps.extensions.twin),
+    tools: strict
+      ? [
+          ...tools,
+          ...(spawn ? (deps.extensions.spawning.tools ?? []) : []),
+          ...(deps.extensions.messaging.tools ?? []),
+        ]
+      : toolFilter(deps.extensions.tools, tools, deps.extensions.twin),
     extensions,
   };
 }
@@ -217,14 +229,19 @@ function capabilities(
 function resolveTools(
   deps: CreationDeps,
   names: string[] | undefined,
+  strict: boolean,
 ): ToolRegistration[] {
   const all = deps.extensions.tools.tools ?? [];
-  // Agents get the internal tools of codemode with it, never by name.
-  const available = all.filter((tool) => !isCodemodeModelTool(tool.name));
-  // Every agent gets the tool twin's tools, named or not.
+  const shared = deps.extensions.twin
+    .extensions()
+    .flatMap((extension) => extension.tools ?? []);
+  // Codemode's internal model tools are granted with codemode, not by name.
+  const available = [...all, ...(strict ? shared : [])].filter(
+    (tool) => !isCodemodeModelTool(tool.name),
+  );
   const twin = new Set(deps.extensions.twin.names());
   const wanted = (names ?? [...DEFAULT_AGENT_TOOLS]).filter(
-    (name) => !twin.has(name),
+    (name) => strict || !twin.has(name),
   );
   const unknown = wanted.filter(
     (name) => !available.some((tool) => tool.name === name),

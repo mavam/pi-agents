@@ -30,7 +30,7 @@ Profile fields:
 | `description` | When to use the profile. Required. |
 | `model` | Model as `provider/id` or `id`. Defaults to the session's model. |
 | `thinking` | Thinking level. Defaults to the session's level. |
-| `tools` | Tool allowlist. Defaults to the session's active tools that agents can run, or `read`, `bash`, `edit`, `write` if it has none. |
+| `tools` | 工作工具白名单，包含共享扩展和 MCP 工具；空列表表示不提供工作工具。省略时继承会话中可用的活动工具，没有时使用 `read`、`bash`、`edit`、`write`，并动态共享扩展和 MCP 工具。 |
 | `skills` | Skills to apply in full, including those only you can invoke. Without this field, the agent sees your skill catalog. An empty list disables skills. |
 | `spawn` | Whether agents of this profile may spawn agents of their own. Defaults to `false`. |
 | `maxTurns` | How many tool rounds one run of an agent may take. The round that reaches it still runs its tools, then the agent fails with `reached its turn limit`; press `r` in `/agents` to continue it for another run. Defaults to no limit. |

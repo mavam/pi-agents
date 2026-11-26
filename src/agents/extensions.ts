@@ -126,7 +126,14 @@ export function createAgentExtensions(
         ...(messaging.tools ?? []),
       ],
       always: twin.names(),
-      filter: (own) => toolFilter(tools, own, twin),
+      filter: (own, strict) =>
+        strict
+          ? [
+              ...own,
+              ...(spawn ? (spawning?.tools ?? []) : []),
+              ...(messaging.tools ?? []),
+            ]
+          : toolFilter(tools, own, twin),
     }),
   });
   spawning = defineExtension({

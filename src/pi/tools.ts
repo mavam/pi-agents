@@ -411,7 +411,7 @@ const agentFields = {
   ),
   tools: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Tool allowlist from: ${AGENT_TOOL_NAMES.join(", ")}. Defaults to your own tools among them. Agents also get every MCP tool and the extension tools the user shares, in any case`,
+      description: `Working tool allowlist, including shared MCP and extension tools; [] for none. Omit to inherit your active tools among ${AGENT_TOOL_NAMES.join(", ")} and dynamically shared tools`,
     }),
   ),
   skills: Type.Optional(

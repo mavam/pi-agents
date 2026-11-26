@@ -238,6 +238,9 @@ export async function resolveSpawn(
     ...(model ? { model } : {}),
     ...(thinking ? { thinking: thinking as ThinkingLevel } : {}),
     ...(tools ? { tools } : {}),
+    ...(request.tools !== undefined || profile?.tools !== undefined
+      ? { strictTools: true }
+      : {}),
     ...(instructions ? { instructions } : {}),
     ...(profile?.maxTurns !== undefined ? { maxTurns: profile.maxTurns } : {}),
   };

@@ -127,6 +127,8 @@ export async function plan(
   /** Tools every agent gets, such as the tool twin's: naming them changes
    * nothing. */
   always: ReadonlySet<string> = new Set(),
+  strictParent = false,
+  inherited?: readonly string[],
 ): Promise<{ helpers: Planned[]; inputs: number[][] }> {
   if (args.agents.length > options.limits.perCall)
     throw new AgentError(
@@ -169,10 +171,11 @@ export async function plan(
     );
     if (spec.thinking !== undefined && !isThinkingLevel(spec.thinking))
       throw new AgentError(`Invalid thinking level: ${spec.thinking}`);
-    // Helpers never get tools their agent lacks.
-    const wanted = (spec.tools ?? own.map((tool) => tool.name)).filter(
-      (tool) => !always.has(tool),
-    );
+    const strict = strictParent || spec.strictTools === true;
+    const wanted = (
+      spec.tools ??
+      (!strict && inherited ? inherited : own.map((tool) => tool.name))
+    ).filter((tool) => strict || !always.has(tool));
     const missing = wanted.filter(
       (tool) => !own.some((each) => each.name === tool),
     );
@@ -188,7 +191,11 @@ export async function plan(
       ),
       callable,
     );
-    helpers.push({ name, spec, tools });
+    helpers.push({
+      name,
+      spec: strict ? { ...spec, strictTools: true } : spec,
+      tools,
+    });
   }
   return { helpers, inputs };
 }

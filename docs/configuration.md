@@ -55,6 +55,12 @@ List only extensions whose tools work on their own: the twin has no
 UI, and its tools see an empty conversation rather than yours. Restart Pi
 after changing the list, `mcp.json`, or your MCP sign-ins.
 
+显式设置 `tools` 时，名单限制所有工作工具，包括共享扩展和 MCP 工具；
+`tools: []` 不提供工作工具。通信工具仍可用，允许创建下级代理时也保留
+创建和管理工具。省略 `tools` 时，共享工具继续动态加入。指定的工具当前
+尚未注册时，创建请求会报错，可以在工具可用后重试。旧会话保持原有设置。
+下级代理不能获得严格限制的上级代理未获准的工作工具。
+
 ## Working agents
 
 Cap parallel work to reduce contention, for example on a local model

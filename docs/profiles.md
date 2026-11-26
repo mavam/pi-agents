@@ -36,7 +36,8 @@ Profile fields:
 | `maxTurns` | How many tool rounds one run of an agent may take. The round that reaches it still runs its tools, then the agent fails with `reached its turn limit`; press `r` in `/agents` to continue it for another run. Defaults to no limit. |
 
 The Markdown body extends the agent's system prompt. Arguments that Pi passes
-to `agent_spawn` override profile settings.
+to `agent_spawn` override profile settings. An empty or whitespace-only
+`profile` is equivalent to omitting it.
 
 Pi-agents reads profiles from `~/.pi/agent/agents` and, for trusted
 projects, `.pi/agents` in the directory where you started Pi. Project

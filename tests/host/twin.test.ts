@@ -632,6 +632,236 @@ export default function (pi) {
   expect(sections?.rules).not.toContain("Use agent_spawn when");
 });
 
+test("shared extensions that override built-in tools follow the allowlist across prompts and helper spawns", async () => {
+  const directory = trackedTempDir("pi-agents-twin-override-");
+  fs.writeFileSync(
+    path.join(directory, "package.json"),
+    JSON.stringify({
+      name: "twin-override",
+      pi: { extensions: ["./override.ts"] },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(directory, "override.ts"),
+    `import { Type } from "typebox";
+export default function (pi) {
+  pi.registerTool({
+    name: "read",
+    label: "Hashline Read",
+    description: "Read files with hashline anchors",
+    promptSnippet: "Read file contents with hashline anchors",
+    promptGuidelines: ["Use hashline anchors returned by read"],
+    parameters: Type.Object({ path: Type.String() }),
+    async execute(_id, args) {
+      return { content: [{ type: "text", text: \`hashline-read:\${args.path}\` }], details: {} };
+    },
+  });
+  pi.registerTool({
+    name: "grep",
+    label: "Hashline Grep",
+    description: "Search files with hashline anchors",
+    promptSnippet: "Search file contents with hashline anchors",
+    parameters: Type.Object({ pattern: Type.String() }),
+    async execute(_id, args) {
+      return { content: [{ type: "text", text: \`hashline-grep:\${args.pattern}\` }], details: {} };
+    },
+  });
+  pi.registerTool({
+    name: "outline",
+    label: "Outline",
+    description: "Show file symbols",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "outline-ok" }], details: {} };
+    },
+  });
+}
+`,
+  );
+
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const seen = new Map<
+    string,
+    {
+      tools: string[];
+      sections: Record<string, string | null> | undefined;
+    }
+  >();
+  let helperStep = 0;
+  faux.setResponses(
+    Array.from({ length: 12 }, () => (context) => {
+      const firstUser = context.messages.find((m) => m.role === "user");
+      const job =
+        firstUser && typeof firstUser.content === "string"
+          ? firstUser.content
+          : Array.isArray(firstUser?.content)
+            ? firstUser.content
+                .map((block) => (block.type === "text" ? block.text : ""))
+                .join("")
+            : "";
+      const key = job.split("\n", 1)[0] ?? "";
+      if (!seen.has(key)) {
+        seen.set(key, {
+          tools: getCurrentTools(context.messages).map((tool) => tool.name),
+          sections: getCurrentSystemMessage(context.messages)?.sections,
+        });
+      }
+      const last = context.messages.at(-1);
+      if (key === "lead-job") {
+        if (last?.role === "user") {
+          helperStep += 1;
+          if (helperStep === 1) {
+            return fauxAssistantMessage(
+              [fauxToolCall("read", { path: "a.ts" })],
+              { stopReason: "toolUse" },
+            );
+          }
+          const lastText =
+            typeof last.content === "string"
+              ? last.content
+              : last.content
+                  .map((block) => (block.type === "text" ? block.text : ""))
+                  .join("");
+          return fauxAssistantMessage(
+            `lead-done:${lastText.includes("helper-read:hashline-read:b.ts")}`,
+          );
+        }
+        if (last?.role === "toolResult") {
+          const text = last.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join("");
+          if (text === "hashline-read:a.ts") {
+            return fauxAssistantMessage(
+              [
+                fauxToolCall("agent_spawn", {
+                  agents: [
+                    { name: "escalate", job: "denied", tools: ["grep"] },
+                  ],
+                }),
+              ],
+              { stopReason: "toolUse" },
+            );
+          }
+          if (text.includes("asks for tools you don't have: grep")) {
+            return fauxAssistantMessage(
+              [
+                fauxToolCall("agent_spawn", {
+                  agents: [
+                    { name: "child", job: "helper-job", tools: ["read"] },
+                  ],
+                }),
+              ],
+              { stopReason: "toolUse" },
+            );
+          }
+          return fauxAssistantMessage("waiting for helper");
+        }
+      }
+      if (key === "helper-job") {
+        if (last?.role === "toolResult") {
+          const text = last.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join("");
+          return fauxAssistantMessage(`helper-read:${text}`);
+        }
+        return fauxAssistantMessage([fauxToolCall("read", { path: "b.ts" })], {
+          stopReason: "toolUse",
+        });
+      }
+      if (key === "search-job") {
+        if (last?.role === "toolResult") {
+          const text = last.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join("");
+          return fauxAssistantMessage(text);
+        }
+        return fauxAssistantMessage(
+          [fauxToolCall("grep", { pattern: "needle" })],
+          { stopReason: "toolUse" },
+        );
+      }
+      return fauxAssistantMessage("done");
+    }),
+  );
+
+  const service = await openService({
+    models,
+    twinExtensions: [directory],
+    skills: async () => [
+      {
+        name: "demo",
+        description: "Demo skill",
+        filePath: "/tmp/demo/SKILL.md",
+        baseDir: "/tmp/demo",
+        sourceInfo: {
+          path: "/tmp/demo/SKILL.md",
+          source: "user",
+          scope: "user",
+          origin: "top-level",
+        },
+        disableModelInvocation: false,
+      },
+    ],
+  });
+  services.push(service);
+
+  await service.spawnGraph({
+    agents: [
+      {
+        name: "lead",
+        job: "lead-job",
+        cwd: ".",
+        model: MODEL,
+        tools: ["read"],
+        spawn: true,
+        ambientSkills: true,
+      },
+    ],
+  });
+  await service.wait(["lead"]);
+
+  const lead = seen.get("lead-job");
+  expect(lead?.tools).toContain("read");
+  expect(lead?.tools).toContain("outline");
+  expect(lead?.tools).not.toContain("grep");
+  expect(lead?.sections?.tools).toContain(
+    "- read: Read file contents with hashline anchors",
+  );
+  expect(lead?.sections?.rules).toContain(
+    "- Use hashline anchors returned by read",
+  );
+  expect(lead?.sections?.skills).toContain("demo");
+  expect(lead?.sections?.skills).toContain("read tool");
+  expect(service.get("lead")?.result?.text).toBe("lead-done:true");
+  const helper = seen.get("helper-job");
+  expect(helper?.tools).toContain("read");
+  expect(helper?.tools).not.toContain("grep");
+
+  await service.spawnGraph({
+    agents: [
+      {
+        name: "searcher",
+        job: "search-job",
+        cwd: ".",
+        model: MODEL,
+        tools: ["read", "grep", "bash"],
+      },
+    ],
+  });
+  await service.wait(["searcher"]);
+
+  const searcher = seen.get("search-job");
+  expect(searcher?.tools).toEqual(
+    expect.arrayContaining(["read", "grep", "bash", "outline"]),
+  );
+  expect(searcher?.sections?.rules).not.toContain(
+    "Use bash for file operations like ls, rg, find",
+  );
+  expect(service.get("searcher")?.result?.text).toBe("hashline-grep:needle");
+});
+
 test("a hanging MCP server does not block harness open or unrelated calls, shows on turn 1, and rejects invalid config overrides", async () => {
   const cwd = trackedTempDir("pi-agents-mcp-cwd-");
   const script = mcpServerScript(cwd);

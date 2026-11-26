@@ -70,14 +70,15 @@ function buildRules(
     const trimmed = rule.trim();
     if (trimmed && !rules.includes(trimmed)) rules.push(trimmed);
   };
+  const allNames = new Set(tools.map((tool) => tool.name));
   const nativeNames = new Set<string>();
   const resolved = tools.map((tool) => {
     const custom = extra?.(tool);
     if (custom === undefined) nativeNames.add(tool.name);
     return { tool, custom };
   });
-  const searches = ["grep", "find", "ls"].some((name) => nativeNames.has(name));
-  if (nativeNames.has("bash") && !searches)
+  const searches = ["grep", "find", "ls"].some((name) => allNames.has(name));
+  if (allNames.has("bash") && !searches)
     add("Use bash for file operations like ls, rg, find");
   for (const { tool, custom } of resolved) {
     if (custom !== undefined) {
@@ -181,12 +182,10 @@ export function createPromptExtension(options: PromptOptions): Extension {
         const state = await input.read.snapshot(AgentsDoc, context);
         const record = state?.agents[String(input.conversationId)];
         if (record && !record.ambientSkills) return undefined;
-        const nativeTools = input.agent.tools
-          .filter((tool) => options.toolPrompt?.(tool) === undefined)
-          .map((tool) => tool.name);
-        const reader = nativeTools.includes("read")
+        const toolNames = input.agent.tools.map((tool) => tool.name);
+        const reader = toolNames.includes("read")
           ? "read"
-          : nativeTools.includes("bash")
+          : toolNames.includes("bash")
             ? "bash"
             : undefined;
         if (reader === undefined) return undefined;

@@ -51,9 +51,13 @@ MCP tool calls, and for pending servers when a resumed `codemode` call was
 interrupted before saving its initial tool catalog); servers that take
 longer reach agents once they do. Pi's terminal doesn't wait for that when you resume a session with
 agents: they open in the background and show in the panel once they did.
-List only extensions whose tools work on their own: the twin has no
-UI, and its tools see an empty conversation rather than yours. Restart Pi
-after changing the list, `mcp.json`, or your MCP sign-ins.
+A shared extension tool with the same name as a built-in tool (such as
+`read` or `grep`) replaces that built-in when the agent's `tools` allowlist
+includes it and stays excluded when the allowlist omits it; tools with new
+names and MCP tools reach every agent. List only extensions whose tools
+work on their own: the twin has no UI, and its tools see an empty
+conversation rather than yours. Restart Pi after changing the list,
+`mcp.json`, or your MCP sign-ins.
 
 ## Working agents
 

@@ -125,7 +125,7 @@ export function createAgentExtensions(
         ...(spawn ? (spawning?.tools ?? []) : []),
         ...(messaging.tools ?? []),
       ],
-      always: twin.names(),
+      always: ambientTwinNames(tools, twin),
       filter: (own) => toolFilter(tools, own, twin),
     }),
   });
@@ -147,9 +147,22 @@ export function createAgentExtensions(
 }
 
 /**
+ * Twin tool names every agent gets regardless of its built-in tool
+ * allowlist: tools the twin adds rather than overrides of built-in tools.
+ * A twin tool sharing a built-in name (such as a custom `read` or `grep`)
+ * follows that built-in's allowlist slot and overrides its implementation
+ * when selected.
+ */
+export function ambientTwinNames(tools: Extension, twin: TwinTools): string[] {
+  const builtin = new Set((tools.tools ?? []).map((tool) => tool.name));
+  return twin.names().filter((name) => !builtin.has(name));
+}
+
+/**
  * The tool filter of an agent whose own tools are `own`: every tool of the
  * extensions it selects but the agent tools it lacks. The tool twin's
- * tools change as servers connect, so a filter that removes keeps them all.
+ * tools change as servers connect, so a filter that removes keeps them all
+ * unless they share a built-in tool name excluded by the allowlist.
  * An agent with `codemode` reaches the twin's script tools from scripts,
  * so it doesn't get `tool_search` for them too.
  */

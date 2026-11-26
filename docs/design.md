@@ -239,9 +239,12 @@ that appear or disappear later still update every agent's selection.
 
 The twin is separate from the user's session: it connects to the servers
 again and never shares the user's conversation, UI, or session-only
-changes. Every agent gets all of its tools: choosing among them would be
+changes. Every agent gets all of its own tools: choosing among them would be
 policy, and an allowlist that named them would break as servers connect and
-change. A call to an external system isn't replayed
+change. A shared extension tool that overrides a built-in name (such as a
+custom `read` or `grep`) still follows that built-in's allowlist slot, so
+read-only allowlists and helper delegation stay intact while selected slots
+use the shared implementation. A call to an external system isn't replayed
 after a crash unless its author marks it as read-only or idempotent.
 
 ## Model requests

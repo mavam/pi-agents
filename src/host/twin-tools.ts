@@ -304,7 +304,7 @@ export class TwinTools {
     return [this.base, ...this.namespaced];
   }
 
-  /** The names of the twin's tools, which agents always get. */
+  /** The names of the twin's currently registered tools. */
   names(): string[] {
     return this.extensions().flatMap((extension) =>
       (extension.tools ?? []).map((tool) => tool.name),

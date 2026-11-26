@@ -18,6 +18,7 @@ import { CONTEXT } from "./context.js";
 import {
   type AgentExtensions,
   agentSelection,
+  ambientTwinNames,
   toolFilter,
 } from "./extensions.js";
 import { GraphTask, NodeTask } from "./graphs.js";
@@ -221,10 +222,15 @@ function resolveTools(
   const all = deps.extensions.tools.tools ?? [];
   // Agents get the internal tools of codemode with it, never by name.
   const available = all.filter((tool) => !isCodemodeModelTool(tool.name));
-  // Every agent gets the tool twin's tools, named or not.
-  const twin = new Set(deps.extensions.twin.names());
+  // Twin-only tools reach every agent regardless of the allowlist, so naming
+  // one is a no-op. Twin tools that override a built-in name stay in `wanted`
+  // so the allowlist keeps or excludes their slot while the twin supplies
+  // the implementation.
+  const ambient = new Set(
+    ambientTwinNames(deps.extensions.tools, deps.extensions.twin),
+  );
   const wanted = (names ?? [...DEFAULT_AGENT_TOOLS]).filter(
-    (name) => !twin.has(name),
+    (name) => !ambient.has(name),
   );
   const unknown = wanted.filter(
     (name) => !available.some((tool) => tool.name === name),

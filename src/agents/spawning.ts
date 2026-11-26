@@ -456,8 +456,9 @@ async function spawnExecute(
     const own = new Set(selection.tools.map((tool) => tool.name));
     const always = new Set(selection.always);
     // Agents get tools their spawner has, besides the tools that make
-    // them agents and those every agent gets.
-    const ownTools = agent.tools.filter(
+    // them agents and those every agent gets. Include deferred built-in
+    // overrides too so a spawner with one can still pass its slot on.
+    const ownTools = [...agent.tools, ...agent.deferred].filter(
       (tool) => !own.has(tool.name) && !always.has(tool.name),
     );
     let planned: Awaited<ReturnType<typeof plan>>;

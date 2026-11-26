@@ -158,7 +158,7 @@ export function toolFilter(
   own: readonly ToolRegistration[],
   twin: TwinTools,
 ): AgentChange["tools"] {
-  const names = new Set(own.map((tool) => tool.name));
+  const names = new Set([...own.map((tool) => tool.name), ...twin.names()]);
   return {
     remove: [
       ...(tools.tools ?? []).filter((tool) => !names.has(tool.name)),

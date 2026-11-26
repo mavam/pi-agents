@@ -1,0 +1,9 @@
+created: 2026-11-26
+title: Pi 1.6.1 and shared built-in tool overrides
+intro: >-
+  pi-agents now requires Pi 1.6.1 or later. Shared extensions that override built-in
+  tools now follow each agent's built-in tool allowlist, including when agents spawn
+  helpers.
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.42.0

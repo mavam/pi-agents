@@ -112,7 +112,7 @@ function resolveProfile(
   cwd: string,
   trusted: boolean,
 ): Profile | undefined {
-  if (name === undefined) return undefined;
+  if (!name?.trim()) return undefined;
   const { profiles } = discoverProfiles(cwd, trusted);
   const profile = findProfile(profiles, name);
   if (!profile) {

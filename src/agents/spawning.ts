@@ -712,11 +712,10 @@ async function waitExecute(
     const resume = options.pause?.(id);
     if (resume) pausedWaits.set(api.taskId, resume);
     return {
-      sleep: {
-        checkpoint: (deadline === undefined ? {} : { deadline }) as WaitPark,
-        signals: open.map((group) => GroupEnded.key(groupKey(Number(group)))),
-        ...(deadline === undefined ? {} : { until: deadline }),
-      },
+      kind: "sleep",
+      checkpoint: (deadline === undefined ? {} : { deadline }) as WaitPark,
+      signals: open.map((group) => GroupEnded.key(groupKey(Number(group)))),
+      ...(deadline === undefined ? {} : { until: deadline }),
     };
   }
   const results = await Promise.all(

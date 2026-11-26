@@ -518,7 +518,7 @@ export class AgentStore {
         throw new AgentError(
           `${name} waits for the agents its job needs and hasn't started yet`,
         );
-      await conversation.submit(tx, draft);
+      await conversation.admit(tx, draft);
       if (record?.stopped) delete record.stopped;
     }, CONTEXT);
   }
@@ -560,7 +560,7 @@ export class AgentStore {
     return this.harness.commit(async (tx) => {
       if (interrupting) await markInterrupted(tx, agentId);
       const rid = await addRequest(tx, agentId, name, request);
-      await conversation.submit(tx, requestSubmission(rid, request));
+      await conversation.admit(tx, requestSubmission(rid, request));
       return rid;
     }, CONTEXT);
   }

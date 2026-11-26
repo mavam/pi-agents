@@ -1124,7 +1124,7 @@ export class AgentService {
           const data: ResultsEntryData = { groups: [id] };
           // The reservation and the input commit together.
           await this.store.reserveAttempt(id, attempt, (tx) =>
-            conversation.submit(tx, {
+            conversation.admit(tx, {
               type: "input",
               content: `${RESULTS_PREFIX}${text}`,
               whenBusy: "followUp",

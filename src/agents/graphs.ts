@@ -555,7 +555,7 @@ export const NodeTask = defineTask<NodeInput, NodeState, NodeResult>({
           ANSWER_KEY,
           context,
         );
-        if (signal === undefined || !("value" in signal)) {
+        if (signal?.kind !== "value") {
           await runtime.commit(
             () => ({
               status: "terminal",

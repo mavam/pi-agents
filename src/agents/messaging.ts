@@ -495,7 +495,7 @@ export function createMessagingExtension(
             const logged = await api.commit(async (tx) => {
               const admitted = await admit(tx, bound);
               if (admitted !== "new") return admitted;
-              await conversation.submit(
+              await conversation.admit(
                 tx,
                 messageSubmission(
                   { ...bound, mode: whenBusyOf(bound.mode) },

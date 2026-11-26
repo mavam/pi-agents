@@ -118,7 +118,7 @@ test.each(["error", "continued answer", "missing model"] as const)(
             },
             onYield: (answer) =>
               textOf(answer.content) === "not the end of the run"
-                ? { continue: "continue to failure" }
+                ? { kind: "continue", continue: "continue to failure" }
                 : undefined,
           }),
         ],

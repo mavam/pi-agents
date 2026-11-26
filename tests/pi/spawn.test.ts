@@ -107,10 +107,21 @@ describe("resolveSpawn", () => {
     expect(inheritedTools(["web_search"])).toBeUndefined();
   });
 
+  test.each(["", "  "])(
+    "treats blank profile %j as omitted",
+    async (profile) => {
+      const ctx = context(project());
+      const sources = { skills: discoverSkills };
+      expect(await resolveSpawn({ job: "x", profile }, ctx, sources)).toEqual(
+        await resolveSpawn({ job: "x" }, ctx, sources),
+      );
+    },
+  );
+
   test("profiles supply settings, instructions, and skills", async () => {
     const cwd = project();
     const spec = await resolveSpawn(
-      { job: "x", profile: "checker" },
+      { job: "x", profile: "  checker  " },
       context(cwd),
       { skills: discoverSkills, thinking: "high" },
     );
@@ -142,8 +153,8 @@ describe("resolveSpawn", () => {
 
   test("reports unknown profiles, skills, models, and directories", async () => {
     const cwd = project();
-    expect(
-      resolveSpawn({ job: "x", profile: "nope" }, context(cwd), {
+    await expect(
+      resolveSpawn({ job: "x", profile: "  nope  " }, context(cwd), {
         skills: discoverSkills,
       }),
     ).rejects.toThrow('Unknown profile "nope"');

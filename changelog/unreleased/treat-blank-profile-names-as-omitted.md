@@ -3,6 +3,8 @@ title: Treat blank profile names as omitted
 type: bugfix
 authors:
   - sunnysab
+prs:
+  - 137
 created: 2026-11-26T08:15:56Z
 ---
 

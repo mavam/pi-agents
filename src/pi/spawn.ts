@@ -112,13 +112,14 @@ function resolveProfile(
   cwd: string,
   trusted: boolean,
 ): Profile | undefined {
-  if (!name?.trim()) return undefined;
+  const trimmed = name?.trim();
+  if (!trimmed) return undefined;
   const { profiles } = discoverProfiles(cwd, trusted);
-  const profile = findProfile(profiles, name);
+  const profile = findProfile(profiles, trimmed);
   if (!profile) {
     const available = profiles.map((entry) => entry.name).join(", ") || "none";
     throw new AgentError(
-      `Unknown profile "${name}". Available profiles: ${available}`,
+      `Unknown profile "${trimmed}". Available profiles: ${available}`,
     );
   }
   return profile;

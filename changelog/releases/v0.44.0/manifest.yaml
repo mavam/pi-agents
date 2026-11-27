@@ -1,0 +1,8 @@
+created: 2026-11-27
+title: Pi 1.7.0
+intro: "This release upgrades pi-agents to Pi 1.7.0 and aligns agent request identity\
+  \ with Pi\u2019s defaults now that install telemetry has been removed. Agents also\
+  \ benefit from Pi 1.7.0\u2019s model and code mode improvements."
+source:
+  mode: sync-stable-queue
+  previous_stable: v0.43.1

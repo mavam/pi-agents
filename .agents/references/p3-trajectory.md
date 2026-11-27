@@ -125,8 +125,8 @@ Cover four points:
     2. Daily-driver surface: met on the web; no TUI yet.
     3. Native subagents (`slice 10`): partial. `harness/subagents.ts` ships
        named, persistent background conversations with async reporting, but
-       no DAGs, peer messaging, recursive spawning (the tool is `scope: "main"`), agent
-       profiles, or `codemode`.
+       no DAGs, peer messaging, recursive spawning (the tool is
+       `scope: "main"`), agent profiles, or `codemode`.
     4. Native MCP (`slice 13`): not built.
   - `apps/p2`: live proving ground with TUI, native Durable MCP, subagents,
     codemode, and user plugins; `p3` is the clean-room successor.

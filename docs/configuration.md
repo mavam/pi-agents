@@ -106,9 +106,8 @@ listed in `compaction.modelOverrides` compacts with that entry's
 `provider/modelId`. Pi's [settings reference](https://pi.dev/docs/latest/settings#per-model-compaction-overrides)
 describes them.
 
-Agents' model requests identify themselves to providers as Pi's do: they
-send Pi's `User-Agent`, and requests to OpenRouter, NVIDIA NIM, and OpenCode
-name Pi as the app that sent them.
+Agents use the same default request identity as Pi, including Pi attribution
+on OpenRouter, NVIDIA NIM, and OpenCode.
 
 ## Storage retention
 

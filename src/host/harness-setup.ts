@@ -1,6 +1,6 @@
 /**
- * Harness setup derived from Pi: Harness settings and the identity of model
- * requests read from Pi's settings, and execution environments. Pi has
+ * Harness setup derived from Pi: Harness settings read from Pi's settings,
+ * the identity of model requests, and execution environments. Pi has
  * configured HTTP already, since agents run in its process.
  */
 
@@ -95,21 +95,13 @@ export function createHarnessSettings(
 
 /**
  * How agents' model requests identify themselves, as Pi's own do: a
- * detailed `User-Agent` with Pi's version, and attribution to Pi while
- * install telemetry is enabled. `PI_TELEMETRY` overrides the setting.
+ * detailed `User-Agent` with Pi's version, and attribution to Pi.
  */
-export function harnessIdentity(
-  settingsManager: SettingsManager,
-  telemetry: string | undefined = process.env.PI_TELEMETRY,
-): ClientIdentity {
-  const enabled =
-    telemetry === undefined
-      ? settingsManager.getEnableInstallTelemetry()
-      : ["1", "true", "yes"].includes(telemetry.toLowerCase());
+export function harnessIdentity(): ClientIdentity {
   return {
     userAgent: "detailed",
     version: VERSION,
-    attribution: enabled ? PI_ATTRIBUTION : null,
+    attribution: PI_ATTRIBUTION,
   };
 }
 

@@ -80,7 +80,7 @@ Inspect `apps/p3/plugins/`, `apps/p3/README.md`, recent entries at the end of
 `apps/p3/docs/slices/13-mcp.md`. Score these four gates:
 
 1. **Core harness & prompts:** worker Durable harness, models, coding tools,
-   and prompt/skills plugins exist (`slices 3 & 8`).
+   and prompt/skills plugins exist (`slices 3 & 7–9`).
 2. **Daily-driver surface:** `p3` is no longer headless (TUI and/or web chat
    works end-to-end).
 3. **Native subagents & codemode (`slice 10`):** diff what `p3` ships out of
@@ -108,15 +108,25 @@ Cover four points:
    messaging UX as a `p3` plugin.
 4. **`coding-agent` shim status:** any breakage or maintenance needed.
 
-## Baseline Snapshot (2026-11-21)
+## Baseline Snapshot (2026-11-27)
 
-- **`pi-agents`:** `v0.41.0` + structured output (#130), twin prompt
-  contributions (#131), and lazy MCP readiness (#132) on
-  `@earendil-works/pi-durable` `1.6.0`.
-- **`earendil-works/pi`:** `780bf31fc` (`2026-11-21`).
-  - `packages/durable`: `1.6.0` released (`[Unreleased]` has breaking
-    tagged-union cleanup `32c71a6d4` and `submit(tx)` -> `admit(tx)`).
-  - `apps/p3/plugins/`: 4 headless foundation plugins (`control`, `runner`,
-    `sessions`, `sign-in`). **0/4 `p3` port gates met.**
+- **`pi-agents`:** `v0.43.1` + the Pi 1.7.0 upgrade on
+  `@earendil-works/pi-durable` `1.7.0`.
+- **`earendil-works/pi`:** `cdf740625` (`2026-11-27`; `v1.7.0` is `fb0fe8235`).
+  - `packages/durable`: `1.7.0` released with no API changes
+    (`[Unreleased]` has `cdf740625`: `codemode` warns on truncated nested
+    text from schema-less tools).
+  - `apps/p3/plugins/`: 19 plugins (`backup`, `canvas`, `checklist`,
+    `chrome`, `control`, `environments`, `files`, `harness`, `layout`,
+    `notes`, `prompt`, `providers`, `runner`, `sessions`, `sign-in`,
+    `terminals`, `things`, `tools`, `transcript`). **2/4 `p3` port gates
+    met:**
+    1. Core harness & prompts: met.
+    2. Daily-driver surface: met on the web; no TUI yet.
+    3. Native subagents (`slice 10`): partial. `harness/subagents.ts` ships
+       named, persistent background conversations with async reporting, but
+       no DAGs, peer messaging, recursive spawning (the tool is `scope: "main"`), agent
+       profiles, or `codemode`.
+    4. Native MCP (`slice 13`): not built.
   - `apps/p2`: live proving ground with TUI, native Durable MCP, subagents,
     codemode, and user plugins; `p3` is the clean-room successor.

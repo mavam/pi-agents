@@ -106,11 +106,8 @@ listed in `compaction.modelOverrides` compacts with that entry's
 `provider/modelId`. Pi's [settings reference](https://pi.dev/docs/latest/settings#per-model-compaction-overrides)
 describes them.
 
-Agents' model requests identify themselves to providers as Pi's do. While
-Pi's install telemetry is on, which the `enableInstallTelemetry` setting or
-the `PI_TELEMETRY` environment variable controls, requests to OpenRouter,
-NVIDIA NIM, and OpenCode name Pi as the app that sent them; with it off,
-they name no app.
+Agents use the same default request identity as Pi, including Pi attribution
+on OpenRouter, NVIDIA NIM, and OpenCode.
 
 ## Storage retention
 

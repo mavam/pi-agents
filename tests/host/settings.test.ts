@@ -48,21 +48,11 @@ describe("harness settings", () => {
     expect(defaults).not.toHaveProperty("websocketConnectTimeoutMs");
   });
 
-  test("agents attribute requests to Pi only while telemetry is enabled", () => {
-    const enabled = SettingsManager.inMemory({ enableInstallTelemetry: true });
-    const disabled = SettingsManager.inMemory({
-      enableInstallTelemetry: false,
-    });
-    expect(harnessIdentity(enabled, undefined)).toEqual({
+  test("agents identify requests as Pi's own", () => {
+    expect(harnessIdentity()).toEqual({
       userAgent: "detailed",
       version: VERSION,
       attribution: PI_ATTRIBUTION,
     });
-    expect(harnessIdentity(disabled, undefined).attribution).toBeNull();
-    // The environment overrides the setting either way.
-    expect(harnessIdentity(disabled, "Yes").attribution).toEqual(
-      PI_ATTRIBUTION,
-    );
-    expect(harnessIdentity(enabled, "0").attribution).toBeNull();
   });
 });

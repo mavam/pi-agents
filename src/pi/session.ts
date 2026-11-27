@@ -265,7 +265,7 @@ export class SessionHost {
       harness = await openAgentHarness({
         storage,
         models,
-        identity: harnessIdentity(settingsManager),
+        identity: harnessIdentity(),
         cwd,
         extensions,
         settings: createHarnessSettings(settingsManager),

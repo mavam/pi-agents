@@ -130,7 +130,7 @@ class MessageStreamView implements Component {
 
   private index(items: MessageInfo[]): number {
     const index = items.findIndex((message) => message.id === this.selected);
-    return index >= 0 ? index : 0;
+    return Math.max(index, 0);
   }
 
   private syncTimer(): void {

@@ -96,7 +96,7 @@ class SplitPaneOverlay<T> implements Component {
     const index = items.findIndex(
       (item) => this.spec.keyOf(item) === this.selectedKey,
     );
-    return index >= 0 ? index : 0;
+    return Math.max(index, 0);
   }
 
   private select(items: T[], index: number): void {
